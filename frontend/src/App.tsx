@@ -457,7 +457,7 @@ function App() {
   };
 
   const dismissPendingRequest = (request: PendingRequest) => {
-    setPendingRequests((current) => current.filter((item) => item.approval_id !== request.approval_id));
+    void resolvePendingRequest(request, { type: 'reject' });
   };
 
   const startProjectDraft = (projectId: string, firstMessage = '') => {

@@ -74,6 +74,15 @@ export function ToolAuditPanel() {
     }
   }
 
+  async function refreshApprovalsOnly() {
+    try {
+      const approvalsResponse = await chatService.listCommandApprovals();
+      setApprovals(approvalsResponse.approvals);
+    } catch {
+      // ignore background poll failures
+    }
+  }
+
   async function updateApproval(approvalId: string, action: 'approve' | 'deny') {
     setLoading(true);
     setError('');
@@ -91,6 +100,10 @@ export function ToolAuditPanel() {
 
   useEffect(() => {
     void refreshAudit();
+    const timer = window.setInterval(() => {
+      void refreshApprovalsOnly();
+    }, 5000);
+    return () => window.clearInterval(timer);
   }, []);
 
   return (

@@ -91,19 +91,19 @@
 }
 
 :root[data-translucent="true"] {
-  --material-panel: color-mix(in srgb, var(--panel-solid) 72%, transparent);
-  --material-panel-solid: color-mix(in srgb, var(--panel-solid) 78%, transparent);
-  --material-control: color-mix(in srgb, var(--control) 66%, transparent);
-  --material-border: color-mix(in srgb, var(--border) 72%, transparent);
-  --material-shadow: color-mix(in srgb, var(--shadow) 72%, transparent);
-  --material-blur: blur(22px) saturate(1.36);
+  --material-panel: color-mix(in srgb, var(--panel-solid) 35%, transparent);
+  --material-panel-solid: color-mix(in srgb, var(--panel-solid) 42%, transparent);
+  --material-control: color-mix(in srgb, var(--control) 28%, transparent);
+  --material-border: color-mix(in srgb, var(--border) 35%, transparent);
+  --material-shadow: color-mix(in srgb, var(--shadow) 35%, transparent);
+  --material-blur: blur(28px) saturate(1.4);
 }
 
 :root[data-theme="dark"][data-translucent="true"] {
-  --material-panel: color-mix(in srgb, var(--panel-solid) 62%, transparent);
-  --material-panel-solid: color-mix(in srgb, var(--panel-solid) 70%, transparent);
-  --material-control: color-mix(in srgb, var(--control) 56%, transparent);
-  --material-border: color-mix(in srgb, var(--border) 58%, transparent);
+  --material-panel: color-mix(in srgb, var(--panel-solid) 25%, transparent);
+  --material-panel-solid: color-mix(in srgb, var(--panel-solid) 32%, transparent);
+  --material-control: color-mix(in srgb, var(--control) 20%, transparent);
+  --material-border: color-mix(in srgb, var(--border) 28%, transparent);
 }
 
 * {
@@ -268,7 +268,7 @@ body.sidebar-resizing {
 }
 
 :root[data-translucent="true"] .sidebar {
-  background: color-mix(in srgb, var(--sidebar) 76%, transparent);
+  background: color-mix(in srgb, var(--sidebar) 40%, transparent);
   backdrop-filter: var(--material-blur);
 }
 
@@ -1397,7 +1397,7 @@ body.sidebar-resizing {
   border: 1px solid var(--material-border);
   border-radius: 22px;
   background:
-    linear-gradient(180deg, color-mix(in oklab, var(--material-panel) 96%, transparent), color-mix(in oklab, var(--material-panel-solid) 90%, transparent)),
+    linear-gradient(180deg, color-mix(in oklab, var(--material-panel) 55%, transparent), color-mix(in oklab, var(--material-panel-solid) 45%, transparent)),
     var(--material-panel);
   box-shadow:
     0 18px 56px color-mix(in oklab, black 24%, transparent),
@@ -1409,7 +1409,7 @@ body.sidebar-resizing {
   overflow: hidden;
   border: 1px solid color-mix(in oklab, var(--foreground) 20%, var(--material-border));
   border-radius: 20px;
-  background: color-mix(in oklab, var(--material-panel-solid) 72%, transparent);
+  background: color-mix(in oklab, var(--material-panel-solid) 55%, transparent);
 }
 
 .composer__select {
@@ -1422,7 +1422,7 @@ body.sidebar-resizing {
   border: 1px solid var(--material-border);
   border-radius: 999px;
   color: var(--muted-foreground);
-  background: color-mix(in oklab, var(--material-control) 72%, transparent);
+  background: color-mix(in oklab, var(--material-control) 55%, transparent);
 }
 
 .composer__select span {
@@ -1595,7 +1595,7 @@ body.sidebar-resizing {
   border-radius: 999px;
   padding: 0 9px;
   color: var(--muted-foreground);
-  background: color-mix(in oklab, var(--material-control) 70%, transparent);
+  background: color-mix(in oklab, var(--material-control) 50%, transparent);
   cursor: pointer;
   font-size: 13px;
   font-weight: 640;
@@ -2596,7 +2596,7 @@ body.sidebar-resizing {
   width: 100%;
   border: 1px solid var(--material-border);
   border-radius: 18px;
-  background: color-mix(in oklab, var(--material-control) 86%, transparent);
+  background: color-mix(in oklab, var(--material-control) 60%, transparent);
   color: var(--foreground);
   padding: 16px;
   text-align: left;
@@ -2654,7 +2654,7 @@ body.sidebar-resizing {
 
 .workspace-dialog__hint {
   color: var(--muted-foreground);
-  background: color-mix(in oklab, var(--material-control) 72%, transparent);
+  background: color-mix(in oklab, var(--material-control) 55%, transparent);
 }
 
 .workspace-dialog__error {
@@ -2919,7 +2919,7 @@ body.sidebar-resizing {
   gap: 4px;
   padding: 9px 11px;
   border-radius: 10px;
-  background: color-mix(in oklab, var(--material-control) 82%, transparent);
+  background: color-mix(in oklab, var(--material-control) 55%, transparent);
 }
 
 .pending-dock__command-line {
@@ -2977,7 +2977,7 @@ body.sidebar-resizing {
   border-radius: 10px;
   color: var(--foreground);
   text-align: left;
-  background: color-mix(in oklab, var(--material-control) 62%, transparent);
+  background: color-mix(in oklab, var(--material-control) 45%, transparent);
   transition:
     border-color 120ms ease,
     background 120ms ease;

@@ -305,6 +305,7 @@ export interface PendingRequest {
   session_id: string;
   approval_status: string;
   messageId: string;
+  resolving?: boolean;
   command?: string[];
   cwd?: string;
   question?: string;

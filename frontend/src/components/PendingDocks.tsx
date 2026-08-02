@@ -176,6 +176,7 @@ export function PendingDocks({
   return (
     <div className="pending-docks">
       {requests.map((request) => {
+        const disabled = request.resolving === true;
         if (request.kind === 'question') {
           return (
             <DockShell
@@ -186,7 +187,7 @@ export function PendingDocks({
             >
               <QuestionBody
                 request={request}
-                disabled={false}
+                disabled={disabled}
                 onSubmit={(message) => onResolve(request, { type: 'respond', message })}
                 onDismiss={() => onDismiss(request)}
               />
@@ -202,14 +203,14 @@ export function PendingDocks({
           >
             <CommandDetails command={request.command ?? []} cwd={request.cwd} />
             <div className="pending-dock__footer">
-              <Button variant="ghost" size="sm" onClick={() => onResolve(request, { type: 'reject' })}>
+              <Button variant="ghost" size="sm" onClick={() => onResolve(request, { type: 'reject' })} disabled={disabled}>
                 {t('chat.approval_deny')}
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => onResolve(request, { type: 'always' })}>
+              <Button variant="secondary" size="sm" onClick={() => onResolve(request, { type: 'always' })} disabled={disabled}>
                 <ShieldCheck size={14} />
                 {t('chat.approval_always')}
               </Button>
-              <Button variant="primary" size="sm" onClick={() => onResolve(request, { type: 'approve' })}>
+              <Button variant="primary" size="sm" onClick={() => onResolve(request, { type: 'approve' })} disabled={disabled}>
                 {t('chat.approval_once')}
               </Button>
             </div>
