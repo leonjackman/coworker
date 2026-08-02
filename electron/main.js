@@ -177,6 +177,17 @@ function createTray() {
   tray.on('click', showMainWindow);
 }
 
+function setTranslucent(enabled) {
+  if (process.platform !== 'darwin' || !mainWindow || mainWindow.isDestroyed()) return;
+  if (enabled) {
+    mainWindow.setVibrancy('under-window');
+    mainWindow.setBackgroundColor('#00000000');
+  } else {
+    mainWindow.setVibrancy(null);
+    mainWindow.setBackgroundColor('#111417');
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -188,6 +199,9 @@ function createWindow() {
       ? {
           titleBarStyle: 'hidden',
           trafficLightPosition: { x: 14, y: 14 },
+          transparent: true,
+          vibrancy: 'under-window',
+          visualEffectState: 'followWindow',
         }
       : {}),
     webPreferences: {
@@ -529,20 +543,6 @@ ipcMain.handle('test-provider', async (event, payload) => {
 ipcMain.handle('fetch-provider-models', async (event, payload) => {
   return requestBackend('/providers/fetch-models', 'POST', payload);
 });
-
-let translucentOnDarwin = false;
-
-function setTranslucent(enabled) {
-  if (process.platform !== 'darwin' || !mainWindow || mainWindow.isDestroyed()) return;
-  translucentOnDarwin = enabled;
-  if (enabled) {
-    mainWindow.setVibrancy('under-window');
-    mainWindow.setBackgroundColor('#00000000');
-  } else {
-    mainWindow.setVibrancy(null);
-    mainWindow.setBackgroundColor('#111417');
-  }
-}
 
 ipcMain.on('update-translucent', (event, enabled) => {
   setTranslucent(enabled);
