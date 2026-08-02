@@ -98,13 +98,15 @@ class CommandApprovalStore:
     def request_runtime_interrupt(
         self,
         interrupt_id: str,
+        action_index: int,
+        kind: str,
         command: list[str],
         cwd: str,
         timeout_seconds: int,
         context: dict[str, Any],
     ) -> dict[str, Any]:
-        digest = f"langgraph:{context.get('session_id', '')}:{interrupt_id}"
-        return self.request(digest, command, cwd, timeout_seconds, context)
+        digest = f"langgraph:{context.get('session_id', '')}:{interrupt_id}:{action_index}"
+        return self.request(digest, command, cwd, timeout_seconds, {**context, "kind": kind})
 
     def approve(self, approval_id: str) -> dict[str, Any]:
         return self.update_status(approval_id, "approved")
@@ -139,18 +141,71 @@ class CommandApprovalStore:
                 return approval
         raise KeyError(f"command approval {approval_id} not found")
 
-    def load(self) -> list[dict[str, Any]]:
+    def set_decision(self, approval_id: str, status: str, decision: dict[str, Any]) -> dict[str, Any]:
+        approvals = self.load()
+        now = datetime.now(timezone.utc).isoformat()
+        for approval in approvals:
+            if approval.get("id") == approval_id:
+                if approval.get("status") not in {"pending", "approved"}:
+                    raise ValueError(f"command approval {approval_id} is already {approval.get('status')}")
+                approval["status"] = status
+                approval["decision"] = decision
+                approval["updated_at"] = now
+                self.save(approvals)
+                return approval
+        raise KeyError(f"command approval {approval_id} not found")
+
+    def mark_consumed(self, approval_id: str) -> None:
+        approvals = self.load()
+        now = datetime.now(timezone.utc).isoformat()
+        for approval in approvals:
+            if approval.get("id") == approval_id:
+                if approval.get("status") not in {"pending", "approved", "denied", "answered"}:
+                    return
+                approval["status"] = "consumed"
+                approval["updated_at"] = now
+                self.save(approvals)
+                return
+
+    def load_payload(self) -> dict[str, Any]:
         if not self.path.exists():
-            return []
+            return {"approvals": [], "allowlist": []}
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return []
-        approvals = payload.get("approvals") if isinstance(payload, dict) else None
+            return {"approvals": [], "allowlist": []}
+        if not isinstance(payload, dict):
+            return {"approvals": [], "allowlist": []}
+        return payload
+
+    def save_payload(self, payload: dict[str, Any]) -> None:
+        self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+    def load(self) -> list[dict[str, Any]]:
+        approvals = self.load_payload().get("approvals")
         return approvals if isinstance(approvals, list) else []
 
     def save(self, approvals: list[dict[str, Any]]) -> None:
-        self.path.write_text(json.dumps({"approvals": approvals}, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        payload = self.load_payload()
+        payload["approvals"] = approvals
+        self.save_payload(payload)
+
+    def allowlist(self) -> list[str]:
+        allowlist = self.load_payload().get("allowlist")
+        return allowlist if isinstance(allowlist, list) else []
+
+    def always_allow(self, digest: str) -> None:
+        payload = self.load_payload()
+        allowlist = payload.get("allowlist")
+        if not isinstance(allowlist, list):
+            allowlist = []
+        if digest not in allowlist:
+            allowlist.append(digest)
+        payload["allowlist"] = allowlist
+        self.save_payload(payload)
+
+    def is_always_allowed(self, digest: str) -> bool:
+        return digest in self.allowlist()
 
 
 class Workspace:
@@ -320,18 +375,36 @@ class Workspace:
                 if not approval_store:
                     raise ValueError("command approval store is required")
                 digest = self.command_digest(command, details["cwd"])
-                approval = approval_store.consume(digest)
-                if not approval:
-                    approval = approval_store.request(
-                        digest,
-                        self.redact_command(command),
-                        details["cwd"],
-                        safe_timeout,
-                        audit_context,
-                    )
-                    if approval["status"] == "denied":
+                if approval_store.is_always_allowed(digest):
+                    details["approval_id"] = "always_allowed"
+                else:
+                    approval = approval_store.consume(digest)
+                    if not approval:
+                        approval = approval_store.request(
+                            digest,
+                            self.redact_command(command),
+                            details["cwd"],
+                            safe_timeout,
+                            audit_context,
+                        )
+                        if approval["status"] == "denied":
+                            result = {
+                                "approval_required": False,
+                                "approval_id": approval["id"],
+                                "approval_status": approval["status"],
+                                "command": command,
+                                "cwd": details["cwd"],
+                                "return_code": None,
+                                "timed_out": False,
+                                "stdout": "",
+                                "stderr": f"Command approval denied: {approval['id']}",
+                                "stdout_truncated": False,
+                                "stderr_truncated": False,
+                            }
+                            self.audit_tool_action("run_command", "approval_denied", {**details, "approval_id": approval["id"]}, audit_context)
+                            return result
                         result = {
-                            "approval_required": False,
+                            "approval_required": True,
                             "approval_id": approval["id"],
                             "approval_status": approval["status"],
                             "command": command,
@@ -339,28 +412,13 @@ class Workspace:
                             "return_code": None,
                             "timed_out": False,
                             "stdout": "",
-                            "stderr": f"Command approval denied: {approval['id']}",
+                            "stderr": f"Command approval required: {approval['id']}",
                             "stdout_truncated": False,
                             "stderr_truncated": False,
                         }
-                        self.audit_tool_action("run_command", "approval_denied", {**details, "approval_id": approval["id"]}, audit_context)
+                        self.audit_tool_action("run_command", "approval_required", {**details, "approval_id": approval["id"]}, audit_context)
                         return result
-                    result = {
-                        "approval_required": True,
-                        "approval_id": approval["id"],
-                        "approval_status": approval["status"],
-                        "command": command,
-                        "cwd": details["cwd"],
-                        "return_code": None,
-                        "timed_out": False,
-                        "stdout": "",
-                        "stderr": f"Command approval required: {approval['id']}",
-                        "stdout_truncated": False,
-                        "stderr_truncated": False,
-                    }
-                    self.audit_tool_action("run_command", "approval_required", {**details, "approval_id": approval["id"]}, audit_context)
-                    return result
-                details["approval_id"] = approval["id"]
+                    details["approval_id"] = approval["id"]
 
             try:
                 completed = subprocess.run(

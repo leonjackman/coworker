@@ -42,8 +42,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listToolAudit: (limit) => ipcRenderer.invoke('list-tool-audit', limit),
   listAgentTraces: (limit) => ipcRenderer.invoke('list-agent-traces', limit),
   listCommandApprovals: () => ipcRenderer.invoke('list-command-approvals'),
-  approveCommand: (approvalId) => ipcRenderer.invoke('approve-command', approvalId),
-  denyCommand: (approvalId) => ipcRenderer.invoke('deny-command', approvalId),
+  resolveCommandApproval: (approvalId, decision) => ipcRenderer.invoke('resolve-command-approval', { approval_id: approvalId, decision }),
   updateTranslucent: (enabled) => ipcRenderer.send('update-translucent', enabled),
   hasVibrancySupport: () => ipcRenderer.invoke('has-vibrancy-support'),
 });

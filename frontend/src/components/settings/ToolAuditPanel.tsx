@@ -79,15 +79,9 @@ export function ToolAuditPanel() {
     setError('');
     try {
       setResumeMessage('');
-      if (action === 'approve') {
-        const response = await chatService.approveCommand(approvalId);
-        const done = response.events?.findLast((event) => event.type === 'done');
-        setResumeMessage(done?.content || '');
-      } else {
-        const response = await chatService.denyCommand(approvalId);
-        const done = response.events?.findLast((event) => event.type === 'done');
-        setResumeMessage(done?.content || '');
-      }
+      const response = await chatService.resolveCommandApproval(approvalId, { type: action === 'approve' ? 'approve' : 'reject' });
+      const done = response.events?.findLast((event) => event.type === 'done');
+      setResumeMessage(done?.content || '');
       await refreshAudit();
     } catch (err) {
       setError(err instanceof Error ? err.message : t('settings.command_approval_failed'));

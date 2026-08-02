@@ -265,11 +265,12 @@ export interface AgentTraceResponse {
 export interface CommandApproval {
   id: string;
   digest: string;
-  status: 'pending' | 'approved' | 'denied' | 'consumed';
+  status: 'pending' | 'approved' | 'denied' | 'answered' | 'consumed';
   command: string[];
   cwd: string;
   timeout_seconds: number;
   context?: Record<string, unknown>;
+  decision?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -283,12 +284,56 @@ export interface CommandApprovalResponse {
   status: string;
   approval: CommandApproval;
   events?: StreamEvent[];
+  resumed?: boolean;
+}
+
+export type ApprovalDecisionType = 'approve' | 'reject' | 'respond' | 'always';
+
+export interface ApprovalDecisionPayload {
+  type: ApprovalDecisionType;
+  message?: string;
+}
+
+export interface ApprovalOption {
+  label: string;
+  description?: string;
+}
+
+export interface PendingRequest {
+  approval_id: string;
+  kind: 'command' | 'question';
+  session_id: string;
+  approval_status: string;
+  messageId: string;
+  command?: string[];
+  cwd?: string;
+  question?: string;
+  header?: string;
+  options?: ApprovalOption[];
+  multiple?: boolean;
 }
 
 export type StreamEvent =
   | { type: 'start'; session_id: string; mode: AgentMode; provider: string; model: string }
   | { type: 'stage'; name: string; status: string }
   | { type: 'delta'; content: string }
-  | { type: 'approval_required'; approval_id: string; command: string[]; cwd: string; approval_status: string }
+  | {
+      type: 'approval_required';
+      approval_id: string;
+      command: string[];
+      cwd: string;
+      approval_status: string;
+      session_id?: string;
+    }
+  | {
+      type: 'question_required';
+      approval_id: string;
+      question: string;
+      header?: string;
+      options?: ApprovalOption[];
+      multiple?: boolean;
+      approval_status: string;
+      session_id?: string;
+    }
   | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string }
   | { type: 'error'; error: string; session_id?: string };

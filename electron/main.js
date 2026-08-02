@@ -495,12 +495,11 @@ ipcMain.handle('list-command-approvals', async () => {
   return requestBackend('/command-approvals');
 });
 
-ipcMain.handle('approve-command', async (event, approvalId) => {
-  return requestBackend('/command-approvals/approve', 'POST', { approval_id: approvalId });
-});
-
-ipcMain.handle('deny-command', async (event, approvalId) => {
-  return requestBackend('/command-approvals/deny', 'POST', { approval_id: approvalId });
+ipcMain.handle('resolve-command-approval', async (event, payload) => {
+  return requestBackend('/command-approvals/resolve', 'POST', {
+    approval_id: payload?.approval_id || '',
+    decision: payload?.decision || {},
+  });
 });
 
 ipcMain.handle('list-providers', async () => {

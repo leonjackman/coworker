@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
+import { PendingDocks } from './components/PendingDocks';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { EmptyProjectStart } from './components/EmptyProjectStart';
@@ -14,7 +15,7 @@ import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { getLanguage, initLanguage, t, translateError } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AccessMode, AppView, ChatMessage, ComposerAttachment, CreateProjectRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AccessMode, AppView, ApprovalDecisionPayload, ChatMessage, ComposerAttachment, CreateProjectRequest, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function createMessage(
@@ -59,15 +60,33 @@ function App() {
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const requestSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
   const activeAssistantMessageIdRef = useRef<string | undefined>(undefined);
+  const resumeAttemptedRef = useRef(false);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (sessionId) {
+      try {
+        localStorage.setItem('cw.last-session', sessionId);
+      } catch {
+        // ignore
+      }
+    } else {
+      try {
+        localStorage.removeItem('cw.last-session');
+      } catch {
+        // ignore
+      }
+    }
   }, [sessionId]);
 
   const refreshProviders = async () => {
@@ -168,6 +187,30 @@ function App() {
     setActiveProjectId(firstProject.id);
   }, [activeProjectId, messages.length, projects, sessionId, sessions.length]);
 
+  useEffect(() => {
+    if (resumeAttemptedRef.current) return;
+    if (sessionId && messages.length > 0) {
+      resumeAttemptedRef.current = true;
+      return;
+    }
+    if (sessions.length === 0) return;
+    let lastId = '';
+    try {
+      lastId = localStorage.getItem('cw.last-session') || '';
+    } catch {
+      return;
+    }
+    if (!lastId || sessions.every((s) => s.id !== lastId)) {
+      const latest = sessions[0];
+      if (latest) {
+        openSession(latest.id);
+      }
+    } else {
+      openSession(lastId);
+    }
+    resumeAttemptedRef.current = true;
+  }, [sessionId, sessions.length, activeProjectId]);
+
   const sendMessage = async (override?: { message: string; projectId?: string }) => {
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) return;
@@ -240,12 +283,30 @@ function App() {
         setMessages((current) =>
           current.map((item) => (item.id === assistantMessageId ? { ...item, content: streamedContent } : item)),
         );
-      } else if (event.type === 'approval_required') {
-        streamedContent = `${t('chat.command_approval_waiting')}\n\n${event.command.join(' ')}\n${event.cwd ? `cwd: ${event.cwd}` : ''}`.trim();
+      } else if (event.type === 'approval_required' || event.type === 'question_required') {
+        const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
+        const base: PendingRequest = {
+          approval_id: event.approval_id,
+          kind: event.type === 'approval_required' ? 'command' : 'question',
+          session_id: sessionIdValue,
+          approval_status: event.approval_status,
+          messageId: assistantMessageId,
+        };
+        const pending: PendingRequest =
+          event.type === 'approval_required'
+            ? { ...base, command: event.command, cwd: event.cwd }
+            : {
+                ...base,
+                ...(event.question !== undefined ? { question: event.question } : {}),
+                ...(event.header !== undefined ? { header: event.header } : {}),
+                ...(event.options !== undefined ? { options: event.options } : {}),
+                ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+              };
+        setPendingRequests((current) => [...current, pending]);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: streamedContent, status: 'done' }
+              ? { ...item, content: t('chat.waiting_resolution'), status: 'done' }
               : item,
           ),
         );
@@ -347,6 +408,58 @@ function App() {
     activeAssistantMessageIdRef.current = undefined;
   };
 
+  const resolvePendingRequest = async (request: PendingRequest, decision: ApprovalDecisionPayload) => {
+    setPendingRequests((current) =>
+      current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
+    );
+    try {
+      const response = await chatService.resolveCommandApproval(request.approval_id, decision);
+      const done = response.events?.findLast((event) => event.type === 'done');
+      const chained = (response.events ?? []).filter(
+        (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }> =>
+          event.type === 'approval_required' || event.type === 'question_required',
+      );
+      setMessages((current) =>
+        current.map((item) => {
+          if (item.id !== request.messageId) return item;
+          if (done?.type === 'done') return { ...item, content: done.content || item.content, status: 'done' };
+          if (response.resumed === false) return item;
+          return item;
+        }),
+      );
+      setPendingRequests((current) => [
+        ...current.filter((item) => item.approval_id !== request.approval_id),
+        ...chained.map((event): PendingRequest => {
+          const base: PendingRequest = {
+            approval_id: event.approval_id,
+            kind: event.type === 'approval_required' ? 'command' : 'question',
+            session_id: event.session_id ?? request.session_id,
+            approval_status: event.approval_status,
+            messageId: request.messageId,
+          };
+          return event.type === 'approval_required'
+            ? { ...base, command: event.command, cwd: event.cwd }
+            : {
+                ...base,
+                ...(event.question !== undefined ? { question: event.question } : {}),
+                ...(event.header !== undefined ? { header: event.header } : {}),
+                ...(event.options !== undefined ? { options: event.options } : {}),
+                ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+              };
+        }),
+      ]);
+    } catch (error) {
+      console.error('Failed to resolve approval:', error);
+      setPendingRequests((current) =>
+        current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: false } : item)),
+      );
+    }
+  };
+
+  const dismissPendingRequest = (request: PendingRequest) => {
+    setPendingRequests((current) => current.filter((item) => item.approval_id !== request.approval_id));
+  };
+
   const startProjectDraft = (projectId: string, firstMessage = '') => {
     abortRef.current?.abort();
     requestSeqRef.current += 1;
@@ -354,6 +467,7 @@ function App() {
     setMessages([]);
     setInput(firstMessage);
     setAttachments([]);
+    setPendingRequests([]);
     setSessionId(undefined);
     sessionIdRef.current = undefined;
     pendingProjectIdRef.current = projectId;
@@ -413,6 +527,7 @@ function App() {
       setSessionId(sessionIdToOpen);
       sessionIdRef.current = sessionIdToOpen;
       pendingProjectIdRef.current = undefined;
+      setPendingRequests([]);
       setActiveProjectId(response.session.project_id || undefined);
       setMessages(loaded);
       setAttachments([]);
@@ -431,6 +546,11 @@ function App() {
         setInput('');
         setAttachments([]);
         pendingProjectIdRef.current = activeProjectId;
+        try {
+          localStorage.removeItem('cw.last-session');
+        } catch {
+          // ignore
+        }
       }
       await refreshSessions();
       await refreshProjects();
@@ -484,6 +604,11 @@ function App() {
         setMessages([]);
         setInput('');
         setAttachments([]);
+        try {
+          localStorage.removeItem('cw.last-session');
+        } catch {
+          // ignore
+        }
       }
       if (activeProjectId === projectId) {
         setActiveProjectId(undefined);
@@ -635,23 +760,30 @@ function App() {
                     </>
                   )}
                   {!showFirstRunStart && !showEmptyProjectStart && (
-                    <ChatInput
-                      value={input}
-                      disabled={isThinking || runtimeStatus === 'connecting'}
-                      isThinking={isThinking}
-                      workMode={workMode}
-                      accessMode={accessMode}
-                      selectedModel={selectedModel}
-                      attachments={attachments}
-                      modelOptions={modelOptions}
-                      onChange={setInput}
-                      onSend={sendMessage}
-                      onStop={stopMessage}
-                      onWorkModeChange={setWorkMode}
-                      onAccessModeChange={setAccessMode}
-                      onModelChange={(providerId) => void changeSelectedModel(providerId)}
-                      onAttachmentsChange={setAttachments}
-                    />
+                    <div className="workspace-dock-area">
+                      <PendingDocks
+                        requests={pendingRequests}
+                        onResolve={(request, decision) => void resolvePendingRequest(request, decision)}
+                        onDismiss={dismissPendingRequest}
+                      />
+                      <ChatInput
+                        value={input}
+                        disabled={isThinking || runtimeStatus === 'connecting' || pendingRequests.length > 0}
+                        isThinking={isThinking}
+                        workMode={workMode}
+                        accessMode={accessMode}
+                        selectedModel={selectedModel}
+                        attachments={attachments}
+                        modelOptions={modelOptions}
+                        onChange={setInput}
+                        onSend={sendMessage}
+                        onStop={stopMessage}
+                        onWorkModeChange={setWorkMode}
+                        onAccessModeChange={setAccessMode}
+                        onModelChange={(providerId) => void changeSelectedModel(providerId)}
+                        onAttachmentsChange={setAttachments}
+                      />
+                    </div>
                   )}
                 </>
               ) : activeView === 'providers' ? (

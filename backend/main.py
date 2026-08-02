@@ -101,6 +101,14 @@ class WorkspaceCommandRequest(BaseModel):
 class CommandApprovalAction(BaseModel):
     approval_id: str
 
+class ApprovalDecisionPayload(BaseModel):
+    type: str
+    message: str = ""
+
+class CommandApprovalResolve(BaseModel):
+    approval_id: str
+    decision: ApprovalDecisionPayload
+
 @app.get("/health")
 async def health():
     return {
@@ -417,60 +425,82 @@ async def agent_traces(limit: int = 100):
 async def list_command_approvals():
     return {"status": "ok", "approvals": command_approval_store.list()}
 
-@app.post("/command-approvals/approve")
-async def approve_command(request: CommandApprovalAction):
+@app.post("/command-approvals/resolve")
+async def resolve_command_approval(request: CommandApprovalResolve):
     try:
-        approval = command_approval_store.approve(request.approval_id)
-        events = await agent_registry.resume_command_approval(approval, True)
-        if events:
-            approval = command_approval_store.update_status(request.approval_id, "consumed")
-            done = next((event for event in reversed(events) if event.get("type") == "done"), None)
-            context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
-            session_id = str(context.get("session_id") or "")
-            if done and session_id:
-                try:
-                    session_store.append_message(
-                        session_id,
-                        role="assistant",
-                        content=str(done.get("content") or ""),
-                        mode="single",
-                        provider=str(done.get("provider") or ""),
-                        model=str(done.get("model") or ""),
-                    )
-                except KeyError:
-                    pass
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", "approval": approval, "events": events}
+        approval = command_approval_store.require(request.approval_id)
+        context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+        kind = str(context.get("kind") or "command")
+        decision_type = request.decision.type
 
-@app.post("/command-approvals/deny")
-async def deny_command(request: CommandApprovalAction):
-    try:
-        approval = command_approval_store.deny(request.approval_id)
-        events = await agent_registry.resume_command_approval(approval, False)
-        if events:
-            done = next((event for event in reversed(events) if event.get("type") == "done"), None)
-            context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
-            session_id = str(context.get("session_id") or "")
-            if done and session_id:
-                try:
-                    session_store.append_message(
-                        session_id,
-                        role="assistant",
-                        content=str(done.get("content") or ""),
-                        mode="single",
-                        provider=str(done.get("provider") or ""),
-                        model=str(done.get("model") or ""),
-                    )
-                except KeyError:
-                    pass
+        if decision_type == "always":
+            command = approval.get("command") if isinstance(approval.get("command"), list) else []
+            cwd = str(approval.get("cwd") or "")
+            if command:
+                from coworker.workspace import Workspace
+
+                command_approval_store.always_allow(Workspace.command_digest(command, cwd))
+            decision = {"type": "approve"}
+            status = "approved"
+        elif decision_type == "approve":
+            decision = {"type": "approve"}
+            status = "approved"
+        elif decision_type == "respond":
+            decision = {"type": "respond", "message": request.decision.message}
+            status = "answered"
+        else:
+            decision = {
+                "type": "reject",
+                "message": request.decision.message or (
+                    "The user rejected this command. Do not run it or retry it unless the user explicitly asks."
+                ),
+            }
+            status = "denied"
+
+        approval = command_approval_store.set_decision(request.approval_id, status, decision)
+
+        interrupt_id = str(context.get("interrupt_id") or "")
+        events: list[dict[str, Any]] = []
+        resolved_statuses = {"approved", "denied", "answered"}
+        if context.get("source") == "agent_langgraph_hitl" and interrupt_id:
+            siblings = [
+                item
+                for item in command_approval_store.list()
+                if isinstance(item.get("context"), dict)
+                and str(item.get("context", {}).get("interrupt_id") or "") == interrupt_id
+            ]
+            all_decided = all(item.get("decision") is not None for item in siblings)
+            if all_decided:
+                ordered = sorted(
+                    siblings,
+                    key=lambda item: int(item.get("context", {}).get("action_index") or 0),
+                )
+                decisions = [item.get("decision") for item in ordered if item.get("decision")]
+                if decisions:
+                    events = await agent_registry.resume_interrupt(approval, decisions)
+                    done = next((event for event in reversed(events) if event.get("type") == "done"), None)
+                    session_id = str(context.get("session_id") or "")
+                    if done and session_id:
+                        try:
+                            session_store.append_message(
+                                session_id,
+                                role="assistant",
+                                content=str(done.get("content") or ""),
+                                mode="single",
+                                provider=str(done.get("provider") or ""),
+                                model=str(done.get("model") or ""),
+                            )
+                        except KeyError:
+                            pass
+                    for item in ordered:
+                        command_approval_store.mark_consumed(item.get("id", ""))
+            else:
+                events = []
+        return {"status": "ok", "approval": approval, "events": events, "resumed": bool(events)}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", "approval": approval, "events": events}
 
 @app.get("/providers")
 async def list_providers():

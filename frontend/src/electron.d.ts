@@ -1,5 +1,6 @@
 import type {
   AgentTraceResponse,
+  ApprovalDecisionPayload,
   ChatRequest,
   ChatResponse,
   CommandApprovalResponse,
@@ -61,8 +62,7 @@ declare global {
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
-      approveCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
-      denyCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
+      resolveCommandApproval: (approvalId: string, decision: ApprovalDecisionPayload) => Promise<CommandApprovalResponse>;
       updateTranslucent: (enabled: boolean) => void;
       hasVibrancySupport: () => Promise<boolean>;
     };

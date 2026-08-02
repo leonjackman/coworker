@@ -71,6 +71,18 @@ class RunCommandArgs(BaseModel):
     timeout_seconds: int = Field(default=20, ge=1, le=60, description="Command timeout in seconds.")
 
 
+class AskUserOption(BaseModel):
+    label: str = Field(description="Display text (1-5 words, concise).")
+    description: str = Field(default="", description="Optional explanation of the choice.")
+
+
+class AskUserArgs(BaseModel):
+    question: str = Field(description="Complete question for the user.")
+    options: list[AskUserOption] = Field(description="Available choices, each with a label and optional description.")
+    multiple: bool = Field(default=False, description="Allow selecting multiple choices.")
+    header: str = Field(default="", description="Very short label (max 30 chars) for the prompt.")
+
+
 class CoworkerExecutionState(TypedDict, total=False):
     messages: list[dict[str, str]]
     language: str
@@ -168,7 +180,7 @@ def agent_run_config(
 
 def build_workspace_tools(
     workspace: Workspace,
-    access_mode: AccessMode,
+    writable: bool,
     audit_context: dict[str, Any] | None = None,
     approval_store: CommandApprovalStore | None = None,
 ) -> list[Any]:
@@ -230,14 +242,50 @@ def build_workspace_tools(
         )
         return json.dumps(result, ensure_ascii=False)
 
-    tools = [search_files, read_file]
-    if access_mode == "full":
+    @tool(args_schema=AskUserArgs)
+    def ask_user(question: str, options: list[dict[str, str]], multiple: bool = False, header: str = "") -> str:
+        """Ask the user a question with selectable options when you need a decision or clarification."""
+        result = {
+            "question": question,
+            "options": options,
+            "multiple": multiple,
+            "header": header,
+            "status": "awaiting_user",
+        }
+        return json.dumps(result, ensure_ascii=False)
+
+    tools = [search_files, read_file, ask_user]
+    if writable:
         tools.extend([replace_in_file, apply_text_edits, write_file, run_command])
     return tools
 
 
-def command_approval_middleware() -> list[Any]:
+def _command_digest_from_tool_call(tool_call: Any) -> str:
+    args = tool_call.get("args") if isinstance(tool_call, dict) else {}
+    command = args.get("command") if isinstance(args, dict) else None
+    cwd = str(args.get("cwd") or "") if isinstance(args, dict) else ""
+    if isinstance(command, list) and all(isinstance(part, str) for part in command):
+        return Workspace.command_digest(command, cwd)
+    return ""
+
+
+def command_approval_middleware(
+    access_mode: AccessMode,
+    approval_store: CommandApprovalStore | None = None,
+) -> list[Any]:
     from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
+
+    if access_mode == "full":
+        return []
+
+    def _needs_approval(req: Any) -> bool:
+        if approval_store is None:
+            return True
+        tool_call = getattr(req, "tool_call", None)
+        digest = _command_digest_from_tool_call(tool_call)
+        if digest and approval_store.is_always_allowed(digest):
+            return False
+        return True
 
     return [
         HumanInTheLoopMiddleware(
@@ -245,7 +293,12 @@ def command_approval_middleware() -> list[Any]:
                 "run_command": {
                     "allowed_decisions": ["approve", "reject"],
                     "description": "Coworker needs approval before running this workspace command.",
-                }
+                    "when": _needs_approval,
+                },
+                "ask_user": {
+                    "allowed_decisions": ["respond", "reject"],
+                    "description": "Coworker asks the user a question that needs an answer.",
+                },
             }
         )
     ]
@@ -258,6 +311,18 @@ def interrupt_payload(interrupt: Any) -> dict[str, Any]:
 
 def interrupt_id(interrupt: Any) -> str:
     return str(getattr(interrupt, "id", "") or "")
+
+
+def interrupt_action_requests(value: dict[str, Any]) -> list[dict[str, Any]]:
+    action_requests = value.get("action_requests") if isinstance(value, dict) else None
+    if not isinstance(action_requests, list):
+        return []
+    return [action for action in action_requests if isinstance(action, dict)]
+
+
+def interrupt_action_kind(action: dict[str, Any]) -> str:
+    name = str(action.get("name") or "")
+    return "question" if name == "ask_user" else "command"
 
 
 def interrupt_command_details(value: dict[str, Any]) -> tuple[list[str], str, int]:
@@ -280,30 +345,80 @@ def record_runtime_interrupts(
     for interrupt in interrupts:
         value = interrupt_payload(interrupt)
         current_interrupt_id = interrupt_id(interrupt)
-        command, cwd, timeout_seconds = interrupt_command_details(value)
-        approval = approval_store.request_runtime_interrupt(
-            current_interrupt_id,
-            command,
-            cwd,
-            timeout_seconds,
-            {
-                **context,
-                "source": "agent_langgraph_hitl",
-                "interrupt_id": current_interrupt_id,
-                "hitl_request": value,
-            },
-        )
-        approvals.append(approval)
+        actions = interrupt_action_requests(value)
+        if not actions:
+            command, cwd, timeout_seconds = interrupt_command_details(value)
+            approval = approval_store.request_runtime_interrupt(
+                current_interrupt_id,
+                0,
+                "command",
+                command,
+                cwd,
+                timeout_seconds,
+                {
+                    **context,
+                    "source": "agent_langgraph_hitl",
+                    "interrupt_id": current_interrupt_id,
+                    "action_index": 0,
+                    "hitl_request": value,
+                },
+            )
+            approvals.append(approval)
+            continue
+        for action_index, action in enumerate(actions):
+            args = action.get("args") if isinstance(action, dict) else {}
+            args = args if isinstance(args, dict) else {}
+            kind = interrupt_action_kind(action)
+            if kind == "question":
+                command, cwd, timeout_seconds = [], "", 20
+            else:
+                command, cwd, timeout_seconds = interrupt_command_details({"action_requests": [action]})
+            approval = approval_store.request_runtime_interrupt(
+                current_interrupt_id,
+                action_index,
+                kind,
+                command,
+                cwd,
+                timeout_seconds,
+                {
+                    **context,
+                    "source": "agent_langgraph_hitl",
+                    "interrupt_id": current_interrupt_id,
+                    "action_index": action_index,
+                    "action_count": len(actions),
+                    "tool_name": str(action.get("name") or ""),
+                    "action_args": args,
+                    "hitl_request": value,
+                },
+            )
+            approvals.append(approval)
     return approvals
 
 
 def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "type": "approval_required",
+    context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+    kind = str(context.get("kind") or "command")
+    base = {
         "approval_id": approval.get("id", ""),
+        "approval_status": approval.get("status", "pending"),
+        "session_id": str(context.get("session_id") or ""),
+    }
+    if kind == "question":
+        args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
+        options = args.get("options") if isinstance(args.get("options"), list) else []
+        return {
+            **base,
+            "type": "question_required",
+            "question": str(args.get("question") or ""),
+            "header": str(args.get("header") or ""),
+            "options": options,
+            "multiple": bool(args.get("multiple")),
+        }
+    return {
+        **base,
+        "type": "approval_required",
         "command": approval.get("command", []),
         "cwd": approval.get("cwd", ""),
-        "approval_status": approval.get("status", "pending"),
     }
 
 
@@ -377,14 +492,20 @@ def invoke_stage_model_sync(llm: Any, system_prompt: str, messages: list[dict[st
     return coerce_message_content(response)
 
 
-def build_langchain_agent(llm: Any, tools: list[Any], checkpointer: Any | None = None) -> Any:
+def build_langchain_agent(
+    llm: Any,
+    tools: list[Any],
+    checkpointer: Any | None = None,
+    access_mode: AccessMode = "default",
+    approval_store: CommandApprovalStore | None = None,
+) -> Any:
     from langchain.agents import create_agent
 
     kwargs: dict[str, Any] = {
         "model": llm,
         "tools": tools,
         "system_prompt": SYSTEM_PROMPT,
-        "middleware": command_approval_middleware(),
+        "middleware": command_approval_middleware(access_mode, approval_store),
         "name": "coworker_single_agent",
     }
     if checkpointer is not None:
@@ -392,7 +513,12 @@ def build_langchain_agent(llm: Any, tools: list[Any], checkpointer: Any | None =
     return create_agent(**kwargs)
 
 
-def build_coworker_execution_graph(llm: Any, tools: list[Any]) -> Any:
+def build_coworker_execution_graph(
+    llm: Any,
+    tools: list[Any],
+    access_mode: AccessMode = "default",
+    approval_store: CommandApprovalStore | None = None,
+) -> Any:
     from langgraph.graph import END, START, StateGraph
 
     async def planner(state: CoworkerExecutionState) -> dict[str, str]:
@@ -415,7 +541,7 @@ def build_coworker_execution_graph(llm: Any, tools: list[Any]) -> Any:
                 ),
             },
         ]
-        agent = build_langchain_agent(llm, tools)
+        agent = build_langchain_agent(llm, tools, access_mode=access_mode, approval_store=approval_store)
         result = await agent.ainvoke({"messages": messages})
         agent_messages = result.get("messages", []) if isinstance(result, dict) else []
         draft = coerce_message_content(agent_messages[-1]) if agent_messages else ""
@@ -460,7 +586,12 @@ def build_coworker_execution_graph(llm: Any, tools: list[Any]) -> Any:
     return builder
 
 
-def build_coworker_execution_graph_sync(llm: Any, tools: list[Any]) -> Any:
+def build_coworker_execution_graph_sync(
+    llm: Any,
+    tools: list[Any],
+    access_mode: AccessMode = "default",
+    approval_store: CommandApprovalStore | None = None,
+) -> Any:
     from langgraph.graph import END, START, StateGraph
 
     def planner(state: CoworkerExecutionState) -> dict[str, str]:
@@ -483,7 +614,7 @@ def build_coworker_execution_graph_sync(llm: Any, tools: list[Any]) -> Any:
                 ),
             },
         ]
-        agent = build_langchain_agent(llm, tools)
+        agent = build_langchain_agent(llm, tools, access_mode=access_mode, approval_store=approval_store)
         result = agent.invoke({"messages": messages})
         agent_messages = result.get("messages", []) if isinstance(result, dict) else []
         draft = coerce_message_content(agent_messages[-1]) if agent_messages else ""
@@ -625,9 +756,12 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             streaming=False,
         )
         self.trace_store.record("run", "start", current_trace_context)
+        effective_access = access_mode if work_mode == "build" else "default"
         graph = build_coworker_execution_graph_sync(
             self.llm,
-            build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context),
+            build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+            access_mode=effective_access,
+            approval_store=self.approval_store,
         ).compile(checkpointer=self.checkpointer)
         try:
             result = graph.invoke(
@@ -750,10 +884,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             "access_mode": access_mode,
         }
         content_parts: list[str] = []
+        effective_access = access_mode if work_mode == "build" else "default"
         async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
             graph = build_coworker_execution_graph(
                 self.llm,
-                build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context),
+                build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+                access_mode=effective_access,
+                approval_store=self.approval_store,
             ).compile(checkpointer=checkpointer)
             try:
                 async for chunk in graph.astream(
@@ -795,10 +932,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.trace_store.record("run", "done", current_trace_context, {"content_chars": len("".join(content_parts))})
         yield {"type": "done", "content": "".join(content_parts), "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
 
-    async def resume_command_approval(
+    async def resume_interrupt(
         self,
         approval: dict[str, Any],
-        approved: bool,
+        decisions: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from langgraph.types import Command
@@ -827,23 +964,19 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         )
         content_parts: list[str] = []
         events: list[dict[str, Any]] = []
-        decision: dict[str, Any]
-        if approved:
-            decision = {"type": "approve"}
-        else:
-            decision = {
-                "type": "reject",
-                "message": "The user rejected this command. Do not run it or retry it unless the user explicitly asks.",
-            }
-        self.trace_store.record("interrupt", "approved" if approved else "rejected", current_trace_context, {"approval_id": approval.get("id", "")})
+        decision_types = ", ".join(str(item.get("type")) for item in decisions)
+        self.trace_store.record("interrupt", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
+        effective_access = access_mode if work_mode == "build" else "default"
         async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
             graph = build_coworker_execution_graph(
                 self.llm,
-                build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context),
+                build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+                access_mode=effective_access,
+                approval_store=self.approval_store,
             ).compile(checkpointer=checkpointer)
             try:
                 async for chunk in graph.astream(
-                    Command(resume={"decisions": [decision]}),
+                    Command(resume={"decisions": decisions}),
                     config=agent_run_config(
                         session_id=session_id,
                         provider=self.provider_name,
@@ -1008,7 +1141,7 @@ class AgentRuntimeRegistry:
     def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.trace_store.list(limit)
 
-    async def resume_command_approval(self, approval: dict[str, Any], approved: bool) -> list[dict[str, Any]]:
+    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
         if context.get("source") != "agent_langgraph_hitl":
             return []
@@ -1019,4 +1152,4 @@ class AgentRuntimeRegistry:
         runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace)
         if not isinstance(runtime, OpenAICompatibleStreamRuntime):
             raise RuntimeError("Only OpenAI-compatible LangGraph sessions can be resumed")
-        return await runtime.resume_command_approval(approval, approved)
+        return await runtime.resume_interrupt(approval, decisions)

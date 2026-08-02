@@ -1,5 +1,6 @@
 import type {
   AgentTraceResponse,
+  ApprovalDecisionPayload,
   ChatRequest,
   ChatResponse,
   CommandApprovalResponse,
@@ -78,8 +79,7 @@ export interface ChatService {
   listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
   listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
   listCommandApprovals: () => Promise<CommandApprovalsResponse>;
-  approveCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
-  denyCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
+  resolveCommandApproval: (approvalId: string, decision: ApprovalDecisionPayload) => Promise<CommandApprovalResponse>;
 }
 
 class ElectronChatService implements ChatService {
@@ -204,14 +204,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.listCommandApprovals();
   }
 
-  async approveCommand(approvalId: string): Promise<CommandApprovalResponse> {
+  async resolveCommandApproval(approvalId: string, decision: ApprovalDecisionPayload): Promise<CommandApprovalResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.approveCommand(approvalId);
-  }
-
-  async denyCommand(approvalId: string): Promise<CommandApprovalResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.denyCommand(approvalId);
+    return window.electronAPI.resolveCommandApproval(approvalId, decision);
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -420,19 +415,11 @@ class HttpChatService implements ChatService {
     return this.request<CommandApprovalsResponse>('/command-approvals');
   }
 
-  async approveCommand(approvalId: string): Promise<CommandApprovalResponse> {
-    return this.request<CommandApprovalResponse>('/command-approvals/approve', {
+  async resolveCommandApproval(approvalId: string, decision: ApprovalDecisionPayload): Promise<CommandApprovalResponse> {
+    return this.request<CommandApprovalResponse>('/command-approvals/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approval_id: approvalId }),
-    });
-  }
-
-  async denyCommand(approvalId: string): Promise<CommandApprovalResponse> {
-    return this.request<CommandApprovalResponse>('/command-approvals/deny', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approval_id: approvalId }),
+      body: JSON.stringify({ approval_id: approvalId, decision }),
     });
   }
 
