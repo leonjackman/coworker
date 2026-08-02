@@ -531,16 +531,28 @@ def build_coworker_execution_graph(
 
     async def executor(state: CoworkerExecutionState) -> dict[str, str]:
         plan = state.get("plan", "")
-        messages = [
-            *state.get("messages", []),
-            {
-                "role": "system",
-                "content": (
+        messages: list[dict[str, str]] = []
+        for message in state.get("messages", []):
+            role = str(message.get("role", ""))
+            if role not in {"user", "assistant"}:
+                continue
+            content = str(message.get("content") or "")
+            if role == "user" and not messages:
+                content = (
                     "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
-                    f"{plan}"
-                ),
-            },
-        ]
+                    f"{plan}\n\n---\n\n{content}"
+                )
+            messages.append({"role": role, "content": content})
+        if not messages:
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
+                        f"{plan}"
+                    ),
+                }
+            ]
         agent = build_langchain_agent(llm, tools, access_mode=access_mode, approval_store=approval_store)
         result = await agent.ainvoke({"messages": messages})
         agent_messages = result.get("messages", []) if isinstance(result, dict) else []
@@ -563,12 +575,12 @@ def build_coworker_execution_graph(
         prompt = (
             f"You are the summarizer stage inside Coworker. Reply in {language_name(normalize_language(state.get('language')))}. "
             "Produce the final user-facing answer from the executor draft and verifier notes. "
-            "Be concise, truthful about validation, and do not expose hidden chain-of-thought."
+            "Be concise, truthful about validation, and do not expose hidden chain-of-thought.\n\n"
+            f"Verifier notes:\n{state.get('verification', '')}"
         )
         messages = [
             *state.get("messages", []),
             {"role": "assistant", "content": f"Executor draft:\n{state.get('draft', '')}"},
-            {"role": "system", "content": f"Verifier notes:\n{state.get('verification', '')}"},
         ]
         final = await invoke_stage_model(llm, prompt, messages)
         return {"final": final}
@@ -604,16 +616,28 @@ def build_coworker_execution_graph_sync(
 
     def executor(state: CoworkerExecutionState) -> dict[str, str]:
         plan = state.get("plan", "")
-        messages = [
-            *state.get("messages", []),
-            {
-                "role": "system",
-                "content": (
+        messages: list[dict[str, str]] = []
+        for message in state.get("messages", []):
+            role = str(message.get("role", ""))
+            if role not in {"user", "assistant"}:
+                continue
+            content = str(message.get("content") or "")
+            if role == "user" and not messages:
+                content = (
                     "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
-                    f"{plan}"
-                ),
-            },
-        ]
+                    f"{plan}\n\n---\n\n{content}"
+                )
+            messages.append({"role": role, "content": content})
+        if not messages:
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
+                        f"{plan}"
+                    ),
+                }
+            ]
         agent = build_langchain_agent(llm, tools, access_mode=access_mode, approval_store=approval_store)
         result = agent.invoke({"messages": messages})
         agent_messages = result.get("messages", []) if isinstance(result, dict) else []
@@ -636,12 +660,12 @@ def build_coworker_execution_graph_sync(
         prompt = (
             f"You are the summarizer stage inside Coworker. Reply in {language_name(normalize_language(state.get('language')))}. "
             "Produce the final user-facing answer from the executor draft and verifier notes. "
-            "Be concise, truthful about validation, and do not expose hidden chain-of-thought."
+            "Be concise, truthful about validation, and do not expose hidden chain-of-thought.\n\n"
+            f"Verifier notes:\n{state.get('verification', '')}"
         )
         messages = [
             *state.get("messages", []),
             {"role": "assistant", "content": f"Executor draft:\n{state.get('draft', '')}"},
-            {"role": "system", "content": f"Verifier notes:\n{state.get('verification', '')}"},
         ]
         final = invoke_stage_model_sync(llm, prompt, messages)
         return {"final": final}

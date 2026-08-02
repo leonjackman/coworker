@@ -62,9 +62,7 @@ declare global {
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
-      resolveCommandApproval: (approvalId: string, decision: ApprovalDecisionPayload) => Promise<CommandApprovalResponse>;
-      updateTranslucent: (enabled: boolean) => void;
-      hasVibrancySupport: () => Promise<boolean>;
+      resolveCommandApproval: (approvalId: string, decision: CommandApprovalDecision) => Promise<CommandApprovalResult>;
     };
   }
 }

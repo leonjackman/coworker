@@ -41,7 +41,6 @@ export interface ThemeSettings {
   mode: ThemeMode;
   presetId: ThemePresetId;
   customPalette: Partial<ThemePalette>;
-  translucent: boolean;
 }
 
 export type ThemeColorKey = keyof Pick<ThemePalette, 'background' | 'foreground' | 'accent' | 'panelSolid' | 'messageUser'>;
@@ -234,7 +233,6 @@ const DEFAULT_SETTINGS: ThemeSettings = {
   mode: 'system',
   presetId: 'mineral',
   customPalette: {},
-  translucent: false,
 };
 const DEFAULT_PRESET = THEME_PRESETS[0] as ThemePreset;
 
@@ -260,7 +258,6 @@ function normalizeSettings(settings: Partial<ThemeSettings>): ThemeSettings {
     mode,
     presetId,
     customPalette: settings.customPalette ?? {},
-    translucent: settings.translucent === true,
   };
 }
 
@@ -300,13 +297,9 @@ export function applyTheme(settings: ThemeSettings): void {
   const root = document.documentElement;
   root.dataset.theme = effective;
   root.dataset.themePreset = settings.presetId;
-  root.dataset.translucent = settings.translucent ? 'true' : 'false';
   root.style.colorScheme = effective;
   for (const [key, value] of Object.entries(palette)) {
     root.style.setProperty(`--${kebabCase(key)}`, value);
-  }
-  if (settings.translucent) {
-    root.style.setProperty('--panel-hover', `color-mix(in srgb, ${palette.panelHover} 72%, transparent)`);
   }
   root.classList.toggle('dark', effective === 'dark');
   root.style.setProperty('--card', 'var(--material-panel-solid)');
@@ -327,9 +320,6 @@ export function applyTheme(settings: ThemeSettings): void {
   root.style.setProperty('--sidebar-accent', palette.controlActive);
   root.style.setProperty('--sidebar-accent-foreground', palette.foreground);
   root.style.setProperty('--sidebar-border', palette.border);
-  if (typeof (window as any).electronAPI?.updateTranslucent === 'function') {
-    (window as any).electronAPI.updateTranslucent(settings.translucent);
-  }
 }
 
 function kebabCase(value: string): string {

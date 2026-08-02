@@ -15,7 +15,7 @@ import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { getLanguage, initLanguage, t, translateError } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AccessMode, AppView, ApprovalDecisionPayload, ChatMessage, ComposerAttachment, CreateProjectRequest, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function createMessage(
@@ -50,7 +50,7 @@ function App() {
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(() => Number(localStorage.getItem('cw.sidebarWidth')) || 276);
+  const [sidebarWidth, setSidebarWidth] = useState(276);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
@@ -67,26 +67,9 @@ function App() {
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
   const activeAssistantMessageIdRef = useRef<string | undefined>(undefined);
-  const resumeAttemptedRef = useRef(false);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (sessionId) {
-      try {
-        localStorage.setItem('cw.last-session', sessionId);
-      } catch {
-        // ignore
-      }
-    } else {
-      try {
-        localStorage.removeItem('cw.last-session');
-      } catch {
-        // ignore
-      }
-    }
   }, [sessionId]);
 
   const refreshProviders = async () => {
@@ -186,30 +169,6 @@ function App() {
     pendingProjectIdRef.current = firstProject.id;
     setActiveProjectId(firstProject.id);
   }, [activeProjectId, messages.length, projects, sessionId, sessions.length]);
-
-  useEffect(() => {
-    if (resumeAttemptedRef.current) return;
-    if (sessionId && messages.length > 0) {
-      resumeAttemptedRef.current = true;
-      return;
-    }
-    if (sessions.length === 0) return;
-    let lastId = '';
-    try {
-      lastId = localStorage.getItem('cw.last-session') || '';
-    } catch {
-      return;
-    }
-    if (!lastId || sessions.every((s) => s.id !== lastId)) {
-      const latest = sessions[0];
-      if (latest) {
-        openSession(latest.id);
-      }
-    } else {
-      openSession(lastId);
-    }
-    resumeAttemptedRef.current = true;
-  }, [sessionId, sessions.length, activeProjectId]);
 
   const sendMessage = async (override?: { message: string; projectId?: string }) => {
     const typedMessage = (override?.message ?? input).trim();
@@ -504,6 +463,49 @@ function App() {
     return response.project;
   };
 
+  const restorePendingForSession = async (targetSessionId: string) => {
+    try {
+      const response = await chatService.listCommandApprovals();
+      const restored: PendingRequest[] = [];
+      for (const approval of response.approvals) {
+        if (approval.status !== 'pending') continue;
+        const context = approval.context;
+        if (!context || context.session_id !== targetSessionId) continue;
+        const kind = context.kind === 'question' ? 'question' : 'command';
+        const base: PendingRequest = {
+          approval_id: approval.id,
+          kind,
+          session_id: targetSessionId,
+          approval_status: approval.status,
+          messageId: '',
+        };
+        if (kind === 'question') {
+          const args = typeof context.action_args === 'object' && context.action_args ? (context.action_args as Record<string, unknown>) : {};
+          restored.push({
+            ...base,
+            ...(typeof args.question === 'string' ? { question: args.question } : {}),
+            ...(typeof args.header === 'string' ? { header: args.header } : {}),
+            ...(Array.isArray(args.options) ? { options: args.options as ApprovalOption[] } : {}),
+            ...(typeof args.multiple === 'boolean' ? { multiple: args.multiple } : {}),
+          });
+        } else {
+          restored.push({
+            ...base,
+            command: Array.isArray(approval.command) ? approval.command : [],
+            ...(approval.cwd ? { cwd: approval.cwd } : {}),
+          });
+        }
+      }
+      if (restored.length === 0) return;
+      setPendingRequests((current) => [
+        ...current.filter((item) => item.session_id !== targetSessionId),
+        ...restored,
+      ]);
+    } catch (error) {
+      console.error('Failed to restore pending approvals:', error);
+    }
+  };
+
   const openSession = async (sessionIdToOpen: string) => {
     abortRef.current?.abort();
     requestSeqRef.current += 1;
@@ -527,7 +529,8 @@ function App() {
       setSessionId(sessionIdToOpen);
       sessionIdRef.current = sessionIdToOpen;
       pendingProjectIdRef.current = undefined;
-      setPendingRequests([]);
+      setPendingRequests((current) => current.filter((item) => item.session_id !== sessionIdToOpen));
+      void restorePendingForSession(sessionIdToOpen);
       setActiveProjectId(response.session.project_id || undefined);
       setMessages(loaded);
       setAttachments([]);
@@ -546,11 +549,6 @@ function App() {
         setInput('');
         setAttachments([]);
         pendingProjectIdRef.current = activeProjectId;
-        try {
-          localStorage.removeItem('cw.last-session');
-        } catch {
-          // ignore
-        }
       }
       await refreshSessions();
       await refreshProjects();
@@ -604,11 +602,6 @@ function App() {
         setMessages([]);
         setInput('');
         setAttachments([]);
-        try {
-          localStorage.removeItem('cw.last-session');
-        } catch {
-          // ignore
-        }
       }
       if (activeProjectId === projectId) {
         setActiveProjectId(undefined);
@@ -684,6 +677,9 @@ function App() {
   const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
   const showFirstRunStart = activeView === 'chat' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0;
   const showEmptyProjectStart = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && activeProjectSessions.length === 0;
+  const currentSessionPending = sessionId
+    ? pendingRequests.filter((item) => item.session_id === sessionId)
+    : [];
 
   const changeThemeSettings = (nextSettings: ThemeSettings) => {
     setThemeSettingsState(nextSettings);
@@ -704,6 +700,7 @@ function App() {
         rightSidebarOpen={rightSidebarOpen}
         bottomPanelOpen={bottomPanelOpen}
         canEditSession={Boolean(sessionId)}
+        pendingCount={currentSessionPending.length}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         onToggleRightSidebar={() => setRightSidebarOpen((value) => !value)}
         onToggleBottomPanel={() => setBottomPanelOpen((value) => !value)}
@@ -722,7 +719,6 @@ function App() {
           onResizeEnd={() => setSidebarResizing(false)}
           onResizeWidth={(width) => {
             setSidebarWidth(width);
-            localStorage.setItem('cw.sidebarWidth', String(width));
           }}
           {...(sessionId ? { activeSessionId: sessionId } : {})}
           onViewChange={setActiveView}
@@ -760,15 +756,18 @@ function App() {
                     </>
                   )}
                   {!showFirstRunStart && !showEmptyProjectStart && (
-                    <div className="workspace-dock-area">
-                      <PendingDocks
-                        requests={pendingRequests}
-                        onResolve={(request, decision) => void resolvePendingRequest(request, decision)}
-                        onDismiss={dismissPendingRequest}
-                      />
+                    currentSessionPending.length > 0 ? (
+                      <div className="workspace-dock-area">
+                        <PendingDocks
+                          requests={currentSessionPending}
+                          onResolve={(request, decision) => void resolvePendingRequest(request, decision)}
+                          onDismiss={dismissPendingRequest}
+                        />
+                      </div>
+                    ) : (
                       <ChatInput
                         value={input}
-                        disabled={isThinking || runtimeStatus === 'connecting' || pendingRequests.length > 0}
+                        disabled={isThinking || runtimeStatus === 'connecting'}
                         isThinking={isThinking}
                         workMode={workMode}
                         accessMode={accessMode}
@@ -783,7 +782,7 @@ function App() {
                         onModelChange={(providerId) => void changeSelectedModel(providerId)}
                         onAttachmentsChange={setAttachments}
                       />
-                    </div>
+                    )
                   )}
                 </>
               ) : activeView === 'providers' ? (
@@ -798,7 +797,6 @@ function App() {
                   onAccessModeChange={setAccessMode}
                   onLanguageChange={() => setLanguageVersion((value) => value + 1)}
                   onClose={() => setActiveView('chat')}
-                  supportsVibrancy={window.electronAPI?.platform === 'darwin'}
                 />
               )}
             </section>

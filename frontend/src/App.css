@@ -90,22 +90,6 @@
   --scroll-thumb: rgba(161, 161, 170, 0.32);
 }
 
-:root[data-translucent="true"] {
-  --material-panel: color-mix(in srgb, var(--panel-solid) 35%, transparent);
-  --material-panel-solid: color-mix(in srgb, var(--panel-solid) 42%, transparent);
-  --material-control: color-mix(in srgb, var(--control) 28%, transparent);
-  --material-border: color-mix(in srgb, var(--border) 35%, transparent);
-  --material-shadow: color-mix(in srgb, var(--shadow) 35%, transparent);
-  --material-blur: blur(28px) saturate(1.4);
-}
-
-:root[data-theme="dark"][data-translucent="true"] {
-  --material-panel: color-mix(in srgb, var(--panel-solid) 25%, transparent);
-  --material-panel-solid: color-mix(in srgb, var(--panel-solid) 32%, transparent);
-  --material-control: color-mix(in srgb, var(--control) 20%, transparent);
-  --material-border: color-mix(in srgb, var(--border) 28%, transparent);
-}
-
 * {
   box-sizing: border-box;
 }
@@ -117,10 +101,6 @@ body {
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-}
-
-:root[data-translucent="true"] body {
-  background: transparent;
 }
 
 button,
@@ -265,11 +245,6 @@ body.sidebar-resizing {
 
 .sidebar--collapsed .sidebar__settings {
   align-items: stretch;
-}
-
-:root[data-translucent="true"] .sidebar {
-  background: color-mix(in srgb, var(--sidebar) 40%, transparent);
-  backdrop-filter: var(--material-blur);
 }
 
 .sidebar__brand {
@@ -692,6 +667,26 @@ body.sidebar-resizing {
 .workspace-titlebar__button--active {
   color: var(--foreground) !important;
   background: var(--material-control) !important;
+}
+
+.titlebar-pending {
+  -webkit-app-region: no-drag;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--material-border));
+  border-radius: 7px;
+  padding: 0 8px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--material-control));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.titlebar-pending span {
+  min-width: 14px;
+  text-align: center;
 }
 
 .titlebar-menu {
@@ -2844,13 +2839,14 @@ body.sidebar-resizing {
 .workspace-dock-area {
   grid-row: 4;
   min-height: 0;
-  display: grid;
-  gap: 8px;
-  padding: 0 24px;
+  box-sizing: border-box;
+  width: min(760px, calc(100% - 48px));
+  margin: 0 auto 16px;
+  padding: 0 32px;
 }
 
 .pending-docks {
-  width: min(760px, calc(100% - 0px));
+  width: 100%;
   margin: 0 auto;
   display: grid;
   gap: 8px;
@@ -3066,6 +3062,7 @@ body.sidebar-resizing {
 
 @media (max-width: 640px) {
   .workspace-dock-area {
+    width: calc(100% - 24px);
     padding: 0 12px;
   }
 }

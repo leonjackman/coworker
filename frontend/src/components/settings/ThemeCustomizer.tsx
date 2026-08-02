@@ -1,5 +1,4 @@
 import { ArrowLeft, Palette } from 'lucide-react';
-import * as React from 'react';
 import {
   CUSTOM_COLOR_KEYS,
   THEME_PRESETS,
@@ -18,14 +17,13 @@ interface ThemeCustomizerProps {
   settings: ThemeSettings;
   onChange: (settings: ThemeSettings) => void;
   onBack: () => void;
-  supportsVibrancy: boolean;
 }
 
 function colorLabel(key: ThemeColorKey): string {
   return t(`theme.color_${key}`);
 }
 
-export function ThemeCustomizer({ settings, onChange, onBack, supportsVibrancy }: ThemeCustomizerProps) {
+export function ThemeCustomizer({ settings, onChange, onBack }: ThemeCustomizerProps) {
   const palette = settings.presetId === 'custom' ? customBasePalette(settings) : resolveThemePalette(settings);
 
   function selectPreset(presetId: ThemePresetId) {
@@ -43,10 +41,6 @@ export function ThemeCustomizer({ settings, onChange, onBack, supportsVibrancy }
     });
   }
 
-  function toggleTranslucent(checked: boolean) {
-    onChange({ ...settings, translucent: checked });
-  }
-
   return (
     <WorkspacePage
       className="theme-customizer"
@@ -60,35 +54,6 @@ export function ThemeCustomizer({ settings, onChange, onBack, supportsVibrancy }
         </Button>
       )}
     >
-      {supportsVibrancy && (
-        <div className="settings-card material-card">
-          <div className="settings-row">
-            <div className="settings-row__copy">
-              <label htmlFor="setting-translucent-input">{t('settings.translucent_theme')}</label>
-              <p>{t('settings.translucent_theme_desc')}</p>
-            </div>
-            <div className="settings-row__control">
-              <Switch
-                id="setting-translucent"
-                checked={settings.translucent}
-                onChange={(event) => toggleTranslucent(event.currentTarget.checked)}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {!supportsVibrancy && (
-        <div className="settings-card material-card">
-          <div className="settings-row">
-            <div className="settings-row__copy">
-              <label>{t('settings.translucent_theme')}</label>
-              <p>{t('settings.translucent_theme')}（仅 macOS 支持）</p>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="theme-preset-grid">
         {THEME_PRESETS.map((preset) => (
           <button

@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   MoreHorizontal,
   PanelBottom,
   PanelLeftClose,
@@ -28,6 +29,7 @@ interface WorkspaceTitlebarProps {
   rightSidebarOpen: boolean;
   bottomPanelOpen: boolean;
   canEditSession: boolean;
+  pendingCount: number;
   onToggleSidebar: () => void;
   onToggleRightSidebar: () => void;
   onToggleBottomPanel: () => void;
@@ -45,6 +47,7 @@ export function WorkspaceTitlebar({
   rightSidebarOpen,
   bottomPanelOpen,
   canEditSession,
+  pendingCount,
   onToggleSidebar,
   onToggleRightSidebar,
   onToggleBottomPanel,
@@ -109,6 +112,14 @@ export function WorkspaceTitlebar({
           <span className={`status-dot status-dot--${status}`} />
           <span>{statusText}</span>
         </div>
+        {pendingCount > 0 && (
+          <Tooltip content={t('chat.pending_badge', { count: pendingCount })}>
+            <div className="titlebar-pending" role="status">
+              <AlertTriangle size={13} />
+              <span>{pendingCount}</span>
+            </div>
+          </Tooltip>
+        )}
         <Tooltip content={bottomPanelOpen ? t('titlebar.bottom_hide') : t('titlebar.bottom_show')}>
           <Button
             type="button"
