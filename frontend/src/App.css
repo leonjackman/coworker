@@ -1,0 +1,244 @@
+:root {
+  color: #1e2329;
+  background: #eef1f4;
+  font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  background:
+    linear-gradient(135deg, rgba(220, 226, 230, 0.95), rgba(246, 248, 247, 0.98)),
+    repeating-linear-gradient(90deg, rgba(25, 29, 32, 0.035) 0 1px, transparent 1px 80px);
+}
+
+.status-bar {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 22px;
+  border-bottom: 1px solid rgba(34, 41, 48, 0.12);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(16px);
+  color: #3c4650;
+  font-size: 13px;
+}
+
+.status-bar__workspace,
+.status-bar__mode {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-bar__workspace span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-bar__divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(34, 41, 48, 0.18);
+}
+
+.status-bar__provider {
+  padding: 3px 8px;
+  border: 1px solid rgba(34, 41, 48, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  text-transform: capitalize;
+}
+
+.language-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(56px, auto));
+  padding: 2px;
+  border: 1px solid rgba(34, 41, 48, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.language-switch__option {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #54616b;
+  background: transparent;
+  cursor: pointer;
+}
+
+.language-switch__option--active {
+  color: #ffffff;
+  background: #26323d;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9ba4ad;
+}
+
+.status-dot--ready {
+  background: #2d9d68;
+}
+
+.status-dot--connecting {
+  background: #c89a2b;
+}
+
+.status-dot--error {
+  background: #c94f3d;
+}
+
+.messages {
+  width: min(920px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 42px 0 24px;
+  overflow-y: auto;
+}
+
+.empty-state {
+  margin-top: 16vh;
+  max-width: 560px;
+}
+
+.empty-state__title {
+  margin: 0 0 12px;
+  color: #15191d;
+  font-size: 34px;
+  font-weight: 700;
+}
+
+.empty-state__body {
+  margin: 0;
+  color: #59636d;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.message {
+  width: fit-content;
+  max-width: min(760px, 92%);
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(34, 41, 48, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 18px 50px rgba(20, 28, 36, 0.08);
+}
+
+.message--user {
+  margin-left: auto;
+  color: #ffffff;
+  background: #26323d;
+}
+
+.message__role {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  opacity: 0.68;
+}
+
+.message__content {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.thinking {
+  color: #58636d;
+  font-size: 14px;
+}
+
+.composer {
+  width: min(920px, calc(100vw - 32px));
+  margin: 0 auto 18px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.composer__input {
+  min-height: 56px;
+  max-height: 150px;
+  padding: 15px 16px;
+  border: 1px solid rgba(34, 41, 48, 0.18);
+  border-radius: 8px;
+  color: #1d252c;
+  background: rgba(255, 255, 255, 0.9);
+  resize: vertical;
+  outline: none;
+  box-shadow: 0 14px 40px rgba(20, 28, 36, 0.1);
+}
+
+.composer__input:focus {
+  border-color: #2b6f8f;
+}
+
+.composer__send {
+  height: 56px;
+  min-width: 86px;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #2b6f8f;
+  cursor: pointer;
+}
+
+.composer__send:disabled {
+  background: #9aa6ae;
+  cursor: not-allowed;
+}
+
+@media (max-width: 680px) {
+  .status-bar {
+    height: auto;
+    min-height: 58px;
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 10px 14px;
+    gap: 6px;
+  }
+
+  .composer {
+    grid-template-columns: 1fr;
+  }
+
+  .composer__send {
+    width: 100%;
+  }
+
+  .empty-state__title {
+    font-size: 28px;
+  }
+}

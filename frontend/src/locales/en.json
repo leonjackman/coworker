@@ -1,0 +1,31 @@
+{
+  "language.name": "English",
+
+  "app.title": "Coworker Single Agent",
+  "app.subtitle": "Ask a coding question or request a focused change in the current workspace.",
+
+  "common.unknown_error": "Unknown error",
+  "common.ready": "Ready",
+  "common.connecting": "Connecting",
+  "common.offline": "Offline",
+  "common.send": "Send",
+  "common.you": "You",
+  "common.coworker": "Coworker",
+
+  "agent.mode.single": "Single Agent",
+  "agent.provider.unknown": "unknown",
+  "agent.thinking": "Thinking...",
+
+  "workspace.unavailable": "Workspace unavailable",
+
+  "chat.placeholder": "Message Coworker",
+  "chat.backend_unreachable": "Coworker backend is not reachable. Please restart the desktop launcher.",
+
+  "language.zh": "中文",
+  "language.en": "English",
+  "language.switch_label": "Display language",
+
+  "error.fetch_failed": "Network request failed. Please check whether the Coworker backend is running.",
+  "error.connection_refused": "Connection refused. Please make sure the Coworker backend has started.",
+  "error.electron_api_unavailable": "Electron bridge is unavailable. Please open the app through the desktop launcher."
+}

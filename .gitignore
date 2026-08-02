@@ -1,0 +1,44 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Node dependencies
+node_modules/
+frontend/node_modules/
+
+# Python virtual environments and caches
+backend/venv/
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Frontend build output
+frontend/dist/
+frontend/build/
+dist/
+build/
+
+# Runtime scratch space
+backend/workspace/
+workspace/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.vite/
+
+# Packaging output
+release/
+out/
+*.dmg
+*.zip

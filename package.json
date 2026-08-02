@@ -1,0 +1,16 @@
+{
+  "name": "coworker",
+  "version": "1.0.0",
+  "description": "Local desktop AI coding assistant MVP",
+  "main": "electron/main.js",
+  "scripts": {
+    "desktop": "electron .",
+    "build:frontend": "npm --prefix frontend run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "43.2.0"
+  }
+}

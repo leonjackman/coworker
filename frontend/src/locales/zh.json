@@ -1,0 +1,31 @@
+{
+  "language.name": "中文",
+
+  "app.title": "Coworker 单 Agent",
+  "app.subtitle": "在当前工作区提问，或请求一次聚焦的代码修改。",
+
+  "common.unknown_error": "未知错误",
+  "common.ready": "就绪",
+  "common.connecting": "连接中",
+  "common.offline": "离线",
+  "common.send": "发送",
+  "common.you": "你",
+  "common.coworker": "Coworker",
+
+  "agent.mode.single": "单 Agent",
+  "agent.provider.unknown": "未知",
+  "agent.thinking": "思考中...",
+
+  "workspace.unavailable": "工作区不可用",
+
+  "chat.placeholder": "给 Coworker 发送消息",
+  "chat.backend_unreachable": "无法连接 Coworker 后端。请重新启动桌面启动器。",
+
+  "language.zh": "中文",
+  "language.en": "English",
+  "language.switch_label": "界面语言",
+
+  "error.fetch_failed": "网络请求失败，请检查 Coworker 后端是否正常运行。",
+  "error.connection_refused": "连接被拒绝，请确认 Coworker 后端已经启动。",
+  "error.electron_api_unavailable": "Electron 通信接口不可用，请通过桌面启动器打开应用。"
+}
