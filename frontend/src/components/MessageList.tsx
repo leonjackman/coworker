@@ -1,36 +1,13 @@
-import { Bot, CheckCircle2, Clock3, FileText, Hammer, ListChecks, Shield, ShieldCheck, Square, UserRound } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { Bot, FileText, Hammer, ListChecks, Loader2, Shield, ShieldCheck } from 'lucide-react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage } from '../types';
-import { Message, MessageAvatar, MessageContent, MessageHeader } from './ui/message';
 import { ScrollArea } from './ui/scroll-area';
+
+const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
 interface MessageListProps {
   messages: ChatMessage[];
-  isThinking: boolean;
-}
-
-function messageTime(timestamp: number) {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(timestamp);
-}
-
-function statusLabel(status: ChatMessage['status']) {
-  if (status === 'running') return t('chat.status_running');
-  if (status === 'stopped') return t('chat.status_stopped');
-  if (status === 'error') return t('chat.status_error');
-  if (status === 'queued') return t('chat.status_queued');
-  return t('chat.status_done');
-}
-
-function statusIcon(status: ChatMessage['status']) {
-  if (status === 'running') return <Clock3 size={13} />;
-  if (status === 'stopped') return <Square size={13} />;
-  if (status === 'error') return <Square size={13} />;
-  if (status === 'queued') return <Clock3 size={13} />;
-  return <CheckCircle2 size={13} />;
 }
 
 function renderContext(message: ChatMessage) {
@@ -60,7 +37,7 @@ function renderContext(message: ChatMessage) {
   if (chips.length === 0 && !message.attachments?.length) return null;
 
   return (
-    <div className="message-context">
+    <div className="message-meta">
       {chips.map((chip) => (
         <span className="message-chip" key={chip.key}>
           {chip.icon}
@@ -77,36 +54,51 @@ function renderContext(message: ChatMessage) {
   );
 }
 
-function TimelineMessage({ message, index }: { message: ChatMessage; index: number }) {
-  const isUser = message.role === 'user';
+function UserMessage({ message }: { message: ChatMessage }) {
   return (
-    <Message align={isUser ? 'end' : 'start'} className={`timeline-item timeline-item--${message.role} timeline-item--${message.status ?? 'done'}`}>
-      <div className="timeline-item__rail">
-        <span className="timeline-item__index">{String(index + 1).padStart(2, '0')}</span>
-        <MessageAvatar className="timeline-item__node">{isUser ? <UserRound size={15} /> : <Bot size={15} />}</MessageAvatar>
-      </div>
-      <MessageContent className="timeline-card">
-        <MessageHeader className="timeline-card__header">
-          <div>
-            <span className="timeline-card__role">{isUser ? t('common.you') : t('common.coworker')}</span>
-            <time>{messageTime(message.timestamp)}</time>
-          </div>
-          <span className="timeline-status">
-            {statusIcon(message.status)}
-            {statusLabel(message.status)}
-          </span>
-        </MessageHeader>
-        {renderContext(message)}
-        <pre className="timeline-card__content">{message.content}</pre>
-      </MessageContent>
-    </Message>
+    <div className="stream-row stream-row--user">
+      <div className="stream-bubble stream-bubble--user">{message.content}</div>
+    </div>
   );
 }
 
-export function MessageList({ messages, isThinking }: MessageListProps) {
+function AssistantMessage({ message }: { message: ChatMessage }) {
+  const isError = message.status === 'error';
+  const isStopped = message.status === 'stopped';
+  const isRunningEmpty = message.status === 'running' && !message.content;
+  return (
+    <div className="stream-row stream-row--assistant">
+      <div className="stream-avatar" aria-hidden="true">
+        <Bot size={15} />
+      </div>
+      <div className={`stream-content stream-content--${message.status ?? 'done'}`}>
+        <div className="stream-role">
+          <span>{t('common.coworker')}</span>
+        </div>
+        {renderContext(message)}
+        {isError ? (
+          <div className="stream-error">{message.content}</div>
+        ) : isStopped ? (
+          <div className="stream-stopped">{message.content}</div>
+        ) : isRunningEmpty ? (
+          <div className="stream-thinking">
+            <Loader2 className="stream-thinking__spinner" size={15} />
+            {t('agent.thinking')}
+          </div>
+        ) : (
+          <Suspense fallback={<div className="markdown-body">{message.content}</div>}>
+            <MarkdownContent content={message.content} />
+          </Suspense>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function MessageList({ messages }: MessageListProps) {
   return (
     <ScrollArea className="messages">
-      <section className="messages__inner" aria-live="polite">
+      <section className="stream-wall" aria-live="polite">
         {messages.length === 0 && (
           <div className="empty-state">
             <p className="empty-state__eyebrow">{t('app.eyebrow')}</p>
@@ -120,24 +112,13 @@ export function MessageList({ messages, isThinking }: MessageListProps) {
           </div>
         )}
 
-        <div className="timeline-wall">
-          {messages.map((message, index) => (
-            <TimelineMessage index={index} key={message.id} message={message} />
-          ))}
-
-          {isThinking && (
-            <TimelineMessage
-              index={messages.length}
-              message={{
-                id: 'assistant-running',
-                role: 'assistant',
-                content: t('agent.thinking'),
-                timestamp: Date.now(),
-                status: 'running',
-              }}
-            />
-          )}
-        </div>
+        {messages.map((message) =>
+          message.role === 'user' ? (
+            <UserMessage key={message.id} message={message} />
+          ) : (
+            <AssistantMessage key={message.id} message={message} />
+          ),
+        )}
       </section>
     </ScrollArea>
   );

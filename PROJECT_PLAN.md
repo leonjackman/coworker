@@ -1,134 +1,126 @@
-# Agent Assistant Project Plan
+# Coworker Development Plan
 
-## Vision
-Build a local desktop application that integrates:
-1. **Single Agent Mode**: Codex-like coding assistant for quick queries and code generation/modification
-2. **Multi-Agent Mode**: Self-organizing "agent company" that automatically decomposes tasks into role-based collaboration (PM, Architect, Developer, Tester, etc.)
+## Product Direction
 
-Both modes share the same backend services and can be switched seamlessly in the chat interface.
+Coworker is a local-first desktop agent app. The current product is a Codex-style single-agent coding assistant with local provider configuration, project/session organization, streaming chat, and guarded workspace tools.
 
-## Technology Stack Decisions
+The long-term direction still includes a multi-agent company mode, but that is not part of the current implemented runtime. The active implementation should keep a clean runtime registry boundary so multi-agent orchestration can be added without forking the desktop, provider, session, or workspace layers.
 
-### Frontend
-- **Framework**: Electron + React + TypeScript
-- **UI Library**: Ant Design (for consistent, professional components)
-- **Chat Interface**: Inspired by opencode's terminal-style interaction but adapted to modern GUI:
-  - Chat history panel with syntax-highlighted code blocks
-  - Bottom input area with mode toggle switch (⚡ Single Agent / 🏢 Multi-Agent Company)
-  - Top status bar showing current working directory and agent state
-  - Optional right-side collapsible panel for file tree or task progress
-- **Communication**: Electron main process launches Python backend via HTTP API; renderer process communicates via IPC to main process which proxies to backend
+## Current Architecture
 
-### Backend
-- **Framework**: Python + FastAPI
-- **Core Orchestration**: LangGraph (for both single agent and future multi-agent workflows)
-- **Tool Ecosystem**: LangChain tools (file operations, code search, command execution, sandbox)
-- **LLM Adapters**: Unified interface supporting OpenAI, Anthropic, Ollama
-- **Data Storage**: SQLite for session history, local filesystem for workspace caching
-- **Security**: Sandboxed tool execution (Docker or restricted environment), file access limited to workspace, command whitelist
+### Desktop Layer
 
-## MVP Scope (Single Agent Focus)
-**Goal**: Deliver a minimally usable coding assistant that can:
-- Answer programming questions
-- Generate basic code snippets
-- Perform simple file operations (read/write)
-- Execute limited development commands in sandbox
-- Maintain context of current workspace
+- Electron owns the app window, tray, startup diagnostics, IPC bridge, and backend process lifecycle.
+- Closing the main window keeps the app available from the tray.
+- Quitting the app terminates the backend process started by the launcher.
+- Production mode loads `frontend/dist`.
 
-### MVP Features
-1. **Electron Desktop Application**
-   - Main window with resizable chat interface
-   - System tray integration (optional)
-   
-2. **Chat Interface**
-   - Virtualized message list for performance
-   - Support for Markdown rendering and code syntax highlighting (Prism.js or Highlight.js)
-   - Input area: multi-line text box (Shift+Enter for newline, Enter to send)
-   - Send button with loading state
-   - Mode toggle switch (visible but disabled in MVP, reserved for future multi-agent)
-   
-3. **Python Backend (FastAPI)**
-   - `/chat` endpoint: accepts user message, returns streaming agent response
-   - `/tools` endpoint: executes registered tools (file read, write, etc.)
-   - `/health` endpoint: service health check
-   - Stateless design with session context passed in requests
-   
-4. **Single Agent Implementation**
-   - Based on LangGraph simple state machine: think → act → observe → (repeat or finish)
-   - Integrated LLM via LangChain adapters
-   - Core tools:
-     - File read (with path validation)
-     - File write (with backup option)
-     - Basic command execution (whitelisted: ls, grep, git status, etc.)
-     - Code sandbox execution (Python in restricted mode)
-   
-5. **Context Management**
-   - Track current workspace directory
-   - Optional: track currently opened file for focused assistance
-   
-6. **Modular Design Principles**
-   - Clear separation between:
-     - UI layer (Electron/React)
-     - Communication layer (IPC ↔ HTTP)
-     - Agent layer (LangGraph-based)
-     - Tool layer (pluggable interface)
-     - LLM adapter layer
-   - Interfaces defined via TypeScript (frontend) and Python protocols/backend interfaces
-   - Dependency injection for easy replacement (e.g., swap LangGraph for AutoGen later)
+### Frontend Layer
 
-## Future Extension Points (for Multi-Agent)
-Designed in MVP:
-- **Mode Switch Backend Endpoint**: `/mode` to toggle between agent types
-- **Workflow Engine Interface**: Abstract base class for agent orchestration (single vs multi)
-- **Role Plugin System**: Define interfaces for different agent roles (PM, Architect, etc.)
-- **Communication Bus**: Abstract message passing between agents
-- **Supervisor/Controller Interface**: For task progression and quality control
-- **Workflow Definition Language**: YAML/JSON schema ready for future implementation
+- React + TypeScript + Vite.
+- Local Radix/shadcn-style primitives are the reusable UI foundation.
+- `App.tsx` owns the current chat/session/project state and streaming message updates.
+- `chatService` is the single frontend boundary for Electron IPC and direct HTTP fallback.
+- `WorkspaceSidebar` owns standalone sessions and project-grouped sessions.
+- `ProvidersPanel` owns provider add/edit/delete/default/test interactions.
+- `SettingsView` owns language, preferences, theme presets, custom colors, and translucent glass mode.
 
-## Development Roadmap
+### Backend Layer
 
-### Phase 1: MVP - Single Agent (2-3 weeks)
-- [x] Setup Electron + React + TypeScript project
-- [x] Implement basic FastAPI service
-- [x] Establish main process ↔ backend communication
-- [x] Build chat UI with message display and input
-- [x] Add one-click desktop launcher
-- [x] Add backend-owned simulated provider for smoke testing
-- [x] Add file read/write tools for the real single-agent provider
-- [ ] Implement LLM streaming response
-- [ ] Enable robust code generation and Q&A with persistent context
+- FastAPI exposes runtime config, chat, streaming chat, provider, session, project, and workspace APIs.
+- `AgentRuntimeRegistry` is the single agent runtime entry.
+- `ProviderManager` is the single local provider config owner.
+- `SessionStore` and `ProjectStore` persist local JSON state under the app data directory.
+- `Workspace` owns path normalization, workspace confinement, file preview, and directory tree traversal.
 
-### Phase 2: Enhanced Single Agent (2-3 weeks)
-- [ ] Add advanced tools (precise edit, code search, sandbox execution)
-- [ ] Optimize prompts for coding tasks
-- [ ] Implement basic context tracking (current file/workspace)
-- [ ] Add error handling and retry mechanisms
+### Agent Layer
 
-### Phase 3: Multi-Agent Foundation (3-4 weeks)
-- [ ] Define role interfaces and basic implementations
-- [ ] Implement simple task decomposition
-- [ ] Build agent communication bus
-- [ ] Create basic workflow executor
-- [ ] Test with simple collaborative tasks
+- Non-streaming calls use LangChain `create_agent`.
+- Streaming calls use LangGraph `create_react_agent` and `astream`.
+- Tools are intentionally small:
+  - Default access: `search_files`, `read_file`
+  - Build + Full Access: `search_files`, `read_file`, `replace_in_file`, `apply_text_edits`, `write_file`, `run_command`
+- Plan mode always removes write access.
+- Attachment content is formatted into the user prompt server-side and capped.
+- File writes, exact replacements, atomic structured text edits, and command executions append JSONL audit events under the app data directory; `/audit/tool` exposes recent records for the settings UI.
+- Command execution requires a one-time approval stored under the app data directory before the process starts.
 
-### Phase 4: Advanced Multi-Agent Company (3-4 weeks)
-- [ ] Implement full role set (PM, Architect, Developer, Tester, DevOps)
-- [ ] Add workflow definition language support
-- [ ] Build supervisor with quality gates
-- [ ] Integrate human-in-the-loop checkpoints
-- [ ] Add automated testing and validation
+## Implemented MVP
 
-### Phase 5: Polish and Release (2 weeks)
-- [ ] Performance optimization (caching, lazy loading)
-- [ ] Comprehensive logging and error reporting
-- [ ] User documentation and tutorial
-- [ ] Security audit and hardening
-- [ ] Packaging and distribution
+- [x] Electron + React + TypeScript app shell.
+- [x] FastAPI backend with `/health` and `/config`.
+- [x] Streaming chat through `/chat/stream`.
+- [x] LangChain/LangGraph single-agent runtime.
+- [x] Simulated provider for local smoke testing.
+- [x] OpenAI-compatible provider configuration.
+- [x] Provider CRUD, default model, model fetching, and connection test.
+- [x] Plan/Build toggle.
+- [x] Default/Full Access toggle.
+- [x] Model selection.
+- [x] Send, stop, new chat, slash commands, and attachments in the composer.
+- [x] Attachment-only sending.
+- [x] Markdown rendering with code highlighting and copy actions.
+- [x] Lazy-loaded Markdown/Shiki rendering boundary.
+- [x] Local sessions and projects.
+- [x] Sidebar with standalone sessions plus project sessions.
+- [x] Workspace file APIs.
+- [x] Atomic structured text edit tool.
+- [x] Tool audit API and settings-page review UI.
+- [x] Command approval API and settings-page approve/deny UI.
+- [x] Chinese/English i18n.
+- [x] Theme presets, custom theme colors, light/dark switching, and translucent glass mode.
+- [x] System tray and frontend/backend process binding.
+- [x] Startup diagnostics instead of silent white screen.
 
-## Immediate Next Steps (Post Read-Only Mode)
-1. Create technology validation prototype:
-   - Minimal Electron window
-   - Simple FastAPI health endpoint
-   - Main process launching backend and proxying IPC→HTTP
-2. Verify LangGraph basic agent loop works in prototype
-3. Finalize UI layout and component choices
+## Active Gaps
+
+These are the next implementation areas. Treat them as real product gaps, not documentation polish.
+
+1. **Richer Coding Tools**
+   - Add multi-file patch/diff support if exact structured text edits are not enough.
+   - Keep all tool access behind the existing work/access policy owner.
+
+2. **Runtime Persistence**
+   - Evaluate LangGraph checkpointing for resumable long-running tasks.
+   - Do not duplicate session truth: either checkpoint is integrated as runtime state, or local `SessionStore` remains the chat-history owner.
+
+3. **Human Approval**
+   - Command execution now has Coworker-owned one-time approval.
+   - Evaluate LangGraph/LangChain human-in-the-loop middleware only if it becomes the runtime policy owner.
+   - Expand approval to other risky tools if product usage requires it.
+
+4. **Multi-Agent Foundation**
+   - Add new runtime modes behind `AgentRuntimeRegistry`.
+   - Keep provider/session/workspace APIs shared.
+   - Avoid adding a second conversation store or provider store.
+
+5. **Packaging And Release**
+   - Add native packaging.
+   - Add installer/update path.
+   - Add release evidence commands and checklist.
+
+6. **Security Hardening**
+   - Harden provider secret storage.
+   - Improve provider validation.
+   - Add retention controls for workspace write/command audit records.
+
+## Verification Gates
+
+Run these before claiming a development slice is complete:
+
+```bash
+cd frontend && npx tsc --noEmit
+cd frontend && npm run build
+backend/venv/bin/python -m compileall backend/main.py backend/coworker
+node --check electron/preload.js && node --check electron/main.js
+git diff --check
+COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
+```
+
+## Design Rules
+
+- Keep one owner for each product truth: provider config, session history, project grouping, workspace access, runtime policy, and Electron process lifecycle.
+- Prefer replacing the root cause over adding compatibility or fallback layers.
+- Do not add a parallel UI state store for conversations unless `App.tsx` state ownership is intentionally migrated.
+- Do not introduce login/account scope; Coworker is currently local software.
+- Do not claim multi-agent support until a real runtime exists behind the registry.

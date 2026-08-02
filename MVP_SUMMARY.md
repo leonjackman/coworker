@@ -1,115 +1,95 @@
-# MVP Summary: Single Agent Coding Assistant
+# Coworker MVP Summary
 
 ## Current Implementation Status
 
-### Backend (Python/FastAPI)
-- ✅ Basic API server with `/health`, `/config`, and `/chat` endpoints
-- ✅ Backend-owned simulated provider for local MVP smoke tests
-- ✅ OpenAI-backed single-agent provider available through `COWORKER_AGENT_PROVIDER=openai`
-- ✅ Runtime registry boundary prepared for future agent modes
-- ✅ Workspace-based file access restriction for security
-- ✅ File read/write tools defined for the real single agent
+### Backend
 
-### Frontend (React/TypeScript)
-- ✅ Componentized chat interface with message history
-- ✅ Input area (Shift+Enter for newline, Enter to send)
-- ✅ Status bar showing backend-owned workspace and agent provider
-- ✅ Chat service abstraction (Electron IPC vs direct HTTP)
-- ✅ Thinking/loading state indicator
-- ✅ Production build output through Vite
+- [x] FastAPI server with `/health`, `/config`, `/chat`, and `/chat/stream`.
+- [x] LangChain non-streaming single-agent runtime.
+- [x] LangGraph streaming ReAct single-agent runtime.
+- [x] Simulated provider for local smoke tests.
+- [x] OpenAI-compatible provider support through app settings or environment variables.
+- [x] Provider CRUD, default provider selection, model fetching, and connection testing.
+- [x] Workspace-restricted file access.
+- [x] Agent tools: `search_files` and `read_file` by default, `replace_in_file`, `apply_text_edits`, `write_file`, and `run_command` only in Build + Full Access.
+- [x] Local session persistence under the app data directory.
+- [x] Local project grouping with standalone sessions and project sessions.
+- [x] Workspace tree, directory listing, and file preview APIs.
+- [x] Text attachment ingestion into the agent prompt.
+- [x] JSONL audit records for writes, exact replacements, atomic structured text edits, and command execution.
+- [x] Tool audit API and settings-page recent audit review UI.
+- [x] One-time command approval queue for agent and bottom-panel terminal commands.
+
+### Frontend
+
+- [x] Electron-first React/TypeScript chat app.
+- [x] Streaming assistant response rendering.
+- [x] Markdown rendering with code highlighting and copy actions.
+- [x] Lazy-loaded Markdown/Shiki code path to keep the main bundle smaller.
+- [x] Composer controls for Plan/Build, Default/Full Access, model selection, send, stop, attachments, new chat, and slash commands.
+- [x] Attachment-only sending.
+- [x] Session and project sidebar modeled after a local agent workspace.
+- [x] Provider settings UI.
+- [x] Chinese/English localization.
+- [x] Theme presets, custom color settings, light/dark switching, and translucent glass mode.
+- [x] Reusable UI primitives for buttons, selects, dropdown menus, toggles, scroll areas, tooltips, and cards.
 
 ### Electron Desktop
-- ✅ Main process setup with window creation
-- ✅ Preload script exposing runtime config and chat IPC APIs
-- ✅ Production mode loads `frontend/dist`
-- ✅ IPC handler forwards chat messages and config requests to backend
-- ✅ Root `package.json` points to the real Electron entry
-- ✅ `coworker_desktop.command` prepares, builds, starts backend, and launches desktop
 
-### Communication Flow
-1. Renderer process (React) → IPC → Main process (Electron)
-2. Main process → HTTP POST → Backend (FastAPI)
-3. Backend → Process message → HTTP response
-4. Main process → IPC → Renderer process
-5. Renderer process → Update chat UI
+- [x] Main process owns window creation and startup diagnostics.
+- [x] Preload script exposes the renderer-safe IPC API.
+- [x] Production mode loads `frontend/dist`.
+- [x] System tray keeps the app alive when the main window closes.
+- [x] Quitting Coworker stops the backend process.
+- [x] Launcher prepares dependencies, builds frontend, starts backend, probes `/health`, and launches Electron.
+- [x] Startup failure page replaces silent white-screen failure.
 
-## MVP Features Implemented
-- [x] Basic desktop application window
-- [x] Chat interface with message history
-- [x] Message input with proper keyboard handling
-- [x] Status bar showing workspace info
-- [x] Backend API with health check
-- [x] Simulated agent responses (for testing without API key)
-- [x] Secure file access restricted to workspace directory
-- [x] Modular service architecture for easy backend swapping
-- [x] Electron-React communication via IPC
-- [x] Environment-based configuration (dev/prod)
+## Runtime Flow
 
-## MVP Features Planned (Next Steps)
-- [ ] Integrate actual LangChain agent when OPENAI_API_KEY is provided
-- [ ] Enhance chat UI to render markdown/code blocks properly
-- [ ] Add more tools (code search, precise edit, command execution)
-- [ ] Implement context tracking (current file, workspace state)
-- [ ] Add error handling and retry mechanisms
-- [ ] Implement mode toggle UI (for future multi-agent)
-- [ ] Add basic file operations to chat context
+1. Renderer creates a `ChatRequest` with message, session/project, provider/model, work mode, access mode, language, and attachments.
+2. Electron IPC forwards the request to the main process.
+3. Electron main process calls FastAPI `/chat/stream`.
+4. FastAPI loads session history, formats attachments, and invokes the selected single-agent runtime.
+5. LangGraph streams model/tool updates.
+6. FastAPI emits SSE events.
+7. Electron forwards stream events back to the renderer.
+8. The renderer updates the running assistant message and persists session/project state through backend APIs.
 
-## How to Run the MVP
+## What Is Still Not Done
 
-### One-Click Desktop Launcher
+- Multi-agent company mode is not implemented.
+- LangGraph checkpoint persistence is not adopted yet; Coworker currently persists chat history itself.
+- LangGraph human-in-the-loop tool approval middleware is not adopted yet; Coworker currently owns command approval plus Plan/Build and Default/Full Access gating.
+- Native packaging, installer, updater, and release evidence are not complete.
+- Local secret storage needs hardening before public distribution.
+
+## How to Run
+
 ```bash
 ./coworker_desktop.command
 ```
 
-### Backend
+Smoke test without opening Electron:
+
 ```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
-# Optional: Set OPENAI_API_KEY for real agent responses
-# export OPENAI_API_KEY="your_key_here"
+COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
 
-### Frontend
+## Verification Commands
+
 ```bash
-cd frontend
-npm install
-npm run dev  # Runs on http://localhost:3000
+cd frontend && npx tsc --noEmit
+cd frontend && npm run build
+backend/venv/bin/python -m compileall backend/main.py backend/coworker
+node --check electron/preload.js && node --check electron/main.js
+git diff --check
+COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
-
-### Electron (Development)
-```bash
-# From project root
-NODE_ENV=development npx electron . --no-sandbox
-```
-
-## Design Principles Followed
-- **Modularity**: Clear separation between UI, communication, agent logic, and tools
-- **Loose Coupling**: Services abstracted via interfaces (chatService)
-- **Security**: Workspace-restricted file access, input validation planned
-- **Extensibility**: Easy to add new tools, LLM providers, or agent frameworks
-- **Maintainability**: Consistent coding patterns, clear file organization
-
-## Future Extension Points (Ready for Implementation)
-1. **Multi-Agent Company**: Mode toggle in UI and `/mode` endpoint in backend
-2. **Enhanced Tools**: Additional LangChain tools can be added to the tools array
-3. **Different LLMs**: Abstract LLM initialization to support multiple providers
-4. **Persistence**: Session history storage (planned for SQLite/localStorage)
-5. **Advanced UI**: Markdown rendering, code syntax highlighting, file tree panel
-
-## Current Limitations (MVP)
-- Default provider is simulated until `COWORKER_AGENT_PROVIDER=openai` and `OPENAI_API_KEY` are set
-- Chat UI preserves text and code formatting but does not yet render markdown AST/code highlighting
-- Limited toolset (file read/write only for real single-agent mode)
-- Session id is retained during the frontend session but no durable persistence exists yet
-- Multi-agent company mode is only reserved at the runtime boundary
 
 ## Next Development Phase
-After validating this MVP, we will:
-1. Integrate actual LangChain agent with OpenAPI key
-2. Add more sophisticated development tools
-3. Enhance UI for better code interaction experience
-4. Implement the mode switch foundation for multi-agent company
-5. Add context tracking and workspace awareness
+
+1. Add richer coding tools with multi-file patch/diff support if needed.
+2. Add LangGraph checkpoint/resume support for longer tasks.
+3. Implement multi-agent runtime modes behind the existing registry boundary.
+4. Harden provider secret storage.
+5. Build native packaging and release validation.

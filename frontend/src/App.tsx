@@ -1,26 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { SettingsView } from './components/settings/SettingsView';
-import { StatusBar } from './components/StatusBar';
+import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
+import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
+import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { getLanguage, initLanguage, t, translateError } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AccessMode, AppView, ChatMessage, ComposerAttachment, ProviderEntry, RuntimeConfig, WorkMode } from './types';
+import type { AccessMode, AppView, ChatMessage, ComposerAttachment, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function createMessage(
   role: ChatMessage['role'],
   content: string,
-  metadata: Omit<Partial<ChatMessage>, 'id' | 'role' | 'content' | 'timestamp'> = {},
+  metadata: Partial<Omit<ChatMessage, 'role' | 'content'>> & { id?: string } = {},
 ): ChatMessage {
   return {
-    id: `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    id: metadata.id ?? `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     role,
     content,
-    timestamp: Date.now(),
+    timestamp: metadata.timestamp ?? Date.now(),
     ...metadata,
   };
 }
@@ -32,29 +34,73 @@ function App() {
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [sessionId, setSessionId] = useState<string | undefined>();
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [languageVersion, setLanguageVersion] = useState(0);
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => Number(localStorage.getItem('cw.sidebarWidth')) || 276);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
+  const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
   const [workMode, setWorkMode] = useState<WorkMode>('build');
   const [accessMode, setAccessMode] = useState<AccessMode>('default');
-  const [selectedModel, setSelectedModel] = useState('auto');
+  const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const requestSeqRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const sessionIdRef = useRef<string | undefined>(undefined);
+  const pendingProjectIdRef = useRef<string | undefined>(undefined);
+  const activeAssistantMessageIdRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   const refreshProviders = async () => {
     try {
       const response = await chatService.listProviders();
-      setProviders(response.providers.filter((provider) => provider.enabled));
+      const enabledProviders = response.providers.filter((provider) => provider.enabled);
+      setProviders(enabledProviders);
+      setSelectedModel((current) => {
+        if (current && enabledProviders.some((provider) => provider.id === current)) return current;
+        return response.default_provider_id || enabledProviders[0]?.id || '';
+      });
       setRuntimeStatus('ready');
+      return response;
     } catch (error) {
       console.error('Failed to load providers:', error);
+      return undefined;
+    }
+  };
+
+  const refreshSessions = async () => {
+    try {
+      const response = await chatService.listSessions();
+      setSessions(response.sessions);
+    } catch (error) {
+      console.error('Failed to load sessions:', error);
+    }
+  };
+
+  const refreshProjects = async () => {
+    try {
+      const response = await chatService.listProjects();
+      setProjects(response.projects);
+    } catch (error) {
+      console.error('Failed to load projects:', error);
     }
   };
 
   useEffect(() => {
     let mounted = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+
     async function bootstrap() {
       applyTheme(themeSettings);
       await initLanguage();
@@ -65,11 +111,22 @@ function App() {
         const config = await chatService.getRuntimeConfig();
         if (!mounted) return;
         setRuntimeConfig(config);
+        setSelectedModel(config.selected_provider_id);
         setRuntimeStatus('ready');
-        await refreshProviders();
+        attempt = 0;
+        const providerResponse = await refreshProviders();
+        if (providerResponse && mounted) {
+          setSelectedModel(config.selected_provider_id || providerResponse.default_provider_id || providerResponse.providers.find((provider) => provider.enabled)?.id || '');
+        }
+        await refreshSessions();
+        await refreshProjects();
       } catch (error) {
         console.error('Failed to load runtime config:', error);
-        if (mounted) setRuntimeStatus('error');
+        if (!mounted) return;
+        setRuntimeStatus('error');
+        attempt += 1;
+        const delay = Math.min(1500 * 2 ** (attempt - 1), 8000);
+        retryTimer = setTimeout(bootstrap, delay);
       }
     }
 
@@ -77,6 +134,7 @@ function App() {
 
     return () => {
       mounted = false;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, []);
 
@@ -93,24 +151,29 @@ function App() {
   }, [languageVersion]);
 
   const sendMessage = async () => {
-    const message = input.trim();
-    if (!message || isThinking) return;
+    const typedMessage = input.trim();
+    if (isThinking) return;
 
-    if (message.startsWith('/')) {
-      handleSlashCommand(message);
+    if (!typedMessage && attachments.length === 0) return;
+
+    if (typedMessage.startsWith('/')) {
+      handleSlashCommand(typedMessage);
       return;
     }
 
+    const message = typedMessage || t('chat.attachment_only_message');
     const requestId = requestSeqRef.current + 1;
     requestSeqRef.current = requestId;
     const selectedProvider = providers.find((provider) => provider.id === selectedModel);
     const requestAttachments = attachments;
-    const requestModel = selectedProvider?.model ?? t('chat.model_auto');
-    const requestProvider = selectedProvider?.name ?? t('chat.model_auto');
+    const requestModel = selectedProvider?.model ?? runtimeConfig?.selected_model ?? '';
+    const requestProvider = selectedProvider?.name ?? runtimeConfig?.agent_provider ?? '';
+    const requestSessionId = sessionIdRef.current;
+
     setMessages((current) => [
       ...current,
       createMessage('user', message, {
-        status: 'queued',
+        status: 'done',
         work_mode: workMode,
         access_mode: accessMode,
         provider: requestProvider,
@@ -121,69 +184,258 @@ function App() {
     setInput('');
     setIsThinking(true);
 
-    try {
-      const response = await chatService.sendMessage({
-        message,
-        mode: runtimeConfig?.default_mode ?? 'single',
-        language: getLanguage(),
+    const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setMessages((current) => [
+      ...current,
+      createMessage('assistant', '', {
+        id: assistantMessageId,
+        status: 'running',
         work_mode: workMode,
         access_mode: accessMode,
-        ...(selectedProvider
-          ? {
-              provider_id: selectedProvider.id,
-              model: selectedProvider.model,
-            }
-          : {}),
-        ...(requestAttachments.length > 0 ? { attachments: requestAttachments } : {}),
-        ...(sessionId ? { session_id: sessionId } : {}),
-      });
+        provider: requestProvider,
+        model: requestModel,
+      }),
+    ]);
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    activeAssistantMessageIdRef.current = assistantMessageId;
+    let streamedContent = '';
+
+    const handleEvent = (event: StreamEvent) => {
       if (requestId !== requestSeqRef.current) return;
-      setSessionId(response.session_id);
-      setMessages((current) => [
-        ...current,
-        createMessage('assistant', response.response, {
-          status: 'done',
+      if (event.type === 'start') {
+        if (event.session_id && !sessionIdRef.current) {
+          setSessionId(event.session_id);
+          sessionIdRef.current = event.session_id;
+        }
+      } else if (event.type === 'delta') {
+        streamedContent += event.content;
+        setMessages((current) =>
+          current.map((item) => (item.id === assistantMessageId ? { ...item, content: streamedContent } : item)),
+        );
+      } else if (event.type === 'tool_call') {
+        // Tool call events are shown implicitly once the model returns text.
+      } else if (event.type === 'done') {
+        if (event.session_id) {
+          setSessionId(event.session_id);
+          sessionIdRef.current = event.session_id;
+        }
+        streamedContent = event.content || streamedContent;
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: streamedContent, status: 'done' }
+              : item,
+          ),
+        );
+      } else if (event.type === 'error') {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error' }
+              : item,
+          ),
+        );
+      }
+    };
+
+    try {
+      await chatService.sendMessageStream(
+        {
+          message,
+          mode: runtimeConfig?.default_mode ?? 'single',
+          language: getLanguage(),
           work_mode: workMode,
           access_mode: accessMode,
-          provider: response.provider,
-          model: requestModel,
-        }),
-      ]);
+          ...(selectedProvider
+            ? {
+                provider_id: selectedProvider.id,
+                model: selectedProvider.model,
+              }
+            : {}),
+          ...(requestAttachments.length > 0 ? { attachments: requestAttachments } : {}),
+          ...(requestSessionId ? { session_id: requestSessionId } : {}),
+          ...(pendingProjectIdRef.current ? { project_id: pendingProjectIdRef.current } : {}),
+        },
+        handleEvent,
+        controller.signal,
+      );
+      if (requestId !== requestSeqRef.current) return;
       setAttachments([]);
       setRuntimeStatus('ready');
+      await refreshSessions();
+      await refreshProjects();
     } catch (error) {
       if (requestId !== requestSeqRef.current) return;
-      console.error('Failed to send message:', error);
-      setRuntimeStatus('error');
-      setMessages((current) => [
-        ...current,
-        createMessage('assistant', translateError(error) || t('chat.backend_unreachable'), {
-          status: 'error',
-          work_mode: workMode,
-          access_mode: accessMode,
-          provider: requestProvider,
-          model: requestModel,
-        }),
-      ]);
+      console.error('Failed to stream message:', error);
+      if ((error as Error).name === 'AbortError') {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: streamedContent || t('chat.stopped'), status: 'stopped' }
+              : item,
+          ),
+        );
+      } else {
+        setRuntimeStatus('error');
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error' }
+              : item,
+          ),
+        );
+      }
     } finally {
-      if (requestId === requestSeqRef.current) setIsThinking(false);
+      if (requestId === requestSeqRef.current) {
+        setIsThinking(false);
+        abortRef.current = null;
+        activeAssistantMessageIdRef.current = undefined;
+      }
     }
   };
 
   const stopMessage = () => {
-    requestSeqRef.current += 1;
+    const assistantMessageId = activeAssistantMessageIdRef.current;
+    abortRef.current?.abort();
     setIsThinking(false);
-    setMessages((current) => [...current, createMessage('assistant', t('chat.stopped'), { status: 'stopped' })]);
+    if (assistantMessageId) {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId && item.status === 'running'
+            ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped' }
+            : item,
+        ),
+      );
+    }
+    requestSeqRef.current += 1;
+    abortRef.current = null;
+    activeAssistantMessageIdRef.current = undefined;
   };
 
-  const startNewChat = () => {
+  const startNewChat = (projectId?: string) => {
+    abortRef.current?.abort();
     requestSeqRef.current += 1;
+    activeAssistantMessageIdRef.current = undefined;
     setMessages([]);
     setInput('');
     setAttachments([]);
     setSessionId(undefined);
+    sessionIdRef.current = undefined;
+    pendingProjectIdRef.current = projectId;
     setIsThinking(false);
     setActiveView('chat');
+  };
+
+  const openSession = async (sessionIdToOpen: string) => {
+    abortRef.current?.abort();
+    requestSeqRef.current += 1;
+    activeAssistantMessageIdRef.current = undefined;
+    setIsThinking(false);
+    setActiveView('chat');
+    try {
+      const response = await chatService.getSession(sessionIdToOpen);
+      const records = response.session.messages ?? [];
+      const loaded = records.map((record, index) =>
+        createMessage(record.role as ChatMessage['role'], record.content, {
+          id: record.id || `${record.role}-${index}-${record.id}`,
+          status: 'done',
+          ...(record.mode ? { work_mode: record.mode as WorkMode } : {}),
+          ...(record.provider ? { provider: record.provider } : {}),
+          ...(record.model ? { model: record.model } : {}),
+          ...(record.attachments?.length ? { attachments: record.attachments } : {}),
+          timestamp: new Date(record.created_at).getTime(),
+        }),
+      );
+      setSessionId(sessionIdToOpen);
+      sessionIdRef.current = sessionIdToOpen;
+      pendingProjectIdRef.current = undefined;
+      setMessages(loaded);
+      setAttachments([]);
+    } catch (error) {
+      console.error('Failed to open session:', error);
+    }
+  };
+
+  const deleteSession = async (sessionIdToDelete: string) => {
+    try {
+      await chatService.deleteSession(sessionIdToDelete);
+      if (sessionIdRef.current === sessionIdToDelete) {
+        startNewChat();
+      }
+      await refreshSessions();
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+    }
+  };
+
+  const renameCurrentSession = async () => {
+    if (!sessionIdRef.current) return;
+    const currentTitle = currentSessionTitle(messages, sessions, sessionIdRef.current);
+    const title = window.prompt(t('titlebar.rename_session'), currentTitle);
+    if (!title || title.trim() === currentTitle) return;
+    try {
+      await chatService.renameSession(sessionIdRef.current, title.trim());
+      await refreshSessions();
+    } catch (error) {
+      console.error('Failed to rename session:', error);
+    }
+  };
+
+  const deleteCurrentSession = async () => {
+    if (!sessionIdRef.current) return;
+    const confirmed = window.confirm(t('titlebar.delete_session_confirm'));
+    if (!confirmed) return;
+    await deleteSession(sessionIdRef.current);
+  };
+
+  const moveSession = async (sessionIdToMove: string, projectId: string) => {
+    try {
+      await chatService.moveSession(sessionIdToMove, projectId);
+      await refreshSessions();
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to move session:', error);
+    }
+  };
+
+  const createProject = async () => {
+    try {
+      const defaultName = t('sidebar.project_new');
+      await chatService.createProject(defaultName);
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to create project:', error);
+    }
+  };
+
+  const renameProject = async (project: ProjectEntry) => {
+    try {
+      const name = window.prompt(t('sidebar.project_rename'), project.name);
+      if (!name || name.trim() === project.name) return;
+      await chatService.renameProject(project.id, name.trim());
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to rename project:', error);
+    }
+  };
+
+  const deleteProject = async (projectId: string) => {
+    const confirmed = window.confirm(t('sidebar.project_delete_confirm'));
+    if (!confirmed) return;
+    try {
+      const sessionInProject = sessions.find((session) => session.project_id === projectId);
+      await chatService.deleteProject(projectId);
+      if (sessionInProject && sessionIdRef.current === sessionInProject.id) {
+        startNewChat();
+      }
+      await refreshSessions();
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to delete project:', error);
+    }
   };
 
   const handleSlashCommand = (message: string) => {
@@ -192,6 +444,10 @@ function App() {
     if (command === '/clear') {
       setMessages([]);
       setAttachments([]);
+      return;
+    }
+    if (command === '/new') {
+      startNewChat();
       return;
     }
     if (command === '/providers') {
@@ -213,15 +469,33 @@ function App() {
     setMessages((current) => [...current, createMessage('assistant', t('chat.command_help_text'), { status: 'done' })]);
   };
 
-  const modelOptions = [
-    { id: 'auto', label: t('chat.model_auto') },
-    ...providers.map((provider) => ({
-      id: provider.id,
-      label: provider.model,
-      provider: provider.name,
-    })),
-  ];
+  const changeSelectedModel = async (providerId: string) => {
+    const provider = providers.find((item) => item.id === providerId);
+    if (!provider) return;
+    const previous = selectedModel;
+    setSelectedModel(provider.id);
+    try {
+      const config = await chatService.updateRuntimeConfig({
+        selected_provider_id: provider.id,
+        selected_model: provider.model,
+      });
+      setRuntimeConfig(config);
+      await refreshProviders();
+    } catch (error) {
+      console.error('Failed to update runtime config:', error);
+      setSelectedModel(previous);
+    }
+  };
+
+  const modelOptions = providers.map((provider) => ({
+    id: provider.id,
+    label: provider.model,
+    provider: provider.name,
+  }));
   const showRuntimeNotice = activeView === 'chat' && (runtimeStatus !== 'ready' || !runtimeConfig);
+  const titlebarSessionTitle = currentSessionTitle(messages, sessions, sessionId);
+  const currentProvider = providers.find((provider) => provider.id === selectedModel);
+  const activeProject = projects.find((project) => sessions.some((session) => session.id === sessionId && session.project_id === project.id));
 
   const changeThemeSettings = (nextSettings: ThemeSettings) => {
     setThemeSettingsState(nextSettings);
@@ -229,63 +503,134 @@ function App() {
   };
 
   return (
-    <main className="app-shell" key={languageVersion}>
-      <WorkspaceSidebar
-        config={runtimeConfig}
-        messages={messages}
+    <main
+      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${sidebarResizing ? 'app-shell--resizing' : ''}`}
+      key={languageVersion}
+      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+    >
+      <WorkspaceTitlebar
+        status={runtimeStatus}
         activeView={activeView}
-        onViewChange={setActiveView}
-        onNewChat={startNewChat}
+        sessionTitle={titlebarSessionTitle}
+        sidebarCollapsed={sidebarCollapsed}
+        rightSidebarOpen={rightSidebarOpen}
+        bottomPanelOpen={bottomPanelOpen}
+        canEditSession={Boolean(sessionId)}
+        onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+        onToggleRightSidebar={() => setRightSidebarOpen((value) => !value)}
+        onToggleBottomPanel={() => setBottomPanelOpen((value) => !value)}
+        onRenameSession={renameCurrentSession}
+        onDeleteSession={deleteCurrentSession}
       />
-      <section className="workspace-shell">
-        <StatusBar status={runtimeStatus} />
-        {activeView === 'chat' ? (
-          <>
-            {showRuntimeNotice && (
-              <section className={`runtime-notice runtime-notice--${runtimeStatus}`}>
-                <p className="runtime-notice__eyebrow">
-                  {runtimeStatus === 'connecting' ? t('runtime.connecting_label') : t('runtime.error_label')}
-                </p>
-                <h2>{runtimeStatus === 'connecting' ? t('runtime.connecting_title') : t('runtime.error_title')}</h2>
-                <p>{runtimeStatus === 'connecting' ? t('runtime.connecting_body') : t('runtime.error_body')}</p>
-              </section>
+      <div className="app-body">
+        <WorkspaceSidebar
+          config={runtimeConfig}
+          sessions={sessions}
+          projects={projects}
+          activeView={activeView}
+          collapsed={sidebarCollapsed}
+          onResizeStart={() => setSidebarResizing(true)}
+          onResizeEnd={() => setSidebarResizing(false)}
+          onResizeWidth={(width) => {
+            setSidebarWidth(width);
+            localStorage.setItem('cw.sidebarWidth', String(width));
+          }}
+          {...(sessionId ? { activeSessionId: sessionId } : {})}
+          onViewChange={setActiveView}
+          onNewChat={startNewChat}
+          onOpenSession={openSession}
+          onDeleteSession={deleteSession}
+          onCreateProject={createProject}
+          onRenameProject={renameProject}
+          onDeleteProject={deleteProject}
+          onMoveSession={moveSession}
+        />
+        <section className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
+          <div className="workspace-upper">
+            <section className="workspace-shell">
+              {activeView === 'chat' ? (
+                <>
+                  {showRuntimeNotice && (
+                    <section className={`runtime-notice runtime-notice--${runtimeStatus}`}>
+                      <p className="runtime-notice__eyebrow">
+                        {runtimeStatus === 'connecting' ? t('runtime.connecting_label') : t('runtime.error_label')}
+                      </p>
+                      <h2>{runtimeStatus === 'connecting' ? t('runtime.connecting_title') : t('runtime.error_title')}</h2>
+                      <p>{runtimeStatus === 'connecting' ? t('runtime.connecting_body') : t('runtime.error_body')}</p>
+                      {runtimeStatus === 'error' && <p className="runtime-notice__retry">{t('runtime.retrying')}</p>}
+                    </section>
+                  )}
+                  <MessageList messages={messages} />
+                  <div ref={bottomRef} />
+                  <ChatInput
+                    value={input}
+                    disabled={isThinking || runtimeStatus === 'connecting'}
+                    isThinking={isThinking}
+                    workMode={workMode}
+                    accessMode={accessMode}
+                    selectedModel={selectedModel}
+                    attachments={attachments}
+                    modelOptions={modelOptions}
+                    onChange={setInput}
+                    onSend={sendMessage}
+                    onStop={stopMessage}
+                    onNewChat={() => startNewChat()}
+                    onWorkModeChange={setWorkMode}
+                    onAccessModeChange={setAccessMode}
+                    onModelChange={(providerId) => void changeSelectedModel(providerId)}
+                    onAttachmentsChange={setAttachments}
+                  />
+                </>
+              ) : activeView === 'providers' ? (
+                <ProvidersPanel onProviderChange={refreshProviders} />
+              ) : (
+                <SettingsView
+                  themeSettings={themeSettings}
+                  workMode={workMode}
+                  accessMode={accessMode}
+                  onThemeSettingsChange={changeThemeSettings}
+                  onWorkModeChange={setWorkMode}
+                  onAccessModeChange={setAccessMode}
+                  onLanguageChange={() => setLanguageVersion((value) => value + 1)}
+                />
+              )}
+            </section>
+            {rightSidebarOpen && (
+              <WorkspaceInspector
+                sessionTitle={titlebarSessionTitle}
+                projectName={activeProject?.name ?? t('sidebar.default_project')}
+                modelName={currentProvider?.model ?? runtimeConfig?.selected_model ?? t('chat.model_unselected')}
+                providerName={currentProvider?.name ?? runtimeConfig?.agent_provider ?? t('chat.model_unselected')}
+                workMode={workMode}
+                accessMode={accessMode}
+                attachmentCount={attachments.length}
+                messageCount={messages.length}
+              />
             )}
-            <MessageList messages={messages} isThinking={isThinking} />
-            <div ref={bottomRef} />
-            <ChatInput
-              value={input}
-              disabled={isThinking || runtimeStatus === 'connecting'}
-              isThinking={isThinking}
-              workMode={workMode}
-              accessMode={accessMode}
-              selectedModel={selectedModel}
-              attachments={attachments}
-              modelOptions={modelOptions}
-              onChange={setInput}
-              onSend={sendMessage}
-              onStop={stopMessage}
-              onWorkModeChange={setWorkMode}
-              onAccessModeChange={setAccessMode}
-              onModelChange={setSelectedModel}
-              onAttachmentsChange={setAttachments}
+          </div>
+          {bottomPanelOpen && (
+            <WorkspaceBottomPanel
+              view={bottomPanelView}
+              runtimeStatus={runtimeStatus}
+              runtimeConfig={runtimeConfig}
+              sessionCount={sessions.length}
+              projectCount={projects.length}
+              messageCount={messages.length}
+              onViewChange={setBottomPanelView}
             />
-          </>
-        ) : activeView === 'providers' ? (
-          <ProvidersPanel onProviderChange={refreshProviders} />
-        ) : (
-          <SettingsView
-            themeSettings={themeSettings}
-            workMode={workMode}
-            accessMode={accessMode}
-            onThemeSettingsChange={changeThemeSettings}
-            onWorkModeChange={setWorkMode}
-            onAccessModeChange={setAccessMode}
-            onLanguageChange={() => setLanguageVersion((value) => value + 1)}
-          />
-        )}
-      </section>
+          )}
+        </section>
+      </div>
     </main>
   );
+}
+
+function currentSessionTitle(messages: ChatMessage[], sessions: SessionSummary[], sessionId?: string): string {
+  const saved = sessionId ? sessions.find((session) => session.id === sessionId)?.title : undefined;
+  if (saved) return saved;
+  const firstUserMessage = messages.find((message) => message.role === 'user');
+  if (!firstUserMessage?.content.trim()) return t('sidebar.new_chat');
+  return firstUserMessage.content.trim().slice(0, 64);
 }
 
 export default App;

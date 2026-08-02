@@ -53,7 +53,7 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
   vllm: {
     key: 'vllm',
     name: 'vLLM (Local)',
-    base_url: 'http://127.0.0.1:8000/v1',
+    base_url: 'http://127.0.0.1:9527/v1',
     icon: vllmIcon,
   },
   openrouter: {

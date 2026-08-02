@@ -27,13 +27,44 @@ interface ChatInputProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
+  onNewChat: () => void;
   onWorkModeChange: (value: WorkMode) => void;
   onAccessModeChange: (value: AccessMode) => void;
   onModelChange: (value: string) => void;
   onAttachmentsChange: (attachments: ComposerAttachment[]) => void;
 }
 
-const SLASH_COMMANDS = ['/help', '/clear', '/providers', '/settings', '/plan', '/build'];
+const SLASH_COMMANDS = ['/help', '/new', '/clear', '/providers', '/settings', '/plan', '/build'];
+const MAX_ATTACHMENT_CHARS = 120_000;
+
+function isTextAttachment(file: File) {
+  if (file.type.startsWith('text/')) return true;
+  return /\.(c|cc|cpp|cs|css|csv|go|h|hpp|html|java|js|json|jsx|kt|log|md|mdx|php|py|rb|rs|sh|sql|swift|toml|ts|tsx|txt|vue|xml|yaml|yml)$/i.test(file.name);
+}
+
+async function buildAttachment(file: File): Promise<ComposerAttachment> {
+  const base = {
+    id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    name: file.name,
+    size: file.size,
+    type: file.type || 'file',
+  };
+  if (!isTextAttachment(file)) {
+    return { ...base, binary: true };
+  }
+  try {
+    const content = await file.text();
+    const truncated = content.length > MAX_ATTACHMENT_CHARS;
+    return {
+      ...base,
+      content: truncated ? content.slice(0, MAX_ATTACHMENT_CHARS) : content,
+      truncated,
+      binary: false,
+    };
+  } catch (error) {
+    return { ...base, binary: true, error: error instanceof Error ? error.message : 'Unable to read attachment' };
+  }
+}
 
 export function ChatInput({
   value,
@@ -47,6 +78,7 @@ export function ChatInput({
   onChange,
   onSend,
   onStop,
+  onNewChat,
   onWorkModeChange,
   onAccessModeChange,
   onModelChange,
@@ -54,19 +86,15 @@ export function ChatInput({
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showCommands, setShowCommands] = useState(false);
+  const canSend = Boolean(value.trim() || attachments.length > 0);
 
   useEffect(() => {
     setShowCommands(value.trim().startsWith('/'));
   }, [value]);
 
-  function addFiles(files: FileList | null) {
+  async function addFiles(files: FileList | null) {
     if (!files) return;
-    const nextAttachments = Array.from(files).map((file) => ({
-      id: `${file.name}-${file.size}-${Date.now()}`,
-      name: file.name,
-      size: file.size,
-      type: file.type || 'file',
-    }));
+    const nextAttachments = await Promise.all(Array.from(files).map((file) => buildAttachment(file)));
     onAttachmentsChange([...attachments, ...nextAttachments]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
@@ -92,9 +120,9 @@ export function ChatInput({
 
           <div className="composer__select">
             <span>{t('chat.model')}</span>
-            <Select value={selectedModel} onValueChange={onModelChange}>
+            <Select value={selectedModel} onValueChange={onModelChange} disabled={modelOptions.length === 0}>
               <SelectTrigger className="composer__model-trigger" size="sm">
-                <SelectValue />
+                <SelectValue placeholder={t('chat.model_unselected')} />
               </SelectTrigger>
               <SelectContent position="popper" align="start">
                 {modelOptions.map((model) => (
@@ -171,8 +199,8 @@ export function ChatInput({
                 <Slash size={16} />
               </Button>
             </Tooltip>
-            <Tooltip content={t('chat.new_task_tooltip')}>
-              <Button variant="icon" disabled>
+            <Tooltip content={t('chat.new_chat_tooltip')}>
+              <Button variant="icon" onClick={onNewChat}>
                 <Plus size={16} />
               </Button>
             </Tooltip>
@@ -184,7 +212,7 @@ export function ChatInput({
               {t('chat.stop')}
             </Button>
           ) : (
-            <Button variant="primary" onClick={onSend} disabled={disabled || !value.trim()}>
+            <Button variant="primary" onClick={onSend} disabled={disabled || !canSend}>
               <CornerDownLeft size={16} />
               {t('common.send')}
             </Button>

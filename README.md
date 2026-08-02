@@ -1,154 +1,156 @@
 # Coworker Agent
 
-A local desktop application that integrates AI agents for coding assistance.
-
-## Vision
-Build a local desktop application that integrates:
-1. **Single Agent Mode**: Codex-like coding assistant for quick queries and code generation/modification
-2. **Multi-Agent Mode**: Self-organizing "agent company" that automatically decomposes tasks into role-based collaboration (PM, Architect, Developer, Tester, etc.)
-
-Both modes share the same backend services and can be switched seamlessly in the chat interface.
+Coworker is a local-first Electron desktop agent app for coding assistance. The current product focuses on a Codex-style single-agent workflow with local sessions, projects, provider configuration, streaming chat, and workspace-restricted file tools.
 
 ## Current Status
-This is a minimum viable product (MVP) focused on single agent mode. The desktop launcher builds the frontend, starts the FastAPI backend, and opens the Electron window. Multi-agent company mode is intentionally left as a future runtime mode behind the same backend boundary.
+
+Coworker is no longer just a scaffold. The desktop launcher builds the Vite frontend, starts the FastAPI backend on `127.0.0.1:9527`, opens Electron, and stops the backend when the whole app exits. Closing the main window keeps the app alive through the system tray; quitting Coworker exits both frontend and backend.
+
+Multi-agent company mode is still a future runtime direction. The current shipped runtime surface is single-agent only.
 
 ## Technology Stack
-- **Frontend**: Electron + React + TypeScript
-- **Backend**: Python + FastAPI
-- **Agent Framework**: LangChain/LangGraph (planned for integration)
-- **Communication**: Electron main process ↔ Python backend (HTTP API) ↔ Renderer process (IPC)
+
+- **Desktop**: Electron main process, preload IPC bridge, system tray, backend process binding
+- **Frontend**: React, TypeScript, Vite, Radix/shadcn-style local UI primitives
+- **Backend**: Python, FastAPI, Pydantic, JSON-file local stores
+- **Agent Runtime**: LangChain `create_agent` for non-streaming calls, LangGraph `create_react_agent` for streaming ReAct execution
+- **LLM Providers**: OpenAI-compatible providers, including OpenAI, Ollama-compatible `/v1`, and custom base URLs
+- **Communication**: Renderer -> Electron IPC -> FastAPI HTTP/SSE -> Renderer stream updates
 
 ## Project Structure
-```
+
+```text
 coworker/
-├── backend/          # Python FastAPI service
-│   ├── main.py       # Backend API
-│   ├── requirements.txt
-│   └── workspace/    # Directory for file operations
-├── electron/         # Electron main process
-│   ├── main.js       # Electron main process
-│   └── preload.js    # Preload script for renderer process
-├── frontend/         # React + TypeScript application
+├── backend/
+│   ├── main.py                    # FastAPI API surface
+│   └── coworker/
+│       ├── agents.py              # LangChain/LangGraph single-agent runtime
+│       ├── config.py              # Runtime settings
+│       ├── projects.py            # Local project grouping store
+│       ├── providers.py           # Provider config store and connection checks
+│       ├── sessions.py            # Durable local chat session store
+│       └── workspace.py           # Workspace path guard and file preview helpers
+├── electron/
+│   ├── main.js                    # Window, tray, IPC, backend process lifecycle
+│   └── preload.js                 # Renderer-safe API bridge
+├── frontend/
 │   ├── src/
-│   │   ├── App.tsx   # Main application component
-│   │   ├── main.tsx  # Entry point
-│   │   └── services/ # Services (e.g., chatService)
+│   │   ├── App.tsx                # App state, streaming chat, sessions/projects
+│   │   ├── components/            # Reusable UI, chat, sidebar, settings, providers
+│   │   ├── lib/                   # i18n, theme, provider registry
+│   │   └── services/              # Electron/HTTP chat service boundary
 │   ├── index.html
-│   ├── package.json
-│   ├── tsconfig.json
 │   └── vite.config.ts
-├── PROJECT_PLAN.md   # Detailed project plan
-└── README.md         # This file
+├── assets/brand/                  # App and tray icons
+├── coworker_desktop.command       # One-click local launcher
+├── PROJECT_PLAN.md
+└── README.md
 ```
 
-## Setup Instructions
+## One-Click Run
 
-### Prerequisites
-- Node.js (v18+ recommended)
-- Python (v3.11+ recommended)
-- Git
-
-### One-Click Desktop Launcher
 From the project root:
+
 ```bash
 ./coworker_desktop.command
 ```
 
-The launcher prepares Python and Node dependencies, builds the Vite frontend, starts the backend on `127.0.0.1:8000`, opens Electron, and stops the backend when the desktop app exits.
+The launcher will:
 
-### Backend Setup
-1. Navigate to the backend directory:
-   ```bash
-   cd backend
-   ```
-2. Create a virtual environment:
-   ```bash
-   python3 -m venv venv
-   ```
-3. Activate the virtual environment:
-   ```bash
-   # On macOS/Linux:
-   source venv/bin/activate
-   # On Windows:
-   venv\Scripts\activate
-   ```
-4. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-5. Set up environment variables (optional for MVP):
-   ```bash
-   # For full functionality with OpenAI models, set:
-   export OPENAI_API_KEY="your_openai_api_key_here"
-   ```
-   Note: without an OpenAI key, the backend runs with the explicit `simulated` single-agent provider.
+1. Create or reuse `backend/venv`.
+2. Install Python and Node dependencies when needed.
+3. Build the Vite frontend into `frontend/dist`.
+4. Start FastAPI on `127.0.0.1:9527`.
+5. Launch the Electron app.
+6. Stop the backend when Coworker quits.
 
-6. Start the backend server:
-   ```bash
-   uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-   The server will be available at http://localhost:8000
+For smoke testing without opening the desktop window:
 
-### Frontend Setup
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the development server:
-   ```bash
-   npm run dev
-   ```
-   The frontend will be available at http://localhost:3000 (or another port if 3000 is in use)
+```bash
+COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
+```
 
-### Electron Setup
-1. From the project root directory, start the Electron application:
-   ```bash
-   # In development mode (loads frontend from dev server)
-   NODE_ENV=development npx electron . --no-sandbox
-   ```
-   Note: The `--no-sandbox` flag is used for simplicity in development. For production, you should remove it and properly configure the sandbox.
+## Backend Development
 
-## How It Works
-1. `coworker_desktop.command` builds the frontend and starts the Python backend.
-2. Electron loads the production Vite output from `frontend/dist`.
-3. The React app requests runtime config from the backend through Electron IPC.
-4. Chat messages go Renderer → Electron IPC → FastAPI `/chat` → single-agent runtime.
-5. The backend owns the active provider:
-   - `COWORKER_AGENT_PROVIDER=simulated` for local MVP smoke tests
-   - `COWORKER_AGENT_PROVIDER=openai` with `OPENAI_API_KEY` for the real OpenAI-backed single agent
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn main:app --host 127.0.0.1 --port 9527
+```
 
-## Features in MVP
-- Basic chat interface with message history
-- Input area with Shift+Enter for newline, Enter to send
-- Status bar showing workspace and agent mode
-- Backend-owned simulated provider for local smoke testing
-- OpenAI-backed single-agent runtime when configured
-- File read/write tools available to the real agent
-- Workspace-based file access restriction for security
-- Modular frontend components and swappable chat service boundary
-- Modular backend runtime registry prepared for future multi-agent mode
+Without a configured provider, Coworker uses the explicit simulated single-agent provider for local smoke tests. For environment-based OpenAI usage:
 
-## Next Steps (Post-MVP)
-1. Integrate LangGraph for proper agent orchestration
-2. Add more sophisticated tools (code search, code execution sandbox, etc.)
-3. Enhance chat UI to render markdown and code blocks properly
-4. Implement mode toggle for single agent vs multi-agent company
-5. Develop multi-agent company with role-based agents (PM, Architect, Developer, Tester)
-6. Add workflow execution and task decomposition capabilities
-7. Implement persistence for chat sessions and workspace state
-8. Add performance optimizations (caching, lazy loading)
-9. Comprehensive logging and error reporting
-10. Security audit and hardening
-11. Packaging and distribution
+```bash
+export COWORKER_AGENT_PROVIDER=openai
+export OPENAI_API_KEY="your_openai_api_key_here"
+```
 
-## Troubleshooting
-- If the Electron app fails to load the frontend, check that the Vite dev server is running on the expected port.
-- If backend communication fails, verify that the backend is running on port 8000 and accessible.
-- For file operation errors, ensure the workspace directory exists and is writable.
+Provider configuration can also be managed in the app settings. Provider records are stored under the app data directory, not in git.
 
-## License
-MIT
+## Frontend Development
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+In development mode, Electron can load the Vite dev server:
+
+```bash
+NODE_ENV=development npx electron . --no-sandbox
+```
+
+## Implemented Features
+
+- Streaming chat through FastAPI SSE and Electron IPC.
+- LangGraph-backed ReAct single-agent loop with `search_files`, `read_file`, and gated `replace_in_file` / `apply_text_edits` / `write_file` / `run_command` workspace tools.
+- JSONL audit records and settings-page review UI for file writes, exact replacements, atomic structured text edits, and command execution.
+- One-time command approval queue for agent and bottom-panel terminal commands.
+- Plan/Build toggle and Default/Full Access toggle.
+- Provider management with add/edit/delete/default provider, model fetch, and connection test.
+- Durable local sessions and project grouping.
+- Standalone sessions plus project sessions in the sidebar.
+- Markdown rendering, code highlighting, code copy button, and lazy-loaded Shiki highlighter.
+- Text attachment ingestion, attachment-only sending, attachment persistence in session history.
+- Slash commands: `/help`, `/new`, `/clear`, `/providers`, `/settings`, `/plan`, `/build`.
+- Chinese/English i18n.
+- Theme settings with presets, user color customization, light/dark mode, and translucent glass effect.
+- Electron tray behavior: close window keeps app running; quit exits frontend and backend.
+- Startup diagnostics instead of silent white screen.
+- Workspace tree, directory listing, and file preview APIs.
+
+## Current Limitations
+
+- Agent mode is currently single-agent only.
+- Toolset is intentionally small: search/read files by default; exact replace, atomic structured text edits, full write, and allowlisted command execution only in Build + Full Access.
+- Command execution requires a settings-page one-time approval before the process is started.
+- Default provider remains simulated until a real provider is configured.
+- Provider secrets are stored locally in the app data directory; production-grade credential storage is still a hardening item.
+- Tool audit is append-only JSONL with a recent-record review UI; retention controls are still missing.
+- Packaging/distribution is not complete.
+- LangGraph checkpoint persistence and human-in-the-loop approval middleware are not yet adopted; Coworker currently owns session storage, command approval, and permission gating itself.
+
+## Verification
+
+Useful local checks:
+
+```bash
+cd frontend && npx tsc --noEmit
+cd frontend && npm run build
+backend/venv/bin/python -m compileall backend/main.py backend/coworker
+node --check electron/preload.js && node --check electron/main.js
+git diff --check
+COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
+```
+
+## Next Development Phase
+
+1. Add a real multi-file patch/diff tool if exact structured text edits are not enough.
+2. Evaluate replacing Coworker's command approval with LangGraph/LangChain human-in-the-loop middleware if it becomes the runtime owner.
+3. Add LangGraph checkpointing for resumable long-running tasks.
+4. Build the multi-agent company runtime behind the existing registry boundary.
+5. Add packaging, updater, and release evidence.
+6. Harden local secret storage and provider validation.

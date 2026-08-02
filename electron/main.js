@@ -3,31 +3,15 @@ const path = require('path');
 const http = require('http');
 
 const BACKEND_HOST = process.env.COWORKER_BACKEND_HOST || 'localhost';
-const BACKEND_PORT = Number(process.env.COWORKER_BACKEND_PORT || 8000);
-const BACKEND_PID = process.env.COWORKER_BACKEND_PID ? Number(process.env.COWORKER_BACKEND_PID) : undefined;
+const BACKEND_PORT = Number(process.env.COWORKER_BACKEND_PORT || 9527);
 const FRONTEND_URL = process.env.COWORKER_FRONTEND_URL || 'http://localhost:3000';
 const FRONTEND_DIST_ENTRY = path.join(__dirname, '../frontend/dist/index.html');
 
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
-let backendStopRequested = false;
 
 const BRAND_ASSET_DIR = path.join(__dirname, '../assets/brand/png');
-
-function stopBackendProcess() {
-  if (!BACKEND_PID || backendStopRequested) {
-    return;
-  }
-  backendStopRequested = true;
-  try {
-    process.kill(BACKEND_PID, 'SIGTERM');
-  } catch (error) {
-    if (error.code !== 'ESRCH') {
-      console.error(`Failed to stop backend process ${BACKEND_PID}:`, error);
-    }
-  }
-}
 
 function themedMonochromeAssetPath(name) {
   const tone = nativeTheme.shouldUseDarkColors ? 'white' : 'black';
@@ -78,7 +62,6 @@ function hideMainWindow() {
 
 function quitApp() {
   isQuitting = true;
-  stopBackendProcess();
   app.quit();
 }
 
@@ -201,6 +184,12 @@ function createWindow() {
     show: false,
     icon: themedMonochromeAssetPath('cw-icon'),
     backgroundColor: '#111417',
+    ...(process.platform === 'darwin'
+      ? {
+          titleBarStyle: 'hidden',
+          trafficLightPosition: { x: 14, y: 14 },
+        }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -274,11 +263,6 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   isQuitting = true;
-  stopBackendProcess();
-});
-
-app.on('will-quit', () => {
-  stopBackendProcess();
 });
 
 function requestBackend(pathname, method = 'GET', payload = undefined) {
@@ -336,8 +320,162 @@ ipcMain.handle('get-runtime-config', async () => {
   return requestBackend('/config');
 });
 
+ipcMain.handle('update-runtime-config', async (event, payload) => {
+  return requestBackend('/config', 'PATCH', payload);
+});
+
 ipcMain.handle('send-chat-message', async (event, payload) => {
   return requestBackend('/chat', 'POST', payload);
+});
+
+const activeStreams = new Map();
+
+ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
+  const data = JSON.stringify(payload);
+  const options = {
+    hostname: BACKEND_HOST,
+    port: BACKEND_PORT,
+    path: '/chat/stream',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data),
+    },
+  };
+
+  const sender = event.sender;
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      res.setEncoding('utf8');
+      let buffer = '';
+      res.on('data', (chunk) => {
+        buffer += chunk;
+        let sepIndex;
+        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sepIndex);
+          buffer = buffer.slice(sepIndex + 2);
+          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
+          if (!dataLine) continue;
+          const raw = dataLine.slice(5).trim();
+          if (!raw) continue;
+          let parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+          sender.send('chat-stream-event', { requestId, event: parsed });
+        }
+      });
+      res.on('end', () => {
+        if (buffer) {
+          const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
+          if (dataLine) {
+            const raw = dataLine.slice(5).trim();
+            if (raw) {
+              try {
+                sender.send('chat-stream-event', { requestId, event: JSON.parse(raw) });
+              } catch {
+                // ignore trailing partial frame
+              }
+            }
+          }
+        }
+        activeStreams.delete(requestId);
+        resolve({ status: 'ok' });
+      });
+    });
+
+    req.on('error', (e) => {
+      activeStreams.delete(requestId);
+      sender.send('chat-stream-event', { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
+      resolve({ status: 'error' });
+    });
+
+    activeStreams.set(requestId, req);
+    req.write(data);
+    req.end();
+  });
+});
+
+ipcMain.on('abort-chat-stream', (event, requestId) => {
+  const req = activeStreams.get(requestId);
+  if (req) {
+    req.destroy();
+    activeStreams.delete(requestId);
+  }
+});
+
+ipcMain.handle('list-sessions', async () => {
+  return requestBackend('/sessions');
+});
+
+ipcMain.handle('create-session', async (event, title) => {
+  return requestBackend('/sessions', 'POST', { title: title || '' });
+});
+
+ipcMain.handle('delete-session', async (event, sessionId) => {
+  return requestBackend(`/sessions/${sessionId}`, 'DELETE');
+});
+
+ipcMain.handle('rename-session', async (event, payload) => {
+  return requestBackend(`/sessions/${payload.session_id}/rename`, 'POST', { title: payload.title });
+});
+
+ipcMain.handle('get-session', async (event, sessionId) => {
+  return requestBackend(`/sessions/${sessionId}`);
+});
+
+ipcMain.handle('move-session', async (event, payload) => {
+  return requestBackend(`/sessions/${payload.session_id}/move`, 'POST', { project_id: payload.project_id });
+});
+
+ipcMain.handle('list-projects', async () => {
+  return requestBackend('/projects');
+});
+
+ipcMain.handle('create-project', async (event, name) => {
+  return requestBackend('/projects', 'POST', { name });
+});
+
+ipcMain.handle('rename-project', async (event, payload) => {
+  return requestBackend(`/projects/${payload.project_id}/rename`, 'POST', { name: payload.name });
+});
+
+ipcMain.handle('delete-project', async (event, projectId) => {
+  return requestBackend(`/projects/${projectId}`, 'DELETE');
+});
+
+ipcMain.handle('get-workspace-tree', async () => {
+  return requestBackend('/workspace/tree');
+});
+
+ipcMain.handle('get-workspace-dir', async (event, path) => {
+  return requestBackend(`/workspace/dir?path=${encodeURIComponent(path || '')}`);
+});
+
+ipcMain.handle('get-workspace-file', async (event, path) => {
+  return requestBackend(`/workspace/file?path=${encodeURIComponent(path)}`);
+});
+
+ipcMain.handle('run-workspace-command', async (event, payload) => {
+  return requestBackend('/workspace/command', 'POST', payload);
+});
+
+ipcMain.handle('list-tool-audit', async (event, limit) => {
+  return requestBackend(`/audit/tool?limit=${encodeURIComponent(limit || 100)}`);
+});
+
+ipcMain.handle('list-command-approvals', async () => {
+  return requestBackend('/command-approvals');
+});
+
+ipcMain.handle('approve-command', async (event, approvalId) => {
+  return requestBackend('/command-approvals/approve', 'POST', { approval_id: approvalId });
+});
+
+ipcMain.handle('deny-command', async (event, approvalId) => {
+  return requestBackend('/command-approvals/deny', 'POST', { approval_id: approvalId });
 });
 
 ipcMain.handle('list-providers', async () => {

@@ -5,6 +5,7 @@ import type { AccessMode, WorkMode } from '../../types';
 import { PageHeading } from '../ui/page-heading';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
+import { ToolAuditPanel } from './ToolAuditPanel';
 import { accessModeOptions, languageOptions, themeOptions, workModeOptions } from './preference-options';
 
 interface SettingsViewProps {
@@ -112,6 +113,7 @@ export function SettingsView({
           },
         ]}
       />
+      <ToolAuditPanel />
     </section>
   );
 }
