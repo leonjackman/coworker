@@ -47,6 +47,9 @@
     "resolveJsonModule": true,
     "allowJs": true,
     "noEmit": true,
+    "paths": {
+      "@/*": ["./src/*"]
+    },
   },
   "include": ["src"],
   "exclude": ["dist", "node_modules"]

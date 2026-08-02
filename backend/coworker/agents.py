@@ -1,10 +1,11 @@
 import json
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from .config import BackendSettings
+from .providers import ProviderEntry, ProviderManager
 from .workspace import Workspace
 
 AgentMode = Literal["single"]
@@ -50,13 +51,10 @@ class SimulatedSingleAgentRuntime(AgentRuntime):
         return AgentReply(content=content, mode=self.mode, provider="simulated")
 
 
-class OpenAISingleAgentRuntime(AgentRuntime):
+class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
 
-    def __init__(self, settings: BackendSettings, workspace: Workspace):
-        if not os.getenv("OPENAI_API_KEY"):
-            raise RuntimeError("OPENAI_API_KEY is required when COWORKER_AGENT_PROVIDER=openai")
-
+    def __init__(self, workspace: Workspace, provider: ProviderEntry, model_override: str | None = None):
         from langchain.agents import create_agent
         from langchain_openai import ChatOpenAI
 
@@ -70,7 +68,12 @@ class OpenAISingleAgentRuntime(AgentRuntime):
             workspace.write_text(payload["file_path"], payload["content"])
             return f"Wrote {payload['file_path']}"
 
-        llm = ChatOpenAI(model=settings.openai_model, temperature=0)
+        llm = ChatOpenAI(
+            model=model_override or provider.model,
+            temperature=0,
+            api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
+            base_url=self.openai_compatible_base_url(provider),
+        )
         self.agent = create_agent(
             model=llm,
             tools=[read_file, write_file],
@@ -88,21 +91,53 @@ class OpenAISingleAgentRuntime(AgentRuntime):
         content = messages[-1].content if messages else ""
         return AgentReply(content=str(content), mode=self.mode, provider="openai")
 
+    @staticmethod
+    def openai_compatible_base_url(provider: ProviderEntry) -> str:
+        base_url = provider.base_url.rstrip("/")
+        if provider.provider_type == "ollama" and not base_url.endswith("/v1"):
+            return f"{base_url}/v1"
+        return base_url
+
 
 class AgentRuntimeRegistry:
     def __init__(self, settings: BackendSettings):
         self.settings = settings
         self.workspace = Workspace(settings.workspace_dir)
-        self.single_agent = self._create_single_agent()
+        self.provider_manager = ProviderManager(settings.data_dir / "providers.json")
 
-    def _create_single_agent(self) -> AgentRuntime:
+    def _provider_for_request(self, provider_id: str | None, model: str | None) -> ProviderEntry | None:
+        if provider_id:
+            config = self.provider_manager.load()
+            provider = config.find_enabled(provider_id)
+            if not provider:
+                raise RuntimeError(f"Provider {provider_id} is not enabled or not found")
+            return replace(provider, model=model or provider.model)
+
+        provider = self.provider_manager.default_provider()
+        if provider and model:
+            return replace(provider, model=model)
+        return provider
+
+    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None) -> AgentRuntime:
+        provider = self._provider_for_request(provider_id, model)
+        if provider:
+            return OpenAICompatibleSingleAgentRuntime(self.workspace, provider)
         if self.settings.agent_provider == "openai":
-            return OpenAISingleAgentRuntime(self.settings, self.workspace)
+            env_provider = ProviderEntry(
+                id="env-openai",
+                name="Environment OpenAI",
+                provider_type="openai",
+                base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"),
+                api_key=os.getenv("OPENAI_API_KEY", ""),
+                model=self.settings.openai_model,
+                enabled=True,
+            )
+            return OpenAICompatibleSingleAgentRuntime(self.workspace, env_provider)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
 
-    def get_runtime(self, mode: AgentMode) -> AgentRuntime:
+    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None) -> AgentRuntime:
         if mode == "single":
-            return self.single_agent
+            return self._create_single_agent(provider_id, model)
         raise RuntimeError(f"Unsupported agent mode: {mode}")
