@@ -530,3 +530,40 @@ ipcMain.handle('test-provider', async (event, payload) => {
 ipcMain.handle('fetch-provider-models', async (event, payload) => {
   return requestBackend('/providers/fetch-models', 'POST', payload);
 });
+
+let translucentOnDarwin = false;
+
+function setTranslucent(enabled) {
+  if (process.platform !== 'darwin' || !mainWindow || mainWindow.isDestroyed()) return;
+  if (enabled) {
+    mainWindow.setTransparent(true);
+    mainWindow.setBackgroundColor({ backgroundColor: '#00000000' });
+    mainWindow.setVibrancy('under-window');
+  } else {
+    transparentOff();
+  }
+}
+
+function transparentOff() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setVibrancy(null);
+  mainWindow.setTransparent(false);
+  mainWindow.setBackgroundColor({ backgroundColor: '#111417' });
+}
+
+function refreshTranslucent() {
+  if (translucentOnDarwin) {
+    setTranslucent(true);
+  } else {
+    transparentOff();
+  }
+}
+
+ipcMain.on('update-translucent', (event, enabled) => {
+  translucentOnDarwin = enabled;
+  setTranslucent(enabled);
+});
+
+ipcMain.handle('has-vibrancy-support', async () => {
+  return process.platform === 'darwin';
+});

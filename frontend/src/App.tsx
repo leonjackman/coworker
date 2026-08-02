@@ -666,6 +666,7 @@ function App() {
                   onAccessModeChange={setAccessMode}
                   onLanguageChange={() => setLanguageVersion((value) => value + 1)}
                   onClose={() => setActiveView('chat')}
+                  supportsVibrancy={window.electronAPI?.platform === 'darwin'}
                 />
               )}
             </section>

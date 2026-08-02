@@ -327,6 +327,9 @@ export function applyTheme(settings: ThemeSettings): void {
   root.style.setProperty('--sidebar-accent', palette.controlActive);
   root.style.setProperty('--sidebar-accent-foreground', palette.foreground);
   root.style.setProperty('--sidebar-border', palette.border);
+  if (typeof (window as any).electronAPI?.updateTranslucent === 'function') {
+    (window as any).electronAPI.updateTranslucent(settings.translucent);
+  }
 }
 
 function kebabCase(value: string): string {

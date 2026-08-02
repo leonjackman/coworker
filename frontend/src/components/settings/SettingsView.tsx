@@ -19,6 +19,7 @@ interface SettingsViewProps {
   onAccessModeChange: (mode: AccessMode) => void;
   onLanguageChange: () => void;
   onClose: () => void;
+  supportsVibrancy?: boolean;
 }
 
 export function SettingsView({
@@ -30,6 +31,7 @@ export function SettingsView({
   onAccessModeChange,
   onLanguageChange,
   onClose,
+  supportsVibrancy = true,
 }: SettingsViewProps) {
   const [settingsPage, setSettingsPage] = useState<'main' | 'theme'>('main');
 
@@ -43,7 +45,7 @@ export function SettingsView({
   const currentPreset = THEME_PRESETS.find((preset) => preset.id === themeSettings.presetId);
 
   if (settingsPage === 'theme') {
-    return <ThemeCustomizer settings={themeSettings} onChange={onThemeSettingsChange} onBack={() => setSettingsPage('main')} />;
+    return <ThemeCustomizer settings={themeSettings} onChange={onThemeSettingsChange} onBack={() => setSettingsPage('main')} supportsVibrancy={supportsVibrancy} />;
   }
 
   return (

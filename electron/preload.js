@@ -44,4 +44,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listCommandApprovals: () => ipcRenderer.invoke('list-command-approvals'),
   approveCommand: (approvalId) => ipcRenderer.invoke('approve-command', approvalId),
   denyCommand: (approvalId) => ipcRenderer.invoke('deny-command', approvalId),
+  updateTranslucent: (enabled) => ipcRenderer.send('update-translucent', enabled),
+  hasVibrancySupport: () => ipcRenderer.invoke('has-vibrancy-support'),
 });

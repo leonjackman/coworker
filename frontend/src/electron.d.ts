@@ -63,6 +63,8 @@ declare global {
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
       approveCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
       denyCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
+      updateTranslucent: (enabled: boolean) => void;
+      hasVibrancySupport: () => Promise<boolean>;
     };
   }
 }

@@ -120,11 +120,7 @@ body {
 }
 
 :root[data-translucent="true"] body {
-  background:
-    radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 30%),
-    radial-gradient(circle at 82% 8%, color-mix(in srgb, var(--message-user) 16%, transparent), transparent 28%),
-    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--foreground) 8%, transparent), transparent 34%),
-    var(--background);
+  background: transparent;
 }
 
 button,
