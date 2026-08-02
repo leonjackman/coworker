@@ -535,32 +535,17 @@ let translucentOnDarwin = false;
 
 function setTranslucent(enabled) {
   if (process.platform !== 'darwin' || !mainWindow || mainWindow.isDestroyed()) return;
+  translucentOnDarwin = enabled;
   if (enabled) {
-    mainWindow.setTransparent(true);
-    mainWindow.setBackgroundColor({ backgroundColor: '#00000000' });
     mainWindow.setVibrancy('under-window');
+    mainWindow.setBackgroundColor('#00000000');
   } else {
-    transparentOff();
-  }
-}
-
-function transparentOff() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  mainWindow.setVibrancy(null);
-  mainWindow.setTransparent(false);
-  mainWindow.setBackgroundColor({ backgroundColor: '#111417' });
-}
-
-function refreshTranslucent() {
-  if (translucentOnDarwin) {
-    setTranslucent(true);
-  } else {
-    transparentOff();
+    mainWindow.setVibrancy(null);
+    mainWindow.setBackgroundColor('#111417');
   }
 }
 
 ipcMain.on('update-translucent', (event, enabled) => {
-  translucentOnDarwin = enabled;
   setTranslucent(enabled);
 });
 
