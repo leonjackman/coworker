@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage, nativeTheme } = require('electron');
 const path = require('path');
 const http = require('http');
 
@@ -410,8 +410,11 @@ ipcMain.handle('list-sessions', async () => {
   return requestBackend('/sessions');
 });
 
-ipcMain.handle('create-session', async (event, title) => {
-  return requestBackend('/sessions', 'POST', { title: title || '' });
+ipcMain.handle('create-session', async (event, payload) => {
+  return requestBackend('/sessions', 'POST', {
+    title: payload?.title || '',
+    project_id: payload?.project_id || '',
+  });
 });
 
 ipcMain.handle('delete-session', async (event, sessionId) => {
@@ -426,16 +429,25 @@ ipcMain.handle('get-session', async (event, sessionId) => {
   return requestBackend(`/sessions/${sessionId}`);
 });
 
-ipcMain.handle('move-session', async (event, payload) => {
-  return requestBackend(`/sessions/${payload.session_id}/move`, 'POST', { project_id: payload.project_id });
-});
-
 ipcMain.handle('list-projects', async () => {
   return requestBackend('/projects');
 });
 
-ipcMain.handle('create-project', async (event, name) => {
-  return requestBackend('/projects', 'POST', { name });
+ipcMain.handle('create-project', async (event, payload) => {
+  return requestBackend('/projects', 'POST', {
+    name: payload?.name || '',
+    workspace_path: payload?.workspace_path || '',
+  });
+});
+
+ipcMain.handle('open-directory-picker', async (event, options = {}) => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: options.title || 'Choose a folder',
+    defaultPath: options.defaultPath,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled) return null;
+  return result.filePaths[0] || null;
 });
 
 ipcMain.handle('rename-project', async (event, payload) => {
@@ -446,16 +458,25 @@ ipcMain.handle('delete-project', async (event, projectId) => {
   return requestBackend(`/projects/${projectId}`, 'DELETE');
 });
 
-ipcMain.handle('get-workspace-tree', async () => {
-  return requestBackend('/workspace/tree');
+ipcMain.handle('get-workspace-tree', async (event, projectId) => {
+  const suffix = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  return requestBackend(`/workspace/tree${suffix}`);
 });
 
-ipcMain.handle('get-workspace-dir', async (event, path) => {
-  return requestBackend(`/workspace/dir?path=${encodeURIComponent(path || '')}`);
+ipcMain.handle('get-workspace-dir', async (event, payload) => {
+  const currentPath = typeof payload === 'string' ? payload : payload?.path || '';
+  const projectId = typeof payload === 'object' && payload ? payload.project_id || '' : '';
+  const params = new URLSearchParams({ path: currentPath });
+  if (projectId) params.set('project_id', projectId);
+  return requestBackend(`/workspace/dir?${params.toString()}`);
 });
 
-ipcMain.handle('get-workspace-file', async (event, path) => {
-  return requestBackend(`/workspace/file?path=${encodeURIComponent(path)}`);
+ipcMain.handle('get-workspace-file', async (event, payload) => {
+  const currentPath = typeof payload === 'string' ? payload : payload?.path || '';
+  const projectId = typeof payload === 'object' && payload ? payload.project_id || '' : '';
+  const params = new URLSearchParams({ path: currentPath });
+  if (projectId) params.set('project_id', projectId);
+  return requestBackend(`/workspace/file?${params.toString()}`);
 });
 
 ipcMain.handle('run-workspace-command', async (event, payload) => {
@@ -464,6 +485,10 @@ ipcMain.handle('run-workspace-command', async (event, payload) => {
 
 ipcMain.handle('list-tool-audit', async (event, limit) => {
   return requestBackend(`/audit/tool?limit=${encodeURIComponent(limit || 100)}`);
+});
+
+ipcMain.handle('list-agent-traces', async (event, limit) => {
+  return requestBackend(`/traces/agent?limit=${encodeURIComponent(limit || 100)}`);
 });
 
 ipcMain.handle('list-command-approvals', async () => {

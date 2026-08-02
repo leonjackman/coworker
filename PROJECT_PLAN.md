@@ -4,7 +4,7 @@
 
 Coworker is a local-first desktop agent app. The current product is a Codex-style single-agent coding assistant with local provider configuration, project/session organization, streaming chat, and guarded workspace tools.
 
-The long-term direction still includes a multi-agent company mode, but that is not part of the current implemented runtime. The active implementation should keep a clean runtime registry boundary so multi-agent orchestration can be added without forking the desktop, provider, session, or workspace layers.
+Multi-agent company mode is not part of the current phase. Complete the single-agent product first; keep the runtime boundary clean, but do not spend current implementation work on additional agent modes.
 
 ## Current Architecture
 
@@ -24,6 +24,7 @@ The long-term direction still includes a multi-agent company mode, but that is n
 - `WorkspaceSidebar` owns standalone sessions and project-grouped sessions.
 - `ProvidersPanel` owns provider add/edit/delete/default/test interactions.
 - `SettingsView` owns language, preferences, theme presets, custom colors, and translucent glass mode.
+- assistant-ui was evaluated for the chat runtime. It is not installed in the current phase because adding it without replacing `App.tsx`, `MessageList`, and `ChatInput` would create a second chat runtime owner. If adopted later, assistant-ui must replace the current chat state/run lifecycle owner in one migration.
 
 ### Backend Layer
 
@@ -35,17 +36,20 @@ The long-term direction still includes a multi-agent company mode, but that is n
 
 ### Agent Layer
 
-- Non-streaming calls use LangChain `create_agent`.
-- Streaming calls use LangGraph `create_react_agent` and `astream`.
+- Non-streaming and streaming calls use the Coworker LangGraph runtime: planner -> executor -> verifier -> summarizer.
+- The executor stage uses LangChain `create_agent`, which compiles to a LangGraph tool agent and owns ReAct-style tool execution.
 - Tools are intentionally small:
   - Default access: `search_files`, `read_file`
   - Build + Full Access: `search_files`, `read_file`, `replace_in_file`, `apply_text_edits`, `write_file`, `run_command`
 - Plan mode always removes write access.
 - Attachment content is formatted into the user prompt server-side and capped.
+- Real provider sessions use LangGraph SQLite checkpointing as the durable runtime message state owner. `SessionStore` remains the persisted UI transcript owner and only seeds runtime state when no checkpoint exists for a session.
+- Agent invocations pass standard LangChain/LangGraph Runnable `run_name`, `tags`, `metadata`, and `thread_id` config for LangSmith/LangChain tracing.
+- `AgentTraceStore` owns local runtime observability records for run start/done/error, stage completion, and HITL interrupt state; settings reads it through `/traces/agent`.
 - File writes, exact replacements, atomic structured text edits, and command executions append JSONL audit events under the app data directory; `/audit/tool` exposes recent records for the settings UI.
-- Command execution requires a one-time approval stored under the app data directory before the process starts.
+- Agent command execution is interrupted by LangGraph/LangChain human-in-the-loop middleware before the process starts, then resumes from the same checkpoint after approve/reject. Bottom-panel terminal commands keep a one-time approval record because they are outside the Agent graph.
 
-## Implemented MVP
+## Implemented Single-Agent Scope
 
 - [x] Electron + React + TypeScript app shell.
 - [x] FastAPI backend with `/health` and `/config`.
@@ -65,6 +69,9 @@ The long-term direction still includes a multi-agent company mode, but that is n
 - [x] Sidebar with standalone sessions plus project sessions.
 - [x] Workspace file APIs.
 - [x] Atomic structured text edit tool.
+- [x] LangGraph SQLite runtime checkpointing for real provider sessions.
+- [x] LangChain/LangGraph trace config on Agent invocations.
+- [x] Local Agent trace API and Runtime Observability settings view.
 - [x] Tool audit API and settings-page review UI.
 - [x] Command approval API and settings-page approve/deny UI.
 - [x] Chinese/English i18n.
@@ -81,18 +88,20 @@ These are the next implementation areas. Treat them as real product gaps, not do
    - Keep all tool access behind the existing work/access policy owner.
 
 2. **Runtime Persistence**
-   - Evaluate LangGraph checkpointing for resumable long-running tasks.
-   - Do not duplicate session truth: either checkpoint is integrated as runtime state, or local `SessionStore` remains the chat-history owner.
+   - Add checkpoint retention/export controls if long-running sessions need operational management.
+   - Keep the owner split clear: LangGraph owns runtime message state; `SessionStore` owns the UI transcript.
+   - Do not feed full transcript history on every turn once a checkpoint exists for the session.
 
 3. **Human Approval**
-   - Command execution now has Coworker-owned one-time approval.
-   - Evaluate LangGraph/LangChain human-in-the-loop middleware only if it becomes the runtime policy owner.
-   - Expand approval to other risky tools if product usage requires it.
+   - Agent `run_command` approval now uses LangGraph/LangChain human-in-the-loop middleware as the runtime policy owner.
+   - Bottom-panel terminal command approval remains Coworker-owned because it is not executed inside the Agent graph.
+   - Expand LangGraph approval to other risky Agent tools if product usage requires it.
 
-4. **Multi-Agent Foundation**
-   - Add new runtime modes behind `AgentRuntimeRegistry`.
-   - Keep provider/session/workspace APIs shared.
-   - Avoid adding a second conversation store or provider store.
+4. **Trace And Debug**
+   - Agent runs now expose standard LangChain/LangGraph trace metadata for LangSmith/LangChain tracing.
+   - Local Agent trace is available in Runtime Observability and remains separate from the safety-focused tool audit.
+   - Keep JSONL tool audit as the local safety log owner.
+   - Add retention/export controls for local Agent trace if long-running usage requires operational management.
 
 5. **Packaging And Release**
    - Add native packaging.
@@ -103,6 +112,16 @@ These are the next implementation areas. Treat them as real product gaps, not do
    - Harden provider secret storage.
    - Improve provider validation.
    - Add retention controls for workspace write/command audit records.
+
+7. **Optional assistant-ui Migration**
+   - Adopt only if assistant-ui becomes the single frontend chat runtime owner.
+   - Replace `App.tsx` message/run lifecycle state, `MessageList`, and `ChatInput` together.
+   - Do not add `AssistantRuntimeProvider` as a passive wrapper around the existing local chat state.
+
+## Out Of Current Scope
+
+- Multi-agent company mode.
+- Additional runtime modes beyond the existing single-agent boundary.
 
 ## Verification Gates
 
@@ -123,4 +142,4 @@ COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 - Prefer replacing the root cause over adding compatibility or fallback layers.
 - Do not add a parallel UI state store for conversations unless `App.tsx` state ownership is intentionally migrated.
 - Do not introduce login/account scope; Coworker is currently local software.
-- Do not claim multi-agent support until a real runtime exists behind the registry.
+- Do not implement or claim multi-agent support during the current single-agent completion phase.

@@ -15,31 +15,29 @@ interface WorkspaceSidebarProps {
   projects: ProjectEntry[];
   activeView: AppView;
   activeSessionId?: string;
+  activeProjectId?: string;
   collapsed: boolean;
   onResizeStart: () => void;
   onResizeEnd: () => void;
   onResizeWidth: (width: number) => void;
   onViewChange: (view: AppView) => void;
   onNewChat: (projectId?: string) => void;
+  onOpenProject: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onCreateProject: () => void;
   onRenameProject: (project: ProjectEntry) => void;
   onDeleteProject: (projectId: string) => void;
-  onMoveSession: (sessionId: string, projectId: string) => void;
 }
 
 interface SessionRowProps {
   session: SessionSummary;
   active: boolean;
-  isStandalone: boolean;
-  projects: ProjectEntry[];
   onOpen: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
-  onMove: (sessionId: string, projectId: string) => void;
 }
 
-function SessionRow({ session, active, isStandalone, projects, onOpen, onDelete, onMove }: SessionRowProps) {
+function SessionRow({ session, active, onOpen, onDelete }: SessionRowProps) {
   return (
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
@@ -54,20 +52,6 @@ function SessionRow({ session, active, isStandalone, projects, onOpen, onDelete,
             <FolderOpen size={14} />
             {t('sidebar.session_open')}
           </DropdownMenuItem>
-          {isStandalone ? (
-            projects.map((project) => (
-              <DropdownMenuItem key={project.id} onClick={() => onMove(session.id, project.id)}>
-                <Folder size={14} />
-                {t('sidebar.session_move_to')}「{project.name}」
-              </DropdownMenuItem>
-            ))
-          ) : (
-            <DropdownMenuItem onClick={() => onMove(session.id, '')}>
-              <Folder size={14} />
-              {t('sidebar.session_move_out')}
-            </DropdownMenuItem>
-          )}
-          {!isStandalone && projects.length > 0 && <DropdownMenuSeparator />}
           <DropdownMenuItem variant="destructive" onClick={() => onDelete(session.id)}>
             <Trash2 size={14} />
             {t('common.delete')}
@@ -82,25 +66,30 @@ interface ProjectRowProps {
   project: ProjectEntry;
   sessions: SessionSummary[];
   activeSessionId?: string;
+  activeProjectId?: string;
   defaultExpanded?: boolean;
   onNewChat: (projectId?: string) => void;
+  onOpenProject: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onRenameProject: (project: ProjectEntry) => void;
   onDeleteProject: (projectId: string) => void;
-  onMoveSession: (sessionId: string, projectId: string) => void;
 }
 
-function ProjectRow({ project, sessions, activeSessionId, defaultExpanded, onNewChat, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onMoveSession }: ProjectRowProps) {
+function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || activeProjectId === project.id;
 
   return (
     <div className="sidebar-project">
-      <div className={`sidebar-project__title-row ${activeSessionId && sessions.some((s) => s.id === activeSessionId) ? 'sidebar-project__title-row--active' : ''}`}>
+      <div className={`sidebar-project__title-row ${active ? 'sidebar-project__title-row--active' : ''}`}>
         <button
           type="button"
           className="sidebar-project__title"
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => {
+            setExpanded(true);
+            onOpenProject(project.id);
+          }}
           aria-expanded={expanded}
         >
           {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -141,11 +130,8 @@ function ProjectRow({ project, sessions, activeSessionId, defaultExpanded, onNew
               key={session.id}
               session={session}
               active={session.id === activeSessionId}
-              isStandalone={false}
-              projects={[]}
               onOpen={onOpenSession}
               onDelete={onDeleteSession}
-              onMove={onMoveSession}
             />
           ))}
           {sessions.length === 0 && <p className="sidebar-project__empty">{t('sidebar.project_empty')}</p>}
@@ -161,21 +147,20 @@ export function WorkspaceSidebar({
   projects,
   activeView,
   activeSessionId,
+  activeProjectId,
   collapsed,
   onResizeStart,
   onResizeEnd,
   onResizeWidth,
   onViewChange,
   onNewChat,
+  onOpenProject,
   onOpenSession,
   onDeleteSession,
   onCreateProject,
   onRenameProject,
   onDeleteProject,
-  onMoveSession,
 }: WorkspaceSidebarProps) {
-  const workspaceName = workspaceProjectName(config?.workspace);
-  const standaloneSessions = sessions.filter((session) => !session.project_id);
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
@@ -224,6 +209,16 @@ export function WorkspaceSidebar({
     });
   }, [activeSessionId, sessions]);
 
+  useEffect(() => {
+    if (!activeProjectId) return;
+    setExpandedProjectIds((current) => {
+      if (current.has(activeProjectId)) return current;
+      const next = new Set(current);
+      next.add(activeProjectId);
+      return next;
+    });
+  }, [activeProjectId]);
+
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
       <div
@@ -243,10 +238,9 @@ export function WorkspaceSidebar({
       </div>
 
       <nav className="sidebar__primary" aria-label={t('sidebar.primary_nav')}>
-        <button className={`sidebar-nav-item sidebar-nav-item--strong ${activeView === 'chat' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onNewChat()}>
+        <button className="sidebar-nav-item sidebar-nav-item--strong" type="button" onClick={() => onNewChat()}>
           <MessageSquarePlus size={17} />
           {!collapsed && <span>{t('sidebar.new_chat')}</span>}
-          {!collapsed && <Plus className="sidebar-nav-item__trail" size={15} />}
         </button>
         <button className={`sidebar-nav-item ${activeView === 'providers' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('providers')}>
           <Settings2 size={17} />
@@ -258,86 +252,53 @@ export function WorkspaceSidebar({
 
       {!collapsed && (
         <div className="sidebar__scroll">
-        <section className="sidebar-group" aria-labelledby="sidebar-sessions-title">
-          <div className="sidebar-group__header">
-            <h2 id="sidebar-sessions-title">{t('sidebar.sessions')}</h2>
-            <Tooltip content={t('sidebar.new_chat')}>
-              <Button variant="icon" className="h-7 w-7" onClick={() => onNewChat()}>
-                <Plus size={15} />
-              </Button>
-            </Tooltip>
-          </div>
-
-          {standaloneSessions.map((session) => (
-            <SessionRow
-              key={session.id}
-              session={session}
-              active={session.id === activeSessionId}
-              isStandalone
-              projects={projects}
-              onOpen={onOpenSession}
-              onDelete={onDeleteSession}
-              onMove={onMoveSession}
-            />
-          ))}
-          {standaloneSessions.length === 0 && <p className="sidebar-group__empty">{t('sidebar.sessions_empty')}</p>}
-        </section>
-
-        <section className="sidebar-group" aria-labelledby="sidebar-projects-title">
-          <div className="sidebar-group__header">
-            <h2 id="sidebar-projects-title">{t('sidebar.projects')}</h2>
-            <Tooltip content={t('sidebar.new_project')}>
-              <Button variant="icon" className="h-7 w-7" onClick={onCreateProject}>
-                <Plus size={15} />
-              </Button>
-            </Tooltip>
-          </div>
-
-          {projects.length === 0 && (
-            <div className="sidebar-project sidebar-project--empty">
-              <div className="sidebar-project__title sidebar-project__title--static">
-                <Folder size={16} />
-                <span>{workspaceName}</span>
-              </div>
-              <p className="sidebar-project__hint">{t('sidebar.projects_empty')}</p>
+          <section className="sidebar-group" aria-labelledby="sidebar-projects-title">
+            <div className="sidebar-group__header">
+              <h2 id="sidebar-projects-title">{t('sidebar.projects')}</h2>
+              <Tooltip content={t('sidebar.new_project')}>
+                <Button variant="icon" className="h-7 w-7" onClick={onCreateProject}>
+                  <Plus size={15} />
+                </Button>
+              </Tooltip>
             </div>
-          )}
 
-          {projects.map((project) => (
-            <ProjectRow
-              key={project.id}
-              project={project}
-              sessions={sessions.filter((session) => session.project_id === project.id)}
-              {...(activeSessionId ? { activeSessionId } : {})}
-              defaultExpanded={expandedProjectIds.has(project.id)}
-              onNewChat={onNewChat}
-              onOpenSession={onOpenSession}
-              onDeleteSession={onDeleteSession}
-              onRenameProject={onRenameProject}
-              onDeleteProject={onDeleteProject}
-              onMoveSession={onMoveSession}
-            />
-          ))}
-        </section>
-      </div>
+            {projects.length === 0 && (
+              <p className="sidebar-group__empty">{t('sidebar.projects_empty')}</p>
+            )}
+
+            {projects.map((project) => (
+              <ProjectRow
+                key={project.id}
+                project={project}
+                sessions={sessions.filter((session) => session.project_id === project.id)}
+                {...(activeSessionId ? { activeSessionId } : {})}
+                {...(activeProjectId ? { activeProjectId } : {})}
+                defaultExpanded={expandedProjectIds.has(project.id)}
+                onNewChat={onNewChat}
+                onOpenProject={onOpenProject}
+                onOpenSession={onOpenSession}
+                onDeleteSession={onDeleteSession}
+                onRenameProject={onRenameProject}
+                onDeleteProject={onDeleteProject}
+              />
+            ))}
+          </section>
+        </div>
       )}
 
       <div className="sidebar__settings">
         <Separator />
-        <button className={`sidebar-nav-item ${activeView === 'settings' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('settings')}>
+        <button
+          className={`sidebar-nav-item ${activeView === 'settings' ? 'sidebar-nav-item--active' : ''}`}
+          type="button"
+          onClick={() => onViewChange(activeView === 'settings' ? 'chat' : 'settings')}
+        >
           <Settings2 size={17} />
           {!collapsed && <span>{t('nav.settings')}</span>}
         </button>
       </div>
     </aside>
   );
-}
-
-function workspaceProjectName(workspace?: string): string {
-  if (!workspace) return t('sidebar.default_project');
-  const normalized = workspace.replace(/\/+$/, '');
-  const [, name] = normalized.match(/([^/]+)$/) ?? [];
-  return name || t('sidebar.default_project');
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-CONFIG_VERSION = 1
+CONFIG_VERSION = 2
 
 
 def _now() -> str:
@@ -18,6 +18,17 @@ class Project:
     name: str
     created_at: str
     updated_at: str
+    workspace_path: str = ""
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "Project":
+        return cls(
+            id=str(payload.get("id", "")),
+            name=str(payload.get("name", "")),
+            created_at=str(payload.get("created_at", _now())),
+            updated_at=str(payload.get("updated_at", _now())),
+            workspace_path=str(payload.get("workspace_path", "")),
+        )
 
 
 @dataclass
@@ -31,7 +42,7 @@ class ProjectConfig:
     def from_dict(cls, payload: dict[str, Any]) -> "ProjectConfig":
         return cls(
             version=int(payload.get("version", CONFIG_VERSION)),
-            projects=[Project(**item) for item in payload.get("projects", [])],
+            projects=[Project.from_dict(item) for item in payload.get("projects", [])],
             created_at=str(payload.get("created_at", _now())),
             updated_at=str(payload.get("updated_at", _now())),
         )
@@ -42,6 +53,12 @@ class ProjectConfig:
     def find(self, project_id: str) -> Project | None:
         for project in self.projects:
             if project.id == project_id:
+                return project
+        return None
+
+    def find_by_workspace_path(self, workspace_path: str) -> Project | None:
+        for project in self.projects:
+            if project.workspace_path == workspace_path:
                 return project
         return None
 
@@ -78,18 +95,25 @@ class ProjectStore:
             raise KeyError(f"project {project_id} not found")
         return project
 
-    def create(self, name: str) -> Project:
+    def create(self, name: str, workspace_path: str) -> Project:
         cleaned = name.strip()
         if not cleaned:
             raise ValueError("project name is required")
+        cleaned_workspace = workspace_path.strip()
+        if not cleaned_workspace:
+            raise ValueError("workspace path is required")
+        config = self.load()
+        existing = config.find_by_workspace_path(cleaned_workspace)
+        if existing:
+            return existing
         now = _now()
         project = Project(
             id=str(uuid.uuid4()),
             name=cleaned[:60],
             created_at=now,
             updated_at=now,
+            workspace_path=cleaned_workspace,
         )
-        config = self.load()
         config.projects.append(project)
         self.save(config)
         return project

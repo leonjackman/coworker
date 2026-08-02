@@ -2,7 +2,7 @@ import { RefreshCw, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
-import type { CommandApproval, ToolAuditEvent } from '../../types';
+import type { AgentTraceEvent, CommandApproval, ToolAuditEvent } from '../../types';
 import { Button } from '../ui/button';
 
 function formatAuditTime(timestamp: string): string {
@@ -35,21 +35,37 @@ function contextLabel(context?: Record<string, unknown>): string {
   return [provider, model].filter(Boolean).join(' / ');
 }
 
+function summarizeTrace(event: AgentTraceEvent): string {
+  const details = event.details || {};
+  const parts = [
+    typeof details.stage === 'string' ? details.stage : '',
+    Array.isArray(details.approval_ids) ? `approvals ${details.approval_ids.join(', ')}` : '',
+    typeof details.approval_id === 'string' ? `approval ${details.approval_id}` : '',
+    typeof details.content_chars === 'number' ? `${details.content_chars} chars` : '',
+    typeof details.error === 'string' ? details.error : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
 export function ToolAuditPanel() {
   const [events, setEvents] = useState<ToolAuditEvent[]>([]);
+  const [traces, setTraces] = useState<AgentTraceEvent[]>([]);
   const [approvals, setApprovals] = useState<CommandApproval[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [resumeMessage, setResumeMessage] = useState('');
 
   async function refreshAudit() {
     setLoading(true);
     setError('');
     try {
-      const [auditResponse, approvalsResponse] = await Promise.all([
+      const [auditResponse, traceResponse, approvalsResponse] = await Promise.all([
         chatService.listToolAudit(80),
+        chatService.listAgentTraces(80),
         chatService.listCommandApprovals(),
       ]);
       setEvents(auditResponse.events);
+      setTraces(traceResponse.events);
       setApprovals(approvalsResponse.approvals);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('settings.audit_load_failed'));
@@ -62,10 +78,15 @@ export function ToolAuditPanel() {
     setLoading(true);
     setError('');
     try {
+      setResumeMessage('');
       if (action === 'approve') {
-        await chatService.approveCommand(approvalId);
+        const response = await chatService.approveCommand(approvalId);
+        const done = response.events?.findLast((event) => event.type === 'done');
+        setResumeMessage(done?.content || '');
       } else {
-        await chatService.denyCommand(approvalId);
+        const response = await chatService.denyCommand(approvalId);
+        const done = response.events?.findLast((event) => event.type === 'done');
+        setResumeMessage(done?.content || '');
       }
       await refreshAudit();
     } catch (err) {
@@ -93,6 +114,15 @@ export function ToolAuditPanel() {
 
       <div className="settings-card settings-audit__card">
         {error && <div className="settings-audit__empty">{error}</div>}
+        {!error && resumeMessage && (
+          <article className="settings-audit__event settings-audit__event--approval">
+            <div className="settings-audit__event-top">
+              <strong>{t('settings.command_resume_complete')}</strong>
+              <span className="settings-audit__status settings-audit__status--success">done</span>
+            </div>
+            <p>{resumeMessage}</p>
+          </article>
+        )}
         {!error && approvals.filter((approval) => approval.status === 'pending').map((approval) => (
           <article className="settings-audit__event settings-audit__event--approval" key={approval.id}>
             <div className="settings-audit__event-top">
@@ -115,11 +145,38 @@ export function ToolAuditPanel() {
           </article>
         ))}
         {!error && events.length === 0 && approvals.filter((approval) => approval.status === 'pending').length === 0 && (
+          traces.length === 0 && (
           <div className="settings-audit__empty">
             <ShieldCheck size={18} />
             <span>{loading ? t('settings.audit_loading') : t('settings.audit_empty')}</span>
           </div>
+          )
         )}
+        {!error && traces.length > 0 && (
+          <div className="settings-audit__section">
+            <h3>{t('settings.trace_group')}</h3>
+            {traces.map((trace, index) => {
+              const context = contextLabel(trace.context);
+              const detail = summarizeTrace(trace);
+              return (
+                <article className="settings-audit__event" key={`${trace.timestamp}-${trace.event}-${index}`}>
+                  <div className="settings-audit__event-top">
+                    <strong>{trace.event}</strong>
+                    <span className={`settings-audit__status settings-audit__status--${trace.status}`}>{trace.status}</span>
+                  </div>
+                  <div className="settings-audit__event-meta">
+                    <span>{formatAuditTime(trace.timestamp)}</span>
+                    {context && <span>{context}</span>}
+                  </div>
+                  {detail && <p>{detail}</p>}
+                </article>
+              );
+            })}
+          </div>
+        )}
+        {!error && events.length > 0 && (
+          <div className="settings-audit__section">
+            <h3>{t('settings.tool_audit_group')}</h3>
         {!error && events.map((event, index) => {
           const detail = summarizeDetails(event.details);
           const context = contextLabel(event.context);
@@ -137,6 +194,8 @@ export function ToolAuditPanel() {
             </article>
           );
         })}
+          </div>
+        )}
       </div>
     </section>
   );

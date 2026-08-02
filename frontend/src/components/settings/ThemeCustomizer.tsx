@@ -10,8 +10,8 @@ import {
 } from '../../lib/theme';
 import { t } from '../../lib/i18n';
 import { Button } from '../ui/button';
-import { PageHeading } from '../ui/page-heading';
 import { Switch } from '../ui/switch';
+import { WorkspacePage } from '../ui/workspace-page';
 
 interface ThemeCustomizerProps {
   settings: ThemeSettings;
@@ -46,19 +46,18 @@ export function ThemeCustomizer({ settings, onChange, onBack }: ThemeCustomizerP
   }
 
   return (
-    <section className="theme-customizer">
-      <PageHeading
-        eyebrow={t('settings.title')}
-        title={t('settings.palette_group')}
-        description={t('settings.palette_group_desc')}
-        action={(
-          <Button variant="ghost" onClick={onBack}>
-            <ArrowLeft size={15} />
-            {t('settings.back')}
-          </Button>
-        )}
-      />
-
+    <WorkspacePage
+      className="theme-customizer"
+      eyebrow={t('settings.title')}
+      title={t('settings.palette_group')}
+      description={t('settings.palette_group_desc')}
+      action={(
+        <Button variant="ghost" onClick={onBack}>
+          <ArrowLeft size={15} />
+          {t('settings.back')}
+        </Button>
+      )}
+    >
       <div className="settings-card material-card">
         <div className="settings-row">
           <div className="settings-row__copy">
@@ -137,7 +136,7 @@ export function ThemeCustomizer({ settings, onChange, onBack }: ThemeCustomizerP
           ))}
         </div>
       </div>
-    </section>
+    </WorkspacePage>
   );
 }
 

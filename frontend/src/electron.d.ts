@@ -1,8 +1,11 @@
 import type {
+  AgentTraceResponse,
   ChatRequest,
   ChatResponse,
   CommandApprovalResponse,
   CommandApprovalsResponse,
+  CreateProjectRequest,
+  CreateSessionRequest,
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
@@ -42,20 +45,21 @@ declare global {
       testProvider: (payload: { base_url: string; api_key: string; model: string }) => Promise<{ status: string; result: ProviderTestResult }>;
       fetchProviderModels: (payload: { base_url: string; api_key: string; provider_type: string }) => Promise<{ status: string; models: string[]; error?: string }>;
       listSessions: () => Promise<SessionsListResponse>;
-      createSession: (title: string) => Promise<SessionResponse>;
+      createSession: (payload: CreateSessionRequest) => Promise<SessionResponse>;
       deleteSession: (sessionId: string) => Promise<{ status: string }>;
       renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
       getSession: (sessionId: string) => Promise<SessionDetailResponse>;
-      moveSession: (sessionId: string, projectId: string) => Promise<SessionResponse>;
       listProjects: () => Promise<ProjectsListResponse>;
-      createProject: (name: string) => Promise<ProjectResponse>;
+      createProject: (payload: CreateProjectRequest) => Promise<ProjectResponse>;
+      openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
       renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
       deleteProject: (projectId: string) => Promise<{ status: string }>;
-      getWorkspaceTree: () => Promise<WorkspaceTreeResponse>;
-      getWorkspaceDir: (path: string) => Promise<WorkspaceDirResponse>;
-      getWorkspaceFile: (path: string) => Promise<WorkspaceFileResponse>;
+      getWorkspaceTree: (projectId?: string) => Promise<WorkspaceTreeResponse>;
+      getWorkspaceDir: (path: string, projectId?: string) => Promise<WorkspaceDirResponse>;
+      getWorkspaceFile: (path: string, projectId?: string) => Promise<WorkspaceFileResponse>;
       runWorkspaceCommand: (payload: WorkspaceCommandRequest) => Promise<WorkspaceCommandResponse>;
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
+      listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
       approveCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
       denyCommand: (approvalId: string) => Promise<CommandApprovalResponse>;

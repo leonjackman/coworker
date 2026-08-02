@@ -109,15 +109,18 @@ class SessionStore:
             sessions.append(session.public())
         return sessions
 
-    def create(self, title: str = "", project_id: str = "") -> Session:
+    def new_session(self, title: str = "", project_id: str = "") -> Session:
         now = _now()
-        session = Session(
+        return Session(
             id=str(uuid.uuid4()),
             title=title or "新会话",
             created_at=now,
             updated_at=now,
             project_id=project_id,
         )
+
+    def create(self, title: str = "", project_id: str = "") -> Session:
+        session = self.new_session(title, project_id)
         self.save(session)
         return session
 
@@ -128,12 +131,6 @@ class SessionStore:
         session = self.load(session_id)
         if not session:
             raise KeyError(f"session {session_id} not found")
-        return session
-
-    def set_project(self, session_id: str, project_id: str) -> Session:
-        session = self.require(session_id)
-        session.project_id = project_id
-        self.save(session)
         return session
 
     def delete(self, session_id: str) -> bool:

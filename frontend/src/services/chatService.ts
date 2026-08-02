@@ -1,8 +1,11 @@
 import type {
+  AgentTraceResponse,
   ChatRequest,
   ChatResponse,
   CommandApprovalResponse,
   CommandApprovalsResponse,
+  CreateProjectRequest,
+  CreateSessionRequest,
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
@@ -58,21 +61,22 @@ export interface ChatService {
   setDefaultProvider: (providerId: string, model: string) => Promise<void>;
   testProvider: (request: { base_url: string; api_key: string; model: string }) => Promise<ProviderTestResult>;
   fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string }) => Promise<{ models: string[]; error?: string }>;
+  openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;
-  createSession: (title?: string) => Promise<SessionResponse>;
+  createSession: (request: CreateSessionRequest) => Promise<SessionResponse>;
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
   getSession: (sessionId: string) => Promise<SessionDetailResponse>;
-  moveSession: (sessionId: string, projectId: string) => Promise<SessionResponse>;
   listProjects: () => Promise<ProjectsListResponse>;
-  createProject: (name: string) => Promise<ProjectResponse>;
+  createProject: (request: CreateProjectRequest) => Promise<ProjectResponse>;
   renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
   deleteProject: (projectId: string) => Promise<void>;
-  getWorkspaceTree: () => Promise<WorkspaceTreeResponse>;
-  getWorkspaceDir: (path: string) => Promise<WorkspaceDirResponse>;
-  getWorkspaceFile: (path: string) => Promise<WorkspaceFileResponse>;
+  getWorkspaceTree: (projectId?: string) => Promise<WorkspaceTreeResponse>;
+  getWorkspaceDir: (path: string, projectId?: string) => Promise<WorkspaceDirResponse>;
+  getWorkspaceFile: (path: string, projectId?: string) => Promise<WorkspaceFileResponse>;
   runWorkspaceCommand: (request: WorkspaceCommandRequest) => Promise<WorkspaceCommandResponse>;
   listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
+  listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
   listCommandApprovals: () => Promise<CommandApprovalsResponse>;
   approveCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
   denyCommand: (approvalId: string) => Promise<CommandApprovalResponse>;
@@ -115,14 +119,19 @@ class ElectronChatService implements ChatService {
     }
   }
 
+  async openDirectoryPicker(options?: { title?: string; defaultPath?: string }): Promise<string | null> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.openDirectoryPicker(options);
+  }
+
   async listSessions(): Promise<SessionsListResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listSessions();
   }
 
-  async createSession(title?: string): Promise<SessionResponse> {
+  async createSession(request: CreateSessionRequest): Promise<SessionResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.createSession(title || '');
+    return window.electronAPI.createSession(request);
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -140,19 +149,14 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.getSession(sessionId);
   }
 
-  async moveSession(sessionId: string, projectId: string): Promise<SessionResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.moveSession(sessionId, projectId);
-  }
-
   async listProjects(): Promise<ProjectsListResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listProjects();
   }
 
-  async createProject(name: string): Promise<ProjectResponse> {
+  async createProject(request: CreateProjectRequest): Promise<ProjectResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.createProject(name);
+    return window.electronAPI.createProject(request);
   }
 
   async renameProject(projectId: string, name: string): Promise<ProjectResponse> {
@@ -165,19 +169,19 @@ class ElectronChatService implements ChatService {
     await window.electronAPI.deleteProject(projectId);
   }
 
-  async getWorkspaceTree(): Promise<WorkspaceTreeResponse> {
+  async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getWorkspaceTree();
+    return window.electronAPI.getWorkspaceTree(projectId);
   }
 
-  async getWorkspaceDir(path: string): Promise<WorkspaceDirResponse> {
+  async getWorkspaceDir(path: string, projectId?: string): Promise<WorkspaceDirResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getWorkspaceDir(path);
+    return window.electronAPI.getWorkspaceDir(path, projectId);
   }
 
-  async getWorkspaceFile(path: string): Promise<WorkspaceFileResponse> {
+  async getWorkspaceFile(path: string, projectId?: string): Promise<WorkspaceFileResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getWorkspaceFile(path);
+    return window.electronAPI.getWorkspaceFile(path, projectId);
   }
 
   async runWorkspaceCommand(request: WorkspaceCommandRequest): Promise<WorkspaceCommandResponse> {
@@ -188,6 +192,11 @@ class ElectronChatService implements ChatService {
   async listToolAudit(limit = 100): Promise<ToolAuditResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listToolAudit(limit);
+  }
+
+  async listAgentTraces(limit = 100): Promise<AgentTraceResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listAgentTraces(limit);
   }
 
   async listCommandApprovals(): Promise<CommandApprovalsResponse> {
@@ -318,15 +327,19 @@ class HttpChatService implements ChatService {
     }
   }
 
+  async openDirectoryPicker(): Promise<string | null> {
+    throw new Error('Directory picker is only available in the desktop app');
+  }
+
   async listSessions(): Promise<SessionsListResponse> {
     return this.request<SessionsListResponse>('/sessions');
   }
 
-  async createSession(title?: string): Promise<SessionResponse> {
+  async createSession(request: CreateSessionRequest): Promise<SessionResponse> {
     return this.request<SessionResponse>('/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: title || '' }),
+      body: JSON.stringify({ title: request.title || '', project_id: request.project_id }),
     });
   }
 
@@ -346,23 +359,15 @@ class HttpChatService implements ChatService {
     return this.request<SessionDetailResponse>(`/sessions/${sessionId}`);
   }
 
-  async moveSession(sessionId: string, projectId: string): Promise<SessionResponse> {
-    return this.request<SessionResponse>(`/sessions/${sessionId}/move`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId }),
-    });
-  }
-
   async listProjects(): Promise<ProjectsListResponse> {
     return this.request<ProjectsListResponse>('/projects');
   }
 
-  async createProject(name: string): Promise<ProjectResponse> {
+  async createProject(request: CreateProjectRequest): Promise<ProjectResponse> {
     return this.request<ProjectResponse>('/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(request),
     });
   }
 
@@ -378,16 +383,21 @@ class HttpChatService implements ChatService {
     await this.request(`/projects/${projectId}`, { method: 'DELETE' });
   }
 
-  async getWorkspaceTree(): Promise<WorkspaceTreeResponse> {
-    return this.request<WorkspaceTreeResponse>('/workspace/tree');
+  async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
+    const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+    return this.request<WorkspaceTreeResponse>(`/workspace/tree${params}`);
   }
 
-  async getWorkspaceDir(path: string): Promise<WorkspaceDirResponse> {
-    return this.request<WorkspaceDirResponse>(`/workspace/dir?path=${encodeURIComponent(path)}`);
+  async getWorkspaceDir(path: string, projectId?: string): Promise<WorkspaceDirResponse> {
+    const params = new URLSearchParams({ path });
+    if (projectId) params.set('project_id', projectId);
+    return this.request<WorkspaceDirResponse>(`/workspace/dir?${params.toString()}`);
   }
 
-  async getWorkspaceFile(path: string): Promise<WorkspaceFileResponse> {
-    return this.request<WorkspaceFileResponse>(`/workspace/file?path=${encodeURIComponent(path)}`);
+  async getWorkspaceFile(path: string, projectId?: string): Promise<WorkspaceFileResponse> {
+    const params = new URLSearchParams({ path });
+    if (projectId) params.set('project_id', projectId);
+    return this.request<WorkspaceFileResponse>(`/workspace/file?${params.toString()}`);
   }
 
   async runWorkspaceCommand(request: WorkspaceCommandRequest): Promise<WorkspaceCommandResponse> {
@@ -400,6 +410,10 @@ class HttpChatService implements ChatService {
 
   async listToolAudit(limit = 100): Promise<ToolAuditResponse> {
     return this.request<ToolAuditResponse>(`/audit/tool?limit=${encodeURIComponent(limit)}`);
+  }
+
+  async listAgentTraces(limit = 100): Promise<AgentTraceResponse> {
+    return this.request<AgentTraceResponse>(`/traces/agent?limit=${encodeURIComponent(limit)}`);
   }
 
   async listCommandApprovals(): Promise<CommandApprovalsResponse> {

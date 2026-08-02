@@ -1,11 +1,16 @@
 import json
 import os
+import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
-from typing import Any, AsyncGenerator, Literal
+from pathlib import Path
+from typing import Any, AsyncGenerator, Iterable, Literal, TypedDict
+
+from pydantic import BaseModel, Field
 
 from .config import BackendSettings
 from .providers import ProviderEntry, ProviderManager
+from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace
 
 AgentMode = Literal["single"]
@@ -14,7 +19,7 @@ WorkMode = Literal["plan", "build"]
 AccessMode = Literal["default", "full"]
 
 SYSTEM_PROMPT = (
-    "You are Coworker Single Agent MVP, a local coding assistant. "
+    "You are Coworker, a local coding assistant. "
     "Use workspace tools only when they are needed and keep answers concise."
 )
 MAX_ATTACHMENT_CHARS = 120_000
@@ -27,8 +32,59 @@ class AgentReply:
     provider: str
 
 
+class SearchFilesArgs(BaseModel):
+    query: str = Field(description="Text to search for in UTF-8 workspace files.")
+    path: str = Field(default="", description="Optional workspace-relative file or directory to search.")
+    max_results: int = Field(default=80, ge=1, le=80, description="Maximum number of matches to return.")
+
+
+class ReadFileArgs(BaseModel):
+    file_path: str = Field(description="Workspace-relative UTF-8 text file path.")
+
+
+class WriteFileArgs(BaseModel):
+    file_path: str = Field(description="Workspace-relative file path to write.")
+    content: str = Field(description="Full UTF-8 file content to write.")
+
+
+class ReplaceInFileArgs(BaseModel):
+    file_path: str = Field(description="Workspace-relative UTF-8 text file path.")
+    old_text: str = Field(description="Exact text to replace.")
+    new_text: str = Field(description="Replacement text.")
+    replace_all: bool = Field(default=False, description="Replace every occurrence when true; otherwise exactly one occurrence is required.")
+
+
+class TextEditArgs(BaseModel):
+    old_text: str = Field(description="Exact text to replace.")
+    new_text: str = Field(description="Replacement text.")
+    replace_all: bool = Field(default=False, description="Replace every occurrence of old_text for this edit.")
+
+
+class ApplyTextEditsArgs(BaseModel):
+    file_path: str = Field(description="Workspace-relative UTF-8 text file path.")
+    edits: list[TextEditArgs] = Field(description="Ordered exact text edits. All edits must validate before the file is written.")
+
+
+class RunCommandArgs(BaseModel):
+    command: list[str] = Field(description="Command argv array, for example ['npm', 'run', 'build']. Shell strings are not accepted.")
+    cwd: str = Field(default="", description="Optional workspace-relative working directory.")
+    timeout_seconds: int = Field(default=20, ge=1, le=60, description="Command timeout in seconds.")
+
+
+class CoworkerExecutionState(TypedDict, total=False):
+    messages: list[dict[str, str]]
+    language: str
+    work_mode: str
+    access_mode: str
+    plan: str
+    draft: str
+    verification: str
+    final: str
+
+
 class AgentRuntime(ABC):
     mode: AgentMode
+    owns_runtime_messages = False
 
     @abstractmethod
     def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
@@ -37,6 +93,7 @@ class AgentRuntime(ABC):
 
 class AgentStreamRuntime(ABC):
     mode: AgentMode
+    owns_runtime_messages = False
 
     @abstractmethod
     def stream(
@@ -62,6 +119,10 @@ def normalize_access_mode(access_mode: str | None) -> AccessMode:
     return "full" if access_mode == "full" else "default"
 
 
+def normalize_language(language: Any) -> Language:
+    return "en" if language == "en" else "zh"
+
+
 def runtime_instruction(work_mode: WorkMode, access_mode: AccessMode) -> str:
     if work_mode == "plan":
         return "Current mode: plan. Do not modify files. Inspect context if needed, then return a concise implementation plan."
@@ -70,60 +131,102 @@ def runtime_instruction(work_mode: WorkMode, access_mode: AccessMode) -> str:
     return "Current mode: build with default access. Read workspace files when needed, but do not modify files."
 
 
+def agent_run_config(
+    *,
+    session_id: str,
+    provider: str,
+    model: str,
+    language: Language,
+    work_mode: WorkMode,
+    access_mode: AccessMode,
+    streaming: bool,
+) -> dict[str, Any]:
+    return {
+        "run_name": "coworker_multi_stage_agent_stream" if streaming else "coworker_multi_stage_agent",
+        "tags": [
+            "coworker",
+            "single-agent",
+            "multi-stage",
+            f"work:{work_mode}",
+            f"access:{access_mode}",
+            "streaming" if streaming else "non-streaming",
+        ],
+        "metadata": {
+            "coworker.session_id": session_id,
+            "coworker.provider": provider,
+            "coworker.model": model,
+            "coworker.language": language,
+            "coworker.work_mode": work_mode,
+            "coworker.access_mode": access_mode,
+            "coworker.streaming": streaming,
+        },
+        "configurable": {
+            "thread_id": session_id,
+        },
+    }
+
+
 def build_workspace_tools(
     workspace: Workspace,
     access_mode: AccessMode,
     audit_context: dict[str, Any] | None = None,
     approval_store: CommandApprovalStore | None = None,
 ) -> list[Any]:
-    def search_files(input_json: str) -> str:
-        """Search UTF-8 workspace text files. Input JSON has query, optional path, and optional max_results."""
-        payload = json.loads(input_json)
+    from langchain_core.tools import tool
+
+    @tool(args_schema=SearchFilesArgs)
+    def search_files(query: str, path: str = "", max_results: int = 80) -> str:
+        """Search UTF-8 workspace text files."""
         result = workspace.search_text(
-            str(payload["query"]),
-            str(payload.get("path") or ""),
-            int(payload.get("max_results") or 80),
+            query,
+            path,
+            max_results,
         )
         return json.dumps(result, ensure_ascii=False)
 
+    @tool(args_schema=ReadFileArgs)
     def read_file(file_path: str) -> str:
         """Read a UTF-8 text file from the configured workspace."""
         return workspace.read_text(file_path)
 
-    def write_file(input_json: str) -> str:
-        """Write a UTF-8 text file. Input JSON has file_path and content."""
-        payload = json.loads(input_json)
-        workspace.write_text(payload["file_path"], payload["content"], audit_context)
-        return f"Wrote {payload['file_path']}"
+    @tool(args_schema=WriteFileArgs)
+    def write_file(file_path: str, content: str) -> str:
+        """Write a full UTF-8 text file."""
+        workspace.write_text(file_path, content, audit_context)
+        return f"Wrote {file_path}"
 
-    def replace_in_file(input_json: str) -> str:
-        """Replace exact text in a UTF-8 workspace file. Input JSON has file_path, old_text, new_text, optional replace_all."""
-        payload = json.loads(input_json)
+    @tool(args_schema=ReplaceInFileArgs)
+    def replace_in_file(file_path: str, old_text: str, new_text: str, replace_all: bool = False) -> str:
+        """Replace exact text in a UTF-8 workspace file."""
         result = workspace.replace_text(
-            str(payload["file_path"]),
-            str(payload["old_text"]),
-            str(payload["new_text"]),
-            bool(payload.get("replace_all") or False),
+            file_path,
+            old_text,
+            new_text,
+            replace_all,
             audit_context,
         )
         return json.dumps(result, ensure_ascii=False)
 
-    def apply_text_edits(input_json: str) -> str:
-        """Apply multiple exact text edits to one UTF-8 workspace file atomically. Input JSON has file_path and edits array with old_text, new_text, optional replace_all."""
-        payload = json.loads(input_json)
-        result = workspace.apply_text_edits(str(payload["file_path"]), payload["edits"], audit_context)
+    @tool(args_schema=ApplyTextEditsArgs)
+    def apply_text_edits(file_path: str, edits: list[TextEditArgs]) -> str:
+        """Apply multiple exact text edits to one UTF-8 workspace file atomically."""
+        result = workspace.apply_text_edits(
+            file_path,
+            [edit.model_dump() if isinstance(edit, TextEditArgs) else edit for edit in edits],
+            audit_context,
+        )
         return json.dumps(result, ensure_ascii=False)
 
-    def run_command(input_json: str) -> str:
-        """Run an allowlisted command in the workspace. Input JSON has command array, optional cwd, optional timeout_seconds."""
-        payload = json.loads(input_json)
+    @tool(args_schema=RunCommandArgs)
+    def run_command(command: list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
+        """Run an allowlisted command in the workspace after runtime policy approval."""
         result = workspace.run_command(
-            payload["command"],
-            str(payload.get("cwd") or ""),
-            int(payload.get("timeout_seconds") or 20),
+            command,
+            cwd,
+            timeout_seconds,
             audit_context,
             approval_store,
-            True,
+            approval_store is not None,
         )
         return json.dumps(result, ensure_ascii=False)
 
@@ -131,6 +234,111 @@ def build_workspace_tools(
     if access_mode == "full":
         tools.extend([replace_in_file, apply_text_edits, write_file, run_command])
     return tools
+
+
+def command_approval_middleware() -> list[Any]:
+    from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
+
+    return [
+        HumanInTheLoopMiddleware(
+            interrupt_on={
+                "run_command": {
+                    "allowed_decisions": ["approve", "reject"],
+                    "description": "Coworker needs approval before running this workspace command.",
+                }
+            }
+        )
+    ]
+
+
+def interrupt_payload(interrupt: Any) -> dict[str, Any]:
+    value = getattr(interrupt, "value", None)
+    return value if isinstance(value, dict) else {"value": value}
+
+
+def interrupt_id(interrupt: Any) -> str:
+    return str(getattr(interrupt, "id", "") or "")
+
+
+def interrupt_command_details(value: dict[str, Any]) -> tuple[list[str], str, int]:
+    action_requests = value.get("action_requests") if isinstance(value, dict) else None
+    action = action_requests[0] if isinstance(action_requests, list) and action_requests else {}
+    args = action.get("args") if isinstance(action, dict) else {}
+    command = args.get("command") if isinstance(args, dict) else None
+    cwd = args.get("cwd") if isinstance(args, dict) else ""
+    timeout_seconds = args.get("timeout_seconds") if isinstance(args, dict) else 20
+    safe_command = command if isinstance(command, list) and all(isinstance(part, str) for part in command) else []
+    return safe_command, str(cwd or ""), int(timeout_seconds or 20)
+
+
+def record_runtime_interrupts(
+    interrupts: Iterable[Any],
+    approval_store: CommandApprovalStore,
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    approvals: list[dict[str, Any]] = []
+    for interrupt in interrupts:
+        value = interrupt_payload(interrupt)
+        current_interrupt_id = interrupt_id(interrupt)
+        command, cwd, timeout_seconds = interrupt_command_details(value)
+        approval = approval_store.request_runtime_interrupt(
+            current_interrupt_id,
+            command,
+            cwd,
+            timeout_seconds,
+            {
+                **context,
+                "source": "agent_langgraph_hitl",
+                "interrupt_id": current_interrupt_id,
+                "hitl_request": value,
+            },
+        )
+        approvals.append(approval)
+    return approvals
+
+
+def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "approval_required",
+        "approval_id": approval.get("id", ""),
+        "command": approval.get("command", []),
+        "cwd": approval.get("cwd", ""),
+        "approval_status": approval.get("status", "pending"),
+    }
+
+
+def stage_event(name: str, status: str = "done") -> dict[str, Any]:
+    return {"type": "stage", "name": name, "status": status}
+
+
+def trace_context(
+    *,
+    session_id: str,
+    provider: str,
+    provider_id: str,
+    model: str,
+    language: Language,
+    work_mode: WorkMode,
+    access_mode: AccessMode,
+    streaming: bool,
+) -> dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "provider": provider,
+        "provider_id": provider_id,
+        "model": model,
+        "language": language,
+        "work_mode": work_mode,
+        "access_mode": access_mode,
+        "streaming": streaming,
+    }
+
+
+def coerce_message_content(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, list):
+        return "\n".join(str(part) for part in content)
+    return str(content or "")
 
 
 def prepare_agent_messages(
@@ -159,14 +367,165 @@ def prepare_agent_messages(
     return [{"role": "user", "content": instruction}]
 
 
-def message_payload(message: Any) -> dict[str, Any]:
-    if isinstance(message, dict):
-        return message
-    return {
-        "content": getattr(message, "content", ""),
-        "tool_calls": getattr(message, "tool_calls", None),
-        "tool_call_id": getattr(message, "tool_call_id", None),
+async def invoke_stage_model(llm: Any, system_prompt: str, messages: list[dict[str, str]]) -> str:
+    response = await llm.ainvoke([{"role": "system", "content": system_prompt}, *messages])
+    return coerce_message_content(response)
+
+
+def invoke_stage_model_sync(llm: Any, system_prompt: str, messages: list[dict[str, str]]) -> str:
+    response = llm.invoke([{"role": "system", "content": system_prompt}, *messages])
+    return coerce_message_content(response)
+
+
+def build_langchain_agent(llm: Any, tools: list[Any], checkpointer: Any | None = None) -> Any:
+    from langchain.agents import create_agent
+
+    kwargs: dict[str, Any] = {
+        "model": llm,
+        "tools": tools,
+        "system_prompt": SYSTEM_PROMPT,
+        "middleware": command_approval_middleware(),
+        "name": "coworker_single_agent",
     }
+    if checkpointer is not None:
+        kwargs["checkpointer"] = checkpointer
+    return create_agent(**kwargs)
+
+
+def build_coworker_execution_graph(llm: Any, tools: list[Any]) -> Any:
+    from langgraph.graph import END, START, StateGraph
+
+    async def planner(state: CoworkerExecutionState) -> dict[str, str]:
+        prompt = (
+            "You are the planner stage inside Coworker. Create a concise internal plan for the executor. "
+            "Do not use tools. Mention likely files, checks, and risks when relevant."
+        )
+        plan = await invoke_stage_model(llm, prompt, state.get("messages", []))
+        return {"plan": plan}
+
+    async def executor(state: CoworkerExecutionState) -> dict[str, str]:
+        plan = state.get("plan", "")
+        messages = [
+            *state.get("messages", []),
+            {
+                "role": "system",
+                "content": (
+                    "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
+                    f"{plan}"
+                ),
+            },
+        ]
+        agent = build_langchain_agent(llm, tools)
+        result = await agent.ainvoke({"messages": messages})
+        agent_messages = result.get("messages", []) if isinstance(result, dict) else []
+        draft = coerce_message_content(agent_messages[-1]) if agent_messages else ""
+        return {"draft": draft}
+
+    async def verifier(state: CoworkerExecutionState) -> dict[str, str]:
+        prompt = (
+            "You are the verifier stage inside Coworker. Review the executor draft for correctness, safety, "
+            "missing verification, and whether it respected Plan/Build and access limits. Keep this internal and concise."
+        )
+        messages = [
+            *state.get("messages", []),
+            {"role": "assistant", "content": state.get("draft", "")},
+        ]
+        verification = await invoke_stage_model(llm, prompt, messages)
+        return {"verification": verification}
+
+    async def summarizer(state: CoworkerExecutionState) -> dict[str, str]:
+        prompt = (
+            f"You are the summarizer stage inside Coworker. Reply in {language_name(normalize_language(state.get('language')))}. "
+            "Produce the final user-facing answer from the executor draft and verifier notes. "
+            "Be concise, truthful about validation, and do not expose hidden chain-of-thought."
+        )
+        messages = [
+            *state.get("messages", []),
+            {"role": "assistant", "content": f"Executor draft:\n{state.get('draft', '')}"},
+            {"role": "system", "content": f"Verifier notes:\n{state.get('verification', '')}"},
+        ]
+        final = await invoke_stage_model(llm, prompt, messages)
+        return {"final": final}
+
+    builder = StateGraph(CoworkerExecutionState)
+    builder.add_node("planner", planner)
+    builder.add_node("executor", executor)
+    builder.add_node("verifier", verifier)
+    builder.add_node("summarizer", summarizer)
+    builder.add_edge(START, "planner")
+    builder.add_edge("planner", "executor")
+    builder.add_edge("executor", "verifier")
+    builder.add_edge("verifier", "summarizer")
+    builder.add_edge("summarizer", END)
+    return builder
+
+
+def build_coworker_execution_graph_sync(llm: Any, tools: list[Any]) -> Any:
+    from langgraph.graph import END, START, StateGraph
+
+    def planner(state: CoworkerExecutionState) -> dict[str, str]:
+        prompt = (
+            "You are the planner stage inside Coworker. Create a concise internal plan for the executor. "
+            "Do not use tools. Mention likely files, checks, and risks when relevant."
+        )
+        plan = invoke_stage_model_sync(llm, prompt, state.get("messages", []))
+        return {"plan": plan}
+
+    def executor(state: CoworkerExecutionState) -> dict[str, str]:
+        plan = state.get("plan", "")
+        messages = [
+            *state.get("messages", []),
+            {
+                "role": "system",
+                "content": (
+                    "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
+                    f"{plan}"
+                ),
+            },
+        ]
+        agent = build_langchain_agent(llm, tools)
+        result = agent.invoke({"messages": messages})
+        agent_messages = result.get("messages", []) if isinstance(result, dict) else []
+        draft = coerce_message_content(agent_messages[-1]) if agent_messages else ""
+        return {"draft": draft}
+
+    def verifier(state: CoworkerExecutionState) -> dict[str, str]:
+        prompt = (
+            "You are the verifier stage inside Coworker. Review the executor draft for correctness, safety, "
+            "missing verification, and whether it respected Plan/Build and access limits. Keep this internal and concise."
+        )
+        messages = [
+            *state.get("messages", []),
+            {"role": "assistant", "content": state.get("draft", "")},
+        ]
+        verification = invoke_stage_model_sync(llm, prompt, messages)
+        return {"verification": verification}
+
+    def summarizer(state: CoworkerExecutionState) -> dict[str, str]:
+        prompt = (
+            f"You are the summarizer stage inside Coworker. Reply in {language_name(normalize_language(state.get('language')))}. "
+            "Produce the final user-facing answer from the executor draft and verifier notes. "
+            "Be concise, truthful about validation, and do not expose hidden chain-of-thought."
+        )
+        messages = [
+            *state.get("messages", []),
+            {"role": "assistant", "content": f"Executor draft:\n{state.get('draft', '')}"},
+            {"role": "system", "content": f"Verifier notes:\n{state.get('verification', '')}"},
+        ]
+        final = invoke_stage_model_sync(llm, prompt, messages)
+        return {"final": final}
+
+    builder = StateGraph(CoworkerExecutionState)
+    builder.add_node("planner", planner)
+    builder.add_node("executor", executor)
+    builder.add_node("verifier", verifier)
+    builder.add_node("summarizer", summarizer)
+    builder.add_edge(START, "planner")
+    builder.add_edge("planner", "executor")
+    builder.add_edge("executor", "verifier")
+    builder.add_edge("verifier", "summarizer")
+    builder.add_edge("summarizer", END)
+    return builder
 
 
 def format_user_message(message: str, attachments: list[dict[str, Any]] | None = None) -> str:
@@ -194,22 +553,23 @@ def format_user_message(message: str, attachments: list[dict[str, Any]] | None =
 class SimulatedSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
 
-    def __init__(self, settings: BackendSettings):
+    def __init__(self, settings: BackendSettings, workspace: Workspace):
         self.settings = settings
+        self.workspace = workspace
 
     def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
         if language == "zh":
             content = (
-                "单 Agent MVP 正在以模拟 provider 模式运行。\n\n"
-                f"工作区：{self.settings.workspace_dir}\n"
+                "Coworker 正在以模拟提供商模式运行。\n\n"
+                f"工作区：{self.workspace.root}\n"
                 f"会话：{session_id}\n\n"
                 f"模式：{work_mode} / {access_mode}\n\n"
                 f"你说：{message}"
             )
         else:
             content = (
-                "Single Agent MVP is running in simulated provider mode.\n\n"
-                f"Workspace: {self.settings.workspace_dir}\n"
+                "Coworker is running in simulated provider mode.\n\n"
+                f"Workspace: {self.workspace.root}\n"
                 f"Session: {session_id}\n\n"
                 f"Mode: {work_mode} / {access_mode}\n\n"
                 f"You said: {message}"
@@ -219,10 +579,20 @@ class SimulatedSingleAgentRuntime(AgentRuntime):
 
 class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
+    owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, provider: ProviderEntry, model_override: str | None = None):
+    def __init__(
+        self,
+        workspace: Workspace,
+        approval_store: CommandApprovalStore,
+        trace_store: AgentTraceStore,
+        checkpointer: Any,
+        provider: ProviderEntry,
+        model_override: str | None = None,
+    ):
         from langchain_openai import ChatOpenAI
 
+        self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
         self.llm = ChatOpenAI(
@@ -233,20 +603,70 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         )
         self.workspace = workspace
         self.approval_store = approval_store
+        self.trace_store = trace_store
+        self.checkpointer = checkpointer
 
     def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
-        from langchain.agents import create_agent
-
-        audit_context = {"session_id": session_id, "provider": self.provider_name, "model": self.model_name}
-        agent = create_agent(
-            model=self.llm,
-            tools=build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context, self.approval_store),
-            system_prompt=SYSTEM_PROMPT,
-            name="coworker_single_agent",
+        audit_context = {
+            "session_id": session_id,
+            "provider": self.provider_name,
+            "provider_id": self.provider_id,
+            "model": self.model_name,
+            "workspace_path": str(self.workspace.root),
+        }
+        current_trace_context = trace_context(
+            session_id=session_id,
+            provider=self.provider_name,
+            provider_id=self.provider_id,
+            model=self.model_name,
+            language=language,
+            work_mode=work_mode,
+            access_mode=access_mode,
+            streaming=False,
         )
-        result = agent.invoke({"messages": prepare_agent_messages([{"role": "user", "content": message}], language, work_mode, access_mode)})
-        messages = result.get("messages", [])
-        content = messages[-1].content if messages else ""
+        self.trace_store.record("run", "start", current_trace_context)
+        graph = build_coworker_execution_graph_sync(
+            self.llm,
+            build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context),
+        ).compile(checkpointer=self.checkpointer)
+        try:
+            result = graph.invoke(
+                {
+                    "messages": prepare_agent_messages([{"role": "user", "content": message}], language, work_mode, access_mode),
+                    "language": language,
+                    "work_mode": work_mode,
+                    "access_mode": access_mode,
+                },
+                config=agent_run_config(
+                    session_id=session_id,
+                    provider=self.provider_name,
+                    model=self.model_name,
+                    language=language,
+                    work_mode=work_mode,
+                    access_mode=access_mode,
+                    streaming=False,
+                ),
+            )
+        except Exception as exc:
+            self.trace_store.record("run", "error", current_trace_context, {"error": str(exc)[:400]})
+            raise
+        if "__interrupt__" in result:
+            approvals = record_runtime_interrupts(
+                result["__interrupt__"],
+                self.approval_store,
+                {
+                    **audit_context,
+                    "language": language,
+                    "work_mode": work_mode,
+                    "access_mode": access_mode,
+                },
+            )
+            self.trace_store.record("interrupt", "pending", current_trace_context, {"approval_ids": [approval.get("id", "") for approval in approvals]})
+            approval_ids = ", ".join(str(approval.get("id", "")) for approval in approvals)
+            content = f"Command approval required: {approval_ids}" if language == "en" else f"命令需要审批：{approval_ids}"
+            return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
+        content = result.get("final", "") if isinstance(result, dict) else ""
+        self.trace_store.record("run", "done", current_trace_context, {"content_chars": len(str(content))})
         return AgentReply(content=str(content), mode=self.mode, provider=self.provider_name)
 
     @staticmethod
@@ -259,8 +679,17 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
 
 class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
+    owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, provider: ProviderEntry, model_override: str | None = None):
+    def __init__(
+        self,
+        workspace: Workspace,
+        approval_store: CommandApprovalStore,
+        trace_store: AgentTraceStore,
+        checkpoint_path: Path,
+        provider: ProviderEntry,
+        model_override: str | None = None,
+    ):
         from langchain_openai import ChatOpenAI
 
         llm = ChatOpenAI(
@@ -269,11 +698,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
             base_url=self.openai_compatible_base_url(provider),
         )
+        self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
         self.llm = llm
         self.workspace = workspace
         self.approval_store = approval_store
+        self.trace_store = trace_store
+        self.checkpoint_path = checkpoint_path
 
     async def stream(
         self,
@@ -283,35 +715,167 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         work_mode: WorkMode,
         access_mode: AccessMode,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        from langgraph.prebuilt import create_react_agent
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-        audit_context = {"session_id": session_id, "provider": self.provider_name, "model": self.model_name}
-        agent = create_react_agent(
-            model=self.llm,
-            tools=build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context, self.approval_store),
-            prompt=SYSTEM_PROMPT,
-            name="coworker_single_agent",
+        audit_context = {
+            "session_id": session_id,
+            "provider": self.provider_name,
+            "provider_id": self.provider_id,
+            "model": self.model_name,
+            "workspace_path": str(self.workspace.root),
+        }
+        current_trace_context = trace_context(
+            session_id=session_id,
+            provider=self.provider_name,
+            provider_id=self.provider_id,
+            model=self.model_name,
+            language=language,
+            work_mode=work_mode,
+            access_mode=access_mode,
+            streaming=True,
         )
+        interrupt_context = {
+            **audit_context,
+            "language": language,
+            "work_mode": work_mode,
+            "access_mode": access_mode,
+        }
+        self.trace_store.record("run", "start", current_trace_context)
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
-        inputs = {"messages": prepare_agent_messages(messages, language, work_mode, access_mode)}
+        prepared_messages = prepare_agent_messages(messages, language, work_mode, access_mode)
+        inputs: CoworkerExecutionState = {
+            "messages": prepared_messages,
+            "language": language,
+            "work_mode": work_mode,
+            "access_mode": access_mode,
+        }
         content_parts: list[str] = []
-        async for chunk in agent.astream(inputs, stream_mode="updates"):
-            for node_name, update in chunk.items():
-                if not isinstance(update, dict):
-                    continue
-                for message in update.get("messages", []) or []:
-                    payload = message_payload(message)
-                    if payload.get("tool_calls"):
-                        for tool_call in payload["tool_calls"]:
-                            name = tool_call.get("name") or (tool_call.get("function") or {}).get("name")
-                            yield {"type": "tool_call", "name": name or "tool"}
-                    if payload.get("tool_call_id"):
-                        yield {"type": "tool_result", "name": node_name}
-                    content = payload.get("content")
-                    if content:
-                        yield {"type": "delta", "content": str(content)}
-                        content_parts.append(str(content))
+        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
+            graph = build_coworker_execution_graph(
+                self.llm,
+                build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context),
+            ).compile(checkpointer=checkpointer)
+            try:
+                async for chunk in graph.astream(
+                    inputs,
+                    config=agent_run_config(
+                        session_id=session_id,
+                        provider=self.provider_name,
+                        model=self.model_name,
+                        language=language,
+                        work_mode=work_mode,
+                        access_mode=access_mode,
+                        streaming=True,
+                    ),
+                    stream_mode="updates",
+                ):
+                    if "__interrupt__" in chunk:
+                        approvals = record_runtime_interrupts(
+                            chunk["__interrupt__"],
+                            self.approval_store,
+                            interrupt_context,
+                        )
+                        self.trace_store.record("interrupt", "pending", current_trace_context, {"approval_ids": [approval.get("id", "") for approval in approvals]})
+                        for approval in approvals:
+                            yield stream_event_from_interrupt(approval)
+                        return
+                    for node_name, update in chunk.items():
+                        if not isinstance(update, dict):
+                            continue
+                        self.trace_store.record("stage", "done", current_trace_context, {"stage": node_name})
+                        yield stage_event(node_name)
+                        if node_name == "summarizer":
+                            final = str(update.get("final") or "")
+                            if final:
+                                yield {"type": "delta", "content": final}
+                                content_parts.append(final)
+            except Exception as exc:
+                self.trace_store.record("run", "error", current_trace_context, {"error": str(exc)[:400]})
+                raise
+        self.trace_store.record("run", "done", current_trace_context, {"content_chars": len("".join(content_parts))})
         yield {"type": "done", "content": "".join(content_parts), "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
+
+    async def resume_command_approval(
+        self,
+        approval: dict[str, Any],
+        approved: bool,
+    ) -> list[dict[str, Any]]:
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        from langgraph.types import Command
+
+        context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+        session_id = str(context.get("session_id") or "")
+        language = normalize_language(context.get("language"))
+        work_mode = normalize_work_mode(str(context.get("work_mode") or "build"))
+        access_mode = normalize_access_mode(str(context.get("access_mode") or "full"))
+        audit_context = {
+            "session_id": session_id,
+            "provider": self.provider_name,
+            "provider_id": self.provider_id,
+            "model": self.model_name,
+            "workspace_path": str(self.workspace.root),
+        }
+        current_trace_context = trace_context(
+            session_id=session_id,
+            provider=self.provider_name,
+            provider_id=self.provider_id,
+            model=self.model_name,
+            language=language,
+            work_mode=work_mode,
+            access_mode=access_mode,
+            streaming=True,
+        )
+        content_parts: list[str] = []
+        events: list[dict[str, Any]] = []
+        decision: dict[str, Any]
+        if approved:
+            decision = {"type": "approve"}
+        else:
+            decision = {
+                "type": "reject",
+                "message": "The user rejected this command. Do not run it or retry it unless the user explicitly asks.",
+            }
+        self.trace_store.record("interrupt", "approved" if approved else "rejected", current_trace_context, {"approval_id": approval.get("id", "")})
+        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
+            graph = build_coworker_execution_graph(
+                self.llm,
+                build_workspace_tools(self.workspace, access_mode if work_mode == "build" else "default", audit_context),
+            ).compile(checkpointer=checkpointer)
+            try:
+                async for chunk in graph.astream(
+                    Command(resume={"decisions": [decision]}),
+                    config=agent_run_config(
+                        session_id=session_id,
+                        provider=self.provider_name,
+                        model=self.model_name,
+                        language=language,
+                        work_mode=work_mode,
+                        access_mode=access_mode,
+                        streaming=True,
+                    ),
+                    stream_mode="updates",
+                ):
+                    if "__interrupt__" in chunk:
+                        approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
+                        self.trace_store.record("interrupt", "pending", current_trace_context, {"approval_ids": [approval.get("id", "") for approval in approvals]})
+                        events.extend(stream_event_from_interrupt(item) for item in approvals)
+                        continue
+                    for node_name, update in chunk.items():
+                        if not isinstance(update, dict):
+                            continue
+                        self.trace_store.record("stage", "done", current_trace_context, {"stage": node_name, "resumed": True})
+                        events.append(stage_event(node_name))
+                        if node_name == "summarizer":
+                            final = str(update.get("final") or "")
+                            if final:
+                                content_parts.append(final)
+                                events.append({"type": "delta", "content": final})
+            except Exception as exc:
+                self.trace_store.record("run", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})
+                raise
+        self.trace_store.record("run", "done", current_trace_context, {"content_chars": len("".join(content_parts)), "resumed": True})
+        events.append({"type": "done", "content": "".join(content_parts), "mode": self.mode, "provider": self.provider_name, "model": self.model_name})
+        return events
 
     @staticmethod
     def openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -324,8 +888,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 class SimulatedStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
 
-    def __init__(self, settings: BackendSettings):
+    def __init__(self, settings: BackendSettings, workspace: Workspace):
         self.settings = settings
+        self.workspace = workspace
 
     async def stream(
         self,
@@ -338,16 +903,16 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
         user_message = messages[-1]["content"] if messages else ""
         if language == "zh":
             content = (
-                "单 Agent MVP 正在以模拟 provider 模式运行。\n\n"
-                f"工作区：{self.settings.workspace_dir}\n"
+                "Coworker 正在以模拟提供商模式运行。\n\n"
+                f"工作区：{self.workspace.root}\n"
                 f"会话：{session_id}\n\n"
                 f"模式：{work_mode} / {access_mode}\n\n"
                 f"你说：{user_message}"
             )
         else:
             content = (
-                "Single Agent MVP is running in simulated provider mode.\n\n"
-                f"Workspace: {self.settings.workspace_dir}\n"
+                "Coworker is running in simulated provider mode.\n\n"
+                f"Workspace: {self.workspace.root}\n"
                 f"Session: {session_id}\n\n"
                 f"Mode: {work_mode} / {access_mode}\n\n"
                 f"You said: {user_message}"
@@ -360,10 +925,23 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
 class AgentRuntimeRegistry:
     def __init__(self, settings: BackendSettings):
+        from langgraph.checkpoint.sqlite import SqliteSaver
+
         self.settings = settings
-        self.workspace = Workspace(settings.workspace_dir, settings.data_dir / TOOL_AUDIT_FILENAME)
+        self.default_workspace = Workspace(settings.workspace_dir, settings.data_dir / TOOL_AUDIT_FILENAME)
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
+        self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
         self.provider_manager = ProviderManager(settings.data_dir / "providers.json")
+        self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False)
+        self.checkpointer = SqliteSaver(self.checkpoint_conn)
+
+    def has_runtime_checkpoint(self, session_id: str) -> bool:
+        return self.checkpointer.get({"configurable": {"thread_id": session_id}}) is not None
+
+    def forget_runtime_checkpoint(self, session_id: str) -> None:
+        self.checkpointer.delete_thread(session_id)
 
     def _provider_for_request(self, provider_id: str | None, model: str | None) -> ProviderEntry | None:
         if provider_id:
@@ -378,10 +956,14 @@ class AgentRuntimeRegistry:
             return replace(provider, model=model)
         return provider
 
-    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None) -> AgentRuntime:
+    def _workspace_or_default(self, workspace: Workspace | None = None) -> Workspace:
+        return workspace or self.default_workspace
+
+    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None) -> AgentRuntime:
+        selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(self.workspace, self.approval_store, provider)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(
                 id="env-openai",
@@ -392,17 +974,18 @@ class AgentRuntimeRegistry:
                 model=self.settings.openai_model,
                 enabled=True,
             )
-            return OpenAICompatibleSingleAgentRuntime(self.workspace, self.approval_store, env_provider)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider)
         if self.settings.agent_provider == "simulated":
-            return SimulatedSingleAgentRuntime(self.settings)
+            return SimulatedSingleAgentRuntime(self.settings, selected_workspace)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
 
-    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None) -> AgentRuntime:
+    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None) -> AgentRuntime:
         if mode == "single":
-            return self._create_single_agent(provider_id, model)
+            return self._create_single_agent(provider_id, model, workspace)
         raise RuntimeError(f"Unsupported agent mode: {mode}")
 
-    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None) -> AgentStreamRuntime:
+    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None) -> AgentStreamRuntime:
+        selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if not provider and self.settings.agent_provider == "openai":
             provider = ProviderEntry(
@@ -416,8 +999,24 @@ class AgentRuntimeRegistry:
             )
         if not provider:
             if self.settings.agent_provider == "simulated":
-                return SimulatedStreamRuntime(self.settings)
+                return SimulatedStreamRuntime(self.settings, selected_workspace)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(self.workspace, self.approval_store, provider, model)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model)
         raise RuntimeError(f"Unsupported agent mode: {mode}")
+
+    def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self.trace_store.list(limit)
+
+    async def resume_command_approval(self, approval: dict[str, Any], approved: bool) -> list[dict[str, Any]]:
+        context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+        if context.get("source") != "agent_langgraph_hitl":
+            return []
+        provider_id = str(context.get("provider_id") or "")
+        model = str(context.get("model") or "")
+        workspace_path = str(context.get("workspace_path") or "")
+        workspace = Workspace(Path(workspace_path), self.settings.data_dir / TOOL_AUDIT_FILENAME) if workspace_path else None
+        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace)
+        if not isinstance(runtime, OpenAICompatibleStreamRuntime):
+            raise RuntimeError("Only OpenAI-compatible LangGraph sessions can be resumed")
+        return await runtime.resume_command_approval(approval, approved)

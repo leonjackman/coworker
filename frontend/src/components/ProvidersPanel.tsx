@@ -8,6 +8,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Switch } from './ui/switch';
+import { WorkspacePage } from './ui/workspace-page';
 
 type ViewMode = 'list' | 'form';
 
@@ -211,11 +212,16 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
 
   if (viewMode === 'form') {
     return (
-      <section className="providers-panel provider-shell provider-shell--form">
-        <button className="provider-back" type="button" onClick={cancelForm}>
-          &larr; {t('providers.back')}
-        </button>
-
+      <WorkspacePage
+        className="provider-shell--form"
+        eyebrow={t('providers.title')}
+        title={form.id ? t('providers.edit_title') : t('providers.add_title')}
+        action={(
+          <Button variant="ghost" onClick={cancelForm}>
+            {t('providers.back')}
+          </Button>
+        )}
+      >
         <div className="provider-form-card">
           <BrainCircuit size={18} className="provider-form-card__icon" />
           <div className="provider-form-card__body">
@@ -318,19 +324,17 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
         )}
 
         {message && <p className="provider-message">{message}</p>}
-      </section>
+      </WorkspacePage>
     );
   }
 
   const defaultProvider = providers.find((provider) => provider.id === defaultProviderId);
 
   return (
-    <section className="providers-panel provider-shell">
-      <div className="provider-heading">
-        <h1>{t('providers.title')}</h1>
-        <p>{t('providers.description')}</p>
-      </div>
-
+    <WorkspacePage
+      title={t('providers.title')}
+      description={t('providers.description')}
+    >
       <div className="provider-quick-card">
         <Network size={18} className="provider-form-card__icon" />
         <div>
@@ -447,6 +451,6 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
       )}
 
       {message && <p className="provider-message">{message}</p>}
-    </section>
+    </WorkspacePage>
   );
 }

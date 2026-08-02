@@ -23,6 +23,8 @@ interface WorkspaceBottomPanelProps {
   sessionCount: number;
   projectCount: number;
   messageCount: number;
+  projectId?: string;
+  workspaceLabel?: string;
   onViewChange: (view: BottomPanelView) => void;
 }
 
@@ -33,6 +35,8 @@ export function WorkspaceBottomPanel({
   sessionCount,
   projectCount,
   messageCount,
+  projectId,
+  workspaceLabel,
   onViewChange,
 }: WorkspaceBottomPanelProps) {
   const [command, setCommand] = useState('pwd');
@@ -58,6 +62,7 @@ export function WorkspaceBottomPanel({
       const response = await chatService.runWorkspaceCommand({
         command: nextCommand,
         timeout_seconds: 20,
+        ...(projectId ? { project_id: projectId } : {}),
       });
       setEntries((current) =>
         current.map((entry) =>
@@ -104,7 +109,7 @@ export function WorkspaceBottomPanel({
           <div className="terminal-panel">
             <div className="terminal-panel__history" aria-live="polite">
               {entries.length === 0 && (
-                <pre>{`$ coworker runtime\nstatus=${runtimeStatus}\nworkspace=${runtimeConfig?.workspace ?? 'unavailable'}\n\nAllowed examples: pwd, ls, rg \"TODO\", npm run build`}</pre>
+                <pre>{`$ coworker runtime\nstatus=${runtimeStatus}\nworkspace=${workspaceLabel || runtimeConfig?.workspace || 'unavailable'}\n\nAllowed examples: pwd, ls, rg \"TODO\", npm run build`}</pre>
               )}
               {entries.map((entry) => (
                 <div className="terminal-entry" key={entry.id}>

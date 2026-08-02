@@ -1,12 +1,10 @@
-import { Ban, CornerDownLeft, Paperclip, Plus, Slash, X } from 'lucide-react';
+import { Hammer, ListChecks, Plus, SendHorizontal, Shield, ShieldCheck, Slash, Square, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../lib/i18n';
 import type { AccessMode, ComposerAttachment, WorkMode } from '../types';
-import { accessModeOptions, workModeOptions } from './settings/preference-options';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
-import { ToggleGroup } from './ui/toggle-group';
 import { Tooltip } from './ui/tooltip';
 
 export interface ModelOption {
@@ -27,7 +25,6 @@ interface ChatInputProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onNewChat: () => void;
   onWorkModeChange: (value: WorkMode) => void;
   onAccessModeChange: (value: AccessMode) => void;
   onModelChange: (value: string) => void;
@@ -78,7 +75,6 @@ export function ChatInput({
   onChange,
   onSend,
   onStop,
-  onNewChat,
   onWorkModeChange,
   onAccessModeChange,
   onModelChange,
@@ -108,115 +104,131 @@ export function ChatInput({
     setShowCommands(false);
   }
 
+  const nextWorkMode = workMode === 'plan' ? 'build' : 'plan';
+  const nextAccessMode = accessMode === 'default' ? 'full' : 'default';
+
   return (
     <footer className="composer">
       <div className="composer__surface">
-        <div className="composer__topbar">
-          <ToggleGroup
-            value={workMode}
-            onValueChange={onWorkModeChange}
-            items={workModeOptions()}
-          />
+        <div className="composer__input-box">
+          <div className="composer__editor">
+            <Textarea
+              className="composer__input"
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  onSend();
+                }
+                if (event.key === 'Escape') {
+                  setShowCommands(false);
+                }
+              }}
+              placeholder={t('chat.placeholder')}
+              disabled={disabled}
+            />
 
-          <div className="composer__select">
-            <span>{t('chat.model')}</span>
-            <Select value={selectedModel} onValueChange={onModelChange} disabled={modelOptions.length === 0}>
-              <SelectTrigger className="composer__model-trigger" size="sm">
-                <SelectValue placeholder={t('chat.model_unselected')} />
-              </SelectTrigger>
-              <SelectContent position="popper" align="start">
-                {modelOptions.map((model) => (
-                  <SelectItem key={model.id} value={model.id}>
-                    {model.provider ? `${model.provider} · ${model.label}` : model.label}
-                  </SelectItem>
+            {showCommands && (
+              <div className="slash-menu">
+                {SLASH_COMMANDS.map((command) => (
+                  <button type="button" key={command} onClick={() => insertCommand(command)}>
+                    <Slash size={13} />
+                    <span>{command}</span>
+                    <small>{t(`chat.command_${command.slice(1)}`)}</small>
+                  </button>
                 ))}
-              </SelectContent>
-            </Select>
+              </div>
+            )}
           </div>
 
-          <ToggleGroup
-            value={accessMode}
-            onValueChange={onAccessModeChange}
-            className="composer__access"
-            items={accessModeOptions()}
-          />
-        </div>
-
-        {attachments.length > 0 && (
-          <div className="composer__attachments">
-            {attachments.map((attachment) => (
-              <span className="attachment-chip" key={attachment.id}>
-                {attachment.name}
-                <button type="button" onClick={() => removeAttachment(attachment.id)} aria-label={t('chat.remove_attachment')}>
-                  <X size={12} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="composer__editor">
-          <Textarea
-            className="composer__input"
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                onSend();
-              }
-              if (event.key === 'Escape') {
-                setShowCommands(false);
-              }
-            }}
-            placeholder={t('chat.placeholder')}
-            disabled={disabled}
-          />
-
-          {showCommands && (
-            <div className="slash-menu">
-              {SLASH_COMMANDS.map((command) => (
-                <button type="button" key={command} onClick={() => insertCommand(command)}>
-                  <Slash size={13} />
-                  <span>{command}</span>
-                  <small>{t(`chat.command_${command.slice(1)}`)}</small>
-                </button>
+          {attachments.length > 0 && (
+            <div className="composer__attachments">
+              {attachments.map((attachment) => (
+                <span className="attachment-chip" key={attachment.id}>
+                  {attachment.name}
+                  <button type="button" onClick={() => removeAttachment(attachment.id)} aria-label={t('chat.remove_attachment')}>
+                    <X size={12} />
+                  </button>
+                </span>
               ))}
             </div>
           )}
+
+          <div className="composer__input-actions">
+            <div className="composer__tools">
+              <input ref={fileInputRef} type="file" multiple className="composer__file-input" onChange={(event) => addFiles(event.target.files)} />
+              <Tooltip content={t('chat.attach_tooltip')}>
+                <Button variant="icon" onClick={() => fileInputRef.current?.click()} aria-label={t('chat.attach_tooltip')}>
+                  <Plus size={19} />
+                </Button>
+              </Tooltip>
+              <Tooltip content={t('chat.slash_tooltip')}>
+                <Button variant="icon" onClick={() => onChange(value.trim().startsWith('/') ? value : `${value}/`)} aria-label={t('chat.slash_tooltip')}>
+                  <Slash size={17} />
+                </Button>
+              </Tooltip>
+            </div>
+
+            {isThinking ? (
+              <Button
+                variant="secondary"
+                className="composer__send-button composer__send-button--stop"
+                onClick={onStop}
+                aria-label={t('chat.stop')}
+              >
+                <Square size={15} fill="currentColor" />
+              </Button>
+            ) : (
+              <Button variant="primary" className="composer__send-button" onClick={onSend} disabled={disabled || !canSend} aria-label={t('common.send')}>
+                <SendHorizontal size={17} />
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="composer__toolbar">
-          <div className="composer__tools">
-            <input ref={fileInputRef} type="file" multiple className="composer__file-input" onChange={(event) => addFiles(event.target.files)} />
-            <Tooltip content={t('chat.attach_tooltip')}>
-              <Button variant="icon" onClick={() => fileInputRef.current?.click()}>
-                <Paperclip size={16} />
-              </Button>
+          <div className="composer__meta">
+            <Tooltip content={t(workMode === 'plan' ? 'chat.mode_plan_tip' : 'chat.mode_build_tip')}>
+              <button
+                type="button"
+                className="composer-toggle-button"
+                onClick={() => onWorkModeChange(nextWorkMode)}
+                aria-label={t('chat.toggle_work_mode')}
+              >
+                {workMode === 'plan' ? <ListChecks size={14} /> : <Hammer size={14} />}
+                <span>{t(workMode === 'plan' ? 'chat.mode_plan' : 'chat.mode_build')}</span>
+              </button>
             </Tooltip>
-            <Tooltip content={t('chat.slash_tooltip')}>
-              <Button variant="icon" onClick={() => onChange(value.trim().startsWith('/') ? value : `${value}/`)}>
-                <Slash size={16} />
-              </Button>
-            </Tooltip>
-            <Tooltip content={t('chat.new_chat_tooltip')}>
-              <Button variant="icon" onClick={onNewChat}>
-                <Plus size={16} />
-              </Button>
+
+            <div className="composer__select">
+              <span>{t('chat.model')}</span>
+              <Select value={selectedModel} onValueChange={onModelChange} disabled={modelOptions.length === 0}>
+                <SelectTrigger className="composer__model-trigger" size="sm">
+                  <SelectValue placeholder={t('chat.model_unselected')} />
+                </SelectTrigger>
+                <SelectContent position="popper" align="start">
+                  {modelOptions.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.provider ? `${model.provider} · ${model.label}` : model.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <Tooltip content={t(accessMode === 'default' ? 'chat.access_default_tip' : 'chat.access_full_tip')}>
+              <button
+                type="button"
+                className="composer-toggle-button"
+                onClick={() => onAccessModeChange(nextAccessMode)}
+                aria-label={t('chat.toggle_access_mode')}
+              >
+                {accessMode === 'default' ? <Shield size={14} /> : <ShieldCheck size={14} />}
+                <span>{t(accessMode === 'default' ? 'chat.access_default' : 'chat.access_full')}</span>
+              </button>
             </Tooltip>
           </div>
-
-          {isThinking ? (
-            <Button variant="secondary" onClick={onStop}>
-              <Ban size={16} />
-              {t('chat.stop')}
-            </Button>
-          ) : (
-            <Button variant="primary" onClick={onSend} disabled={disabled || !canSend}>
-              <CornerDownLeft size={16} />
-              {t('common.send')}
-            </Button>
-          )}
         </div>
       </div>
     </footer>

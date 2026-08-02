@@ -117,9 +117,21 @@ export interface SessionSummary {
 export interface ProjectEntry {
   id: string;
   name: string;
+  workspace_path: string;
+  workspace_available: boolean;
   created_at: string;
   updated_at: string;
   session_count: number;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  workspace_path: string;
+}
+
+export interface CreateSessionRequest {
+  title?: string;
+  project_id: string;
 }
 
 export interface SessionMessageRecord {
@@ -138,6 +150,7 @@ export interface SessionDetail {
   title: string;
   created_at: string;
   updated_at: string;
+  project_id: string;
   messages: SessionMessageRecord[];
 }
 
@@ -201,6 +214,7 @@ export interface WorkspaceCommandRequest {
   command: string;
   cwd?: string;
   timeout_seconds?: number;
+  project_id?: string;
 }
 
 export interface WorkspaceCommandResult {
@@ -235,6 +249,19 @@ export interface ToolAuditResponse {
   events: ToolAuditEvent[];
 }
 
+export interface AgentTraceEvent {
+  timestamp: string;
+  event: string;
+  status: string;
+  context?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+}
+
+export interface AgentTraceResponse {
+  status: string;
+  events: AgentTraceEvent[];
+}
+
 export interface CommandApproval {
   id: string;
   digest: string;
@@ -255,12 +282,13 @@ export interface CommandApprovalsResponse {
 export interface CommandApprovalResponse {
   status: string;
   approval: CommandApproval;
+  events?: StreamEvent[];
 }
 
 export type StreamEvent =
   | { type: 'start'; session_id: string; mode: AgentMode; provider: string; model: string }
+  | { type: 'stage'; name: string; status: string }
   | { type: 'delta'; content: string }
-  | { type: 'tool_call'; name: string }
-  | { type: 'tool_result'; name: string }
+  | { type: 'approval_required'; approval_id: string; command: string[]; cwd: string; approval_status: string }
   | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string }
   | { type: 'error'; error: string; session_id?: string };

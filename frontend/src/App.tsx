@@ -2,6 +2,10 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { ProvidersPanel } from './components/ProvidersPanel';
+import { CreateProjectDialog } from './components/CreateProjectDialog';
+import { EmptyProjectStart } from './components/EmptyProjectStart';
+import { FirstRunStart } from './components/FirstRunStart';
+import { NewSessionDialog } from './components/NewSessionDialog';
 import { SettingsView } from './components/settings/SettingsView';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
@@ -10,7 +14,7 @@ import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { getLanguage, initLanguage, t, translateError } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AccessMode, AppView, ChatMessage, ComposerAttachment, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AccessMode, AppView, ChatMessage, ComposerAttachment, CreateProjectRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function createMessage(
@@ -36,6 +40,11 @@ function App() {
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
+  const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
+  const [newSessionDialogOpen, setNewSessionDialogOpen] = useState(false);
+  const [newSessionInitialProjectId, setNewSessionInitialProjectId] = useState<string | undefined>();
+  const [newSessionInitialMessage, setNewSessionInitialMessage] = useState('');
   const [languageVersion, setLanguageVersion] = useState(0);
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
@@ -150,14 +159,31 @@ function App() {
     document.title = t('app.title');
   }, [languageVersion]);
 
-  const sendMessage = async () => {
-    const typedMessage = input.trim();
+  useEffect(() => {
+    if (sessionId || messages.length > 0 || projects.length === 0 || sessions.length > 0) return;
+    if (activeProjectId && projects.some((project) => project.id === activeProjectId)) return;
+    const firstProject = projects[0];
+    if (!firstProject) return;
+    pendingProjectIdRef.current = firstProject.id;
+    setActiveProjectId(firstProject.id);
+  }, [activeProjectId, messages.length, projects, sessionId, sessions.length]);
+
+  const sendMessage = async (override?: { message: string; projectId?: string }) => {
+    const typedMessage = (override?.message ?? input).trim();
     if (isThinking) return;
 
     if (!typedMessage && attachments.length === 0) return;
 
     if (typedMessage.startsWith('/')) {
       handleSlashCommand(typedMessage);
+      return;
+    }
+
+    const requestProjectId = override?.projectId || pendingProjectIdRef.current;
+
+    if (!sessionIdRef.current && !requestProjectId) {
+      openNewSessionDialog(undefined, typedMessage);
+      setInput('');
       return;
     }
 
@@ -214,8 +240,15 @@ function App() {
         setMessages((current) =>
           current.map((item) => (item.id === assistantMessageId ? { ...item, content: streamedContent } : item)),
         );
-      } else if (event.type === 'tool_call') {
-        // Tool call events are shown implicitly once the model returns text.
+      } else if (event.type === 'approval_required') {
+        streamedContent = `${t('chat.command_approval_waiting')}\n\n${event.command.join(' ')}\n${event.cwd ? `cwd: ${event.cwd}` : ''}`.trim();
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: streamedContent, status: 'done' }
+              : item,
+          ),
+        );
       } else if (event.type === 'done') {
         if (event.session_id) {
           setSessionId(event.session_id);
@@ -256,7 +289,7 @@ function App() {
             : {}),
           ...(requestAttachments.length > 0 ? { attachments: requestAttachments } : {}),
           ...(requestSessionId ? { session_id: requestSessionId } : {}),
-          ...(pendingProjectIdRef.current ? { project_id: pendingProjectIdRef.current } : {}),
+          ...(requestProjectId ? { project_id: requestProjectId } : {}),
         },
         handleEvent,
         controller.signal,
@@ -314,18 +347,47 @@ function App() {
     activeAssistantMessageIdRef.current = undefined;
   };
 
-  const startNewChat = (projectId?: string) => {
+  const startProjectDraft = (projectId: string, firstMessage = '') => {
     abortRef.current?.abort();
     requestSeqRef.current += 1;
     activeAssistantMessageIdRef.current = undefined;
     setMessages([]);
-    setInput('');
+    setInput(firstMessage);
     setAttachments([]);
     setSessionId(undefined);
     sessionIdRef.current = undefined;
     pendingProjectIdRef.current = projectId;
+    setActiveProjectId(projectId);
     setIsThinking(false);
     setActiveView('chat');
+  };
+
+  const openNewSessionDialog = (projectId?: string, initialMessage = '') => {
+    setNewSessionInitialProjectId(projectId || activeProjectId);
+    setNewSessionInitialMessage(initialMessage);
+    setNewSessionDialogOpen(true);
+  };
+
+  const openProject = (projectId: string) => {
+    startProjectDraft(projectId);
+  };
+
+  const startProjectSession = (projectId: string, firstMessage: string) => {
+    startProjectDraft(projectId);
+    if (firstMessage.trim()) {
+      void sendMessage({ message: firstMessage, projectId });
+    }
+  };
+
+  const pickWorkspaceDirectory = async () => {
+    return chatService.openDirectoryPicker({ title: t('project_dialog.pick_workspace') });
+  };
+
+  const createProjectWithWorkspace = async (payload: CreateProjectRequest): Promise<ProjectEntry> => {
+    const response = await chatService.createProject(payload);
+    await refreshProjects();
+    setActiveProjectId(response.project.id);
+    return response.project;
   };
 
   const openSession = async (sessionIdToOpen: string) => {
@@ -351,6 +413,7 @@ function App() {
       setSessionId(sessionIdToOpen);
       sessionIdRef.current = sessionIdToOpen;
       pendingProjectIdRef.current = undefined;
+      setActiveProjectId(response.session.project_id || undefined);
       setMessages(loaded);
       setAttachments([]);
     } catch (error) {
@@ -362,7 +425,12 @@ function App() {
     try {
       await chatService.deleteSession(sessionIdToDelete);
       if (sessionIdRef.current === sessionIdToDelete) {
-        startNewChat();
+        setSessionId(undefined);
+        sessionIdRef.current = undefined;
+        setMessages([]);
+        setInput('');
+        setAttachments([]);
+        pendingProjectIdRef.current = activeProjectId;
       }
       await refreshSessions();
       await refreshProjects();
@@ -391,25 +459,7 @@ function App() {
     await deleteSession(sessionIdRef.current);
   };
 
-  const moveSession = async (sessionIdToMove: string, projectId: string) => {
-    try {
-      await chatService.moveSession(sessionIdToMove, projectId);
-      await refreshSessions();
-      await refreshProjects();
-    } catch (error) {
-      console.error('Failed to move session:', error);
-    }
-  };
-
-  const createProject = async () => {
-    try {
-      const defaultName = t('sidebar.project_new');
-      await chatService.createProject(defaultName);
-      await refreshProjects();
-    } catch (error) {
-      console.error('Failed to create project:', error);
-    }
-  };
+  const createProject = () => setCreateProjectDialogOpen(true);
 
   const renameProject = async (project: ProjectEntry) => {
     try {
@@ -429,7 +479,15 @@ function App() {
       const sessionInProject = sessions.find((session) => session.project_id === projectId);
       await chatService.deleteProject(projectId);
       if (sessionInProject && sessionIdRef.current === sessionInProject.id) {
-        startNewChat();
+        setSessionId(undefined);
+        sessionIdRef.current = undefined;
+        setMessages([]);
+        setInput('');
+        setAttachments([]);
+      }
+      if (activeProjectId === projectId) {
+        setActiveProjectId(undefined);
+        pendingProjectIdRef.current = undefined;
       }
       await refreshSessions();
       await refreshProjects();
@@ -447,7 +505,7 @@ function App() {
       return;
     }
     if (command === '/new') {
-      startNewChat();
+      openNewSessionDialog();
       return;
     }
     if (command === '/providers') {
@@ -495,7 +553,12 @@ function App() {
   const showRuntimeNotice = activeView === 'chat' && (runtimeStatus !== 'ready' || !runtimeConfig);
   const titlebarSessionTitle = currentSessionTitle(messages, sessions, sessionId);
   const currentProvider = providers.find((provider) => provider.id === selectedModel);
-  const activeProject = projects.find((project) => sessions.some((session) => session.id === sessionId && session.project_id === project.id));
+  const sessionProjectId = sessions.find((session) => session.id === sessionId)?.project_id;
+  const currentProjectId = activeProjectId || sessionProjectId;
+  const activeProject = projects.find((project) => project.id === currentProjectId);
+  const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
+  const showFirstRunStart = activeView === 'chat' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0;
+  const showEmptyProjectStart = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && activeProjectSessions.length === 0;
 
   const changeThemeSettings = (nextSettings: ThemeSettings) => {
     setThemeSettingsState(nextSettings);
@@ -529,6 +592,7 @@ function App() {
           projects={projects}
           activeView={activeView}
           collapsed={sidebarCollapsed}
+          {...(currentProjectId ? { activeProjectId: currentProjectId } : {})}
           onResizeStart={() => setSidebarResizing(true)}
           onResizeEnd={() => setSidebarResizing(false)}
           onResizeWidth={(width) => {
@@ -537,17 +601,17 @@ function App() {
           }}
           {...(sessionId ? { activeSessionId: sessionId } : {})}
           onViewChange={setActiveView}
-          onNewChat={startNewChat}
+          onNewChat={openNewSessionDialog}
+          onOpenProject={openProject}
           onOpenSession={openSession}
           onDeleteSession={deleteSession}
           onCreateProject={createProject}
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
-          onMoveSession={moveSession}
         />
         <section className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className="workspace-upper">
-            <section className="workspace-shell">
+            <section className={`workspace-shell workspace-shell--${activeView}`}>
               {activeView === 'chat' ? (
                 <>
                   {showRuntimeNotice && (
@@ -560,26 +624,35 @@ function App() {
                       {runtimeStatus === 'error' && <p className="runtime-notice__retry">{t('runtime.retrying')}</p>}
                     </section>
                   )}
-                  <MessageList messages={messages} />
-                  <div ref={bottomRef} />
-                  <ChatInput
-                    value={input}
-                    disabled={isThinking || runtimeStatus === 'connecting'}
-                    isThinking={isThinking}
-                    workMode={workMode}
-                    accessMode={accessMode}
-                    selectedModel={selectedModel}
-                    attachments={attachments}
-                    modelOptions={modelOptions}
-                    onChange={setInput}
-                    onSend={sendMessage}
-                    onStop={stopMessage}
-                    onNewChat={() => startNewChat()}
-                    onWorkModeChange={setWorkMode}
-                    onAccessModeChange={setAccessMode}
-                    onModelChange={(providerId) => void changeSelectedModel(providerId)}
-                    onAttachmentsChange={setAttachments}
-                  />
+                  {showFirstRunStart ? (
+                    <FirstRunStart onCreateProject={createProject} onNewSession={() => openNewSessionDialog()} />
+                  ) : showEmptyProjectStart ? (
+                    <EmptyProjectStart project={activeProject} onStart={() => openNewSessionDialog(activeProject.id)} />
+                  ) : (
+                    <>
+                      <MessageList messages={messages} />
+                      <div ref={bottomRef} />
+                    </>
+                  )}
+                  {!showFirstRunStart && !showEmptyProjectStart && (
+                    <ChatInput
+                      value={input}
+                      disabled={isThinking || runtimeStatus === 'connecting'}
+                      isThinking={isThinking}
+                      workMode={workMode}
+                      accessMode={accessMode}
+                      selectedModel={selectedModel}
+                      attachments={attachments}
+                      modelOptions={modelOptions}
+                      onChange={setInput}
+                      onSend={sendMessage}
+                      onStop={stopMessage}
+                      onWorkModeChange={setWorkMode}
+                      onAccessModeChange={setAccessMode}
+                      onModelChange={(providerId) => void changeSelectedModel(providerId)}
+                      onAttachmentsChange={setAttachments}
+                    />
+                  )}
                 </>
               ) : activeView === 'providers' ? (
                 <ProvidersPanel onProviderChange={refreshProviders} />
@@ -592,6 +665,7 @@ function App() {
                   onWorkModeChange={setWorkMode}
                   onAccessModeChange={setAccessMode}
                   onLanguageChange={() => setLanguageVersion((value) => value + 1)}
+                  onClose={() => setActiveView('chat')}
                 />
               )}
             </section>
@@ -616,11 +690,29 @@ function App() {
               sessionCount={sessions.length}
               projectCount={projects.length}
               messageCount={messages.length}
+              {...(currentProjectId ? { projectId: currentProjectId } : {})}
+              {...(activeProject?.workspace_path ? { workspaceLabel: activeProject.workspace_path } : {})}
               onViewChange={setBottomPanelView}
             />
           )}
         </section>
       </div>
+      <CreateProjectDialog
+        open={createProjectDialogOpen}
+        onClose={() => setCreateProjectDialogOpen(false)}
+        onPickWorkspace={pickWorkspaceDirectory}
+        onCreate={createProjectWithWorkspace}
+      />
+      <NewSessionDialog
+        open={newSessionDialogOpen}
+        projects={projects}
+        {...(newSessionInitialProjectId ? { initialProjectId: newSessionInitialProjectId } : {})}
+        {...(newSessionInitialMessage ? { initialMessage: newSessionInitialMessage } : {})}
+        onClose={() => setNewSessionDialogOpen(false)}
+        onPickWorkspace={pickWorkspaceDirectory}
+        onCreateProject={createProjectWithWorkspace}
+        onStart={startProjectSession}
+      />
     </main>
   );
 }

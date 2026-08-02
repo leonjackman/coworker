@@ -95,6 +95,17 @@ class CommandApprovalStore:
         self.save(approvals)
         return approval
 
+    def request_runtime_interrupt(
+        self,
+        interrupt_id: str,
+        command: list[str],
+        cwd: str,
+        timeout_seconds: int,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        digest = f"langgraph:{context.get('session_id', '')}:{interrupt_id}"
+        return self.request(digest, command, cwd, timeout_seconds, context)
+
     def approve(self, approval_id: str) -> dict[str, Any]:
         return self.update_status(approval_id, "approved")
 

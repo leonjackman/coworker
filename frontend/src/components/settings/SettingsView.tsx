@@ -1,8 +1,10 @@
+import { X } from 'lucide-react';
 import { useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
 import type { AccessMode, WorkMode } from '../../types';
-import { PageHeading } from '../ui/page-heading';
+import { Button } from '../ui/button';
+import { WorkspacePage } from '../ui/workspace-page';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
@@ -16,6 +18,7 @@ interface SettingsViewProps {
   onWorkModeChange: (mode: WorkMode) => void;
   onAccessModeChange: (mode: AccessMode) => void;
   onLanguageChange: () => void;
+  onClose: () => void;
 }
 
 export function SettingsView({
@@ -26,6 +29,7 @@ export function SettingsView({
   onWorkModeChange,
   onAccessModeChange,
   onLanguageChange,
+  onClose,
 }: SettingsViewProps) {
   const [settingsPage, setSettingsPage] = useState<'main' | 'theme'>('main');
 
@@ -39,17 +43,21 @@ export function SettingsView({
   const currentPreset = THEME_PRESETS.find((preset) => preset.id === themeSettings.presetId);
 
   if (settingsPage === 'theme') {
-    return (
-      <section className="settings-panel">
-        <ThemeCustomizer settings={themeSettings} onChange={onThemeSettingsChange} onBack={() => setSettingsPage('main')} />
-      </section>
-    );
+    return <ThemeCustomizer settings={themeSettings} onChange={onThemeSettingsChange} onBack={() => setSettingsPage('main')} />;
   }
 
   return (
-    <section className="settings-panel">
-      <PageHeading eyebrow={t('settings.title')} title={t('settings.heading')} description={t('settings.description')} />
-
+    <WorkspacePage
+      eyebrow={t('settings.title')}
+      title={t('settings.heading')}
+      description={t('settings.description')}
+      action={(
+        <Button variant="ghost" onClick={onClose}>
+          <X size={15} />
+          {t('settings.close')}
+        </Button>
+      )}
+    >
       <SettingsList
         groups={[
           {
@@ -114,6 +122,6 @@ export function SettingsView({
         ]}
       />
       <ToolAuditPanel />
-    </section>
+    </WorkspacePage>
   );
 }

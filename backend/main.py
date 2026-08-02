@@ -1,6 +1,5 @@
 import shlex
 from typing import Any, Optional
-from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -13,7 +12,8 @@ from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
 from coworker.sessions import SessionStore
-from coworker.workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace, list_tool_audit_events
+from coworker.workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events
+from coworker.workspace_controller import WorkspaceController
 
 app = FastAPI()
 app.add_middleware(
@@ -30,8 +30,8 @@ config_controller = AppConfigController(settings, provider_manager)
 session_store = SessionStore(settings.data_dir / "sessions")
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
-workspace = Workspace(settings.workspace_dir, tool_audit_path)
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
+workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
 
 class ChatRequest(BaseModel):
     message: str
@@ -96,6 +96,7 @@ class WorkspaceCommandRequest(BaseModel):
     command: str
     cwd: str = ""
     timeout_seconds: int = 20
+    project_id: str = ""
 
 class CommandApprovalAction(BaseModel):
     approval_id: str
@@ -118,18 +119,32 @@ async def runtime_config():
 async def update_runtime_config(request: RuntimeConfigUpdate):
     try:
         return RuntimeConfigResponse(**config_controller.update_runtime_config(request.model_dump()))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    session_id = request.session_id or str(uuid4())
+    if not request.session_id and not request.project_id:
+        raise HTTPException(status_code=400, detail="project_id is required to start a new chat")
+    created_session = None
+    session_id = request.session_id
     work_mode = normalize_work_mode(request.work_mode)
     access_mode = normalize_access_mode(request.access_mode)
     try:
-        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model)
+        resolved_workspace = workspace_controller.workspace_for_chat(
+            session_id=session_id,
+            project_id=request.project_id,
+        )
+        if not session_id:
+            created_session = session_store.new_session(request.message, project_id=request.project_id or "")
+            session_id = created_session.id
+        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace)
         reply = runtime.run(format_user_message(request.message, request.attachments), session_id, request.language, work_mode, access_mode)
-    except Exception as exc:
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     try:
@@ -150,7 +165,9 @@ async def chat(request: ChatRequest):
                 model=request.model or "",
             )
         else:
-            session = session_store.create(request.message, project_id=request.project_id or "")
+            session = created_session or session_store.require(session_id)
+            if created_session:
+                session_store.save(session)
             session_store.append_message(session.id, role="user", content=request.message, mode=request.mode, attachments=request.attachments)
             session_store.append_message(
                 session.id,
@@ -179,11 +196,17 @@ class ChatStreamRequest(ChatRequest):
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatStreamRequest):
+    if not request.session_id and not request.project_id:
+        raise HTTPException(status_code=400, detail="project_id is required to start a new chat")
     work_mode = normalize_work_mode(request.work_mode)
     access_mode = normalize_access_mode(request.access_mode)
     try:
-        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model)
-    except RuntimeError as exc:
+        resolved_workspace = workspace_controller.workspace_for_chat(
+            session_id=request.session_id or None,
+            project_id=request.project_id,
+        )
+        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace)
+    except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     session_id = request.session_id
@@ -196,14 +219,18 @@ async def chat_stream(request: ChatStreamRequest):
                 for m in session.messages
                 if m.role in {"user", "assistant"} and m.content
             ]
-        except KeyError:
-            session_id = None
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     else:
         session = session_store.create(request.message, project_id=request.project_id or "")
         session_id = session.id
 
+    user_message = {"role": "user", "content": format_user_message(request.message, request.attachments)}
     session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, attachments=request.attachments)
-    messages = history + [{"role": "user", "content": format_user_message(request.message, request.attachments)}]
+    if runtime.owns_runtime_messages and agent_registry.has_runtime_checkpoint(session_id):
+        messages = [user_message]
+    else:
+        messages = history + [user_message]
 
     async def event_stream():
         try:
@@ -238,9 +265,6 @@ class SessionCreateRequest(BaseModel):
 class SessionRenameRequest(BaseModel):
     title: str
 
-class SessionMoveRequest(BaseModel):
-    project_id: str = ""
-
 class SessionMessageIn(BaseModel):
     role: str
     content: str
@@ -250,6 +274,7 @@ class SessionMessageIn(BaseModel):
 
 class ProjectCreateRequest(BaseModel):
     name: str
+    workspace_path: str
 
 class ProjectRenameRequest(BaseModel):
     name: str
@@ -260,6 +285,12 @@ async def list_sessions(project_id: str | None = None):
 
 @app.post("/sessions")
 async def create_session(request: SessionCreateRequest):
+    if not request.project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    try:
+        project_store.require(request.project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     session = session_store.create(request.title, project_id=request.project_id)
     return {"status": "ok", "session": session.public()}
 
@@ -275,6 +306,7 @@ async def get_session(session_id: str):
 async def delete_session(session_id: str):
     if not session_store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
+    agent_registry.forget_runtime_checkpoint(session_id)
     return {"status": "ok"}
 
 @app.post("/sessions/{session_id}/rename")
@@ -285,29 +317,25 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "ok", "session": session.public()}
 
-@app.post("/sessions/{session_id}/move")
-async def move_session(session_id: str, request: SessionMoveRequest):
-    try:
-        session = session_store.set_project(session_id, request.project_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"status": "ok", "session": session.public()}
-
 @app.get("/projects")
 async def list_projects():
     projects = []
     for project in project_store.list_projects():
         count = len(session_store.list_sessions(project.id))
-        projects.append({"id": project.id, "name": project.name, "created_at": project.created_at, "updated_at": project.updated_at, "session_count": count})
+        projects.append(workspace_controller.public_project(project.id, count))
     return {"status": "ok", "projects": projects}
 
 @app.post("/projects")
 async def create_project(request: ProjectCreateRequest):
     try:
-        project = project_store.create(request.name)
+        workspace_path = workspace_controller.validate_workspace_path(request.workspace_path)
+        project = project_store.create(request.name, workspace_path)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", "project": {"id": project.id, "name": project.name, "created_at": project.created_at, "updated_at": project.updated_at, "session_count": 0}}
+    count = len(session_store.list_sessions(project.id))
+    return {"status": "ok", "project": workspace_controller.public_project(project.id, count)}
 
 @app.post("/projects/{project_id}/rename")
 async def rename_project(project_id: str, request: ProjectRenameRequest):
@@ -318,39 +346,51 @@ async def rename_project(project_id: str, request: ProjectRenameRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     count = len(session_store.list_sessions(project.id))
-    return {"status": "ok", "project": {"id": project.id, "name": project.name, "created_at": project.created_at, "updated_at": project.updated_at, "session_count": count}}
+    return {"status": "ok", "project": workspace_controller.public_project(project.id, count)}
 
 @app.delete("/projects/{project_id}")
 async def delete_project(project_id: str):
     if not project_store.delete(project_id):
         raise HTTPException(status_code=404, detail=f"project {project_id} not found")
+    for session in session_store.list_sessions(project_id):
+        agent_registry.forget_runtime_checkpoint(session["id"])
     session_store.delete_by_project(project_id)
     return {"status": "ok"}
 
 @app.get("/workspace/tree")
-async def workspace_tree(path: str = ""):
+async def workspace_tree(path: str = "", project_id: str = ""):
     try:
-        return {"status": "ok", "root": str(settings.workspace_dir), "tree": workspace.build_tree(path)}
+        workspace = workspace_controller.workspace_for_project(project_id) if project_id else workspace_controller.default()
+        return {"status": "ok", "root": str(workspace.root), "tree": workspace.build_tree(path)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/workspace/dir")
-async def workspace_dir(path: str = ""):
+async def workspace_dir(path: str = "", project_id: str = ""):
     try:
+        workspace = workspace_controller.workspace_for_project(project_id) if project_id else workspace_controller.default()
         return {"status": "ok", "path": path or ".", "entries": workspace.list_dir(path)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/workspace/file")
-async def workspace_file(path: str):
+async def workspace_file(path: str, project_id: str = ""):
     try:
+        workspace = workspace_controller.workspace_for_project(project_id) if project_id else workspace_controller.default()
         return {"status": "ok", "path": path, "file": workspace.read_preview(path)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.post("/workspace/command")
 async def workspace_command(request: WorkspaceCommandRequest):
     try:
+        workspace = workspace_controller.workspace_for_project(request.project_id) if request.project_id else workspace_controller.default()
         result = workspace.run_command(
             shlex.split(request.command),
             cwd=request.cwd,
@@ -359,6 +399,8 @@ async def workspace_command(request: WorkspaceCommandRequest):
             approval_store=command_approval_store,
             require_approval=True,
         )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "result": result}
@@ -366,6 +408,10 @@ async def workspace_command(request: WorkspaceCommandRequest):
 @app.get("/audit/tool")
 async def tool_audit(limit: int = 100):
     return {"status": "ok", "events": list_tool_audit_events(tool_audit_path, limit)}
+
+@app.get("/traces/agent")
+async def agent_traces(limit: int = 100):
+    return {"status": "ok", "events": agent_registry.list_agent_traces(limit)}
 
 @app.get("/command-approvals")
 async def list_command_approvals():
@@ -375,21 +421,56 @@ async def list_command_approvals():
 async def approve_command(request: CommandApprovalAction):
     try:
         approval = command_approval_store.approve(request.approval_id)
+        events = await agent_registry.resume_command_approval(approval, True)
+        if events:
+            approval = command_approval_store.update_status(request.approval_id, "consumed")
+            done = next((event for event in reversed(events) if event.get("type") == "done"), None)
+            context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+            session_id = str(context.get("session_id") or "")
+            if done and session_id:
+                try:
+                    session_store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=str(done.get("content") or ""),
+                        mode="single",
+                        provider=str(done.get("provider") or ""),
+                        model=str(done.get("model") or ""),
+                    )
+                except KeyError:
+                    pass
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", "approval": approval}
+    return {"status": "ok", "approval": approval, "events": events}
 
 @app.post("/command-approvals/deny")
 async def deny_command(request: CommandApprovalAction):
     try:
         approval = command_approval_store.deny(request.approval_id)
+        events = await agent_registry.resume_command_approval(approval, False)
+        if events:
+            done = next((event for event in reversed(events) if event.get("type") == "done"), None)
+            context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+            session_id = str(context.get("session_id") or "")
+            if done and session_id:
+                try:
+                    session_store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=str(done.get("content") or ""),
+                        mode="single",
+                        provider=str(done.get("provider") or ""),
+                        model=str(done.get("model") or ""),
+                    )
+                except KeyError:
+                    pass
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok", "approval": approval}
+    return {"status": "ok", "approval": approval, "events": events}
 
 @app.get("/providers")
 async def list_providers():
