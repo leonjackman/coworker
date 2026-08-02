@@ -35,11 +35,8 @@ function themedMonochromeAssetPath(name) {
 }
 
 function createTrayIcon() {
-  const trayPath = process.platform === 'darwin'
-    ? path.join(BRAND_ASSET_DIR, 'cw-icon-white.png')
-    : themedMonochromeAssetPath('cw-icon');
+  const trayPath = themedMonochromeAssetPath('cw-icon');
   const image = nativeImage.createFromPath(trayPath).resize({ width: 18, height: 18 });
-  image.setTemplateImage(process.platform === 'darwin');
   return image;
 }
 

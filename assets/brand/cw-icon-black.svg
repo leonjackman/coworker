@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" fill="none"/>
+  <defs>
+    <clipPath id="logo-clip">
+      <text x="41.50" y="416.50" font-family="'SF Pro Rounded','SF Compact Rounded','SF Pro Display','Helvetica Neue',Arial,sans-serif" font-size="284" font-weight="820" letter-spacing="-0.092em">CW</text>
+    </clipPath>
+  </defs>
+  <text x="41.50" y="416.50" font-family="'SF Pro Rounded','SF Compact Rounded','SF Pro Display','Helvetica Neue',Arial,sans-serif" font-size="284" font-weight="820" letter-spacing="-0.092em" fill="#171B20">CW</text>
+  <g clip-path="url(#logo-clip)">
+    <polygon points="230.50,211.50 242.50,212.50 210.50,397.50 204.50,397.50" fill="#4F83F1"/>
+  </g>
+</svg>
