@@ -92,25 +92,12 @@ export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession
 
               {hasMore && (
                 <button
-                  className="project-session-list__more"
+                  className="project-session-list__toggle"
                   type="button"
-                  onClick={() => setExpanded(true)}
+                  onClick={() => setExpanded(!expanded)}
                 >
-                  <span className="project-session-list__more-text">
-                    {t('project_session.view_all', { total: sessions.length })}
-                  </span>
-                  <ChevronDown size={14} />
-                </button>
-              )}
-
-              {isShowingMore && (
-                <button
-                  className="project-session-list__collapse"
-                  type="button"
-                  onClick={() => setExpanded(false)}
-                >
-                  <ChevronUp size={14} />
-                  {t('project_session.collapse')}
+                  <ChevronUp size={14} className={isShowingMore ? 'project-session-list__toggle-chevron' : ''} />
+                  {t(isShowingMore ? 'project_session.collapse' : 'project_session.view_all', { total: sessions.length })}
                 </button>
               )}
             </>
