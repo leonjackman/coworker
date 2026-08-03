@@ -1055,7 +1055,7 @@ body.sidebar-resizing {
 
 .stream-wall {
   box-sizing: border-box;
-  width: min(760px, calc(100% - 48px));
+  width: min(1024px, calc(100% - 48px));
   margin: 0 auto;
   padding: 28px 0 40px;
   display: grid;
@@ -1109,7 +1109,8 @@ body.sidebar-resizing {
 
 .stream-content {
   min-width: 0;
-  max-width: min(640px, calc(100% - 42px));
+  width: 100%;
+  max-width: 100%;
 }
 
 .stream-content--running {
@@ -1429,7 +1430,7 @@ body.sidebar-resizing {
 
 .composer {
   box-sizing: border-box;
-  width: min(760px, calc(100% - 48px));
+  width: min(1024px, calc(100% - 48px));
   margin: 0 auto 16px;
   padding: 0 32px;
 }

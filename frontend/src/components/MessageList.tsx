@@ -1,5 +1,5 @@
 import { Bot, FileText, Hammer, ListChecks, Loader2, Shield, ShieldCheck } from 'lucide-react';
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart } from '../types';
 import { ScrollArea } from './ui/scroll-area';
@@ -10,8 +10,11 @@ import { MessageActions } from './MessageActions';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
+const STICK_THRESHOLD = 80;
+
 interface MessageListProps {
   messages: ChatMessage[];
+  isThinking?: boolean;
   onEditMessage?: (messageId: string, content: string) => void;
   onRegenerateMessage?: (messageId: string) => void;
   onRollbackMessage?: (messageId: string) => void;
@@ -137,9 +140,43 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
   );
 }
 
-function MessageListView({ messages, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
+function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const lastCountRef = useRef(messages.length);
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+  };
+
+  const handleViewportScroll = () => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    stickToBottomRef.current = distanceFromBottom <= STICK_THRESHOLD;
+  };
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const newMessages = messages.length > lastCountRef.current;
+    const isSessionOpen = lastCountRef.current === 0 && messages.length > 0;
+    lastCountRef.current = messages.length;
+    if (isSessionOpen || newMessages || isThinking) {
+      if (stickToBottomRef.current) {
+        scrollToBottom('auto');
+      }
+    }
+  }, [messages, isThinking]);
+
   return (
-    <ScrollArea className="messages">
+    <ScrollArea
+      className="messages"
+      viewportRef={viewportRef}
+      onViewportScroll={handleViewportScroll}
+    >
       <section className="stream-wall" aria-live="polite">
         {messages.length === 0 && (
           <div className="empty-state">
@@ -176,10 +213,11 @@ function MessageListView({ messages, onEditMessage, onRegenerateMessage, onRollb
 }
 
 export function MessageList(props: MessageListProps) {
-  const { messages, onEditMessage, onRegenerateMessage, onRollbackMessage } = props;
+  const { messages, isThinking, onEditMessage, onRegenerateMessage, onRollbackMessage } = props;
   return (
     <MessageListView
       messages={messages}
+      isThinking={isThinking}
       onEditMessage={onEditMessage}
       onRegenerateMessage={onRegenerateMessage}
       onRollbackMessage={onRollbackMessage}

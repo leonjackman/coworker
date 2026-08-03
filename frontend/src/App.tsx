@@ -61,7 +61,6 @@ function App() {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const requestSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
@@ -152,10 +151,6 @@ function App() {
   useEffect(() => {
     applyTheme(themeSettings);
   }, [themeSettings]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isThinking]);
 
   useEffect(() => {
     document.title = t('app.title');
@@ -1297,11 +1292,11 @@ function App() {
                     <>
                       <MessageList
                         messages={messages}
+                        isThinking={isThinking}
                         onEditMessage={(messageId, content) => beginEditMessage(messageId, content)}
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
                         onRollbackMessage={(messageId) => void handleRollbackMessage(messageId)}
                       />
-                      <div ref={bottomRef} />
                     </>
                   )}
                   {!showFirstRunStart && !showProjectSessionList && (
