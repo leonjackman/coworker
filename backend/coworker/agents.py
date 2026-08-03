@@ -594,6 +594,47 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 return True
         return False
 
+    async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        if not self._is_plan_mode(state):
+            return None
+        if self._already_planned(state):
+            return None
+
+        language = str(state.get("language", "en"))
+        lang_name = "Chinese" if language == "zh" else "English"
+        prompt = (
+            f"You are the planner stage inside Coworker. Create a concise internal plan "
+            f"for the upcoming task. Reply in {lang_name}. "
+            "Mention likely files, approach, checks, and risks when relevant. "
+            "Do not use tools. Output only the plan text."
+        )
+
+        user_message = ""
+        for msg in state.get("messages", []):
+            if getattr(msg, "type", None) == "human":
+                user_message = getattr(msg, "content", "") or ""
+                break
+
+        plan_text = ""
+        try:
+            response = await self.planner_llm.ainvoke([
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_message or "Analyze the task and create a plan."},
+            ])
+            plan_text = coerce_message_content(response).strip()
+        except Exception:
+            plan_text = "Plan could not be generated. Proceed with best-effort analysis."
+
+        if plan_text:
+            stream_writer = getattr(runtime, "stream_writer", None)
+            if stream_writer is not None:
+                stream_writer({"type": "plan_start"})
+                stream_writer({"type": "plan_delta", "content": plan_text})
+                stream_writer({"type": "plan_end", "content": plan_text})
+
+        marker_msg = SystemMessage(content=f"{PLAN_MARKER}\n{plan_text}")
+        return {"messages": [marker_msg]}
+
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         if not self._is_plan_mode(state):
             return None
@@ -644,6 +685,16 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 tool_call_id=getattr(request, "tool_call_id", "unknown"),
             )
         return handler(request)
+
+    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+        tool_name = getattr(request, "tool_name", "") or ""
+        if tool_name in _WRITE_TOOL_NAMES:
+            from langchain_core.messages import ToolMessage
+            return ToolMessage(
+                content=f"Tool '{tool_name}' is not available in plan mode. Use read-only tools only.",
+                tool_call_id=getattr(request, "tool_call_id", "unknown"),
+            )
+        return await handler(request)
 
 
 # ---------------------------------------------------------------------------
