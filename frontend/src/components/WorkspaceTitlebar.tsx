@@ -25,6 +25,7 @@ interface WorkspaceTitlebarProps {
   status: 'connecting' | 'ready' | 'error';
   activeView: AppView;
   sessionTitle: string;
+  projectName: string;
   sidebarCollapsed: boolean;
   rightSidebarOpen: boolean;
   bottomPanelOpen: boolean;
@@ -43,6 +44,7 @@ export function WorkspaceTitlebar({
   status,
   activeView,
   sessionTitle,
+  projectName,
   sidebarCollapsed,
   rightSidebarOpen,
   bottomPanelOpen,
@@ -77,7 +79,7 @@ export function WorkspaceTitlebar({
 
       <div className="workspace-titlebar__center">
         <div className="workspace-titlebar__title">
-          <span>Coworker</span>
+          <span>{projectName}</span>
           <span aria-hidden="true">/</span>
           <strong>{title}</strong>
         </div>

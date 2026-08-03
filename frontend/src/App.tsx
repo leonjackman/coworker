@@ -686,6 +686,7 @@ function App() {
   const sessionProjectId = sessions.find((session) => session.id === sessionId)?.project_id;
   const currentProjectId = activeProjectId || sessionProjectId;
   const activeProject = projects.find((project) => project.id === currentProjectId);
+  const titlebarProjectName = activeProject?.name ?? t('sidebar.default_project');
   const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
   const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0;
   const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && runtimeStatus === 'ready';
@@ -708,6 +709,7 @@ function App() {
         status={runtimeStatus}
         activeView={activeView}
         sessionTitle={titlebarSessionTitle}
+        projectName={titlebarProjectName}
         sidebarCollapsed={sidebarCollapsed}
         rightSidebarOpen={rightSidebarOpen}
         bottomPanelOpen={bottomPanelOpen}
