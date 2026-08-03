@@ -143,7 +143,8 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
 function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
-  const lastCountRef = useRef(messages.length);
+  const lastMessageIdRef = useRef<string | undefined>(undefined);
+  const lastCountRef = useRef(0);
 
   const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
     const viewport = viewportRef.current;
@@ -161,10 +162,22 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    const newMessages = messages.length > lastCountRef.current;
-    const isSessionOpen = lastCountRef.current === 0 && messages.length > 0;
+
+    const lastMessage = messages[messages.length - 1];
+    const newMessageId = lastMessage?.id;
+    const hasNewMessage = newMessageId !== undefined && newMessageId !== lastMessageIdRef.current;
+    const isNewUserMessage = hasNewMessage && lastMessage?.role === 'user';
+    const isSessionOpen = messages.length > 0 && lastCountRef.current === 0;
+
+    lastMessageIdRef.current = newMessageId;
     lastCountRef.current = messages.length;
-    if (isSessionOpen || newMessages || isThinking) {
+
+    if (isNewUserMessage || isSessionOpen) {
+      // A user sent a new message (or a session just opened): always reveal it.
+      stickToBottomRef.current = true;
+      scrollToBottom('auto');
+    } else if (hasNewMessage || isThinking) {
+      // Streaming agent reply: follow only when the user hasn't scrolled away.
       if (stickToBottomRef.current) {
         scrollToBottom('auto');
       }
