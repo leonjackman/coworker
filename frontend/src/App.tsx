@@ -396,50 +396,105 @@ function App() {
     setPendingRequests((current) =>
       current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
     );
+    let resumeId: string | undefined;
     try {
       const response = await chatService.resolveCommandApproval(request.approval_id, decision);
-      const done = response.events?.findLast((event) => event.type === 'done');
+      resumeId = response.resume_id;
       const chained = (response.events ?? []).filter(
         (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }> =>
           event.type === 'approval_required' || event.type === 'question_required',
       );
-      setMessages((current) =>
-        current.map((item) => {
-          if (item.id !== request.messageId) return item;
-          if (done?.type === 'done') return { ...item, content: done.content || item.content, status: 'done' };
-          if (response.resumed === false) return item;
-          return item;
-        }),
-      );
       setPendingRequests((current) => [
         ...current.filter((item) => item.approval_id !== request.approval_id),
-        ...chained.map((event): PendingRequest => {
-          const base: PendingRequest = {
-            approval_id: event.approval_id,
-            kind: event.type === 'approval_required' ? 'command' : 'question',
-            session_id: event.session_id ?? request.session_id,
-            approval_status: event.approval_status,
-            messageId: request.messageId,
-          };
-          return event.type === 'approval_required'
-            ? { ...base, command: event.command, cwd: event.cwd }
-            : {
-                ...base,
-                ...(event.question !== undefined ? { question: event.question } : {}),
-                ...(event.header !== undefined ? { header: event.header } : {}),
-                ...(event.options !== undefined ? { options: event.options } : {}),
-                ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
-              };
-        }),
+        ...chained.map((event): PendingRequest => pendingFromEvent(event, request.session_id, request.messageId)),
       ]);
+      if (response.resumed === false && !response.resume_id) {
+        setMessages((current) =>
+          current.map((item) => {
+            if (item.id !== request.messageId) return item;
+            return item;
+          }),
+        );
+        return;
+      }
     } catch (error) {
       console.error('Failed to resolve approval:', error);
       setPendingRequests((current) =>
         current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: false } : item)),
       );
+      return;
     } finally {
       resolvingRef.current = false;
     }
+
+    if (!resumeId) return;
+    const controller = new AbortController();
+    const resumeSessionId = request.session_id || sessionIdRef.current || '';
+    try {
+      await chatService.subscribeApprovalEvents(
+        resumeId,
+        (event) => {
+          if (event.type === 'done' || event.type === 'delta') {
+            setMessages((current) =>
+              current.map((item) => {
+                if (item.id !== request.messageId) return item;
+                if (event.type === 'done') return { ...item, content: event.content || item.content, status: 'done' };
+                return { ...item, content: event.content || item.content, status: 'running' as const };
+              }),
+            );
+          } else if (event.type === 'stage') {
+            setMessages((current) =>
+              current.map((item) =>
+                item.id === request.messageId
+                  ? { ...item, content: `${t('chat.waiting_resolution')} · ${event.name}`, status: 'running' as const }
+                  : item,
+              ),
+            );
+          } else if (event.type === 'approval_required' || event.type === 'question_required') {
+            setPendingRequests((current) => {
+              if (current.some((item) => item.approval_id === event.approval_id)) return current;
+              return [...current, pendingFromEvent(event, resumeSessionId, request.messageId)];
+            });
+          } else if (event.type === 'error') {
+            setMessages((current) =>
+              current.map((item) =>
+                item.id === request.messageId
+                  ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error' }
+                  : item,
+              ),
+            );
+          }
+        },
+        controller.signal,
+      );
+    } catch (error) {
+      if ((error as Error).name !== 'AbortError') {
+        console.error('Approval event stream failed:', error);
+      }
+    }
+  };
+
+  const pendingFromEvent = (
+    event: Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }>,
+    sessionId: string,
+    messageId: string,
+  ): PendingRequest => {
+    const base: PendingRequest = {
+      approval_id: event.approval_id,
+      kind: event.type === 'approval_required' ? 'command' : 'question',
+      session_id: event.session_id ?? sessionId,
+      approval_status: event.approval_status,
+      messageId,
+    };
+    return event.type === 'approval_required'
+      ? { ...base, command: event.command, cwd: event.cwd }
+      : {
+          ...base,
+          ...(event.question !== undefined ? { question: event.question } : {}),
+          ...(event.header !== undefined ? { header: event.header } : {}),
+          ...(event.options !== undefined ? { options: event.options } : {}),
+          ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+        };
   };
 
   const dismissPendingRequest = (request: PendingRequest) => {

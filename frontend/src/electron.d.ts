@@ -38,6 +38,7 @@ declare global {
       sendChatMessage: (payload: ChatRequest) => Promise<ChatResponse>;
       streamChatMessage: (requestId: string, payload: ChatRequest, onEvent: StreamEventCallback) => Promise<void>;
       abortChatStream: (requestId: string) => void;
+      streamApprovalEvents: (requestId: string, resumeId: string, onEvent: StreamEventCallback) => Promise<void>;
       listProviders: () => Promise<ProvidersListResponse>;
       createProvider: (payload: ProviderPayload) => Promise<{ status: string }>;
       updateProvider: (providerId: string, params: ProviderUpdatePayload) => Promise<{ status: string }>;

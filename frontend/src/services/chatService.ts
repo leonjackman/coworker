@@ -81,6 +81,7 @@ export interface ChatService {
   listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
   listCommandApprovals: () => Promise<CommandApprovalsResponse>;
   resolveCommandApproval: (approvalId: string, decision: ApprovalDecisionPayload) => Promise<CommandApprovalResponse>;
+  subscribeApprovalEvents: (resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
 }
 
 class ElectronChatService implements ChatService {
@@ -208,6 +209,18 @@ class ElectronChatService implements ChatService {
   async resolveCommandApproval(approvalId: string, decision: ApprovalDecisionPayload): Promise<CommandApprovalResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.resolveCommandApproval(approvalId, decision);
+  }
+
+  async subscribeApprovalEvents(resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const requestId = `approval-${resumeId}-${Date.now()}`;
+    const abortStream = () => window.electronAPI?.abortChatStream(requestId);
+    const detachAbortListener = attachAbortListener(signal, abortStream);
+    try {
+      await window.electronAPI.streamApprovalEvents(requestId, resumeId, onEvent);
+    } finally {
+      detachAbortListener();
+    }
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -428,6 +441,42 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approval_id: approvalId, decision }),
     });
+  }
+
+  async subscribeApprovalEvents(resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    const response = await fetch(`${BACKEND_URL}/command-approvals/events/${encodeURIComponent(resumeId)}`, {
+      ...(signal instanceof AbortSignal ? { signal } : {}),
+    });
+    if (!response.ok) {
+      throw new Error(`Backend returned ${response.status}`);
+    }
+    if (!response.body) return;
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) {
+          const line = frame.split('\n').find((item) => item.startsWith('data:'));
+          if (!line) continue;
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+          try {
+            onEvent(JSON.parse(raw) as StreamEvent);
+          } catch {
+            // skip malformed frames
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   async listProviders(): Promise<ProvidersListResponse> {

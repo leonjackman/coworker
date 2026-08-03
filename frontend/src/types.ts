@@ -289,6 +289,7 @@ export interface CommandApprovalResponse {
   approval: CommandApproval;
   events?: StreamEvent[];
   resumed?: boolean;
+  resume_id?: string;
 }
 
 export type ApprovalDecisionType = 'approve' | 'reject' | 'respond' | 'always';

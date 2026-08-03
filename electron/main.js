@@ -406,6 +406,69 @@ ipcMain.on('abort-chat-stream', (event, requestId) => {
   }
 });
 
+ipcMain.handle('start-approval-stream', async (event, { requestId, resumeId }) => {
+  const options = {
+    hostname: BACKEND_HOST,
+    port: BACKEND_PORT,
+    path: `/command-approvals/events/${encodeURIComponent(resumeId)}`,
+    method: 'GET',
+  };
+
+  const sender = event.sender;
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      res.setEncoding('utf8');
+      let buffer = '';
+      res.on('data', (chunk) => {
+        buffer += chunk;
+        let sepIndex;
+        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sepIndex);
+          buffer = buffer.slice(sepIndex + 2);
+          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
+          if (!dataLine) continue;
+          const raw = dataLine.slice(5).trim();
+          if (!raw) continue;
+          let parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+          sender.send('approval-stream-event', { requestId, event: parsed });
+        }
+      });
+      res.on('end', () => {
+        if (buffer) {
+          const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
+          if (dataLine) {
+            const raw = dataLine.slice(5).trim();
+            if (raw) {
+              try {
+                sender.send('approval-stream-event', { requestId, event: JSON.parse(raw) });
+              } catch {
+                // ignore trailing partial frame
+              }
+            }
+          }
+        }
+        activeStreams.delete(requestId);
+        resolve({ status: 'ok' });
+      });
+    });
+
+    req.on('error', (e) => {
+      activeStreams.delete(requestId);
+      sender.send('approval-stream-event', { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
+      resolve({ status: 'error' });
+    });
+
+    activeStreams.set(requestId, req);
+    req.end();
+  });
+});
+
+
 ipcMain.handle('list-sessions', async () => {
   return requestBackend('/sessions');
 });

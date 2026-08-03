@@ -18,6 +18,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     });
   },
   abortChatStream: (requestId) => ipcRenderer.send('abort-chat-stream', requestId),
+  streamApprovalEvents: (requestId, resumeId, onEvent) => {
+    const listener = (_event, data) => {
+      if (data.requestId !== requestId) return;
+      onEvent(data.event);
+    };
+    ipcRenderer.on('approval-stream-event', listener);
+    return ipcRenderer.invoke('start-approval-stream', { requestId, resumeId }).finally(() => {
+      ipcRenderer.removeListener('approval-stream-event', listener);
+    });
+  },
   listProviders: () => ipcRenderer.invoke('list-providers'),
   createProvider: (payload) => ipcRenderer.invoke('create-provider', payload),
   updateProvider: (providerId, params) => ipcRenderer.invoke('update-provider', { provider_id: providerId, params }),

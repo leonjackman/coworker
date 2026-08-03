@@ -49,7 +49,7 @@ function ApprovalDock({ request, onResolve }: { request: PendingRequest & { kind
         <button
           type="button"
           className="button-secondary"
-          onClick={() => dispatch({ type: 'approve' })}
+          onClick={() => dispatch({ type: 'always' })}
           disabled={resolving}
         >
           {t('chat.approval_always', { command: request.command?.[0] || '' })}
@@ -60,7 +60,7 @@ function ApprovalDock({ request, onResolve }: { request: PendingRequest & { kind
           onClick={() => dispatch({ type: 'approve' })}
           disabled={resolving}
         >
-          {t('chat.approval_approve_once')}
+          {t('chat.approval_once')}
         </button>
       </div>
     </div>
@@ -176,7 +176,7 @@ function QuestionDock({ request, onResolve }: { request: PendingRequest & { kind
             onClick={handleSubmit}
             disabled={!hasAnswer || resolving}
           >
-            {t('chat.approval_approve_once')}
+            {t('chat.approval_once')}
           </button>
         ) : null}
         <button
@@ -191,7 +191,7 @@ function QuestionDock({ request, onResolve }: { request: PendingRequest & { kind
           }}
           disabled={resolving}
         >
-          {t('chat.approval_approve_once')}
+          {t('chat.approval_once')}
         </button>
       </div>
     </div>

@@ -1,4 +1,6 @@
+import asyncio
 import shlex
+from collections import defaultdict
 from typing import Any, Optional
 
 import uvicorn
@@ -37,6 +39,56 @@ project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
+
+
+class ApprovalEventBus:
+    """In-memory pub/sub that streams resume progress events to SSE subscribers.
+
+    A small ring buffer per resume_id ensures subscribers that attach after the
+    background resume task started still receive the events already published.
+    """
+
+    def __init__(self, buffer_size: int = 64) -> None:
+        self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = defaultdict(list)
+        self._buffer: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._buffer_size = buffer_size
+
+    def subscribe(self, resume_id: str) -> asyncio.Queue[dict[str, Any]]:
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+        self._subscribers[resume_id].append(queue)
+        for event in list(self._buffer.get(resume_id, [])):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                break
+        return queue
+
+    def unsubscribe(self, resume_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        queues = self._subscribers.get(resume_id, [])
+        if queue in queues:
+            queues.remove(queue)
+        if not queues:
+            self._subscribers.pop(resume_id, None)
+
+    async def publish(self, resume_id: str, event: dict[str, Any]) -> None:
+        buffer = self._buffer[resume_id]
+        buffer.append(event)
+        if len(buffer) > self._buffer_size:
+            del buffer[: len(buffer) - self._buffer_size]
+        queues = list(self._subscribers.get(resume_id, []))
+        for queue in queues:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                await queue.put(event)
+
+    def close(self, resume_id: str) -> None:
+        queues = self._subscribers.pop(resume_id, [])
+        for queue in queues:
+            queue.put_nowait({"type": "stream_end"})
+
+
+approval_event_bus = ApprovalEventBus()
 
 class ChatRequest(BaseModel):
     message: str
@@ -467,7 +519,6 @@ async def resolve_command_approval(request: CommandApprovalResolve):
     try:
         approval = command_approval_store.require(request.approval_id)
         context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
-        kind = str(context.get("kind") or "command")
         decision_type = request.decision.type
 
         if decision_type == "always":
@@ -497,8 +548,7 @@ async def resolve_command_approval(request: CommandApprovalResolve):
         approval = command_approval_store.set_decision(request.approval_id, status, decision)
 
         interrupt_id = str(context.get("interrupt_id") or "")
-        events: list[dict[str, Any]] = []
-        resolved_statuses = {"approved", "denied", "answered"}
+        resume_id = interrupt_id or approval.get("id", "")
         if context.get("source") == "agent_langgraph_hitl" and interrupt_id:
             siblings = [
                 item
@@ -508,36 +558,87 @@ async def resolve_command_approval(request: CommandApprovalResolve):
             ]
             all_decided = all(item.get("decision") is not None for item in siblings)
             if all_decided:
-                ordered = sorted(
-                    siblings,
-                    key=lambda item: int(item.get("context", {}).get("action_index") or 0),
+                asyncio.create_task(
+                    _resume_in_background(resume_id, approval, siblings)
                 )
-                decisions = [item.get("decision") for item in ordered if item.get("decision")]
-                if decisions:
-                    events = await agent_registry.resume_interrupt(approval, decisions)
-                    done = next((event for event in reversed(events) if event.get("type") == "done"), None)
-                    session_id = str(context.get("session_id") or "")
-                    if done and session_id:
-                        try:
-                            session_store.append_message(
-                                session_id,
-                                role="assistant",
-                                content=str(done.get("content") or ""),
-                                mode="single",
-                                provider=str(done.get("provider") or ""),
-                                model=str(done.get("model") or ""),
-                            )
-                        except KeyError:
-                            pass
-                    for item in ordered:
-                        command_approval_store.mark_consumed(item.get("id", ""))
-            else:
-                events = []
-        return {"status": "ok", "approval": approval, "events": events, "resumed": bool(events)}
+                return {
+                    "status": "ok",
+                    "approval": approval,
+                    "events": [],
+                    "resumed": True,
+                    "resume_id": resume_id,
+                }
+            return {"status": "ok", "approval": approval, "events": [], "resumed": False}
+        return {"status": "ok", "approval": approval, "events": [], "resumed": False}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblings: list[dict[str, Any]]) -> None:
+    """Run the agent resume in the background and stream events via the event bus."""
+    ordered = sorted(
+        siblings,
+        key=lambda item: int(item.get("context", {}).get("action_index") or 0),
+    )
+    decisions = [item.get("decision") for item in ordered if item.get("decision")]
+    context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+    session_id = str(context.get("session_id") or "")
+    try:
+        if not decisions:
+            approval_event_bus.close(resume_id)
+            return
+        events = await agent_registry.resume_interrupt(approval, decisions)
+        done = next((event for event in reversed(events) if event.get("type") == "done"), None)
+        for event in events:
+            event["session_id"] = session_id
+            event["resume_id"] = resume_id
+            await approval_event_bus.publish(resume_id, event)
+        if done and session_id:
+            try:
+                session_store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=str(done.get("content") or ""),
+                    mode="single",
+                    provider=str(done.get("provider") or ""),
+                    model=str(done.get("model") or ""),
+                )
+            except KeyError:
+                pass
+        for item in ordered:
+            command_approval_store.mark_consumed(item.get("id", ""))
+    except Exception as exc:
+        await approval_event_bus.publish(
+            resume_id,
+            {"type": "error", "session_id": session_id, "error": str(exc)[:400], "resume_id": resume_id},
+        )
+    finally:
+        approval_event_bus.close(resume_id)
+
+
+@app.get("/command-approvals/events/{resume_id}")
+async def stream_approval_events(resume_id: str):
+    """SSE stream of resume progress events for a given resume_id."""
+    from fastapi.responses import StreamingResponse
+
+    async def event_stream():
+        queue = approval_event_bus.subscribe(resume_id)
+        try:
+            while True:
+                event = await queue.get()
+                if event.get("type") == "stream_end":
+                    break
+                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        finally:
+            approval_event_bus.unsubscribe(resume_id, queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @app.get("/providers")
 async def list_providers():
