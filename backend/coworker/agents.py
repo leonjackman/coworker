@@ -773,7 +773,7 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 stream_writer({"type": "plan_delta", "content": plan_text})
                 stream_writer({"type": "plan_end", "content": plan_text})
 
-        marker_msg = {"role": "human", "content": f"\n\n{PLAN_MARKER}\n{plan_text}"}
+        marker_msg = {"role": "assistant", "content": f"{PLAN_MARKER}\n{plan_text}"}
         return {"messages": [marker_msg]}
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
@@ -814,7 +814,7 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 stream_writer({"type": "plan_delta", "content": plan_text})
                 stream_writer({"type": "plan_end", "content": plan_text})
 
-        marker_msg = {"role": "human", "content": f"\n\n{PLAN_MARKER}\n{plan_text}"}
+        marker_msg = {"role": "assistant", "content": f"{PLAN_MARKER}\n{plan_text}"}
         return {"messages": [marker_msg]}
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
@@ -873,7 +873,9 @@ def build_coworker_agent_graph(
 
     system_prompt = (
         f"Reply in {language_name(language)}.\n"
-        f"{runtime_instruction(work_mode, access_mode)}"
+        f"{runtime_instruction(work_mode, access_mode)}\n"
+        "Messages prefixed with [CW-PLAN] are your own internal plan for reference only. "
+        "Never repeat or quote them in your reply; use them to guide your work silently."
     )
 
     kwargs: dict[str, Any] = {
