@@ -1299,6 +1299,7 @@ function App() {
                     <>
                       <MessageList
                         messages={messages}
+                        isThinking={isThinking}
                         onEditMessage={(messageId, content) => beginEditMessage(messageId, content)}
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
                         onRollbackMessage={(messageId) => void handleRollbackMessage(messageId)}
