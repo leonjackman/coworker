@@ -186,6 +186,10 @@ async def chat(request: ChatRequest):
                 model=request.model or "",
             )
             session_id = session.id
+        try:
+            session_store.update_modes(session_id, work_mode, access_mode)
+        except KeyError:
+            pass
     except KeyError:
         pass
 
@@ -256,8 +260,16 @@ async def chat_stream(request: ChatStreamRequest):
                         )
                     except KeyError:
                         pass
+                    try:
+                        session_store.update_modes(session_id, work_mode, access_mode)
+                    except KeyError:
+                        pass
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
+            try:
+                session_store.update_modes(session_id, work_mode, access_mode)
+            except KeyError:
+                pass
             yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

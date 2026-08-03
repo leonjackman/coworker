@@ -4,7 +4,7 @@ import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
-import { EmptyProjectStart } from './components/EmptyProjectStart';
+import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
 import { NewSessionDialog } from './components/NewSessionDialog';
 import { SettingsView } from './components/settings/SettingsView';
@@ -675,8 +675,8 @@ function App() {
   const currentProjectId = activeProjectId || sessionProjectId;
   const activeProject = projects.find((project) => project.id === currentProjectId);
   const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
-  const showFirstRunStart = activeView === 'chat' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0;
-  const showEmptyProjectStart = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && activeProjectSessions.length === 0;
+  const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0;
+  const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && runtimeStatus === 'ready';
   const currentSessionPending = sessionId
     ? pendingRequests.filter((item) => item.session_id === sessionId)
     : [];
@@ -747,15 +747,21 @@ function App() {
                   )}
                   {showFirstRunStart ? (
                     <FirstRunStart onCreateProject={createProject} onNewSession={() => openNewSessionDialog()} />
-                  ) : showEmptyProjectStart ? (
-                    <EmptyProjectStart project={activeProject} onStart={() => openNewSessionDialog(activeProject.id)} />
+                  ) : showProjectSessionList ? (
+                    <ProjectSessionList
+                      project={activeProject}
+                      sessions={activeProjectSessions}
+                      onNewChat={openNewSessionDialog}
+                      onOpenSession={openSession}
+                      onDeleteSession={deleteSession}
+                    />
                   ) : (
                     <>
                       <MessageList messages={messages} />
                       <div ref={bottomRef} />
                     </>
                   )}
-                  {!showFirstRunStart && !showEmptyProjectStart && (
+                  {!showFirstRunStart && !showProjectSessionList && (
                     currentSessionPending.length > 0 ? (
                       <div className="workspace-dock-area">
                         <PendingDocks

@@ -111,6 +111,8 @@ export interface SessionSummary {
   created_at: string;
   updated_at: string;
   project_id: string;
+  work_mode?: string;
+  access_mode?: string;
   message_count: number;
 }
 
@@ -151,6 +153,8 @@ export interface SessionDetail {
   created_at: string;
   updated_at: string;
   project_id: string;
+  work_mode: string;
+  access_mode: string;
   messages: SessionMessageRecord[];
 }
 

@@ -36,6 +36,8 @@ class Session:
     created_at: str
     updated_at: str
     project_id: str = ""
+    work_mode: str = "build"
+    access_mode: str = "default"
     messages: list[SessionMessage] = field(default_factory=list)
 
     @classmethod
@@ -46,6 +48,8 @@ class Session:
             created_at=str(payload.get("created_at", _now())),
             updated_at=str(payload.get("updated_at", _now())),
             project_id=str(payload.get("project_id", "")),
+            work_mode=str(payload.get("work_mode", "build")),
+            access_mode=str(payload.get("access_mode", "default")),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
 
@@ -59,6 +63,8 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "project_id": self.project_id,
+            "work_mode": self.work_mode,
+            "access_mode": self.access_mode,
             "message_count": len(self.messages),
         }
 
@@ -69,6 +75,8 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "project_id": self.project_id,
+            "work_mode": self.work_mode,
+            "access_mode": self.access_mode,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -109,7 +117,7 @@ class SessionStore:
             sessions.append(session.public())
         return sessions
 
-    def new_session(self, title: str = "", project_id: str = "") -> Session:
+    def new_session(self, title: str = "", project_id: str = "", work_mode: str = "build", access_mode: str = "default") -> Session:
         now = _now()
         return Session(
             id=str(uuid.uuid4()),
@@ -117,10 +125,19 @@ class SessionStore:
             created_at=now,
             updated_at=now,
             project_id=project_id,
+            work_mode=work_mode,
+            access_mode=access_mode,
         )
 
-    def create(self, title: str = "", project_id: str = "") -> Session:
-        session = self.new_session(title, project_id)
+    def create(self, title: str = "", project_id: str = "", work_mode: str = "build", access_mode: str = "default") -> Session:
+        session = self.new_session(title, project_id, work_mode, access_mode)
+        self.save(session)
+        return session
+
+    def update_modes(self, session_id: str, work_mode: str, access_mode: str) -> Session:
+        session = self.require(session_id)
+        session.work_mode = work_mode
+        session.access_mode = access_mode
         self.save(session)
         return session
 

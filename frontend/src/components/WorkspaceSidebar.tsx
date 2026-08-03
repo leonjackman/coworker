@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Folder, FolderOpen, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
 import { Button } from './ui/button';
@@ -80,19 +80,29 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || activeProjectId === project.id;
 
+  const handleTitleClick = () => {
+    setExpanded(true);
+    onOpenProject(project.id);
+  };
+
   return (
     <div className="sidebar-project">
       <div className={`sidebar-project__title-row ${active ? 'sidebar-project__title-row--active' : ''}`}>
         <button
           type="button"
           className="sidebar-project__title"
-          onClick={() => {
-            setExpanded(true);
-            onOpenProject(project.id);
-          }}
+          onClick={handleTitleClick}
           aria-expanded={expanded}
         >
-          {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          <span
+            className="sidebar-project__chevron-icon"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+          >
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          </span>
           {expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
           <span>{project.name}</span>
           {project.session_count > 0 && <small className="sidebar-project__count">{project.session_count}</small>}

@@ -968,7 +968,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         session_id = str(context.get("session_id") or "")
         language = normalize_language(context.get("language"))
         work_mode = normalize_work_mode(str(context.get("work_mode") or "build"))
-        access_mode = normalize_access_mode(str(context.get("access_mode") or "full"))
+        access_mode = normalize_access_mode(str(context.get("access_mode") or "default"))
         audit_context = {
             "session_id": session_id,
             "provider": self.provider_name,

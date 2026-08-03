@@ -106,6 +106,7 @@ export function ChatInput({
 
   const nextWorkMode = workMode === 'plan' ? 'build' : 'plan';
   const nextAccessMode = accessMode === 'default' ? 'full' : 'default';
+  const effectiveAccessMode: AccessMode = workMode === 'build' ? accessMode : 'default';
 
   return (
     <footer className="composer">
@@ -217,15 +218,16 @@ export function ChatInput({
               </Select>
             </div>
 
-            <Tooltip content={t(accessMode === 'default' ? 'chat.access_default_tip' : 'chat.access_full_tip')}>
+            <Tooltip content={t(effectiveAccessMode === 'default' ? 'chat.access_default_tip' : 'chat.access_full_tip')}>
               <button
                 type="button"
                 className="composer-toggle-button"
                 onClick={() => onAccessModeChange(nextAccessMode)}
+                disabled={workMode === 'plan'}
                 aria-label={t('chat.toggle_access_mode')}
               >
-                {accessMode === 'default' ? <Shield size={14} /> : <ShieldCheck size={14} />}
-                <span>{t(accessMode === 'default' ? 'chat.access_default' : 'chat.access_full')}</span>
+                {effectiveAccessMode === 'default' ? <Shield size={14} /> : <ShieldCheck size={14} />}
+                <span>{t(effectiveAccessMode === 'default' ? 'chat.access_default' : 'chat.access_full')}</span>
               </button>
             </Tooltip>
           </div>
