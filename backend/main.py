@@ -228,6 +228,7 @@ async def chat(request: ChatRequest):
                 mode=reply.mode,
                 provider=reply.provider,
                 model=request.model or "",
+                parts=reply.parts or [],
             )
         else:
             session = created_session or session_store.require(session_id)
@@ -241,6 +242,7 @@ async def chat(request: ChatRequest):
                 mode=reply.mode,
                 provider=reply.provider,
                 model=request.model or "",
+                parts=reply.parts or [],
             )
             session_id = session.id
         try:
@@ -314,6 +316,7 @@ async def chat_stream(request: ChatStreamRequest):
                             mode=event.get("mode") or request.mode,
                             provider=event.get("provider") or "",
                             model=event.get("model") or request.model or "",
+                            parts=event.get("parts") or [],
                         )
                     except KeyError:
                         pass
@@ -604,6 +607,7 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
                     mode="single",
                     provider=str(done.get("provider") or ""),
                     model=str(done.get("model") or ""),
+                    parts=done.get("parts") or [],
                 )
             except KeyError:
                 pass

@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Iterable, Literal, TypedDict
 
 from pydantic import BaseModel, Field
+from langchain_core.messages import AIMessageChunk, SystemMessage
+from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import AgentState, Runtime
 
 from .config import BackendSettings
 from .providers import ProviderEntry, ProviderManager
@@ -37,12 +40,20 @@ TITLE_SYSTEM_PROMPT = (
 )
 MAX_ATTACHMENT_CHARS = 120_000
 
+PLAN_MARKER = "[CW-PLAN]"
+
+
+class CoworkerAgentState(AgentState[Any]):
+    work_mode: str
+    language: str
+
 
 @dataclass(frozen=True)
 class AgentReply:
     content: str
     mode: AgentMode
     provider: str
+    parts: list[dict[str, Any]] | None = None
 
 
 class SearchFilesArgs(BaseModel):
@@ -94,17 +105,6 @@ class AskUserArgs(BaseModel):
     options: list[AskUserOption] = Field(description="Available choices, each with a label and optional description.")
     multiple: bool = Field(default=False, description="Allow selecting multiple choices.")
     header: str = Field(default="", description="Very short label (max 30 chars) for the prompt.")
-
-
-class CoworkerExecutionState(TypedDict, total=False):
-    messages: list[dict[str, str]]
-    language: str
-    work_mode: str
-    access_mode: str
-    plan: str
-    draft: str
-    verification: str
-    final: str
 
 
 class AgentRuntime(ABC):
@@ -167,11 +167,10 @@ def agent_run_config(
     streaming: bool,
 ) -> dict[str, Any]:
     return {
-        "run_name": "coworker_multi_stage_agent_stream" if streaming else "coworker_multi_stage_agent",
+        "run_name": "coworker_agent" + ("_stream" if streaming else ""),
         "tags": [
             "coworker",
-            "single-agent",
-            "multi-stage",
+            "agent",
             f"work:{work_mode}",
             f"access:{access_mode}",
             "streaming" if streaming else "non-streaming",
@@ -202,11 +201,7 @@ def build_workspace_tools(
     @tool(args_schema=SearchFilesArgs)
     def search_files(query: str, path: str = "", max_results: int = 80) -> str:
         """Search UTF-8 workspace text files."""
-        result = workspace.search_text(
-            query,
-            path,
-            max_results,
-        )
+        result = workspace.search_text(query, path, max_results)
         return json.dumps(result, ensure_ascii=False)
 
     @tool(args_schema=ReadFileArgs)
@@ -223,13 +218,7 @@ def build_workspace_tools(
     @tool(args_schema=ReplaceInFileArgs)
     def replace_in_file(file_path: str, old_text: str, new_text: str, replace_all: bool = False) -> str:
         """Replace exact text in a UTF-8 workspace file."""
-        result = workspace.replace_text(
-            file_path,
-            old_text,
-            new_text,
-            replace_all,
-            audit_context,
-        )
+        result = workspace.replace_text(file_path, old_text, new_text, replace_all, audit_context)
         return json.dumps(result, ensure_ascii=False)
 
     @tool(args_schema=ApplyTextEditsArgs)
@@ -245,14 +234,7 @@ def build_workspace_tools(
     @tool(args_schema=RunCommandArgs)
     def run_command(command: list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
         """Run an allowlisted command in the workspace after runtime policy approval."""
-        result = workspace.run_command(
-            command,
-            cwd,
-            timeout_seconds,
-            audit_context,
-            approval_store,
-            approval_store is not None,
-        )
+        result = workspace.run_command(command, cwd, timeout_seconds, audit_context, approval_store, approval_store is not None)
         return json.dumps(result, ensure_ascii=False)
 
     @tool(args_schema=AskUserArgs)
@@ -271,6 +253,9 @@ def build_workspace_tools(
     if writable:
         tools.extend([replace_in_file, apply_text_edits, write_file, run_command])
     return tools
+
+
+_WRITE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits", "run_command"}
 
 
 def _command_digest_from_tool_call(tool_call: Any) -> str:
@@ -362,19 +347,8 @@ def record_runtime_interrupts(
         if not actions:
             command, cwd, timeout_seconds = interrupt_command_details(value)
             approval = approval_store.request_runtime_interrupt(
-                current_interrupt_id,
-                0,
-                "command",
-                command,
-                cwd,
-                timeout_seconds,
-                {
-                    **context,
-                    "source": "agent_langgraph_hitl",
-                    "interrupt_id": current_interrupt_id,
-                    "action_index": 0,
-                    "hitl_request": value,
-                },
+                current_interrupt_id, 0, "command", command, cwd, timeout_seconds,
+                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": 0, "hitl_request": value},
             )
             approvals.append(approval)
             continue
@@ -387,22 +361,8 @@ def record_runtime_interrupts(
             else:
                 command, cwd, timeout_seconds = interrupt_command_details({"action_requests": [action]})
             approval = approval_store.request_runtime_interrupt(
-                current_interrupt_id,
-                action_index,
-                kind,
-                command,
-                cwd,
-                timeout_seconds,
-                {
-                    **context,
-                    "source": "agent_langgraph_hitl",
-                    "interrupt_id": current_interrupt_id,
-                    "action_index": action_index,
-                    "action_count": len(actions),
-                    "tool_name": str(action.get("name") or ""),
-                    "action_args": args,
-                    "hitl_request": value,
-                },
+                current_interrupt_id, action_index, kind, command, cwd, timeout_seconds,
+                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": action_index, "action_count": len(actions), "tool_name": str(action.get("name") or ""), "action_args": args, "hitl_request": value},
             )
             approvals.append(approval)
     return approvals
@@ -420,45 +380,22 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
         args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
         options = args.get("options") if isinstance(args.get("options"), list) else []
         return {
-            **base,
-            "type": "question_required",
+            **base, "type": "question_required",
             "question": str(args.get("question") or ""),
             "header": str(args.get("header") or ""),
             "options": options,
             "multiple": bool(args.get("multiple")),
         }
-    return {
-        **base,
-        "type": "approval_required",
-        "command": approval.get("command", []),
-        "cwd": approval.get("cwd", ""),
-    }
-
-
-def stage_event(name: str, status: str = "done") -> dict[str, Any]:
-    return {"type": "stage", "name": name, "status": status}
+    return {**base, "type": "approval_required", "command": approval.get("command", []), "cwd": approval.get("cwd", "")}
 
 
 def trace_context(
-    *,
-    session_id: str,
-    provider: str,
-    provider_id: str,
-    model: str,
-    language: Language,
-    work_mode: WorkMode,
-    access_mode: AccessMode,
-    streaming: bool,
+    *, session_id: str, provider: str, provider_id: str, model: str,
+    language: Language, work_mode: WorkMode, access_mode: AccessMode, streaming: bool,
 ) -> dict[str, Any]:
     return {
-        "session_id": session_id,
-        "provider": provider,
-        "provider_id": provider_id,
-        "model": model,
-        "language": language,
-        "work_mode": work_mode,
-        "access_mode": access_mode,
-        "streaming": streaming,
+        "session_id": session_id, "provider": provider, "provider_id": provider_id, "model": model,
+        "language": language, "work_mode": work_mode, "access_mode": access_mode, "streaming": streaming,
     }
 
 
@@ -469,36 +406,70 @@ def coerce_message_content(message: Any) -> str:
     return str(content or "")
 
 
+def _extract_reasoning_from_chunk(chunk: Any) -> str | None:
+    additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
+    raw = additional_kwargs.get("reasoning")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return None
+
+
+def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for part in parts:
+        if part.get("type") == "reasoning_delta":
+            if merged and merged[-1].get("type") == "reasoning":
+                merged[-1]["content"] += part["content"]
+            else:
+                merged.append({"type": "reasoning", "content": part["content"]})
+        elif part.get("type") == "plan_delta":
+            if merged and merged[-1].get("type") == "plan":
+                merged[-1]["content"] += part["content"]
+            elif merged and merged[-1].get("type") == "plan_end":
+                merged[-1]["content"] = part["content"]
+                merged[-1]["type"] = "plan"
+            else:
+                merged.append({"type": "plan", "content": part["content"]})
+        elif part.get("type") == "plan_start":
+            continue
+        elif part.get("type") == "plan_end":
+            if merged and merged[-1].get("type") == "plan":
+                merged[-1]["content"] = part["content"] or merged[-1].get("content", "")
+            else:
+                merged.append({"type": "plan", "content": part.get("content", "")})
+        elif part.get("type") == "tool_delta":
+            existing_tool = next((p for p in merged if p.get("type") == "tool" and p.get("id") == part.get("id")), None)
+            if existing_tool:
+                existing_tool["input"] = (existing_tool.get("input", "") or "") + (part.get("input") or "")
+            elif merged and merged[-1].get("type") == "tool_start":
+                merged[-1]["type"] = "tool"
+                merged[-1]["input"] = (merged[-1].get("input", "") or "") + (part.get("input") or "")
+        elif part.get("type") == "tool_start":
+            merged.append({"type": "tool", "id": part.get("id", ""), "name": part.get("name", ""), "status": "running", "input": part.get("input", "")})
+        else:
+            merged.append(part)
+    return merged
+
+
 def generate_title(user_message: str) -> str:
     from langchain_openai import ChatOpenAI
-
     try:
         from .config import load_settings
         from .providers import ProviderManager
-
         settings = load_settings()
         provider_manager = ProviderManager(settings.data_dir / "providers.json")
         dp = provider_manager.default_provider()
         if dp and dp.api_key and (dp.base_url or dp.provider_type):
-            try:
-                llm = ChatOpenAI(
-                    model=dp.model,
-                    temperature=0,
-                    api_key=dp.api_key,
-                    base_url=dp.base_url or None,
-                )
-                response = llm.invoke([
-                    {"role": "system", "content": TITLE_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message},
-                ])
-                title = coerce_message_content(response).strip().strip('"').strip("'")
-                if title and 3 <= len(title) <= 50:
-                    return title
-            except Exception:
-                pass
+            llm = ChatOpenAI(model=dp.model, temperature=0, api_key=dp.api_key, base_url=dp.base_url or None)
+            response = llm.invoke([
+                {"role": "system", "content": TITLE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ])
+            title = coerce_message_content(response).strip().strip('"').strip("'")
+            if title and 3 <= len(title) <= 50:
+                return title
     except Exception:
         pass
-
     return _default_title_from_message(user_message)
 
 
@@ -522,224 +493,17 @@ def prepare_agent_messages(
         if role not in {"user", "assistant", "system"} or content is None:
             continue
         prepared.append({"role": role, "content": str(content)})
-
     instruction = f"Reply in {language_name(language)}.\n{runtime_instruction(work_mode, access_mode)}"
     for index in range(len(prepared) - 1, -1, -1):
         if prepared[index]["role"] == "user":
-            prepared[index] = {
-                **prepared[index],
-                "content": f"{instruction}\n\n{prepared[index]['content']}",
-            }
+            prepared[index] = {**prepared[index], "content": f"{instruction}\n\n{prepared[index]['content']}"}
             return prepared
-
     return [{"role": "user", "content": instruction}]
-
-
-async def invoke_stage_model(llm: Any, system_prompt: str, messages: list[dict[str, str]]) -> str:
-    response = await llm.ainvoke([{"role": "system", "content": system_prompt}, *messages])
-    return coerce_message_content(response)
-
-
-def invoke_stage_model_sync(llm: Any, system_prompt: str, messages: list[dict[str, str]]) -> str:
-    response = llm.invoke([{"role": "system", "content": system_prompt}, *messages])
-    return coerce_message_content(response)
-
-
-def build_langchain_agent(
-    llm: Any,
-    tools: list[Any],
-    checkpointer: Any | None = None,
-    access_mode: AccessMode = "default",
-    approval_store: CommandApprovalStore | None = None,
-) -> Any:
-    from langchain.agents import create_agent
-
-    kwargs: dict[str, Any] = {
-        "model": llm,
-        "tools": tools,
-        "system_prompt": SYSTEM_PROMPT,
-        "middleware": command_approval_middleware(access_mode, approval_store),
-        "name": "coworker_single_agent",
-    }
-    if checkpointer is not None:
-        kwargs["checkpointer"] = checkpointer
-    return create_agent(**kwargs)
-
-
-def build_coworker_execution_graph(
-    llm: Any,
-    tools: list[Any],
-    access_mode: AccessMode = "default",
-    approval_store: CommandApprovalStore | None = None,
-) -> Any:
-    from langgraph.graph import END, START, StateGraph
-
-    async def planner(state: CoworkerExecutionState) -> dict[str, str]:
-        prompt = (
-            "You are the planner stage inside Coworker. Create a concise internal plan for the executor. "
-            "Do not use tools. Mention likely files, checks, and risks when relevant."
-        )
-        plan = await invoke_stage_model(llm, prompt, state.get("messages", []))
-        return {"plan": plan}
-
-    async def executor(state: CoworkerExecutionState) -> dict[str, str]:
-        plan = state.get("plan", "")
-        messages: list[dict[str, str]] = []
-        for message in state.get("messages", []):
-            role = str(message.get("role", ""))
-            if role not in {"user", "assistant"}:
-                continue
-            content = str(message.get("content") or "")
-            if role == "user" and not messages:
-                content = (
-                    "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
-                    f"{plan}\n\n---\n\n{content}"
-                )
-            messages.append({"role": role, "content": content})
-        if not messages:
-            messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
-                        f"{plan}"
-                    ),
-                }
-            ]
-        agent = build_langchain_agent(llm, tools, access_mode=access_mode, approval_store=approval_store)
-        result = await agent.ainvoke({"messages": messages})
-        agent_messages = result.get("messages", []) if isinstance(result, dict) else []
-        draft = coerce_message_content(agent_messages[-1]) if agent_messages else ""
-        return {"draft": draft}
-
-    async def verifier(state: CoworkerExecutionState) -> dict[str, str]:
-        prompt = (
-            "You are the verifier stage inside Coworker. Review the executor draft for correctness, safety, "
-            "missing verification, and whether it respected Plan/Build and access limits. Keep this internal and concise."
-        )
-        messages = [
-            *state.get("messages", []),
-            {"role": "assistant", "content": state.get("draft", "")},
-        ]
-        verification = await invoke_stage_model(llm, prompt, messages)
-        return {"verification": verification}
-
-    async def summarizer(state: CoworkerExecutionState) -> dict[str, str]:
-        prompt = (
-            f"You are the summarizer stage inside Coworker. Reply in {language_name(normalize_language(state.get('language')))}. "
-            "Produce the final user-facing answer from the executor draft and verifier notes. "
-            "Be concise, truthful about validation, and do not expose hidden chain-of-thought.\n\n"
-            f"Verifier notes:\n{state.get('verification', '')}"
-        )
-        messages = [
-            *state.get("messages", []),
-            {"role": "assistant", "content": f"Executor draft:\n{state.get('draft', '')}"},
-        ]
-        final = await invoke_stage_model(llm, prompt, messages)
-        return {"final": final}
-
-    builder = StateGraph(CoworkerExecutionState)
-    builder.add_node("planner", planner)
-    builder.add_node("executor", executor)
-    builder.add_node("verifier", verifier)
-    builder.add_node("summarizer", summarizer)
-    builder.add_edge(START, "planner")
-    builder.add_edge("planner", "executor")
-    builder.add_edge("executor", "verifier")
-    builder.add_edge("verifier", "summarizer")
-    builder.add_edge("summarizer", END)
-    return builder
-
-
-def build_coworker_execution_graph_sync(
-    llm: Any,
-    tools: list[Any],
-    access_mode: AccessMode = "default",
-    approval_store: CommandApprovalStore | None = None,
-) -> Any:
-    from langgraph.graph import END, START, StateGraph
-
-    def planner(state: CoworkerExecutionState) -> dict[str, str]:
-        prompt = (
-            "You are the planner stage inside Coworker. Create a concise internal plan for the executor. "
-            "Do not use tools. Mention likely files, checks, and risks when relevant."
-        )
-        plan = invoke_stage_model_sync(llm, prompt, state.get("messages", []))
-        return {"plan": plan}
-
-    def executor(state: CoworkerExecutionState) -> dict[str, str]:
-        plan = state.get("plan", "")
-        messages: list[dict[str, str]] = []
-        for message in state.get("messages", []):
-            role = str(message.get("role", ""))
-            if role not in {"user", "assistant"}:
-                continue
-            content = str(message.get("content") or "")
-            if role == "user" and not messages:
-                content = (
-                    "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
-                    f"{plan}\n\n---\n\n{content}"
-                )
-            messages.append({"role": role, "content": content})
-        if not messages:
-            messages = [
-                {
-                    "role": "user",
-                    "content": (
-                        "Executor stage. Use this internal plan as guidance, but prioritize the user's request and current tool results.\n\n"
-                        f"{plan}"
-                    ),
-                }
-            ]
-        agent = build_langchain_agent(llm, tools, access_mode=access_mode, approval_store=approval_store)
-        result = agent.invoke({"messages": messages})
-        agent_messages = result.get("messages", []) if isinstance(result, dict) else []
-        draft = coerce_message_content(agent_messages[-1]) if agent_messages else ""
-        return {"draft": draft}
-
-    def verifier(state: CoworkerExecutionState) -> dict[str, str]:
-        prompt = (
-            "You are the verifier stage inside Coworker. Review the executor draft for correctness, safety, "
-            "missing verification, and whether it respected Plan/Build and access limits. Keep this internal and concise."
-        )
-        messages = [
-            *state.get("messages", []),
-            {"role": "assistant", "content": state.get("draft", "")},
-        ]
-        verification = invoke_stage_model_sync(llm, prompt, messages)
-        return {"verification": verification}
-
-    def summarizer(state: CoworkerExecutionState) -> dict[str, str]:
-        prompt = (
-            f"You are the summarizer stage inside Coworker. Reply in {language_name(normalize_language(state.get('language')))}. "
-            "Produce the final user-facing answer from the executor draft and verifier notes. "
-            "Be concise, truthful about validation, and do not expose hidden chain-of-thought.\n\n"
-            f"Verifier notes:\n{state.get('verification', '')}"
-        )
-        messages = [
-            *state.get("messages", []),
-            {"role": "assistant", "content": f"Executor draft:\n{state.get('draft', '')}"},
-        ]
-        final = invoke_stage_model_sync(llm, prompt, messages)
-        return {"final": final}
-
-    builder = StateGraph(CoworkerExecutionState)
-    builder.add_node("planner", planner)
-    builder.add_node("executor", executor)
-    builder.add_node("verifier", verifier)
-    builder.add_node("summarizer", summarizer)
-    builder.add_edge(START, "planner")
-    builder.add_edge("planner", "executor")
-    builder.add_edge("executor", "verifier")
-    builder.add_edge("verifier", "summarizer")
-    builder.add_edge("summarizer", END)
-    return builder
 
 
 def format_user_message(message: str, attachments: list[dict[str, Any]] | None = None) -> str:
     if not attachments:
         return message
-
     parts = [message, "\n\nAttachments:"]
     for attachment in attachments:
         name = str(attachment.get("name") or "attachment")
@@ -758,6 +522,180 @@ def format_user_message(message: str, attachments: list[dict[str, Any]] | None =
     return "\n".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Reasoning-preserving ChatOpenAI adapter
+# ---------------------------------------------------------------------------
+
+class ReasonPreservingChatOpenAI:
+    """Factory that returns a :class:`ChatOpenAI` subclass which persists
+    ``reasoning_content`` in ``additional_kwargs`` for OpenAI-compatible
+    providers (DeepSeek, vLLM, Ollama, local proxy).
+
+    Needed because the base ``langchain-openai`` class deliberately discards
+    non‑standard delta fields in ``_convert_delta_to_message_chunk``.
+    """
+
+    @staticmethod
+    def create(model: str, temperature: float, api_key: str, base_url: str | None) -> Any:
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import AIMessageChunk
+
+        _original = ChatOpenAI._convert_chunk_to_generation_chunk
+
+        def _patched_convert(self: Any, chunk: dict, default_chunk_class: Any, base_generation_info: Any | None = None) -> Any:
+            gen_chunk = _original(self, chunk, default_chunk_class, base_generation_info)
+            if gen_chunk is None or gen_chunk.message is None:
+                return gen_chunk
+            msg = gen_chunk.message
+            if isinstance(msg, AIMessageChunk):
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                reasoning = delta.get("reasoning_content")
+                if isinstance(reasoning, str) and reasoning:
+                    additional = dict(getattr(msg, "additional_kwargs", {}) or {})
+                    existing = additional.get("reasoning", "")
+                    additional["reasoning"] = reasoning
+                    object.__setattr__(msg, "additional_kwargs", additional)
+            return gen_chunk
+
+        # Patch at the class level so bind() / model_copy() clones inherit it
+        ChatOpenAI._convert_chunk_to_generation_chunk = _patched_convert
+
+        return ChatOpenAI(
+            model=model, temperature=temperature, api_key=api_key, base_url=base_url,
+        )
+
+
+# ---------------------------------------------------------------------------
+# PlanGateMiddleware – enforces plan‑first semantics before the agent acts.
+# ---------------------------------------------------------------------------
+
+class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """In plan mode, runs a deterministic planner LLM pass and injects the
+    result as a ``SystemMessage`` marked with ``[CW-PLAN]`` into the agent
+    state before the first model call of a turn.
+
+    In build mode the middleware is a no‑op (codex‑style).
+
+    Also gates write/execute tools in plan mode via ``wrap_tool_call``.
+    """
+
+    def __init__(self, planner_llm: Any, language: Language = "en"):
+        self.planner_llm = planner_llm
+        self.language = language
+
+    def _is_plan_mode(self, state: CoworkerAgentState) -> bool:
+        return str(state.get("work_mode", "build")) == "plan"
+
+    def _already_planned(self, state: CoworkerAgentState) -> bool:
+        messages = state.get("messages", [])
+        for msg in messages:
+            content = getattr(msg, "content", "") or ""
+            if isinstance(content, str) and PLAN_MARKER in content:
+                return True
+        return False
+
+    def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        if not self._is_plan_mode(state):
+            return None
+        if self._already_planned(state):
+            return None
+
+        language = str(state.get("language", "en"))
+        lang_name = "Chinese" if language == "zh" else "English"
+        prompt = (
+            f"You are the planner stage inside Coworker. Create a concise internal plan "
+            f"for the upcoming task. Reply in {lang_name}. "
+            "Mention likely files, approach, checks, and risks when relevant. "
+            "Do not use tools. Output only the plan text."
+        )
+
+        user_message = ""
+        for msg in state.get("messages", []):
+            if getattr(msg, "type", None) == "human":
+                user_message = getattr(msg, "content", "") or ""
+                break
+
+        plan_text = ""
+        try:
+            response = self.planner_llm.invoke([
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_message or "Analyze the task and create a plan."},
+            ])
+            plan_text = coerce_message_content(response).strip()
+        except Exception:
+            plan_text = "Plan could not be generated. Proceed with best-effort analysis."
+
+        if plan_text:
+            stream_writer = getattr(runtime, "stream_writer", None)
+            if stream_writer is not None:
+                stream_writer({"type": "plan_start"})
+                stream_writer({"type": "plan_delta", "content": plan_text})
+                stream_writer({"type": "plan_end", "content": plan_text})
+
+        marker_msg = SystemMessage(content=f"{PLAN_MARKER}\n{plan_text}")
+        return {"messages": [marker_msg]}
+
+    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+        tool_name = getattr(request, "tool_name", "") or ""
+        if tool_name in _WRITE_TOOL_NAMES:
+            from langchain_core.messages import ToolMessage
+            return ToolMessage(
+                content=f"Tool '{tool_name}' is not available in plan mode. Use read-only tools only.",
+                tool_call_id=getattr(request, "tool_call_id", "unknown"),
+            )
+        return handler(request)
+
+
+# ---------------------------------------------------------------------------
+# Agent builder – single create_agent graph (official langchain idiom).
+# ---------------------------------------------------------------------------
+
+def build_coworker_agent_graph(
+    llm: Any,
+    tools: list[Any],
+    work_mode: WorkMode,
+    language: Language,
+    access_mode: AccessMode = "default",
+    checkpointer: Any | None = None,
+    approval_store: CommandApprovalStore | None = None,
+) -> Any:
+    """Compile the Coworker agent as a single ``create_agent`` graph.
+
+    The graph always includes ``HumanInTheLoopMiddleware`` (when
+    access_mode != full). In *plan* mode it also includes a
+    ``PlanGateMiddleware`` that runs a deterministic planning step.
+    """
+    from langchain.agents import create_agent
+
+    middleware: list[Any] = []
+
+    if work_mode == "plan":
+        middleware.append(PlanGateMiddleware(llm, language))
+
+    middleware.extend(command_approval_middleware(access_mode, approval_store))
+
+    system_prompt = (
+        f"Reply in {language_name(language)}.\n"
+        f"{runtime_instruction(work_mode, access_mode)}"
+    )
+
+    kwargs: dict[str, Any] = {
+        "model": llm,
+        "tools": tools,
+        "system_prompt": system_prompt,
+        "middleware": middleware,
+        "state_schema": CoworkerAgentState,
+        "name": "coworker_agent",
+    }
+    if checkpointer is not None:
+        kwargs["checkpointer"] = checkpointer
+    return create_agent(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Concrete runtimes
+# ---------------------------------------------------------------------------
+
 class SimulatedSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
 
@@ -769,18 +707,14 @@ class SimulatedSingleAgentRuntime(AgentRuntime):
         if language == "zh":
             content = (
                 "Coworker 正在以模拟提供商模式运行。\n\n"
-                f"工作区：{self.workspace.root}\n"
-                f"会话：{session_id}\n\n"
-                f"模式：{work_mode} / {access_mode}\n\n"
-                f"你说：{message}"
+                f"工作区：{self.workspace.root}\n会话：{session_id}\n\n"
+                f"模式：{work_mode} / {access_mode}\n\n你说：{message}"
             )
         else:
             content = (
                 "Coworker is running in simulated provider mode.\n\n"
-                f"Workspace: {self.workspace.root}\n"
-                f"Session: {session_id}\n\n"
-                f"Mode: {work_mode} / {access_mode}\n\n"
-                f"You said: {message}"
+                f"Workspace: {self.workspace.root}\nSession: {session_id}\n\n"
+                f"Mode: {work_mode} / {access_mode}\n\nYou said: {message}"
             )
         return AgentReply(content=content, mode=self.mode, provider="simulated")
 
@@ -789,231 +723,220 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(
-        self,
-        workspace: Workspace,
-        approval_store: CommandApprovalStore,
-        trace_store: AgentTraceStore,
-        checkpointer: Any,
-        provider: ProviderEntry,
-        model_override: str | None = None,
-    ):
-        from langchain_openai import ChatOpenAI
-
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None):
+        llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
-        self.llm = ChatOpenAI(
-            model=self.model_name,
-            temperature=0,
-            api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
-            base_url=self.openai_compatible_base_url(provider),
-        )
+        self.llm = llm_cls(model=self.model_name, temperature=0, api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed", base_url=self._openai_compatible_base_url(provider))
         self.workspace = workspace
         self.approval_store = approval_store
         self.trace_store = trace_store
         self.checkpointer = checkpointer
 
-    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
-        audit_context = {
-            "session_id": session_id,
-            "provider": self.provider_name,
-            "provider_id": self.provider_id,
-            "model": self.model_name,
-            "workspace_path": str(self.workspace.root),
-        }
-        current_trace_context = trace_context(
-            session_id=session_id,
-            provider=self.provider_name,
-            provider_id=self.provider_id,
-            model=self.model_name,
-            language=language,
-            work_mode=work_mode,
-            access_mode=access_mode,
-            streaming=False,
-        )
-        self.trace_store.record("run", "start", current_trace_context)
-        effective_access = access_mode if work_mode == "build" else "default"
-        graph = build_coworker_execution_graph_sync(
-            self.llm,
-            build_workspace_tools(self.workspace, work_mode == "build", audit_context),
-            access_mode=effective_access,
-            approval_store=self.approval_store,
-        ).compile(checkpointer=self.checkpointer)
-        try:
-            result = graph.invoke(
-                {
-                    "messages": prepare_agent_messages([{"role": "user", "content": message}], language, work_mode, access_mode),
-                    "language": language,
-                    "work_mode": work_mode,
-                    "access_mode": access_mode,
-                },
-                config=agent_run_config(
-                    session_id=session_id,
-                    provider=self.provider_name,
-                    model=self.model_name,
-                    language=language,
-                    work_mode=work_mode,
-                    access_mode=access_mode,
-                    streaming=False,
-                ),
-            )
-        except Exception as exc:
-            self.trace_store.record("run", "error", current_trace_context, {"error": str(exc)[:400]})
-            raise
-        if "__interrupt__" in result:
-            approvals = record_runtime_interrupts(
-                result["__interrupt__"],
-                self.approval_store,
-                {
-                    **audit_context,
-                    "language": language,
-                    "work_mode": work_mode,
-                    "access_mode": access_mode,
-                },
-            )
-            self.trace_store.record("interrupt", "pending", current_trace_context, {"approval_ids": [approval.get("id", "") for approval in approvals]})
-            approval_ids = ", ".join(str(approval.get("id", "")) for approval in approvals)
-            content = f"Command approval required: {approval_ids}" if language == "en" else f"命令需要审批：{approval_ids}"
-            return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
-        content = result.get("final", "") if isinstance(result, dict) else ""
-        self.trace_store.record("run", "done", current_trace_context, {"content_chars": len(str(content))})
-        return AgentReply(content=str(content), mode=self.mode, provider=self.provider_name)
-
     @staticmethod
-    def openai_compatible_base_url(provider: ProviderEntry) -> str:
+    def _openai_compatible_base_url(provider: ProviderEntry) -> str:
         base_url = provider.base_url.rstrip("/")
         if provider.provider_type == "ollama" and not base_url.endswith("/v1"):
             return f"{base_url}/v1"
         return base_url
+
+    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
+        audit_context = {
+            "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
+            "model": self.model_name, "workspace_path": str(self.workspace.root),
+        }
+        current_trace_context = trace_context(
+            session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
+            model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=False,
+        )
+        self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "run"})
+        effective_access = access_mode if work_mode == "build" else "default"
+        graph = build_coworker_agent_graph(
+            self.llm,
+            build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+            work_mode=work_mode,
+            language=language,
+            access_mode=effective_access,
+            checkpointer=self.checkpointer,
+            approval_store=self.approval_store,
+        )
+        try:
+            result = graph.invoke(
+                {"messages": prepare_agent_messages([{"role": "user", "content": message}], language, work_mode, access_mode), "work_mode": work_mode, "language": language},
+                config=agent_run_config(
+                    session_id=session_id, provider=self.provider_name, model=self.model_name,
+                    language=language, work_mode=work_mode, access_mode=access_mode, streaming=False,
+                ),
+            )
+        except Exception as exc:
+            self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
+            raise
+        if "__interrupt__" in result:
+            approvals = record_runtime_interrupts(
+                result["__interrupt__"], self.approval_store,
+                {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode},
+            )
+            self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
+            approval_ids = ", ".join(str(a.get("id", "")) for a in approvals)
+            content = f"Command approval required: {approval_ids}" if language == "en" else f"命令需要审批：{approval_ids}"
+            return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
+        messages = result.get("messages", []) if isinstance(result, dict) else []
+        content = coerce_message_content(messages[-1]) if messages else ""
+        self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(content)})
+        return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
 
 
 class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(
-        self,
-        workspace: Workspace,
-        approval_store: CommandApprovalStore,
-        trace_store: AgentTraceStore,
-        checkpoint_path: Path,
-        provider: ProviderEntry,
-        model_override: str | None = None,
-    ):
-        from langchain_openai import ChatOpenAI
-
-        llm = ChatOpenAI(
-            model=model_override or provider.model,
-            temperature=0,
-            api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
-            base_url=self.openai_compatible_base_url(provider),
-        )
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None):
+        llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
-        self.llm = llm
+        self.llm = llm_cls(model=self.model_name, temperature=0, api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed", base_url=self._openai_compatible_base_url(provider))
         self.workspace = workspace
         self.approval_store = approval_store
         self.trace_store = trace_store
         self.checkpoint_path = checkpoint_path
 
+    @staticmethod
+    def _openai_compatible_base_url(provider: ProviderEntry) -> str:
+        base_url = provider.base_url.rstrip("/")
+        if provider.provider_type == "ollama" and not base_url.endswith("/v1"):
+            return f"{base_url}/v1"
+        return base_url
+
     async def stream(
-        self,
-        messages: list[dict[str, Any]],
-        session_id: str,
-        language: Language,
-        work_mode: WorkMode,
-        access_mode: AccessMode,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
     ) -> AsyncGenerator[dict[str, Any], None]:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
         audit_context = {
-            "session_id": session_id,
-            "provider": self.provider_name,
-            "provider_id": self.provider_id,
-            "model": self.model_name,
-            "workspace_path": str(self.workspace.root),
+            "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
+            "model": self.model_name, "workspace_path": str(self.workspace.root),
         }
         current_trace_context = trace_context(
-            session_id=session_id,
-            provider=self.provider_name,
-            provider_id=self.provider_id,
-            model=self.model_name,
-            language=language,
-            work_mode=work_mode,
-            access_mode=access_mode,
-            streaming=True,
+            session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
+            model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
         )
-        interrupt_context = {
-            **audit_context,
-            "language": language,
-            "work_mode": work_mode,
-            "access_mode": access_mode,
-        }
-        self.trace_store.record("run", "start", current_trace_context)
+        interrupt_context = {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode}
+        self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "stream"})
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
-        prepared_messages = prepare_agent_messages(messages, language, work_mode, access_mode)
-        inputs: CoworkerExecutionState = {
-            "messages": prepared_messages,
-            "language": language,
-            "work_mode": work_mode,
-            "access_mode": access_mode,
-        }
-        content_parts: list[str] = []
-        effective_access = access_mode if work_mode == "build" else "default"
-        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
-            graph = build_coworker_execution_graph(
-                self.llm,
-                build_workspace_tools(self.workspace, work_mode == "build", audit_context),
-                access_mode=effective_access,
-                approval_store=self.approval_store,
-            ).compile(checkpointer=checkpointer)
-            try:
-                async for chunk in graph.astream(
-                    inputs,
-                    config=agent_run_config(
-                        session_id=session_id,
-                        provider=self.provider_name,
-                        model=self.model_name,
-                        language=language,
-                        work_mode=work_mode,
-                        access_mode=access_mode,
-                        streaming=True,
-                    ),
-                    stream_mode="updates",
-                ):
-                    if "__interrupt__" in chunk:
-                        approvals = record_runtime_interrupts(
-                            chunk["__interrupt__"],
-                            self.approval_store,
-                            interrupt_context,
-                        )
-                        self.trace_store.record("interrupt", "pending", current_trace_context, {"approval_ids": [approval.get("id", "") for approval in approvals]})
-                        for approval in approvals:
-                            yield stream_event_from_interrupt(approval)
-                        return
-                    for node_name, update in chunk.items():
-                        if not isinstance(update, dict):
-                            continue
-                        self.trace_store.record("stage", "done", current_trace_context, {"stage": node_name})
-                        yield stage_event(node_name)
-                        if node_name == "summarizer":
-                            final = str(update.get("final") or "")
-                            if final:
-                                yield {"type": "delta", "content": final}
-                                content_parts.append(final)
-            except Exception as exc:
-                self.trace_store.record("run", "error", current_trace_context, {"error": str(exc)[:400]})
-                raise
-        self.trace_store.record("run", "done", current_trace_context, {"content_chars": len("".join(content_parts))})
-        yield {"type": "done", "content": "".join(content_parts), "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
 
-    async def resume_interrupt(
-        self,
-        approval: dict[str, Any],
-        decisions: list[dict[str, Any]],
+        prepared_messages = prepare_agent_messages(messages, language, work_mode, access_mode)
+        effective_access = access_mode if work_mode == "build" else "default"
+
+        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
+            graph = build_coworker_agent_graph(
+                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+                work_mode=work_mode, language=language, access_mode=effective_access,
+                checkpointer=checkpointer, approval_store=self.approval_store,
+            )
+
+            inputs = {"messages": prepared_messages, "work_mode": work_mode, "language": language}
+            config = agent_run_config(
+                session_id=session_id, provider=self.provider_name, model=self.model_name,
+                language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
+            )
+
+            content_parts: list[str] = []
+            tool_state: dict[str, dict[str, Any]] = {}
+            parts: list[dict[str, Any]] = []
+
+            try:
+                async for stream_mode, chunk in graph.astream(inputs, config=config, stream_mode=["messages", "custom", "updates"]):
+                    if stream_mode == "messages":
+                        msg, _meta = chunk
+                        try:
+                            for event in self._handle_message_chunk(msg, content_parts, tool_state, parts):
+                                yield event
+                        except GeneratorExit:
+                            raise
+                        except Exception:
+                            pass
+                    elif stream_mode == "custom":
+                        if isinstance(chunk, dict):
+                            event_type = chunk.get("type", "")
+                            if event_type in ("plan_start", "plan_delta", "plan_end"):
+                                parts.append(chunk)
+                                yield chunk
+                    elif stream_mode == "updates":
+                        if "__interrupt__" in chunk:
+                            approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, interrupt_context)
+                            self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
+                            for approval in approvals:
+                                yield stream_event_from_interrupt(approval)
+                            return
+            except Exception as exc:
+                self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
+                raise
+
+        final_content = "".join(content_parts)
+        self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content)})
+        merged_parts = _merge_event_parts(parts)
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts}
+
+    def _handle_message_chunk(
+        self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        from langchain_core.messages import AIMessageChunk, ToolMessage
+
+        events: list[dict[str, Any]] = []
+
+        if isinstance(msg, AIMessageChunk):
+            reasoning = _extract_reasoning_from_chunk(msg)
+            if reasoning:
+                parts.append({"type": "reasoning_delta", "content": reasoning})
+                events.append({"type": "reasoning_delta", "content": reasoning})
+
+            text = getattr(msg, "content", "") or ""
+            if isinstance(text, str) and text:
+                content_parts.append(text)
+                events.append({"type": "delta", "content": text})
+
+            tool_call_chunks = getattr(msg, "tool_call_chunks", None) or []
+            for tc in tool_call_chunks:
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = tc.get("id") or ""
+                tc_name = tc.get("name") or ""
+                tc_args = tc.get("args") or ""
+
+                if not tc_id:
+                    continue
+
+                if tc_id not in tool_state:
+                    tool_state[tc_id] = {"name": tc_name or "", "input": "", "status": "running"}
+                    parts.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
+                    events.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
+                else:
+                    tool_state[tc_id]["input"] = tool_state[tc_id].get("input", "") + tc_args
+                    if tc_name:
+                        tool_state[tc_id]["name"] = tc_name
+                    part = {"type": "tool_delta", "id": tc_id, "input": tc_args}
+                    parts.append(part)
+                    events.append(part)
+
+        elif isinstance(msg, ToolMessage):
+            tc_id = getattr(msg, "tool_call_id", "") or ""
+            content = getattr(msg, "content", "") or ""
+            if tc_id in tool_state:
+                tool_state[tc_id]["status"] = "success"
+                tool_state[tc_id]["output"] = str(content)[:2000]
+                part = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": "success"}
+                parts.append(part)
+                events.append(part)
+            elif tc_id:
+                part = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": "success"}
+                parts.append(part)
+                events.append(part)
+
+        return events
+
+    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from langgraph.types import Command
 
@@ -1023,76 +946,62 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         work_mode = normalize_work_mode(str(context.get("work_mode") or "build"))
         access_mode = normalize_access_mode(str(context.get("access_mode") or "default"))
         audit_context = {
-            "session_id": session_id,
-            "provider": self.provider_name,
-            "provider_id": self.provider_id,
-            "model": self.model_name,
-            "workspace_path": str(self.workspace.root),
+            "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
+            "model": self.model_name, "workspace_path": str(self.workspace.root),
         }
         current_trace_context = trace_context(
-            session_id=session_id,
-            provider=self.provider_name,
-            provider_id=self.provider_id,
-            model=self.model_name,
-            language=language,
-            work_mode=work_mode,
-            access_mode=access_mode,
-            streaming=True,
+            session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
+            model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
         )
         content_parts: list[str] = []
         events: list[dict[str, Any]] = []
+        parts: list[dict[str, Any]] = []
         decision_types = ", ".join(str(item.get("type")) for item in decisions)
-        self.trace_store.record("interrupt", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
+        self.trace_store.record("agent_activity", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
         effective_access = access_mode if work_mode == "build" else "default"
-        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
-            graph = build_coworker_execution_graph(
-                self.llm,
-                build_workspace_tools(self.workspace, work_mode == "build", audit_context),
-                access_mode=effective_access,
-                approval_store=self.approval_store,
-            ).compile(checkpointer=checkpointer)
-            try:
-                async for chunk in graph.astream(
-                    Command(resume={"decisions": decisions}),
-                    config=agent_run_config(
-                        session_id=session_id,
-                        provider=self.provider_name,
-                        model=self.model_name,
-                        language=language,
-                        work_mode=work_mode,
-                        access_mode=access_mode,
-                        streaming=True,
-                    ),
-                    stream_mode="updates",
-                ):
-                    if "__interrupt__" in chunk:
-                        approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
-                        self.trace_store.record("interrupt", "pending", current_trace_context, {"approval_ids": [approval.get("id", "") for approval in approvals]})
-                        events.extend(stream_event_from_interrupt(item) for item in approvals)
-                        continue
-                    for node_name, update in chunk.items():
-                        if not isinstance(update, dict):
-                            continue
-                        self.trace_store.record("stage", "done", current_trace_context, {"stage": node_name, "resumed": True})
-                        events.append(stage_event(node_name))
-                        if node_name == "summarizer":
-                            final = str(update.get("final") or "")
-                            if final:
-                                content_parts.append(final)
-                                events.append({"type": "delta", "content": final})
-            except Exception as exc:
-                self.trace_store.record("run", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})
-                raise
-        self.trace_store.record("run", "done", current_trace_context, {"content_chars": len("".join(content_parts)), "resumed": True})
-        events.append({"type": "done", "content": "".join(content_parts), "mode": self.mode, "provider": self.provider_name, "model": self.model_name})
-        return events
 
-    @staticmethod
-    def openai_compatible_base_url(provider: ProviderEntry) -> str:
-        base_url = provider.base_url.rstrip("/")
-        if provider.provider_type == "ollama" and not base_url.endswith("/v1"):
-            return f"{base_url}/v1"
-        return base_url
+        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
+            graph = build_coworker_agent_graph(
+                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+                work_mode=work_mode, language=language, access_mode=effective_access,
+                checkpointer=checkpointer, approval_store=self.approval_store,
+            )
+            config = agent_run_config(
+                session_id=session_id, provider=self.provider_name, model=self.model_name,
+                language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
+            )
+            tool_state: dict[str, dict[str, Any]] = {}
+            try:
+                async for stream_mode, chunk in graph.astream(Command(resume={"decisions": decisions}), config=config, stream_mode=["messages", "custom", "updates"]):
+                    if stream_mode == "messages":
+                        msg, _meta = chunk
+                        try:
+                            for event in self._handle_message_chunk(msg, content_parts, tool_state, parts):
+                                events.append(event)
+                        except GeneratorExit:
+                            raise
+                        except Exception:
+                            pass
+                    elif stream_mode == "custom":
+                        if isinstance(chunk, dict):
+                            event_type = chunk.get("type", "")
+                            if event_type in ("plan_start", "plan_delta", "plan_end"):
+                                parts.append(chunk)
+                                events.append(chunk)
+                    elif stream_mode == "updates":
+                        if "__interrupt__" in chunk:
+                            approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
+                            self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals], "resumed": True})
+                            events.extend(stream_event_from_interrupt(item) for item in approvals)
+                            continue
+            except Exception as exc:
+                self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})
+                raise
+
+        final_content = "".join(content_parts)
+        self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
+        events.append({"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(parts)})
+        return events
 
 
 class SimulatedStreamRuntime(AgentStreamRuntime):
@@ -1102,30 +1011,19 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
         self.settings = settings
         self.workspace = workspace
 
-    async def stream(
-        self,
-        messages: list[dict[str, Any]],
-        session_id: str,
-        language: Language,
-        work_mode: WorkMode,
-        access_mode: AccessMode,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    async def stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AsyncGenerator[dict[str, Any], None]:
         user_message = messages[-1]["content"] if messages else ""
         if language == "zh":
             content = (
                 "Coworker 正在以模拟提供商模式运行。\n\n"
-                f"工作区：{self.workspace.root}\n"
-                f"会话：{session_id}\n\n"
-                f"模式：{work_mode} / {access_mode}\n\n"
-                f"你说：{user_message}"
+                f"工作区：{self.workspace.root}\n会话：{session_id}\n\n"
+                f"模式：{work_mode} / {access_mode}\n\n你说：{user_message}"
             )
         else:
             content = (
                 "Coworker is running in simulated provider mode.\n\n"
-                f"Workspace: {self.workspace.root}\n"
-                f"Session: {session_id}\n\n"
-                f"Mode: {work_mode} / {access_mode}\n\n"
-                f"You said: {user_message}"
+                f"Workspace: {self.workspace.root}\nSession: {session_id}\n\n"
+                f"Mode: {work_mode} / {access_mode}\n\nYou said: {user_message}"
             )
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": "simulated", "model": ""}
         for chunk in content:
@@ -1160,7 +1058,6 @@ class AgentRuntimeRegistry:
             if not provider:
                 raise RuntimeError(f"Provider {provider_id} is not enabled or not found")
             return replace(provider, model=model or provider.model)
-
         provider = self.provider_manager.default_provider()
         if provider and model:
             return replace(provider, model=model)
@@ -1175,15 +1072,7 @@ class AgentRuntimeRegistry:
         if provider:
             return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider)
         if self.settings.agent_provider == "openai":
-            env_provider = ProviderEntry(
-                id="env-openai",
-                name="Environment OpenAI",
-                provider_type="openai",
-                base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"),
-                api_key=os.getenv("OPENAI_API_KEY", ""),
-                model=self.settings.openai_model,
-                enabled=True,
-            )
+            env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
             return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace)
@@ -1198,35 +1087,11 @@ class AgentRuntimeRegistry:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if not provider and self.settings.agent_provider == "openai":
-            provider = ProviderEntry(
-                id="env-openai",
-                name="Environment OpenAI",
-                provider_type="openai",
-                base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"),
-                api_key=os.getenv("OPENAI_API_KEY", ""),
-                model=self.settings.openai_model,
-                enabled=True,
-            )
+            provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
         if not provider:
             if self.settings.agent_provider == "simulated":
                 return SimulatedStreamRuntime(self.settings, selected_workspace)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
             return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model)
-        raise RuntimeError(f"Unsupported agent mode: {mode}")
-
-    def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
-        return self.trace_store.list(limit)
-
-    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
-        if context.get("source") != "agent_langgraph_hitl":
-            return []
-        provider_id = str(context.get("provider_id") or "")
-        model = str(context.get("model") or "")
-        workspace_path = str(context.get("workspace_path") or "")
-        workspace = Workspace(Path(workspace_path), self.settings.data_dir / TOOL_AUDIT_FILENAME) if workspace_path else None
-        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace)
-        if not isinstance(runtime, OpenAICompatibleStreamRuntime):
-            raise RuntimeError("Only OpenAI-compatible LangGraph sessions can be resumed")
-        return await runtime.resume_interrupt(approval, decisions)
+        raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")

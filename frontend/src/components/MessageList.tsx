@@ -1,8 +1,11 @@
 import { Bot, FileText, Hammer, ListChecks, Loader2, Shield, ShieldCheck } from 'lucide-react';
 import { lazy, Suspense, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
-import type { ChatMessage } from '../types';
+import type { ChatMessage, MessagePart } from '../types';
 import { ScrollArea } from './ui/scroll-area';
+import { ThinkingBlock } from './ThinkingBlock';
+import { PlanBlock } from './PlanBlock';
+import { ToolCallCard } from './ToolCallCard';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
@@ -54,6 +57,13 @@ function renderContext(message: ChatMessage) {
   );
 }
 
+function groupParts(parts: MessagePart[]) {
+  const planParts = parts.filter((p) => p.type === 'plan');
+  const reasoningParts = parts.filter((p) => p.type === 'reasoning');
+  const toolParts = parts.filter((p) => p.type === 'tool');
+  return { planParts, reasoningParts, toolParts };
+}
+
 function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <div className="stream-row stream-row--user">
@@ -65,7 +75,11 @@ function UserMessage({ message }: { message: ChatMessage }) {
 function AssistantMessage({ message }: { message: ChatMessage }) {
   const isError = message.status === 'error';
   const isStopped = message.status === 'stopped';
-  const isRunningEmpty = message.status === 'running' && !message.content;
+  const isRunning = message.status === 'running';
+  const isRunningEmpty = isRunning && !message.content;
+  const parts = message.parts ?? [];
+  const { planParts, reasoningParts, toolParts } = groupParts(parts);
+
   return (
     <div className="stream-row stream-row--assistant">
       <div className="stream-avatar" aria-hidden="true">
@@ -76,6 +90,20 @@ function AssistantMessage({ message }: { message: ChatMessage }) {
           <span>{t('common.coworker')}</span>
         </div>
         {renderContext(message)}
+
+        {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
+        {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
+
+        {toolParts.length > 0 && (
+          <div className="tool-chain">
+            {toolParts.map((part) => {
+              if (part.type !== 'tool') return null;
+              const key = `${part.id}-${part.status}`;
+              return <ToolCallCard key={key} tool={part} />;
+            })}
+          </div>
+        )}
+
         {isError ? (
           <div className="stream-error">{message.content}</div>
         ) : isStopped ? (

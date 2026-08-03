@@ -15,7 +15,7 @@ import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { getLanguage, initLanguage, t, translateError } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function createMessage(
@@ -229,6 +229,7 @@ function App() {
     abortRef.current = controller;
     activeAssistantMessageIdRef.current = assistantMessageId;
     let streamedContent = '';
+    let localParts: MessagePart[] = [];
 
     const handleEvent = (event: StreamEvent) => {
       if (requestId !== requestSeqRef.current) return;
@@ -240,7 +241,76 @@ function App() {
       } else if (event.type === 'delta') {
         streamedContent += event.content;
         setMessages((current) =>
-          current.map((item) => (item.id === assistantMessageId ? { ...item, content: streamedContent } : item)),
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'reasoning_delta') {
+        const last = localParts[localParts.length - 1];
+        if (last && last.type === 'reasoning') {
+          last.content = event.content;
+        } else {
+          localParts.push({ type: 'reasoning', content: event.content });
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_start') {
+        localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_delta') {
+        const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+        if (toolPart) {
+          toolPart.input = (toolPart.input || '') + (event.input || '');
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_end') {
+        const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+        if (toolPart) {
+          toolPart.status = event.status === 'success' ? 'success' : 'error';
+          if (event.output) toolPart.output = event.output;
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'plan_start') {
+        localParts.push({ type: 'plan', content: '' });
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'plan_delta') {
+        const planPart = localParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
+        if (planPart) {
+          planPart.content += event.content;
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'plan_end') {
+        const planPart = localParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
+        if (planPart && event.content) {
+          planPart.content = event.content;
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
         );
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
@@ -265,7 +335,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: t('chat.waiting_resolution'), status: 'done' }
+              ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] }
               : item,
           ),
         );
@@ -275,10 +345,13 @@ function App() {
           sessionIdRef.current = event.session_id;
         }
         streamedContent = event.content || streamedContent;
+        if (event.parts && event.parts.length > 0) {
+          localParts = event.parts;
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: streamedContent, status: 'done' }
+              ? { ...item, content: streamedContent, status: 'done', parts: [...localParts] }
               : item,
           ),
         );
@@ -286,7 +359,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error' }
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts] }
               : item,
           ),
         );
@@ -430,17 +503,89 @@ function App() {
     if (!resumeId) return;
     const controller = new AbortController();
     const resumeSessionId = request.session_id || sessionIdRef.current || '';
+    let resumeContent = '';
+    let resumeParts: MessagePart[] = [];
     try {
       await chatService.subscribeApprovalEvents(
         resumeId,
         (event) => {
-          if (event.type === 'done' || event.type === 'delta') {
+          if (event.type === 'done') {
+            resumeContent = event.content || resumeContent;
+            if (event.parts && event.parts.length > 0) {
+              resumeParts = event.parts;
+            }
             setMessages((current) =>
-              current.map((item) => {
-                if (item.id !== request.messageId) return item;
-                if (event.type === 'done') return { ...item, content: event.content || item.content, status: 'done' };
-                return { ...item, content: event.content || item.content, status: 'running' as const };
-              }),
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'done' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'delta') {
+            resumeContent += event.content;
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'reasoning_delta') {
+            const last = resumeParts[resumeParts.length - 1];
+            if (last && last.type === 'reasoning') {
+              last.content = event.content;
+            } else {
+              resumeParts.push({ type: 'reasoning', content: event.content });
+            }
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'tool_start') {
+            resumeParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'tool_delta') {
+            const tp = resumeParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+            if (tp) tp.input = (tp.input || '') + (event.input || '');
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'tool_end') {
+            const tp = resumeParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+            if (tp) {
+              tp.status = event.status === 'success' ? 'success' : 'error';
+              if (event.output) tp.output = event.output;
+            }
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'plan_start') {
+            resumeParts.push({ type: 'plan', content: '' });
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'plan_delta') {
+            const pp = resumeParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
+            if (pp) pp.content += event.content;
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
+            );
+          } else if (event.type === 'plan_end') {
+            const pp = resumeParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
+            if (pp && event.content) pp.content = event.content;
+            setMessages((current) =>
+              current.map((item) =>
+                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
+              ),
             );
           } else if (event.type === 'stage') {
             setMessages((current) =>

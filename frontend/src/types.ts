@@ -15,6 +15,27 @@ export interface ComposerAttachment {
   error?: string;
 }
 
+export interface PartTool {
+  type: 'tool';
+  id: string;
+  name: string;
+  status: 'running' | 'success' | 'error';
+  input: string;
+  output?: string;
+}
+
+export interface PartReasoning {
+  type: 'reasoning';
+  content: string;
+}
+
+export interface PartPlan {
+  type: 'plan';
+  content: string;
+}
+
+export type MessagePart = PartTool | PartReasoning | PartPlan;
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -26,6 +47,7 @@ export interface ChatMessage {
   provider?: string;
   model?: string;
   attachments?: ComposerAttachment[];
+  parts?: MessagePart[];
 }
 
 export interface RuntimeConfig {
@@ -145,6 +167,7 @@ export interface SessionMessageRecord {
   provider?: string;
   model?: string;
   attachments?: ComposerAttachment[];
+  parts?: MessagePart[];
 }
 
 export interface SessionDetail {
@@ -323,6 +346,14 @@ export type StreamEvent =
   | { type: 'start'; session_id: string; mode: AgentMode; provider: string; model: string }
   | { type: 'stage'; name: string; status: string }
   | { type: 'delta'; content: string }
+  | { type: 'reasoning_delta'; content: string }
+  | { type: 'tool_start'; id: string; name: string; input: string }
+  | { type: 'tool_delta'; id: string; input: string }
+  | { type: 'tool_end'; id: string; output: string; status: string }
+  | { type: 'plan_start' }
+  | { type: 'plan_delta'; content: string }
+  | { type: 'plan_end'; content: string }
+  | { type: 'agent_activity'; name: string; status: string }
   | {
       type: 'approval_required';
       approval_id: string;
@@ -341,5 +372,5 @@ export type StreamEvent =
       approval_status: string;
       session_id?: string;
     }
-  | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string }
+  | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
   | { type: 'error'; error: string; session_id?: string };
