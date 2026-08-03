@@ -459,6 +459,7 @@ body.sidebar-resizing {
 }
 
 .sidebar-project__sessions {
+  overflow: hidden;
   display: grid;
   gap: 1px;
   padding: 2px 0 4px 18px;
