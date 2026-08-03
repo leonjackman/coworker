@@ -282,5 +282,14 @@
   "empty_project.title": "{name} has no sessions yet",
   "empty_project.description": "This project is bound to a workspace. Once you start the first task, the session will appear under the project.",
   "empty_project.start": "Start first session",
-  "runtime.retrying": "Auto-retrying backend connection…"
+  "runtime.retrying": "Auto-retrying backend connection…",
+  "message.copy": "Copy",
+  "message.copied": "Copied",
+  "message.edit": "Edit",
+  "message.regenerate": "Regenerate",
+  "message.rollback": "Revert",
+  "message.edit_placeholder": "Edit this message…",
+  "message.edit_save": "Save & regenerate",
+  "message.edit_cancel": "Cancel",
+  "message.rollback_confirm": "Revert this message? It and all following replies will be removed."
 }

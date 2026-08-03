@@ -496,6 +496,85 @@ ipcMain.handle('generate-title', async (event, payload) => {
   return requestBackend(`/sessions/${payload.session_id}/generateTitle`, 'POST', { first_user_message: payload.first_user_message });
 });
 
+function startStreamingRequest(requestId, path, payload, sender, eventName = 'chat-stream-event') {
+  const data = JSON.stringify(payload);
+  const options = {
+    hostname: BACKEND_HOST,
+    port: BACKEND_PORT,
+    path,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data),
+    },
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      res.setEncoding('utf8');
+      let buffer = '';
+      res.on('data', (chunk) => {
+        buffer += chunk;
+        let sepIndex;
+        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sepIndex);
+          buffer = buffer.slice(sepIndex + 2);
+          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
+          if (!dataLine) continue;
+          const raw = dataLine.slice(5).trim();
+          if (!raw) continue;
+          let parsed;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+          if (sender) sender.send(eventName, { requestId, event: parsed });
+        }
+      });
+      res.on('end', () => {
+        if (buffer) {
+          const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
+          if (dataLine) {
+            const raw = dataLine.slice(5).trim();
+            if (raw) {
+              try {
+                if (sender) sender.send(eventName, { requestId, event: JSON.parse(raw) });
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+        activeStreams.delete(requestId);
+        resolve({ status: 'ok' });
+      });
+    });
+
+    req.on('error', (e) => {
+      activeStreams.delete(requestId);
+      if (sender) sender.send(eventName, { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
+      resolve({ status: 'error' });
+    });
+
+    activeStreams.set(requestId, req);
+    req.write(data);
+    req.end();
+  });
+}
+
+ipcMain.handle('rollback-message', async (event, payload) => {
+  return requestBackend(`/sessions/${payload.session_id}/messages/${payload.message_id}/rollback`, 'POST', {});
+});
+
+ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id }) => {
+  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/regenerate`, {}, event.sender);
+});
+
+ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content }) => {
+  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/edit`, { content }, event.sender);
+});
+
 ipcMain.handle('list-projects', async () => {
   return requestBackend('/projects');
 });

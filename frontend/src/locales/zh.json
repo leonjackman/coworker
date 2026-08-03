@@ -282,5 +282,14 @@
   "empty_project.title": "{name} 还没有会话",
   "empty_project.description": "这个项目已经绑定 workspace。开始第一段任务后，会话会自动出现在项目下。",
   "empty_project.start": "开始第一个会话",
-  "runtime.retrying": "正在自动重试连接后端…"
+  "runtime.retrying": "正在自动重试连接后端…",
+  "message.copy": "复制",
+  "message.copied": "已复制",
+  "message.edit": "编辑",
+  "message.regenerate": "重新生成",
+  "message.rollback": "撤回",
+  "message.edit_placeholder": "修改这条消息…",
+  "message.edit_save": "保存并重新生成",
+  "message.edit_cancel": "取消",
+  "message.rollback_confirm": "确定撤回这条消息？它及其之后的回复都将被删除。"
 }

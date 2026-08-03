@@ -42,6 +42,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateTitle: (sessionId, firstUserMessage) =>
     ipcRenderer.invoke('generate-title', { session_id: sessionId, first_user_message: firstUserMessage }),
   getSession: (sessionId) => ipcRenderer.invoke('get-session', sessionId),
+  rollbackMessage: (sessionId, messageId) =>
+    ipcRenderer.invoke('rollback-message', { session_id: sessionId, message_id: messageId }),
+  streamRegenerateMessage: (requestId, sessionId, messageId, onEvent) => {
+    const listener = (_event, data) => {
+      if (data.requestId !== requestId) return;
+      onEvent(data.event);
+    };
+    ipcRenderer.on('chat-stream-event', listener);
+    return ipcRenderer.invoke('start-regenerate-stream', { requestId, session_id: sessionId, message_id: messageId }).finally(() => {
+      ipcRenderer.removeListener('chat-stream-event', listener);
+    });
+  },
+  streamEditMessage: (requestId, sessionId, messageId, content, onEvent) => {
+    const listener = (_event, data) => {
+      if (data.requestId !== requestId) return;
+      onEvent(data.event);
+    };
+    ipcRenderer.on('chat-stream-event', listener);
+    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content }).finally(() => {
+      ipcRenderer.removeListener('chat-stream-event', listener);
+    });
+  },
   listProjects: () => ipcRenderer.invoke('list-projects'),
   createProject: (payload) => ipcRenderer.invoke('create-project', payload),
   openDirectoryPicker: (options) => ipcRenderer.invoke('open-directory-picker', options),

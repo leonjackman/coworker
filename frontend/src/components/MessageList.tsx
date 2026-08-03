@@ -6,11 +6,15 @@ import { ScrollArea } from './ui/scroll-area';
 import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
 import { ToolCallCard } from './ToolCallCard';
+import { MessageActions } from './MessageActions';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
 interface MessageListProps {
   messages: ChatMessage[];
+  onEditMessage?: (messageId: string, content: string) => void;
+  onRegenerateMessage?: (messageId: string) => void;
+  onRollbackMessage?: (messageId: string) => void;
 }
 
 function renderContext(message: ChatMessage) {
@@ -64,19 +68,25 @@ function groupParts(parts: MessagePart[]) {
   return { planParts, reasoningParts, toolParts };
 }
 
-function UserMessage({ message }: { message: ChatMessage }) {
+function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; onEdit?: (content: string) => void; onRollback?: () => void }) {
   return (
     <div className="stream-row stream-row--user">
-      <div className="stream-bubble stream-bubble--user">{message.content}</div>
+      <div className="stream-bubble-wrap">
+        <div className="stream-bubble stream-bubble--user">{message.content}</div>
+        {!message.content.includes(t('chat.waiting_resolution')) && (
+          <MessageActions role="user" content={message.content} onEdit={onEdit} onRollback={onRollback} />
+        )}
+      </div>
     </div>
   );
 }
 
-function AssistantMessage({ message }: { message: ChatMessage }) {
+function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onRegenerate?: () => void }) {
   const isError = message.status === 'error';
   const isStopped = message.status === 'stopped';
   const isRunning = message.status === 'running';
   const isRunningEmpty = isRunning && !message.content;
+  const isWaiting = message.content.includes(t('chat.waiting_resolution'));
   const parts = message.parts ?? [];
   const { planParts, reasoningParts, toolParts } = groupParts(parts);
 
@@ -118,12 +128,16 @@ function AssistantMessage({ message }: { message: ChatMessage }) {
             <MarkdownContent content={message.content} />
           </Suspense>
         )}
+
+        {!isRunning && !isRunningEmpty && !isWaiting && (
+          <MessageActions role="assistant" content={message.content} onRegenerate={onRegenerate} />
+        )}
       </div>
     </div>
   );
 }
 
-export function MessageList({ messages }: MessageListProps) {
+function MessageListView({ messages, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
   return (
     <ScrollArea className="messages">
       <section className="stream-wall" aria-live="polite">
@@ -142,12 +156,33 @@ export function MessageList({ messages }: MessageListProps) {
 
         {messages.map((message) =>
           message.role === 'user' ? (
-            <UserMessage key={message.id} message={message} />
+            <UserMessage
+              key={message.id}
+              message={message}
+              onEdit={onEditMessage ? (content) => onEditMessage(message.id, content) : undefined}
+              onRollback={onRollbackMessage ? () => onRollbackMessage(message.id) : undefined}
+            />
           ) : (
-            <AssistantMessage key={message.id} message={message} />
+            <AssistantMessage
+              key={message.id}
+              message={message}
+              onRegenerate={onRegenerateMessage ? () => onRegenerateMessage(message.id) : undefined}
+            />
           ),
         )}
       </section>
     </ScrollArea>
+  );
+}
+
+export function MessageList(props: MessageListProps) {
+  const { messages, onEditMessage, onRegenerateMessage, onRollbackMessage } = props;
+  return (
+    <MessageListView
+      messages={messages}
+      onEditMessage={onEditMessage}
+      onRegenerateMessage={onRegenerateMessage}
+      onRollbackMessage={onRollbackMessage}
+    />
   );
 }

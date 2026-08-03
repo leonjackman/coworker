@@ -417,6 +417,166 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
     return {"status": "ok", "title": new_title}
 
 
+class EditMessageRequest(BaseModel):
+    content: str
+
+
+def request_language_for_session(session) -> str:
+    return "en" if getattr(session, "_language", "zh") == "en" else "zh"
+
+
+def _provider_id_for_model(provider_name: str, model: str) -> str:
+    if provider_name:
+        try:
+            config = provider_manager.load()
+            for provider in config.providers:
+                if provider.name == provider_name or provider.model == model:
+                    return provider.id
+        except Exception:
+            pass
+    return ""
+
+
+def _session_message_history(session) -> list[dict[str, Any]]:
+    """Build the message history (role/content) that should be replayed when
+    re-running the agent from a truncated point."""
+    history = []
+    for message in session.messages:
+        if message.role not in {"user", "assistant"} or not message.content:
+            continue
+        if message.role == "user":
+            history.append({"role": "user", "content": format_user_message(message.content, message.attachments)})
+        else:
+            history.append({"role": "assistant", "content": message.content})
+    return history
+
+
+def _session_provider_context(session) -> tuple[str, str]:
+    for message in reversed(session.messages):
+        if message.role == "assistant" and message.provider:
+            return message.provider, message.model
+    return "", ""
+
+
+@app.post("/sessions/{session_id}/messages/{message_id}/rollback")
+async def rollback_message(session_id: str, message_id: str):
+    """Revert the conversation to the state right before the given message.
+    The target message and everything after it are truncated; the agent
+    checkpoint is reset so the next turn continues from that point."""
+    try:
+        session_store.truncate_before(session_id, message_id)
+        agent_registry.forget_runtime_checkpoint(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session = session_store.require(session_id)
+    return {"status": "ok", "messages": [m.__dict__ for m in session.messages]}
+
+
+@app.post("/sessions/{session_id}/messages/{message_id}/regenerate")
+async def regenerate_message(session_id: str, message_id: str):
+    """Re-run the assistant reply for the user message that precedes the given
+    assistant message (or, if given a user message, for that user message).
+    Truncates after that user message and streams a fresh reply."""
+    try:
+        session = session_store.require(session_id)
+        index = session_store.find_message_index(session_id, message_id)
+        target_message = session.messages[index]
+        # Walk back to the triggering user message.
+        user_index = index
+        if target_message.role == "assistant":
+            user_index = index - 1
+        while user_index >= 0 and session.messages[user_index].role != "user":
+            user_index -= 1
+        if user_index < 0:
+            raise HTTPException(status_code=400, detail="No user message to regenerate from")
+        user_message = session.messages[user_index]
+        session_store.truncate_from(session_id, user_message.id)
+        agent_registry.forget_runtime_checkpoint(session_id)
+        session = session_store.require(session_id)
+        history = _session_message_history(session)
+        provider_name, model = _session_provider_context(session)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    work_mode = normalize_work_mode(session.work_mode)
+    access_mode = normalize_access_mode(session.access_mode)
+    language = request_language_for_session(session)
+    provider_id = _provider_id_for_model(provider_name, model)
+
+    async def event_stream():
+        try:
+            async for event in agent_registry.rerun_stream(
+                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model,
+            ):
+                event["session_id"] = session_id
+                if event.get("type") == "done":
+                    try:
+                        session_store.append_message(
+                            session_id,
+                            role="assistant",
+                            content=event["content"],
+                            mode="single",
+                            provider=event.get("provider") or provider_name,
+                            model=event.get("model") or model,
+                            parts=event.get("parts") or [],
+                        )
+                    except KeyError:
+                        pass
+                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/sessions/{session_id}/messages/{message_id}/edit")
+async def edit_message(session_id: str, message_id: str, request: EditMessageRequest):
+    """Edit a user message and re-run the conversation from that point."""
+    try:
+        session = session_store.require(session_id)
+        index = session_store.find_message_index(session_id, message_id)
+        if session.messages[index].role != "user":
+            raise HTTPException(status_code=400, detail="Only user messages can be edited")
+        session_store.update_message_content(session_id, message_id, request.content)
+        session_store.truncate_from(session_id, message_id)
+        agent_registry.forget_runtime_checkpoint(session_id)
+        session = session_store.require(session_id)
+        history = _session_message_history(session)
+        provider_name, model = _session_provider_context(session)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    work_mode = normalize_work_mode(session.work_mode)
+    access_mode = normalize_access_mode(session.access_mode)
+    language = request_language_for_session(session)
+    provider_id = _provider_id_for_model(provider_name, model)
+
+    async def event_stream():
+        try:
+            async for event in agent_registry.rerun_stream(
+                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model,
+            ):
+                event["session_id"] = session_id
+                if event.get("type") == "done":
+                    try:
+                        session_store.append_message(
+                            session_id,
+                            role="assistant",
+                            content=event["content"],
+                            mode="single",
+                            provider=event.get("provider") or provider_name,
+                            model=event.get("model") or model,
+                            parts=event.get("parts") or [],
+                        )
+                    except KeyError:
+                        pass
+                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/projects")
 async def list_projects():
     projects = []

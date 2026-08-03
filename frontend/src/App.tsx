@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
+import { EditMessageBanner } from './components/EditMessageBanner';
 import { PendingDocks } from './components/PendingDocks';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
@@ -439,6 +440,302 @@ function App() {
     requestSeqRef.current += 1;
     abortRef.current = null;
     activeAssistantMessageIdRef.current = undefined;
+  };
+
+  const [editingMessage, setEditingMessage] = useState<{ id: string; content: string } | null>(null);
+
+  const commitEditMessage = async (messageId: string, content: string) => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId) return;
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    setEditingMessage(null);
+    setIsThinking(true);
+    const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setMessages((current) => {
+      const index = current.findIndex((m) => m.id === messageId);
+      if (index < 0) return current;
+      const truncated = current.slice(0, index + 1);
+      return [
+        ...truncated.map((m) => (m.id === messageId ? { ...m, content: trimmed, status: 'done' as const } : m)),
+        createMessage('assistant', '', {
+          id: assistantMessageId,
+          status: 'running',
+          work_mode: workMode,
+          access_mode: accessMode,
+        }),
+      ];
+    });
+    let streamedContent = '';
+    let localParts: MessagePart[] = [];
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const handleEvent = (event: StreamEvent) => {
+      if (event.type === 'delta') {
+        streamedContent += event.content;
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'reasoning_delta') {
+        const last = localParts[localParts.length - 1];
+        if (last && last.type === 'reasoning') {
+          last.content = event.content;
+        } else {
+          localParts.push({ type: 'reasoning', content: event.content });
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_start') {
+        localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_end') {
+        const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+        if (toolPart) {
+          toolPart.status = event.status === 'success' ? 'success' : 'error';
+          if (event.output) toolPart.output = event.output;
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'plan_start' || event.type === 'plan_delta' || event.type === 'plan_end') {
+        if (event.type === 'plan_start') {
+          localParts.push({ type: 'plan', content: '' });
+        } else {
+          const planPart = localParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
+          if (planPart) {
+            if (event.type === 'plan_delta') planPart.content += event.content;
+            else if (event.type === 'plan_end' && event.content) planPart.content = event.content;
+          }
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'approval_required' || event.type === 'question_required') {
+        const pending: PendingRequest = {
+          approval_id: event.approval_id,
+          kind: event.type === 'approval_required' ? 'command' : 'question',
+          session_id: currentSessionId,
+          approval_status: event.approval_status,
+          messageId: assistantMessageId,
+          ...(event.type === 'approval_required' ? { command: event.command, cwd: event.cwd } : {}),
+          ...(event.question !== undefined ? { question: event.question } : {}),
+          ...(event.header !== undefined ? { header: event.header } : {}),
+          ...(event.options !== undefined ? { options: event.options } : {}),
+          ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+        };
+        setPendingRequests((current) => [...current, pending]);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'done') {
+        streamedContent = event.content || streamedContent;
+        if (event.parts && event.parts.length > 0) localParts = event.parts;
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'error') {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts] }
+              : item,
+          ),
+        );
+      }
+    };
+    try {
+      await chatService.streamEditMessage(currentSessionId, messageId, trimmed, handleEvent, controller.signal);
+      await refreshSessions();
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to edit message:', error);
+      if ((error as Error).name !== 'AbortError') {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error' }
+              : item,
+          ),
+        );
+      }
+    } finally {
+      setIsThinking(false);
+      abortRef.current = null;
+      requestSeqRef.current += 1;
+    }
+  };
+
+  const handleRegenerateMessage = async (messageId: string) => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId || isThinking) return;
+    setIsThinking(true);
+    const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setMessages((current) => {
+      const index = current.findIndex((m) => m.id === messageId);
+      if (index < 0) return current;
+      const truncated = current.slice(0, index);
+      return [
+        ...truncated,
+        createMessage('assistant', '', {
+          id: assistantMessageId,
+          status: 'running',
+          work_mode: workMode,
+          access_mode: accessMode,
+        }),
+      ];
+    });
+    let streamedContent = '';
+    let localParts: MessagePart[] = [];
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const handleEvent = (event: StreamEvent) => {
+      if (event.type === 'delta') {
+        streamedContent += event.content;
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'reasoning_delta') {
+        const last = localParts[localParts.length - 1];
+        if (last && last.type === 'reasoning') {
+          last.content = event.content;
+        } else {
+          localParts.push({ type: 'reasoning', content: event.content });
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_start') {
+        localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_end') {
+        const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+        if (toolPart) {
+          toolPart.status = event.status === 'success' ? 'success' : 'error';
+          if (event.output) toolPart.output = event.output;
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'plan_start' || event.type === 'plan_delta' || event.type === 'plan_end') {
+        if (event.type === 'plan_start') {
+          localParts.push({ type: 'plan', content: '' });
+        } else {
+          const planPart = localParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
+          if (planPart) {
+            if (event.type === 'plan_delta') planPart.content += event.content;
+            else if (event.type === 'plan_end' && event.content) planPart.content = event.content;
+          }
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'approval_required' || event.type === 'question_required') {
+        const pending: PendingRequest = {
+          approval_id: event.approval_id,
+          kind: event.type === 'approval_required' ? 'command' : 'question',
+          session_id: currentSessionId,
+          approval_status: event.approval_status,
+          messageId: assistantMessageId,
+          ...(event.type === 'approval_required' ? { command: event.command, cwd: event.cwd } : {}),
+          ...(event.question !== undefined ? { question: event.question } : {}),
+          ...(event.header !== undefined ? { header: event.header } : {}),
+          ...(event.options !== undefined ? { options: event.options } : {}),
+          ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+        };
+        setPendingRequests((current) => [...current, pending]);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'done') {
+        streamedContent = event.content || streamedContent;
+        if (event.parts && event.parts.length > 0) localParts = event.parts;
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'error') {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts] }
+              : item,
+          ),
+        );
+      }
+    };
+    try {
+      await chatService.streamRegenerateMessage(currentSessionId, messageId, handleEvent, controller.signal);
+      await refreshSessions();
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to regenerate message:', error);
+      if ((error as Error).name !== 'AbortError') {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error' }
+              : item,
+          ),
+        );
+      }
+    } finally {
+      setIsThinking(false);
+      abortRef.current = null;
+      requestSeqRef.current += 1;
+    }
+  };
+
+  const handleRollbackMessage = async (messageId: string) => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId) return;
+    if (!window.confirm(t('message.rollback_confirm'))) return;
+    try {
+      const response = await chatService.rollbackMessage(currentSessionId, messageId);
+      const remaining = response.messages.map((m) =>
+        createMessage(m.role as 'user' | 'assistant', m.content, {
+          id: m.id,
+          status: 'done',
+          parts: (m.parts as MessagePart[]) ?? [],
+        }),
+      );
+      setMessages(remaining);
+      await refreshSessions();
+      await refreshProjects();
+    } catch (error) {
+      console.error('Failed to rollback message:', error);
+    }
   };
 
   const pendingRequestsRef = useRef<PendingRequest[]>([]);
@@ -988,7 +1285,14 @@ function App() {
                     />
                   ) : (
                     <>
-                      <MessageList messages={messages} />
+                      <MessageList
+                        messages={messages}
+                        onEditMessage={(messageId, content) => {
+                          setEditingMessage({ id: messageId, content });
+                        }}
+                        onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
+                        onRollbackMessage={(messageId) => void handleRollbackMessage(messageId)}
+                      />
                       <div ref={bottomRef} />
                     </>
                   )}
@@ -1005,6 +1309,14 @@ function App() {
                           }}
                         />
                       </div>
+                    ) : editingMessage ? (
+                      <EditMessageBanner
+                        initialContent={editingMessage.content}
+                        onSave={(content) => void commitEditMessage(editingMessage.id, content)}
+                        onCancel={() => {
+                          setEditingMessage(null);
+                        }}
+                      />
                     ) : (
                       <ChatInput
                         value={input}

@@ -203,3 +203,37 @@ class SessionStore:
             session.title = _title_from_message(content)
         self.save(session)
         return session
+
+    def find_message_index(self, session_id: str, message_id: str) -> int:
+        session = self.require(session_id)
+        for index, message in enumerate(session.messages):
+            if message.id == message_id:
+                return index
+        raise KeyError(f"message {message_id} not found in session {session_id}")
+
+    def truncate_from(self, session_id: str, message_id: str) -> list[SessionMessage]:
+        """Truncate the session so it keeps only messages up to and including
+        the given message id. Returns the remaining messages."""
+        session = self.require(session_id)
+        index = self.find_message_index(session_id, message_id)
+        session.messages = session.messages[: index + 1]
+        self.save(session)
+        return session.messages
+
+    def truncate_before(self, session_id: str, message_id: str) -> list[SessionMessage]:
+        """Truncate the session so it keeps only messages strictly before the
+        given message id (the target message is dropped too). Returns the
+        remaining messages."""
+        session = self.require(session_id)
+        index = self.find_message_index(session_id, message_id)
+        session.messages = session.messages[:index]
+        self.save(session)
+        return session.messages
+
+    def update_message_content(self, session_id: str, message_id: str, content: str) -> SessionMessage:
+        session = self.require(session_id)
+        index = self.find_message_index(session_id, message_id)
+        message = session.messages[index]
+        message.content = content
+        self.save(session)
+        return message

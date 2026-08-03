@@ -16,6 +16,7 @@ import type {
   RuntimeConfig,
   RuntimeConfigUpdate,
   SessionDetailResponse,
+  SessionMessageRecord,
   SessionResponse,
   SessionsListResponse,
   StreamEvent,
@@ -82,6 +83,9 @@ export interface ChatService {
   listCommandApprovals: () => Promise<CommandApprovalsResponse>;
   resolveCommandApproval: (approvalId: string, decision: ApprovalDecisionPayload) => Promise<CommandApprovalResponse>;
   subscribeApprovalEvents: (resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
+  rollbackMessage: (sessionId: string, messageId: string) => Promise<{ status: string; messages: SessionMessageRecord[] }>;
+  streamRegenerateMessage: (sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
+  streamEditMessage: (sessionId: string, messageId: string, content: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
 }
 
 class ElectronChatService implements ChatService {
@@ -218,6 +222,41 @@ class ElectronChatService implements ChatService {
     const detachAbortListener = attachAbortListener(signal, abortStream);
     try {
       await window.electronAPI.streamApprovalEvents(requestId, resumeId, onEvent);
+    } finally {
+      detachAbortListener();
+    }
+  }
+
+  async rollbackMessage(sessionId: string, messageId: string): Promise<{ status: string; messages: SessionMessageRecord[] }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.rollbackMessage(sessionId, messageId);
+  }
+
+  async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    if (signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    const requestId = `regenerate-${messageId}-${Date.now()}`;
+    const abortStream = () => window.electronAPI?.abortChatStream(requestId);
+    const detachAbortListener = attachAbortListener(signal, abortStream);
+    try {
+      await window.electronAPI.streamRegenerateMessage(requestId, sessionId, messageId, onEvent);
+    } finally {
+      detachAbortListener();
+    }
+  }
+
+  async streamEditMessage(sessionId: string, messageId: string, content: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    if (signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    const requestId = `edit-${messageId}-${Date.now()}`;
+    const abortStream = () => window.electronAPI?.abortChatStream(requestId);
+    const detachAbortListener = attachAbortListener(signal, abortStream);
+    try {
+      await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, onEvent);
     } finally {
       detachAbortListener();
     }
@@ -471,6 +510,66 @@ class HttpChatService implements ChatService {
             onEvent(JSON.parse(raw) as StreamEvent);
           } catch {
             // skip malformed frames
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  async rollbackMessage(sessionId: string, messageId: string): Promise<{ status: string; messages: SessionMessageRecord[] }> {
+    return this.request<{ status: string; messages: SessionMessageRecord[] }>(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/rollback`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    );
+  }
+
+  async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate`, {}, onEvent, signal);
+  }
+
+  async streamEditMessage(sessionId: string, messageId: string, content: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, { content }, onEvent, signal);
+  }
+
+  private async streamPost(path: string, payload: Record<string, unknown>, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    const response = await fetch(`${BACKEND_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      ...(signal instanceof AbortSignal ? { signal } : {}),
+    });
+    if (!response.ok) {
+      let detail = `Backend returned ${response.status}`;
+      try {
+        const body = await response.json();
+        detail = body.detail || detail;
+      } catch {
+        // ignore
+      }
+      throw new Error(detail);
+    }
+    if (!response.body) return;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) {
+          const line = frame.split('\n').find((item) => item.startsWith('data:'));
+          if (!line) continue;
+          const raw = line.slice(5).trim();
+          if (!raw) continue;
+          try {
+            onEvent(JSON.parse(raw) as StreamEvent);
+          } catch {
+            // skip
           }
         }
       }

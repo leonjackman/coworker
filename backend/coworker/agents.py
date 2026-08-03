@@ -1011,6 +1011,24 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     async def stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
     ) -> AsyncGenerator[dict[str, Any], None]:
+        async for event in self._stream(messages, session_id, language, work_mode, access_mode, rerun=False):
+            yield event
+
+    async def stream_rerun(
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Re-run the agent from a full message history (rollback/regenerate/edit).
+
+        Unlike ``stream``, this treats the given messages as the complete initial
+        state (no checkpoint append). The session checkpoint must already have
+        been reset by the caller so the history is rebuilt from scratch.
+        """
+        async for event in self._stream(messages, session_id, language, work_mode, access_mode, rerun=True):
+            yield event
+
+    async def _stream(
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode, *, rerun: bool,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
         audit_context = {
@@ -1022,7 +1040,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
         )
         interrupt_context = {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode}
-        self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "stream"})
+        self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "rerun" if rerun else "stream"})
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
 
         prepared_messages = prepare_agent_messages(messages, language, work_mode, access_mode)
@@ -1311,3 +1329,24 @@ class AgentRuntimeRegistry:
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
         runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace)
         return await runtime.resume_interrupt(approval, decisions)
+
+    def _stream_runtime_from_context(self, context: dict[str, Any]) -> AgentStreamRuntime:
+        provider_id = str(context.get("provider_id") or "")
+        model = str(context.get("model") or "")
+        workspace_path = context.get("workspace_path")
+        workspace = None
+        if workspace_path:
+            from pathlib import Path
+            workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
+        return self.get_stream_runtime("single", provider_id or None, model or None, workspace)
+
+    async def rerun_stream(
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
+        provider_id: str | None = None, model: str | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Reset the session checkpoint and re-run the agent from full history."""
+        self.forget_runtime_checkpoint(session_id)
+        context = {"provider_id": provider_id or "", "model": model or ""}
+        runtime = self._stream_runtime_from_context(context)
+        async for event in runtime.stream_rerun(messages, session_id, language, work_mode, access_mode):
+            yield event
