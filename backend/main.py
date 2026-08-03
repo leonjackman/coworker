@@ -419,6 +419,8 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
 
 class EditMessageRequest(BaseModel):
     content: str
+    work_mode: Optional[str] = None
+    access_mode: Optional[str] = None
 
 
 def request_language_for_session(session) -> str:
@@ -546,8 +548,13 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    work_mode = normalize_work_mode(session.work_mode)
-    access_mode = normalize_access_mode(session.access_mode)
+    work_mode = normalize_work_mode(request.work_mode or session.work_mode)
+    access_mode = normalize_access_mode(request.access_mode or session.access_mode)
+    if request.work_mode or request.access_mode:
+        try:
+            session_store.update_modes(session_id, work_mode, access_mode)
+        except KeyError:
+            pass
     language = request_language_for_session(session)
     provider_id = _provider_id_for_model(provider_name, model)
 

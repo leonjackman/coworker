@@ -571,8 +571,11 @@ ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id,
   return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/regenerate`, {}, event.sender);
 });
 
-ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content }) => {
-  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/edit`, { content }, event.sender);
+ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, access_mode }) => {
+  const payload = { content };
+  if (work_mode) payload.work_mode = work_mode;
+  if (access_mode) payload.access_mode = access_mode;
+  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/edit`, payload, event.sender);
 });
 
 ipcMain.handle('list-projects', async () => {

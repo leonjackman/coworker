@@ -54,13 +54,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('chat-stream-event', listener);
     });
   },
-  streamEditMessage: (requestId, sessionId, messageId, content, onEvent) => {
+  streamEditMessage: (requestId, sessionId, messageId, content, onEvent, options) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;
       onEvent(data.event);
     };
     ipcRenderer.on('chat-stream-event', listener);
-    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content }).finally(() => {
+    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content, work_mode: options?.work_mode, access_mode: options?.access_mode }).finally(() => {
       ipcRenderer.removeListener('chat-stream-event', listener);
     });
   },

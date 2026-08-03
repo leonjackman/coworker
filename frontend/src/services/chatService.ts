@@ -85,7 +85,13 @@ export interface ChatService {
   subscribeApprovalEvents: (resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   rollbackMessage: (sessionId: string, messageId: string) => Promise<{ status: string; messages: SessionMessageRecord[] }>;
   streamRegenerateMessage: (sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
-  streamEditMessage: (sessionId: string, messageId: string, content: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
+  streamEditMessage: (
+    sessionId: string,
+    messageId: string,
+    content: string,
+    onEvent: StreamEventCallback,
+    options?: { signal?: AbortSignalLike; workMode?: string; accessMode?: string },
+  ) => Promise<void>;
 }
 
 class ElectronChatService implements ChatService {
@@ -247,8 +253,15 @@ class ElectronChatService implements ChatService {
     }
   }
 
-  async streamEditMessage(sessionId: string, messageId: string, content: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+  async streamEditMessage(
+    sessionId: string,
+    messageId: string,
+    content: string,
+    onEvent: StreamEventCallback,
+    options?: { signal?: AbortSignalLike; workMode?: string; accessMode?: string },
+  ): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const signal = options?.signal;
     if (signal?.aborted) {
       throw new DOMException('The operation was aborted.', 'AbortError');
     }
@@ -256,7 +269,10 @@ class ElectronChatService implements ChatService {
     const abortStream = () => window.electronAPI?.abortChatStream(requestId);
     const detachAbortListener = attachAbortListener(signal, abortStream);
     try {
-      await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, onEvent);
+      await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, onEvent, {
+        work_mode: options?.workMode,
+        access_mode: options?.accessMode,
+      });
     } finally {
       detachAbortListener();
     }
@@ -529,8 +545,17 @@ class HttpChatService implements ChatService {
     await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate`, {}, onEvent, signal);
   }
 
-  async streamEditMessage(sessionId: string, messageId: string, content: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
-    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, { content }, onEvent, signal);
+  async streamEditMessage(
+    sessionId: string,
+    messageId: string,
+    content: string,
+    onEvent: StreamEventCallback,
+    options?: { signal?: AbortSignalLike; workMode?: string; accessMode?: string },
+  ): Promise<void> {
+    const payload: Record<string, unknown> = { content };
+    if (options?.workMode) payload.work_mode = options.workMode;
+    if (options?.accessMode) payload.access_mode = options.accessMode;
+    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, payload, onEvent, options?.signal);
   }
 
   private async streamPost(path: string, payload: Record<string, unknown>, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {

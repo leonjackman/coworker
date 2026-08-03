@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
-import { EditMessageBanner } from './components/EditMessageBanner';
 import { PendingDocks } from './components/PendingDocks';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
@@ -443,6 +442,12 @@ function App() {
   };
 
   const [editingMessage, setEditingMessage] = useState<{ id: string; content: string } | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+
+  const beginEditMessage = (messageId: string, content: string) => {
+    setEditingMessage({ id: messageId, content });
+    setEditDraft(content);
+  };
 
   const commitEditMessage = async (messageId: string, content: string) => {
     const currentSessionId = sessionIdRef.current;
@@ -450,6 +455,7 @@ function App() {
     const trimmed = content.trim();
     if (!trimmed) return;
     setEditingMessage(null);
+    setEditDraft('');
     setIsThinking(true);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setMessages((current) => {
@@ -561,7 +567,11 @@ function App() {
       }
     };
     try {
-      await chatService.streamEditMessage(currentSessionId, messageId, trimmed, handleEvent, controller.signal);
+      await chatService.streamEditMessage(currentSessionId, messageId, trimmed, handleEvent, {
+        signal: controller.signal,
+        workMode,
+        accessMode,
+      });
       await refreshSessions();
       await refreshProjects();
     } catch (error) {
@@ -1287,9 +1297,7 @@ function App() {
                     <>
                       <MessageList
                         messages={messages}
-                        onEditMessage={(messageId, content) => {
-                          setEditingMessage({ id: messageId, content });
-                        }}
+                        onEditMessage={(messageId, content) => beginEditMessage(messageId, content)}
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
                         onRollbackMessage={(messageId) => void handleRollbackMessage(messageId)}
                       />
@@ -1309,17 +1317,9 @@ function App() {
                           }}
                         />
                       </div>
-                    ) : editingMessage ? (
-                      <EditMessageBanner
-                        initialContent={editingMessage.content}
-                        onSave={(content) => void commitEditMessage(editingMessage.id, content)}
-                        onCancel={() => {
-                          setEditingMessage(null);
-                        }}
-                      />
                     ) : (
                       <ChatInput
-                        value={input}
+                        value={editingMessage ? editDraft : input}
                         disabled={isThinking || runtimeStatus === 'connecting'}
                         isThinking={isThinking}
                         workMode={workMode}
@@ -1327,13 +1327,18 @@ function App() {
                         selectedModel={selectedModel}
                         attachments={attachments}
                         modelOptions={modelOptions}
-                        onChange={setInput}
-                        onSend={sendMessage}
+                        editing={Boolean(editingMessage)}
+                        onChange={editingMessage ? setEditDraft : setInput}
+                        onSend={editingMessage ? () => void commitEditMessage(editingMessage.id, editDraft) : sendMessage}
                         onStop={stopMessage}
                         onWorkModeChange={setWorkMode}
                         onAccessModeChange={setAccessMode}
                         onModelChange={(providerId) => void changeSelectedModel(providerId)}
                         onAttachmentsChange={setAttachments}
+                        onCancelEdit={() => {
+                          setEditingMessage(null);
+                          setEditDraft('');
+                        }}
                       />
                     )
                   )}

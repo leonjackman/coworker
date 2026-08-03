@@ -1,4 +1,4 @@
-import { Hammer, ListChecks, Plus, SendHorizontal, Shield, ShieldCheck, Slash, Square, X } from 'lucide-react';
+import { Check, Hammer, ListChecks, Pencil, Plus, SendHorizontal, Shield, ShieldCheck, Slash, Square, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../lib/i18n';
 import type { AccessMode, ComposerAttachment, WorkMode } from '../types';
@@ -29,6 +29,8 @@ interface ChatInputProps {
   onAccessModeChange: (value: AccessMode) => void;
   onModelChange: (value: string) => void;
   onAttachmentsChange: (attachments: ComposerAttachment[]) => void;
+  editing?: boolean;
+  onCancelEdit?: () => void;
 }
 
 const SLASH_COMMANDS = ['/help', '/new', '/clear', '/providers', '/settings', '/plan', '/build'];
@@ -79,6 +81,8 @@ export function ChatInput({
   onAccessModeChange,
   onModelChange,
   onAttachmentsChange,
+  editing = false,
+  onCancelEdit,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showCommands, setShowCommands] = useState(false);
@@ -111,6 +115,18 @@ export function ChatInput({
   return (
     <footer className="composer">
       <div className="composer__surface">
+        {editing && (
+          <div className="composer__edit-bar">
+            <span className="composer__edit-label">
+              <Pencil size={13} />
+              {t('message.edit')}
+            </span>
+            <Button variant="ghost" size="xs" onClick={onCancelEdit} aria-label={t('message.edit_cancel')}>
+              <X size={13} />
+              {t('message.edit_cancel')}
+            </Button>
+          </div>
+        )}
         <div className="composer__input-box">
           <div className="composer__editor">
             <Textarea
@@ -181,8 +197,8 @@ export function ChatInput({
                 <Square size={15} fill="currentColor" />
               </Button>
             ) : (
-              <Button variant="primary" className="composer__send-button" onClick={onSend} disabled={disabled || !canSend} aria-label={t('common.send')}>
-                <SendHorizontal size={17} />
+              <Button variant="primary" className="composer__send-button" onClick={onSend} disabled={disabled || !canSend} aria-label={editing ? t('message.edit_save') : t('common.send')}>
+                {editing ? <Check size={17} /> : <SendHorizontal size={17} />}
               </Button>
             )}
           </div>
