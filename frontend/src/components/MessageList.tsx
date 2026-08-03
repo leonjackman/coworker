@@ -1,24 +1,26 @@
-import { Bot, FileText, Hammer, ListChecks, Loader2, Shield, ShieldCheck } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Bot, FileText, Hammer, ListChecks, Shield, ShieldCheck } from 'lucide-react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
-import type { ChatMessage, MessagePart } from '../types';
+import type { ChatMessage, MessagePart, PartFileChange } from '../types';
 import { ScrollArea } from './ui/scroll-area';
 import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
 import { ToolCallCard } from './ToolCallCard';
+import { FileChangesCard } from './FileChangesCard';
+import { AgentActivity } from './AgentActivity';
 import { MessageActions } from './MessageActions';
+import { ToolGroup, ToolGroupTrigger, ToolGroupContent } from './assistant-ui/tool-group';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
-const STICK_THRESHOLD = 80;
-
 interface MessageListProps {
   messages: ChatMessage[];
-  isThinking?: boolean;
   onEditMessage?: (messageId: string, content: string) => void;
   onRegenerateMessage?: (messageId: string) => void;
   onRollbackMessage?: (messageId: string) => void;
 }
+
+const CONTEXT_TOOLS = new Set(['read_file', 'search_files']);
 
 function renderContext(message: ChatMessage) {
   const chips: Array<{ key: string; icon: ReactNode; label: string }> = [];
@@ -71,13 +73,79 @@ function groupParts(parts: MessagePart[]) {
   return { planParts, reasoningParts, toolParts };
 }
 
+interface ToolGroupNode {
+  key: string;
+  tools: Extract<MessagePart, { type: 'tool' }>[];
+}
+
+function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): ToolGroupNode[] {
+  const groups: ToolGroupNode[] = [];
+  let current: Extract<MessagePart, { type: 'tool' }>[] = [];
+  const flush = () => {
+    if (current.length > 0) {
+      groups.push({ key: current[0]!.id, tools: current });
+      current = [];
+    }
+  };
+  for (const part of toolParts) {
+    if (CONTEXT_TOOLS.has(part.name)) {
+      current.push(part);
+    } else {
+      flush();
+      groups.push({ key: part.id, tools: [part] });
+    }
+  }
+  flush();
+  return groups;
+}
+
+function ToolChain({ toolParts }: { toolParts: Extract<MessagePart, { type: 'tool' }>[] }) {
+  const groups = buildToolGroups(toolParts);
+  return (
+    <div className="tool-chain">
+      {groups.map((group) => {
+        if (group.tools.length === 1) {
+          const single = group.tools[0]!;
+          return <ToolCallCard key={single.id} tool={single} />;
+        }
+        const active = group.tools.some((part) => part.status === 'running');
+        return (
+          <ToolGroup.Root key={group.key} variant="ghost">
+            <ToolGroupTrigger count={group.tools.length} active={active} />
+            <ToolGroupContent>
+              {group.tools.map((part) => (
+                <ToolCallCard key={part.id} tool={part} />
+              ))}
+            </ToolGroupContent>
+          </ToolGroup.Root>
+        );
+      })}
+    </div>
+  );
+}
+
+function collectFileChanges(toolParts: Extract<MessagePart, { type: 'tool' }>[]): PartFileChange[] {
+  const files: PartFileChange[] = [];
+  for (const part of toolParts) {
+    for (const file of part.files ?? []) {
+      files.push(file);
+    }
+  }
+  return files;
+}
+
 function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; onEdit?: (content: string) => void; onRollback?: () => void }) {
   return (
     <div className="stream-row stream-row--user">
       <div className="stream-bubble-wrap">
         <div className="stream-bubble stream-bubble--user">{message.content}</div>
         {!message.content.includes(t('chat.waiting_resolution')) && (
-          <MessageActions role="user" content={message.content} onEdit={onEdit} onRollback={onRollback} />
+          <MessageActions
+            role="user"
+            content={message.content}
+            {...(onEdit ? { onEdit } : {})}
+            {...(onRollback ? { onRollback } : {})}
+          />
         )}
       </div>
     </div>
@@ -92,6 +160,8 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
   const isWaiting = message.content.includes(t('chat.waiting_resolution'));
   const parts = message.parts ?? [];
   const { planParts, reasoningParts, toolParts } = groupParts(parts);
+  const fileChanges = collectFileChanges(toolParts);
+  const hasRunningTools = isRunning && toolParts.some((part) => part.status === 'running');
 
   return (
     <div className="stream-row stream-row--assistant">
@@ -107,89 +177,32 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
         {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
         {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
 
-        {toolParts.length > 0 && (
-          <div className="tool-chain">
-            {toolParts.map((part) => {
-              if (part.type !== 'tool') return null;
-              const key = `${part.id}-${part.status}`;
-              return <ToolCallCard key={key} tool={part} />;
-            })}
-          </div>
-        )}
+        {toolParts.length > 0 && <ToolChain toolParts={toolParts} />}
+        {fileChanges.length > 0 && !isRunning && <FileChangesCard files={fileChanges} />}
+
+        {isRunning && (hasRunningTools || isRunningEmpty) && <AgentActivity parts={parts} working={isRunning} />}
 
         {isError ? (
           <div className="stream-error">{message.content}</div>
         ) : isStopped ? (
           <div className="stream-stopped">{message.content}</div>
-        ) : isRunningEmpty ? (
-          <div className="stream-thinking">
-            <Loader2 className="stream-thinking__spinner" size={15} />
-            {t('agent.thinking')}
-          </div>
-        ) : (
+        ) : isRunningEmpty ? null : (
           <Suspense fallback={<div className="markdown-body">{message.content}</div>}>
             <MarkdownContent content={message.content} />
           </Suspense>
         )}
 
         {!isRunning && !isRunningEmpty && !isWaiting && (
-          <MessageActions role="assistant" content={message.content} onRegenerate={onRegenerate} />
+          <MessageActions role="assistant" content={message.content} {...(onRegenerate ? { onRegenerate } : {})} />
         )}
       </div>
     </div>
   );
 }
 
-function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const stickToBottomRef = useRef(true);
-  const lastUserMessageIdRef = useRef<string | undefined>(undefined);
-  const lastCountRef = useRef(0);
-
-  const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
-  };
-
-  const handleViewportScroll = () => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    stickToBottomRef.current = distanceFromBottom <= STICK_THRESHOLD;
-  };
-
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-
-    const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
-    const lastUserMessageId = lastUserMessage?.id;
-    const hasNewUserMessage = lastUserMessageId !== undefined && lastUserMessageId !== lastUserMessageIdRef.current;
-    const isSessionOpen = messages.length > 0 && lastCountRef.current === 0;
-
-    lastUserMessageIdRef.current = lastUserMessageId;
-    lastCountRef.current = messages.length;
-
-    if (hasNewUserMessage || isSessionOpen) {
-      // The user just sent a new message (or a session just opened): always
-      // reveal it regardless of the previous scroll position.
-      stickToBottomRef.current = true;
-      scrollToBottom('auto');
-    } else if (isThinking) {
-      // Streaming agent reply: follow only when the user hasn't scrolled away.
-      if (stickToBottomRef.current) {
-        scrollToBottom('auto');
-      }
-    }
-  }, [messages, isThinking]);
-
+function MessageListView({ messages, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
   return (
-    <ScrollArea
-      className="messages"
-      viewportRef={viewportRef}
-      onViewportScroll={handleViewportScroll}
-    >
+    <ScrollArea className="messages">
       <section className="stream-wall" aria-live="polite">
         {messages.length === 0 && (
           <div className="empty-state">
@@ -209,14 +222,14 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
             <UserMessage
               key={message.id}
               message={message}
-              onEdit={onEditMessage ? (content) => onEditMessage(message.id, content) : undefined}
-              onRollback={onRollbackMessage ? () => onRollbackMessage(message.id) : undefined}
+              {...(onEditMessage ? { onEdit: (content) => onEditMessage(message.id, content) } : {})}
+              {...(onRollbackMessage ? { onRollback: () => onRollbackMessage(message.id) } : {})}
             />
           ) : (
             <AssistantMessage
               key={message.id}
               message={message}
-              onRegenerate={onRegenerateMessage ? () => onRegenerateMessage(message.id) : undefined}
+              {...(onRegenerateMessage ? { onRegenerate: () => onRegenerateMessage(message.id) } : {})}
             />
           ),
         )}
@@ -226,14 +239,13 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
 }
 
 export function MessageList(props: MessageListProps) {
-  const { messages, isThinking, onEditMessage, onRegenerateMessage, onRollbackMessage } = props;
+  const { messages, onEditMessage, onRegenerateMessage, onRollbackMessage } = props;
   return (
     <MessageListView
       messages={messages}
-      isThinking={isThinking}
-      onEditMessage={onEditMessage}
-      onRegenerateMessage={onRegenerateMessage}
-      onRollbackMessage={onRollbackMessage}
+      {...(onEditMessage ? { onEditMessage } : {})}
+      {...(onRegenerateMessage ? { onRegenerateMessage } : {})}
+      {...(onRollbackMessage ? { onRollbackMessage } : {})}
     />
   );
 }

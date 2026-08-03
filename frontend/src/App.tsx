@@ -274,6 +274,8 @@ function App() {
         if (toolPart) {
           toolPart.status = event.status === 'success' ? 'success' : 'error';
           if (event.output) toolPart.output = event.output;
+          if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
+          if (event.files !== undefined) toolPart.files = event.files;
         }
         setMessages((current) =>
           current.map((item) =>
@@ -503,6 +505,8 @@ function App() {
         if (toolPart) {
           toolPart.status = event.status === 'success' ? 'success' : 'error';
           if (event.output) toolPart.output = event.output;
+          if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
+          if (event.files !== undefined) toolPart.files = event.files;
         }
         setMessages((current) =>
           current.map((item) =>
@@ -532,10 +536,10 @@ function App() {
           approval_status: event.approval_status,
           messageId: assistantMessageId,
           ...(event.type === 'approval_required' ? { command: event.command, cwd: event.cwd } : {}),
-          ...(event.question !== undefined ? { question: event.question } : {}),
-          ...(event.header !== undefined ? { header: event.header } : {}),
-          ...(event.options !== undefined ? { options: event.options } : {}),
-          ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+          ...(event.type === 'question_required' && event.question !== undefined ? { question: event.question } : {}),
+          ...(event.type === 'question_required' && event.header !== undefined ? { header: event.header } : {}),
+          ...(event.type === 'question_required' && event.options !== undefined ? { options: event.options } : {}),
+          ...(event.type === 'question_required' && event.multiple !== undefined ? { multiple: event.multiple } : {}),
         };
         setPendingRequests((current) => [...current, pending]);
         setMessages((current) =>
@@ -642,6 +646,8 @@ function App() {
         if (toolPart) {
           toolPart.status = event.status === 'success' ? 'success' : 'error';
           if (event.output) toolPart.output = event.output;
+          if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
+          if (event.files !== undefined) toolPart.files = event.files;
         }
         setMessages((current) =>
           current.map((item) =>
@@ -671,10 +677,10 @@ function App() {
           approval_status: event.approval_status,
           messageId: assistantMessageId,
           ...(event.type === 'approval_required' ? { command: event.command, cwd: event.cwd } : {}),
-          ...(event.question !== undefined ? { question: event.question } : {}),
-          ...(event.header !== undefined ? { header: event.header } : {}),
-          ...(event.options !== undefined ? { options: event.options } : {}),
-          ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+          ...(event.type === 'question_required' && event.question !== undefined ? { question: event.question } : {}),
+          ...(event.type === 'question_required' && event.header !== undefined ? { header: event.header } : {}),
+          ...(event.type === 'question_required' && event.options !== undefined ? { options: event.options } : {}),
+          ...(event.type === 'question_required' && event.multiple !== undefined ? { multiple: event.multiple } : {}),
         };
         setPendingRequests((current) => [...current, pending]);
         setMessages((current) =>
@@ -1054,6 +1060,7 @@ function App() {
           ...(record.provider ? { provider: record.provider } : {}),
           ...(record.model ? { model: record.model } : {}),
           ...(record.attachments?.length ? { attachments: record.attachments } : {}),
+          ...(record.parts?.length ? { parts: record.parts as MessagePart[] } : {}),
           timestamp: new Date(record.created_at).getTime(),
         }),
       );
@@ -1292,7 +1299,6 @@ function App() {
                     <>
                       <MessageList
                         messages={messages}
-                        isThinking={isThinking}
                         onEditMessage={(messageId, content) => beginEditMessage(messageId, content)}
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
                         onRollbackMessage={(messageId) => void handleRollbackMessage(messageId)}

@@ -16,11 +16,11 @@ import type {
   RuntimeConfig,
   RuntimeConfigUpdate,
   SessionDetailResponse,
+  SessionMessageRecord,
   SessionResponse,
   SessionsListResponse,
   StreamEvent,
-  ToolAuditResponse,
-  WorkspaceCommandRequest,
+  ToolAuditResponse,  WorkspaceCommandRequest,
   WorkspaceCommandResponse,
   WorkspaceDirResponse,
   WorkspaceFileResponse,
@@ -65,6 +65,16 @@ declare global {
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
       resolveCommandApproval: (approvalId: string, decision: CommandApprovalDecision) => Promise<CommandApprovalResult>;
+      rollbackMessage: (sessionId: string, messageId: string) => Promise<{ status: string; messages: SessionMessageRecord[] }>;
+      streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback) => Promise<void>;
+      streamEditMessage: (
+        requestId: string,
+        sessionId: string,
+        messageId: string,
+        content: string,
+        onEvent: StreamEventCallback,
+        options?: { work_mode?: string; access_mode?: string },
+      ) => Promise<void>;
     };
   }
 }

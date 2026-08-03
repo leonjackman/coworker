@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import sqlite3
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -453,9 +455,120 @@ def coerce_message_content(message: Any) -> str:
 def _extract_reasoning_from_chunk(chunk: Any) -> str | None:
     additional_kwargs = getattr(chunk, "additional_kwargs", {}) or {}
     raw = additional_kwargs.get("reasoning")
+    if not isinstance(raw, str) or not raw.strip():
+        raw = additional_kwargs.get("reasoning_content")
     if isinstance(raw, str) and raw.strip():
         return raw.strip()
     return None
+
+
+def _reasoning_heading(text: str) -> str:
+    """Extract a short summary heading from reasoning text.
+
+    Prefers the first markdown heading, then the first ``**bold**`` segment.
+    """
+    if not text:
+        return ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            return re.sub(r"^#+\s*", "", stripped).strip()[:80]
+    match = re.search(r"\*\*([^*]+)\*\*", text)
+    if match:
+        return match.group(1).strip()[:80]
+    return ""
+
+
+def _strip_plan_leak(content: str, parts: list[dict[str, Any]]) -> str:
+    """Remove a leaked internal plan-marker segment from streamed content.
+
+    ``PlanGateMiddleware`` injects the planner output as an assistant message
+    (``[CW-PLAN]`` + plan text) so the model can use it as guidance. Some
+    providers/graph modes re-stream that injected message as ordinary content
+    deltas, duplicating the plan that was already delivered through the
+    ``plan_*`` events. This strips that leading segment when it matches the
+    plan text emitted through the plan events.
+    """
+    if not content:
+        return content
+    plan_text = ""
+    for part in parts:
+        if part.get("type") == "plan_end" and part.get("content"):
+            plan_text = str(part["content"])
+            break
+        if part.get("type") == "plan" and part.get("content"):
+            plan_text = str(part["content"])
+            break
+    if not plan_text:
+        return content
+
+    if content.startswith(plan_text):
+        return content[len(plan_text):].lstrip("\n")
+    stripped = content.lstrip("\n")
+    if stripped.startswith(PLAN_MARKER):
+        stripped = stripped[len(PLAN_MARKER):].lstrip("\n")
+        if stripped.startswith(plan_text):
+            return stripped[len(plan_text):].lstrip("\n")
+    return content
+
+
+_WRITE_ARG_PATH_KEYS = ("file_path", "path", "target")
+
+
+def _estimate_file_changes(tool_name: str, input_raw: str) -> list[dict[str, Any]]:
+    """Best-effort summary of files touched by a write/edit tool call.
+
+    Returns a list of ``{path, kind, added, removed}`` dicts derived from the
+    tool input arguments. Values are line-count estimates, not exact diffs.
+    """
+    if not input_raw:
+        return []
+    try:
+        args = json.loads(input_raw)
+    except Exception:
+        return []
+    if not isinstance(args, dict):
+        return []
+
+    def _count_lines(text: str) -> int:
+        if not text:
+            return 0
+        return max(text.rstrip("\n").count("\n") + 1, 1)
+
+    if tool_name == "write_file":
+        path = next((str(args[k]) for k in _WRITE_ARG_PATH_KEYS if args.get(k)), "")
+        content = str(args.get("content") or "")
+        if path:
+            return [{"path": path, "kind": "write", "added": _count_lines(content), "removed": 0}]
+
+    if tool_name == "replace_in_file":
+        path = next((str(args[k]) for k in _WRITE_ARG_PATH_KEYS if args.get(k)), "")
+        old_text = str(args.get("old_text") or "")
+        new_text = str(args.get("new_text") or "")
+        occurrences = 1 if not args.get("replace_all") else max(int(args.get("occurrences") or 1), 1)
+        if path:
+            removed = occurrences * max(_count_lines(old_text) - 1, 0)
+            added = occurrences * max(_count_lines(new_text) - 1, 0)
+            return [{"path": path, "kind": "edit", "added": added, "removed": removed}]
+
+    if tool_name == "apply_text_edits":
+        path = next((str(args[k]) for k in _WRITE_ARG_PATH_KEYS if args.get(k)), "")
+        edits = args.get("edits")
+        if path and isinstance(edits, list):
+            added = 0
+            removed = 0
+            for edit in edits:
+                if not isinstance(edit, dict):
+                    continue
+                old_lines = _count_lines(str(edit.get("old_text") or ""))
+                new_lines = _count_lines(str(edit.get("new_text") or ""))
+                removed += max(old_lines - 1, 0)
+                added += max(new_lines - 1, 0)
+            return [{"path": path, "kind": "edit", "added": added, "removed": removed}]
+
+    return []
 
 
 def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -490,8 +603,36 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 merged[-1]["input"] = (merged[-1].get("input", "") or "") + (part.get("input") or "")
         elif part.get("type") == "tool_start":
             merged.append({"type": "tool", "id": part.get("id", ""), "name": part.get("name", ""), "status": "running", "input": part.get("input", "")})
+        elif part.get("type") == "tool_end":
+            existing_tool = next((p for p in merged if p.get("type") == "tool" and p.get("id") == part.get("id")), None)
+            if existing_tool:
+                existing_tool["status"] = "success" if part.get("status") == "success" else "error"
+                if part.get("output") is not None:
+                    existing_tool["output"] = part["output"]
+                if part.get("duration_ms") is not None:
+                    existing_tool["duration_ms"] = part["duration_ms"]
+                if part.get("files") is not None:
+                    existing_tool["files"] = part["files"]
+            else:
+                merged.append(
+                    {
+                        "type": "tool",
+                        "id": part.get("id", ""),
+                        "name": part.get("name", ""),
+                        "status": "success" if part.get("status") == "success" else "error",
+                        "input": "",
+                        "output": part.get("output"),
+                        **({"duration_ms": part["duration_ms"]} if part.get("duration_ms") is not None else {}),
+                        **({"files": part["files"]} if part.get("files") is not None else {}),
+                    }
+                )
         else:
             merged.append(part)
+
+    for item in merged:
+        if item.get("type") == "reasoning":
+            item["heading"] = _reasoning_heading(item.get("content", ""))
+            item["done"] = True
     return merged
 
 
@@ -758,10 +899,13 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
         plan_text = ""
         try:
-            response = await self.planner_llm.ainvoke([
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_message or "Analyze the task and create a plan."},
-            ])
+            response = await self.planner_llm.ainvoke(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_message or "Analyze the task and create a plan."},
+                ],
+                config={"callbacks": []},
+            )
             plan_text = coerce_message_content(response).strip()
         except Exception:
             plan_text = "Plan could not be generated. Proceed with best-effort analysis."
@@ -799,10 +943,13 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
         plan_text = ""
         try:
-            response = self.planner_llm.invoke([
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_message or "Analyze the task and create a plan."},
-            ])
+            response = self.planner_llm.invoke(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_message or "Analyze the task and create a plan."},
+                ],
+                config={"callbacks": []},
+            )
             plan_text = coerce_message_content(response).strip()
         except Exception:
             plan_text = "Plan could not be generated. Proceed with best-effort analysis."
@@ -1042,6 +1189,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         interrupt_context = {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode}
         self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "rerun" if rerun else "stream"})
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
+        yield {"type": "stage", "name": "executing", "status": "running"}
 
         prepared_messages = prepare_agent_messages(messages, language, work_mode, access_mode)
         effective_access = access_mode if work_mode == "build" else "default"
@@ -1092,8 +1240,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 raise
 
         final_content = "".join(content_parts)
+        final_content = _strip_plan_leak(final_content, parts)
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content)})
         merged_parts = _merge_event_parts(parts)
+        yield {"type": "stage", "name": "finalizing", "status": "done"}
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts}
 
     def _handle_message_chunk(
@@ -1126,7 +1276,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     continue
 
                 if tc_id not in tool_state:
-                    tool_state[tc_id] = {"name": tc_name or "", "input": "", "status": "running"}
+                    tool_state[tc_id] = {"name": tc_name or "", "input": "", "status": "running", "started_at": time.time()}
                     parts.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
                     events.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
                 else:
@@ -1143,7 +1293,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             if tc_id in tool_state:
                 tool_state[tc_id]["status"] = "success"
                 tool_state[tc_id]["output"] = str(content)[:2000]
-                part = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": "success"}
+                started_at = tool_state[tc_id].get("started_at")
+                duration_ms = round((time.time() - started_at) * 1000) if started_at else None
+                files = _estimate_file_changes(tool_state[tc_id].get("name", ""), tool_state[tc_id].get("input", ""))
+                part: dict[str, Any] = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": "success"}
+                if duration_ms is not None:
+                    part["duration_ms"] = duration_ms
+                if files:
+                    part["files"] = files
                 parts.append(part)
                 events.append(part)
             elif tc_id:
@@ -1216,7 +1373,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 raise
 
         final_content = "".join(content_parts)
+        final_content = _strip_plan_leak(final_content, parts)
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
+        events.append({"type": "stage", "name": "finalizing", "status": "done"})
         events.append({"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(parts)})
         return events
 

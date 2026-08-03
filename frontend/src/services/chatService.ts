@@ -270,8 +270,8 @@ class ElectronChatService implements ChatService {
     const detachAbortListener = attachAbortListener(signal, abortStream);
     try {
       await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, onEvent, {
-        work_mode: options?.workMode,
-        access_mode: options?.accessMode,
+        ...(options?.workMode ? { work_mode: options.workMode } : {}),
+        ...(options?.accessMode ? { access_mode: options.accessMode } : {}),
       });
     } finally {
       detachAbortListener();

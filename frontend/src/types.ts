@@ -15,6 +15,13 @@ export interface ComposerAttachment {
   error?: string;
 }
 
+export interface PartFileChange {
+  path: string;
+  kind: 'write' | 'edit';
+  added: number;
+  removed: number;
+}
+
 export interface PartTool {
   type: 'tool';
   id: string;
@@ -22,11 +29,15 @@ export interface PartTool {
   status: 'running' | 'success' | 'error';
   input: string;
   output?: string;
+  duration_ms?: number;
+  files?: PartFileChange[];
 }
 
 export interface PartReasoning {
   type: 'reasoning';
   content: string;
+  heading?: string;
+  done?: boolean;
 }
 
 export interface PartPlan {
@@ -349,7 +360,7 @@ export type StreamEvent =
   | { type: 'reasoning_delta'; content: string }
   | { type: 'tool_start'; id: string; name: string; input: string }
   | { type: 'tool_delta'; id: string; input: string }
-  | { type: 'tool_end'; id: string; output: string; status: string }
+  | { type: 'tool_end'; id: string; output: string; status: string; duration_ms?: number; files?: PartFileChange[] }
   | { type: 'plan_start' }
   | { type: 'plan_delta'; content: string }
   | { type: 'plan_end'; content: string }
