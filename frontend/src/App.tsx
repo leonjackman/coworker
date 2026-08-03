@@ -367,7 +367,15 @@ function App() {
     activeAssistantMessageIdRef.current = undefined;
   };
 
+  const pendingRequestsRef = useRef<PendingRequest[]>([]);
+  useEffect(() => {
+    pendingRequestsRef.current = pendingRequests;
+  }, [pendingRequests]);
+  const resolvingRef = useRef(false);
+
   const resolvePendingRequest = async (request: PendingRequest, decision: ApprovalDecisionPayload) => {
+    if (resolvingRef.current) return;
+    resolvingRef.current = true;
     setPendingRequests((current) =>
       current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
     );
@@ -412,12 +420,16 @@ function App() {
       setPendingRequests((current) =>
         current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: false } : item)),
       );
+    } finally {
+      resolvingRef.current = false;
     }
   };
 
   const dismissPendingRequest = (request: PendingRequest) => {
     void resolvePendingRequest(request, { type: 'reject' });
   };
+
+  const isResolving = () => resolvingRef.current;
 
   const startProjectDraft = (projectId: string, firstMessage = '') => {
     abortRef.current?.abort();
@@ -766,8 +778,12 @@ function App() {
                       <div className="workspace-dock-area">
                         <PendingDocks
                           requests={currentSessionPending}
-                          onResolve={(request, decision) => void resolvePendingRequest(request, decision)}
-                          onDismiss={dismissPendingRequest}
+                          onResolve={async (request, decision) => {
+                            await resolvePendingRequest(request, decision);
+                          }}
+                          onDismiss={(request) => {
+                            void resolvePendingRequest(request, { type: 'reject' });
+                          }}
                         />
                       </div>
                     ) : (
