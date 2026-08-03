@@ -143,7 +143,7 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
 function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
-  const lastMessageIdRef = useRef<string | undefined>(undefined);
+  const lastUserMessageIdRef = useRef<string | undefined>(undefined);
   const lastCountRef = useRef(0);
 
   const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
@@ -163,20 +163,20 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
     const viewport = viewportRef.current;
     if (!viewport) return;
 
-    const lastMessage = messages[messages.length - 1];
-    const newMessageId = lastMessage?.id;
-    const hasNewMessage = newMessageId !== undefined && newMessageId !== lastMessageIdRef.current;
-    const isNewUserMessage = hasNewMessage && lastMessage?.role === 'user';
+    const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+    const lastUserMessageId = lastUserMessage?.id;
+    const hasNewUserMessage = lastUserMessageId !== undefined && lastUserMessageId !== lastUserMessageIdRef.current;
     const isSessionOpen = messages.length > 0 && lastCountRef.current === 0;
 
-    lastMessageIdRef.current = newMessageId;
+    lastUserMessageIdRef.current = lastUserMessageId;
     lastCountRef.current = messages.length;
 
-    if (isNewUserMessage || isSessionOpen) {
-      // A user sent a new message (or a session just opened): always reveal it.
+    if (hasNewUserMessage || isSessionOpen) {
+      // The user just sent a new message (or a session just opened): always
+      // reveal it regardless of the previous scroll position.
       stickToBottomRef.current = true;
       scrollToBottom('auto');
-    } else if (hasNewMessage || isThinking) {
+    } else if (isThinking) {
       // Streaming agent reply: follow only when the user hasn't scrolled away.
       if (stickToBottomRef.current) {
         scrollToBottom('auto');
