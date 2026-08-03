@@ -680,9 +680,10 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         tool_name = getattr(request, "tool_name", "") or ""
         if tool_name in _WRITE_TOOL_NAMES:
             from langchain_core.messages import ToolMessage
+            tc_id = request.tool_call.get("id", "unknown")
             return ToolMessage(
                 content=f"Tool '{tool_name}' is not available in plan mode. Use read-only tools only.",
-                tool_call_id=getattr(request, "tool_call_id", "unknown"),
+                tool_call_id=tc_id,
             )
         return handler(request)
 
@@ -690,9 +691,10 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         tool_name = getattr(request, "tool_name", "") or ""
         if tool_name in _WRITE_TOOL_NAMES:
             from langchain_core.messages import ToolMessage
+            tc_id = request.tool_call.get("id", "unknown")
             return ToolMessage(
                 content=f"Tool '{tool_name}' is not available in plan mode. Use read-only tools only.",
-                tool_call_id=getattr(request, "tool_call_id", "unknown"),
+                tool_call_id=tc_id,
             )
         return await handler(request)
 
