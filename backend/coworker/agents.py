@@ -198,51 +198,77 @@ def build_workspace_tools(
 ) -> list[Any]:
     from langchain_core.tools import tool
 
+    def _error_result(error: Exception, operation: str) -> str:
+        details = {"error": str(error)[:500], "operation": operation}
+        return json.dumps(details, ensure_ascii=False)
+
     @tool(args_schema=SearchFilesArgs)
     def search_files(query: str, path: str = "", max_results: int = 80) -> str:
         """Search UTF-8 workspace text files."""
-        result = workspace.search_text(query, path, max_results)
-        return json.dumps(result, ensure_ascii=False)
+        try:
+            result = workspace.search_text(query, path, max_results)
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "search_files")
 
     @tool(args_schema=ReadFileArgs)
     def read_file(file_path: str) -> str:
         """Read a UTF-8 text file from the configured workspace."""
-        return workspace.read_text(file_path)
+        try:
+            return workspace.read_text(file_path)
+        except Exception as exc:
+            return _error_result(exc, "read_file")
 
     @tool(args_schema=WriteFileArgs)
     def write_file(file_path: str, content: str) -> str:
         """Write a full UTF-8 text file."""
-        workspace.write_text(file_path, content, audit_context)
-        return f"Wrote {file_path}"
+        try:
+            workspace.write_text(file_path, content, audit_context)
+            return f"Wrote {file_path}"
+        except Exception as exc:
+            return _error_result(exc, "write_file")
 
     @tool(args_schema=ReplaceInFileArgs)
     def replace_in_file(file_path: str, old_text: str, new_text: str, replace_all: bool = False) -> str:
         """Replace exact text in a UTF-8 workspace file."""
-        result = workspace.replace_text(file_path, old_text, new_text, replace_all, audit_context)
-        return json.dumps(result, ensure_ascii=False)
+        try:
+            result = workspace.replace_text(file_path, old_text, new_text, replace_all, audit_context)
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "replace_in_file")
 
     @tool(args_schema=ApplyTextEditsArgs)
     def apply_text_edits(file_path: str, edits: list[TextEditArgs]) -> str:
         """Apply multiple exact text edits to one UTF-8 workspace file atomically."""
-        result = workspace.apply_text_edits(
-            file_path,
-            [edit.model_dump() if isinstance(edit, TextEditArgs) else edit for edit in edits],
-            audit_context,
-        )
-        return json.dumps(result, ensure_ascii=False)
+        try:
+            result = workspace.apply_text_edits(
+                file_path,
+                [edit.model_dump() if isinstance(edit, TextEditArgs) else edit for edit in edits],
+                audit_context,
+            )
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "apply_text_edits")
 
     @tool(args_schema=RunCommandArgs)
     def run_command(command: list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
         """Run an allowlisted command in the workspace after runtime policy approval."""
-        result = workspace.run_command(command, cwd, timeout_seconds, audit_context, approval_store, approval_store is not None)
-        return json.dumps(result, ensure_ascii=False)
+        try:
+            result = workspace.run_command(command, cwd, timeout_seconds, audit_context, approval_store, approval_store is not None)
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "run_command")
 
     @tool(args_schema=AskUserArgs)
     def ask_user(question: str, options: list[dict[str, str]], multiple: bool = False, header: str = "") -> str:
         """Ask the user a question with selectable options when you need a decision or clarification."""
+        normalized_options = [
+            item.model_dump() if isinstance(item, AskUserOption) else item
+            for item in options
+        ]
         result = {
             "question": question,
-            "options": options,
+            "options": normalized_options,
             "multiple": multiple,
             "header": header,
             "status": "awaiting_user",
@@ -323,6 +349,20 @@ def interrupt_action_kind(action: dict[str, Any]) -> str:
     return "question" if name == "ask_user" else "command"
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, AskUserOption):
+        return value.model_dump()
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def interrupt_command_details(value: dict[str, Any]) -> tuple[list[str], str, int]:
     action_requests = value.get("action_requests") if isinstance(value, dict) else None
     action = action_requests[0] if isinstance(action_requests, list) and action_requests else {}
@@ -348,13 +388,17 @@ def record_runtime_interrupts(
             command, cwd, timeout_seconds = interrupt_command_details(value)
             approval = approval_store.request_runtime_interrupt(
                 current_interrupt_id, 0, "command", command, cwd, timeout_seconds,
-                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": 0, "hitl_request": value},
+                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": 0, "hitl_request": _json_safe(value)},
             )
             approvals.append(approval)
             continue
         for action_index, action in enumerate(actions):
             args = action.get("args") if isinstance(action, dict) else {}
             args = args if isinstance(args, dict) else {}
+            args = {
+                key: ([item.model_dump() if isinstance(item, AskUserOption) else item for item in value] if key == "options" and isinstance(value, list) else value)
+                for key, value in args.items()
+            }
             kind = interrupt_action_kind(action)
             if kind == "question":
                 command, cwd, timeout_seconds = [], "", 20
@@ -362,7 +406,7 @@ def record_runtime_interrupts(
                 command, cwd, timeout_seconds = interrupt_command_details({"action_requests": [action]})
             approval = approval_store.request_runtime_interrupt(
                 current_interrupt_id, action_index, kind, command, cwd, timeout_seconds,
-                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": action_index, "action_count": len(actions), "tool_name": str(action.get("name") or ""), "action_args": args, "hitl_request": value},
+                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": action_index, "action_count": len(actions), "tool_name": str(action.get("name") or ""), "action_args": args, "hitl_request": _json_safe(value)},
             )
             approvals.append(approval)
     return approvals
@@ -566,6 +610,103 @@ class ReasonPreservingChatOpenAI:
 
 
 # ---------------------------------------------------------------------------
+# NormalizeMessagesMiddleware – keeps provider-safe message ordering.
+# ---------------------------------------------------------------------------
+
+class NormalizeMessagesMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Ensures no ``system`` message ends up in a non‑first position of the
+    message list passed to the model.
+
+    Some providers (e.g. Qwen3.6 / vLLM) reject any request where a system
+    message is not the very first message. Historical checkpoints created
+    before the plan marker fix can contain a residual ``SystemMessage``
+    (``[CW-PLAN]``) in the middle of the conversation, which would trigger a
+    400 on resume. This middleware downgrades such misplaced system messages
+    to ``human`` (content preserved) right before each model call.
+    """
+
+    def _normalize(self, state: CoworkerAgentState) -> list[Any] | None:
+        from langchain_core.messages import HumanMessage
+
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+
+        changed = False
+        normalized: list[Any] = []
+        for index, msg in enumerate(messages):
+            msg_type = getattr(msg, "type", None)
+            if msg_type == "system" and index > 0:
+                normalized.append(HumanMessage(content=msg.content, id=getattr(msg, "id", None), additional_kwargs=msg.additional_kwargs or {}))
+                changed = True
+            else:
+                normalized.append(msg)
+
+        return normalized if changed else None
+
+    def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        normalized = self._normalize(state)
+        if normalized is None:
+            return None
+        return {"messages": normalized}
+
+    async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        normalized = self._normalize(state)
+        if normalized is None:
+            return None
+        return {"messages": normalized}
+
+
+# ---------------------------------------------------------------------------
+# ToolCallCleanerMiddleware – drops empty/invalid tool calls before execution.
+# ---------------------------------------------------------------------------
+
+class ToolCallCleanerMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Removes tool calls that the provider emitted without a tool name.
+
+    Some OpenAI-compatible streaming servers (e.g. vLLM with Qwen3.6) can emit
+    a parallel tool call whose delta never carries a ``name``, leaving an empty
+    ``{"name": "", "args": {}}`` entry in the assistant message. LangChain keeps
+    such entries in ``tool_calls``; executing them fails with an invalid-tool
+    error, and the corrupted entry is then replayed to the provider on the next
+    model call, producing a 400 (``Extra data``). This middleware strips these
+    empty tool calls right after the model call so they never reach the tool
+    executor or the provider.
+    """
+
+    def _clean(self, state: CoworkerAgentState) -> dict[str, Any] | None:
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+
+        replacements: list[Any] = []
+        for msg in messages:
+            tool_calls = getattr(msg, "tool_calls", None)
+            if not tool_calls:
+                continue
+            invalid = [t for t in tool_calls if not (t.get("name") if isinstance(t, dict) else getattr(t, "name", ""))]
+            if not invalid:
+                continue
+            from langchain_core.messages import AIMessage
+            valid = [t for t in tool_calls if (t.get("name") if isinstance(t, dict) else getattr(t, "name", ""))]
+            replacements.append(AIMessage(
+                content=getattr(msg, "content", None) or "",
+                tool_calls=valid,
+                id=getattr(msg, "id", None),
+                additional_kwargs=getattr(msg, "additional_kwargs", None) or {},
+            ))
+        if not replacements:
+            return None
+        return {"messages": replacements}
+
+    def after_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        return self._clean(state)
+
+    async def aafter_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        return self._clean(state)
+
+
+# ---------------------------------------------------------------------------
 # PlanGateMiddleware – enforces plan‑first semantics before the agent acts.
 # ---------------------------------------------------------------------------
 
@@ -632,7 +773,8 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 stream_writer({"type": "plan_delta", "content": plan_text})
                 stream_writer({"type": "plan_end", "content": plan_text})
 
-        marker_msg = {"role": "human", "content": "\n\n--- Plan ---\n\n" + str(plan_text)}
+        marker_msg = {"role": "human", "content": f"\n\n{PLAN_MARKER}\n{plan_text}"}
+        return {"messages": [marker_msg]}
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         if not self._is_plan_mode(state):
@@ -672,7 +814,8 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 stream_writer({"type": "plan_delta", "content": plan_text})
                 stream_writer({"type": "plan_end", "content": plan_text})
 
-        marker_msg = {"role": "human", "content": "\n\n--- Plan ---\n\n" + str(plan_text)}
+        marker_msg = {"role": "human", "content": f"\n\n{PLAN_MARKER}\n{plan_text}"}
+        return {"messages": [marker_msg]}
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
         tool_name = getattr(request, "tool_name", "") or ""
@@ -719,6 +862,9 @@ def build_coworker_agent_graph(
     from langchain.agents import create_agent
 
     middleware: list[Any] = []
+
+    middleware.append(NormalizeMessagesMiddleware())
+    middleware.append(ToolCallCleanerMiddleware())
 
     if work_mode == "plan":
         middleware.append(PlanGateMiddleware(llm, language))
@@ -1146,3 +1292,20 @@ class AgentRuntimeRegistry:
         if mode == "single":
             return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
+
+    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Resume an interrupted agent turn (HITL approval) using the stream runtime.
+
+        The approval context carries the provider id, workspace path, and session
+        metadata so the same graph can be rebuilt against the existing checkpoint.
+        """
+        context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+        provider_id = str(context.get("provider_id") or "")
+        model = str(context.get("model") or "")
+        workspace_path = context.get("workspace_path")
+        workspace = None
+        if workspace_path:
+            from pathlib import Path
+            workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
+        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace)
+        return await runtime.resume_interrupt(approval, decisions)
