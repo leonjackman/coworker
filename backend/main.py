@@ -342,6 +342,26 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "ok", "session": session.public()}
 
+
+class GenerateTitleRequest(BaseModel):
+    first_user_message: str
+
+
+@app.post("/sessions/{session_id}/generateTitle")
+async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest):
+    try:
+        session = session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if session.title != "新会话":
+        return {"status": "ok", "title": session.title}
+    from coworker.agents import generate_title
+    new_title = generate_title(request.first_user_message)
+    if new_title and new_title != session.title:
+        session_store.rename(session_id, new_title)
+    return {"status": "ok", "title": new_title}
+
+
 @app.get("/projects")
 async def list_projects():
     projects = []

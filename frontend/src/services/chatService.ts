@@ -68,6 +68,7 @@ export interface ChatService {
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
   getSession: (sessionId: string) => Promise<SessionDetailResponse>;
+  generateTitle: (sessionId: string, firstUserMessage: string) => Promise<string>;
   listProjects: () => Promise<ProjectsListResponse>;
   createProject: (request: CreateProjectRequest) => Promise<ProjectResponse>;
   renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
@@ -244,6 +245,12 @@ class ElectronChatService implements ChatService {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.fetchProviderModels(request);
     return response.error ? { models: response.models, error: response.error } : { models: response.models };
+  }
+
+  async generateTitle(sessionId: string, firstUserMessage: string): Promise<string> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const response = await window.electronAPI.generateTitle(sessionId, firstUserMessage);
+    return response.title;
   }
 }
 
@@ -470,6 +477,15 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
+  }
+
+  async generateTitle(sessionId: string, firstUserMessage: string): Promise<string> {
+    const response = await this.request<{ status: string; title: string }>(`/sessions/${sessionId}/generateTitle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ first_user_message: firstUserMessage }),
+    });
+    return response.title;
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

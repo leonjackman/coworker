@@ -429,6 +429,10 @@ ipcMain.handle('get-session', async (event, sessionId) => {
   return requestBackend(`/sessions/${sessionId}`);
 });
 
+ipcMain.handle('generate-title', async (event, payload) => {
+  return requestBackend(`/sessions/${payload.session_id}/generateTitle`, 'POST', { first_user_message: payload.first_user_message });
+});
+
 ipcMain.handle('list-projects', async () => {
   return requestBackend('/projects');
 });

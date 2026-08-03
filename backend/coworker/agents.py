@@ -22,6 +22,19 @@ SYSTEM_PROMPT = (
     "You are Coworker, a local coding assistant. "
     "Use workspace tools only when they are needed and keep answers concise."
 )
+TITLE_SYSTEM_PROMPT = (
+    "You are a thread title generator. Output ONLY the title string. Nothing else. No code fences, no quotes, no explanation."
+    "Rules:"
+    " - Use the same language as the user's first message."
+    " - Title must be a complete meaningful phrase."
+    " - Never include tool names like read tool, bash tool, edit tool."
+    " - Focus on the main topic, question, or task."
+    " - Keep exact: technical terms, numbers, filenames, HTTP codes."
+    " - Remove generic words: the, this, my, a, an."
+    " - Never respond to questions—just generate a title for the conversation."
+    " - For short or conversational messages (hello, lol, what's up, hey): generate a brief friendly title like 'Quick introduction', 'Brief check-in', 'Light chat', etc."
+    " - The title must be a single line, 3-40 characters, no explanations."
+)
 MAX_ATTACHMENT_CHARS = 120_000
 
 
@@ -454,6 +467,46 @@ def coerce_message_content(message: Any) -> str:
     if isinstance(content, list):
         return "\n".join(str(part) for part in content)
     return str(content or "")
+
+
+def generate_title(user_message: str) -> str:
+    from langchain_openai import ChatOpenAI
+
+    try:
+        from .config import load_settings
+        from .providers import ProviderManager
+
+        settings = load_settings()
+        provider_manager = ProviderManager(settings.data_dir / "providers.json")
+        dp = provider_manager.default_provider()
+        if dp and dp.api_key and (dp.base_url or dp.provider_type):
+            try:
+                llm = ChatOpenAI(
+                    model=dp.model,
+                    temperature=0,
+                    api_key=dp.api_key,
+                    base_url=dp.base_url or None,
+                )
+                response = llm.invoke([
+                    {"role": "system", "content": TITLE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ])
+                title = coerce_message_content(response).strip().strip('"').strip("'")
+                if title and 3 <= len(title) <= 50:
+                    return title
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return _default_title_from_message(user_message)
+
+
+def _default_title_from_message(user_message: str) -> str:
+    text = user_message.strip()
+    if len(text) <= 40:
+        return text
+    return text[:40].rstrip()[:40]
 
 
 def prepare_agent_messages(

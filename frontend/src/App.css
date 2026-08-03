@@ -190,6 +190,7 @@ textarea {
   border-right: 1px solid var(--material-border);
   background: var(--sidebar);
   transition: padding 200ms ease;
+  overflow: hidden;
 }
 
 .sidebar__resizer {
@@ -1369,6 +1370,8 @@ body.sidebar-resizing {
 /* File tree */
 .sidebar-session {
   position: relative;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .sidebar-session__inner {

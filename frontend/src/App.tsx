@@ -319,6 +319,7 @@ function App() {
       setRuntimeStatus('ready');
       await refreshSessions();
       await refreshProjects();
+      _generateSessionTitleIfNeeded(message, sessionIdRef.current);
     } catch (error) {
       if (requestId !== requestSeqRef.current) return;
       console.error('Failed to stream message:', error);
@@ -372,6 +373,22 @@ function App() {
     pendingRequestsRef.current = pendingRequests;
   }, [pendingRequests]);
   const resolvingRef = useRef(false);
+
+  const _generateSessionTitleIfNeeded = (firstMessageContent: string, sessionSessionId?: string) => {
+    if (!sessionSessionId) return;
+    const userMessages = messages.filter((m) => m.role === 'user');
+    const currentSession = sessions.find((s) => s.id === sessionSessionId);
+    if (!currentSession || currentSession.title !== '新会话') return;
+    if (userMessages.length > 1) return;
+    chatService.generateTitle(sessionSessionId, firstMessageContent).then(
+      (newTitle) => {
+        if (newTitle && newTitle !== '新会话') {
+          setSessions((current) => current.map((s) => (s.id === sessionSessionId ? { ...s, title: newTitle } : s)));
+        }
+      },
+      () => {},
+    );
+  };
 
   const resolvePendingRequest = async (request: PendingRequest, decision: ApprovalDecisionPayload) => {
     if (resolvingRef.current) return;
