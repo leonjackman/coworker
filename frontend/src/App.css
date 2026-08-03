@@ -3230,6 +3230,7 @@ body.sidebar-resizing {
   text-align: left;
   color: var(--foreground);
   transition: background 120ms ease;
+  padding-right: 32px;
 }
 
 .project-session-list__item-content:hover {

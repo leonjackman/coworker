@@ -44,7 +44,7 @@ export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession
 
   return (
     <WorkspacePage
-      eyebrow={project.name}
+      eyebrow={project.workspace_path}
       title={project.name}
       description={sessions.length === 0 ? t('project_session.empty_state') : t('project_session.project_sessions_count', { count: sessions.length })}
     >

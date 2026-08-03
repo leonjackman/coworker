@@ -3,7 +3,7 @@ import { PageHeading } from './page-heading';
 
 interface WorkspacePageProps {
   eyebrow?: ReactNode;
-  title?: ReactNode;
+  title: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
   children: ReactNode;
