@@ -57,7 +57,7 @@ class AgentReply:
 
 
 class SearchFilesArgs(BaseModel):
-    query: str = Field(description="Text to search for in UTF-8 workspace files.")
+    query: str = Field(min_length=1, description="Text to search for in UTF-8 workspace files.")
     path: str = Field(default="", description="Optional workspace-relative file or directory to search.")
     max_results: int = Field(default=80, ge=1, le=80, description="Maximum number of matches to return.")
 
