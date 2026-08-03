@@ -1675,6 +1675,7 @@ body.sidebar-resizing {
 
 .workspace-page__content {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
 }
 
@@ -3160,9 +3161,9 @@ body.sidebar-resizing {
 }
 
 .project-session-list {
-  max-width: 760px;
-  margin: 24px auto -16px;
+  width: 100%;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   height: 100%;
   overflow: hidden;
@@ -3193,7 +3194,9 @@ body.sidebar-resizing {
 .project-session-list__items {
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
   padding-bottom: 12px;
 }
@@ -3208,6 +3211,7 @@ body.sidebar-resizing {
 
 .project-session-list__item {
   position: relative;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0;
