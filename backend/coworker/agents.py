@@ -632,8 +632,7 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 stream_writer({"type": "plan_delta", "content": plan_text})
                 stream_writer({"type": "plan_end", "content": plan_text})
 
-        marker_msg = SystemMessage(content=f"{PLAN_MARKER}\n{plan_text}")
-        return {"messages": [marker_msg]}
+        marker_msg = {"role": "human", "content": "\n\n--- Plan ---\n\n" + str(plan_text)}
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         if not self._is_plan_mode(state):
@@ -673,8 +672,7 @@ class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 stream_writer({"type": "plan_delta", "content": plan_text})
                 stream_writer({"type": "plan_end", "content": plan_text})
 
-        marker_msg = SystemMessage(content=f"{PLAN_MARKER}\n{plan_text}")
-        return {"messages": [marker_msg]}
+        marker_msg = {"role": "human", "content": "\n\n--- Plan ---\n\n" + str(plan_text)}
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
         tool_name = getattr(request, "tool_name", "") or ""
