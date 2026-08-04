@@ -41,15 +41,17 @@ agent 先研究 (search/read) → 调用 submit_plan 工具 → after_model 拦�
 
 ### Resume 修复（重要）
 
-发现 LangGraph 1.2.10 的 `Command(resume=...)` 在**多 middleware + interrupt 位于 after_model 节点**时无法可靠恢复中断（resume 值不注入 scratchpad，导致 agent 恢复后重规划/死循环）。该 bug 在原始代码的 run_command 审批中同样存在（预先存在，非本次引入）。
+发现 LangGraph 1.2.10 的 `Command(resume=...)` 在**多 middleware + interrupt 位于 after_model 节点**时无法可靠恢复中断。**根因是双重的**：
 
-**解决方案**：plan approve 走 `_run_with_approved_plan` 重跑路径：
-- 从 checkpoint 读取消息历史
-- 清理未配对的 tool_call / orphan tool message（保证 API 合法）
-- 注入 "用户已批准计划" HumanMessage + `plan_approved: True`
-- 重新 astream 新图（非 Command resume）
+1. **`plan_approved` 状态未持久化**：approve 决策后 `plan_approved=True` 没有写回 checkpoint，resume 恢复的 agent 看到 `plan_approved=False`，`wrap_tool_call` 拦截写文件工具 → agent 重新 submit_plan → 死循环。
+2. **SQLite `database is locked`**：`_open_checkpointer` 每次新建 `AsyncSqliteSaver` 连接，多个连接在同一 checkpoint 文件上交替读写时锁竞争（即使 busy timeout 也只是等待 30 秒后超时）。该 bug 在原始代码的 run_command 审批中同样存在（预先存在，非本次引入）。
 
-reject / regenerate：不重跑 agent，直接返回简洁 done 消息。
+**解决方案**：
+- **resume 前用 `graph.aupdate_state(config, {"plan_approved": True})`** 持久化批准状态，在**完全独立的 checkpoint 块**中完成（先关闭，再开 resume 块），避免与 resume 连接争锁。
+- **进程级单例 `AsyncSqliteSaver`**（`_open_checkpointer`）：整个进程复用一个 checkpoint 连接，串行化所有 checkpoint 读写，彻底消除 `database is locked`。
+- reject / regenerate：不重跑 agent，直接返回简洁 done 消息。
+
+**结果**：plan approve 走**官方 interrupt/resume 无缝续跑**（同一 graph、同一 thread 恢复执行），不是重跑。run_command/ask_user 的 resume bug 也因单例连接顺带修复。
 
 ## 前端改动
 
@@ -63,10 +65,10 @@ reject / regenerate：不重跑 agent，直接返回简洁 done 消息。
 ## 验证
 
 后端 + ego-browser 真机（DeepSeek provider）均验证通过：
-- ✅ 写文件任务 → plan 审批卡 → 批准 → 执行写文件成功
+- ✅ 写文件任务 → plan 审批卡 → 批准 → **同一执行流无缝续跑**写文件成功（非重跑）
 - ✅ 拒绝 → "No changes were made"，无文件创建
 - ✅ 重新规划 → "No changes were made"
 - ✅ 纯问答不触发计划审批
 - ✅ 用户消息时间戳 + Agent meta 行（模型 + 时长）
-- ✅ run_command 审批初始触发正常（不被 plan gate 拦截）
-- 注意：run_command approve 后 resume 有预先存在的 LangGraph bug（非本次引入），与改动前行为一致
+- ✅ run_command 审批触发 + approve 后继续执行均正常（单例连接顺带修复 resume）
+- ✅ 并发（2 个并行 session）稳定：连续 4 次 + 并发 2 次全部成功，无 `database is locked`

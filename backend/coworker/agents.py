@@ -214,6 +214,36 @@ def agent_run_config(
     }
 
 
+_ASYNC_SAVER: "Any" = None
+_ASYNC_SAVER_PATH: "Any" = None
+
+
+def _open_checkpointer(checkpoint_path: Any):
+    """Return a process-wide AsyncSqliteSaver connection for the checkpoint.
+
+    LangGraph's ``AsyncSqliteSaver.from_conn_string`` opens a fresh sqlite
+    connection per access. Concurrent connections on the same checkpoint file
+    contend on the SQLite write lock and intermittently raise ``database is
+    locked`` (even with a busy timeout). Reusing one long-lived connection for
+    the whole process serializes all checkpoint reads/writes and eliminates the
+    lock contention. The connection lives for the process lifetime.
+    """
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _open():
+        global _ASYNC_SAVER, _ASYNC_SAVER_PATH
+        if _ASYNC_SAVER is None or _ASYNC_SAVER_PATH != str(checkpoint_path):
+            conn = await aiosqlite.connect(str(checkpoint_path), timeout=30.0)
+            _ASYNC_SAVER = AsyncSqliteSaver(conn)
+            _ASYNC_SAVER_PATH = str(checkpoint_path)
+        yield _ASYNC_SAVER
+
+    return _open()
+
+
 def build_workspace_tools(
     workspace: Workspace,
     writable: bool,
@@ -992,14 +1022,6 @@ class PlanApprovalMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             "action_requests": [{"name": "submit_plan", "args": {"plan_text": plan_text}}],
             "review_configs": [{"action_name": "submit_plan", "allowed_decisions": ["approve", "reject", "regenerate"]}],
         }
-        import sys as _sys
-        from langgraph.config import get_config as _gc
-        from langgraph._internal._constants import CONFIG_KEY_SCRATCHPAD as _SP
-        try:
-            _sp = _gc()["configurable"][_SP]
-            _r = list(_sp.resume) if _sp.resume else []
-        except Exception as _e:
-            _r = f"err"
         decisions = interrupt(hitl_request)["decisions"]
         decision = decisions[0] if decisions else {"type": "reject"}
         dtype = str(decision.get("type", "reject"))
@@ -1255,8 +1277,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     async def _stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode, *, rerun: bool,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
             "model": self.model_name, "workspace_path": str(self.workspace.root),
@@ -1274,7 +1294,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         effective_access = access_mode if work_mode == "build" else "default"
         turn_index = self._next_turn_index(session_id)
 
-        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
+        async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
                 self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index),
                 work_mode=work_mode, language=language, access_mode=effective_access,
@@ -1409,111 +1429,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     return [_change_to_public(change)]
         return _estimate_file_changes(tool_name, input_raw)
 
-    async def _run_with_approved_plan(
-        self,
-        graph: Any,
-        config: dict[str, Any],
-        context: dict[str, Any],
-        approval: dict[str, Any],
-        session_id: str,
-        language: Language,
-        work_mode: WorkMode,
-        access_mode: AccessMode,
-    ) -> list[dict[str, Any]]:
-        """Re-run the agent graph with the user-approved plan injected into state.
-
-        Because LangGraph Command(resume) is unreliable when the interrupt was
-        raised inside a middleware ``after_model`` node, we instead load the
-        checkpointed message history, append a synthetic approval notice, and
-        stream a fresh invocation with ``plan_approved`` already True.
-        """
-        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-
-        # Read the checkpointed messages for this thread.
-        thread_config = {"configurable": {"thread_id": session_id}}
-        checkpoint = await graph.aget_state(thread_config)
-        messages = list(checkpoint.values.get("messages", []) if checkpoint and checkpoint.values else [])
-
-        args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
-        plan_text = str(args.get("plan_text") or approval.get("plan") or "")
-
-        # The checkpoint contains an unanswered submit_plan AI message. Rebuild a
-        # clean history: drop orphan tool messages and clear tool_calls on any
-        # assistant message that lacks a matching response, so re-sending the
-        # history to the model stays API-valid.
-        cleaned: list[Any] = []
-        tool_call_ids: set[str] = set()
-        for msg in messages:
-            if isinstance(msg, AIMessage):
-                ids = [tc.get("id") for tc in (getattr(msg, "tool_calls", None) or []) if tc.get("id")]
-                if ids and not any(
-                    isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None) in set(ids)
-                    for m in messages
-                ):
-                    msg = msg.model_copy(update={"tool_calls": []})
-                for tid in ids:
-                    tool_call_ids.add(tid)
-                cleaned.append(msg)
-            elif isinstance(msg, ToolMessage):
-                if getattr(msg, "tool_call_id", None) in tool_call_ids:
-                    cleaned.append(msg)
-                # else: orphan tool message, drop it
-            else:
-                cleaned.append(msg)
-        messages = cleaned
-
-        approval_notice = (
-            "The user has APPROVED the following plan. Proceed to implement it now "
-            "using the write/execute tools. Do not call submit_plan again.\n\n"
-            f"Approved plan:\n{plan_text}"
-        )
-        messages.append(HumanMessage(content=approval_notice))
-
-        content_parts: list[str] = []
-        tool_state: dict[str, dict[str, Any]] = {}
-        parts: list[dict[str, Any]] = []
-        events: list[dict[str, Any]] = []
-        try:
-            async for stream_mode, chunk in graph.astream(
-                {"messages": messages, "work_mode": work_mode, "language": language, "plan_approved": True},
-                config=config,
-                stream_mode=["messages", "custom", "updates"],
-            ):
-                if stream_mode == "messages":
-                    msg, _meta = chunk
-                    try:
-                        for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
-                            events.append(event)
-                    except GeneratorExit:
-                        raise
-                    except Exception:
-                        pass
-                elif stream_mode == "custom":
-                    if isinstance(chunk, dict) and chunk.get("type") in ("plan_start", "plan_delta", "plan_end"):
-                        parts.append(chunk)
-                        events.append(chunk)
-                elif stream_mode == "updates":
-                    if "__interrupt__" in chunk:
-                        approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
-                        self.trace_store.record("agent_activity", "pending", trace_context(session_id=session_id, provider=self.provider_name, provider_id=self.provider_id, model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True), {"approval_ids": [a.get("id", "") for a in approvals], "resumed": True})
-                        for item in approvals:
-                            event = stream_event_from_interrupt(item)
-                            if event.get("type") == "plan_required":
-                                parts.append({"type": "plan", "content": str(event.get("plan") or "")})
-                            events.append(event)
-                        continue
-        except Exception as exc:
-            self.trace_store.record("agent_activity", "error", trace_context(session_id=session_id, provider=self.provider_name, provider_id=self.provider_id, model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True), {"error": str(exc)[:400], "resumed": True})
-            raise
-
-        final_content = "".join(content_parts)
-        self.trace_store.record("agent_activity", "done", trace_context(session_id=session_id, provider=self.provider_name, provider_id=self.provider_id, model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True), {"content_chars": len(final_content), "resumed": True})
-        events.append({"type": "stage", "name": "finalizing", "status": "done"})
-        events.append({"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(parts)})
-        return events
-
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from langgraph.types import Command
 
         context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
@@ -1536,28 +1452,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.trace_store.record("agent_activity", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
         effective_access = access_mode if work_mode == "build" else "default"
 
-        async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
-            graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store),
-                work_mode=work_mode, language=language, access_mode=effective_access,
-                checkpointer=checkpointer, approval_store=self.approval_store,
-            )
-            config = agent_run_config(
-                session_id=session_id, provider=self.provider_name, model=self.model_name,
-                language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
-            )
-            # Plan approvals resume by re-running the graph with the approved plan
-            # injected into state, rather than relying on LangGraph Command(resume)
-            # which is unreliable when the interrupt lives inside a middleware node.
-            is_plan = str(context.get("kind") or "") == "plan"
-            if is_plan and decisions:
-                decision = decisions[0] if isinstance(decisions, list) else decisions
-                dtype = str(decision.get("type", "") if isinstance(decision, dict) else "")
-                if dtype == "approve":
-                    events.extend(await self._run_with_approved_plan(
-                        graph, config, context, approval, session_id, language, work_mode, access_mode,
-                    ))
-                    return events
+        is_plan = str(context.get("kind") or "") == "plan"
+        config = agent_run_config(
+            session_id=session_id, provider=self.provider_name, model=self.model_name,
+            language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
+        )
+        if is_plan and decisions:
+            decision = decisions[0] if isinstance(decisions, list) else decisions
+            dtype = str(decision.get("type", "") if isinstance(decision, dict) else "")
+            if dtype != "approve":
                 # reject / regenerate: do not resume the agent; finish the turn cleanly.
                 reject_msg = (
                     "The user rejected the proposed plan. No changes were made."
@@ -1568,6 +1471,29 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 events.append({"type": "stage", "name": "finalizing", "status": "done"})
                 events.append({"type": "done", "content": reject_msg, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": []})
                 return events
+            # Approve: resume the SAME graph execution (official LangGraph
+            # interrupt/resume). Before resuming, persist plan_approved=True
+            # into the thread state so the resumed agent sees the plan as
+            # approved and write/execute tools pass the gate. Done in a fully
+            # closed checkpoint connection before the resume connection opens,
+            # to avoid SQLite write-lock contention.
+            try:
+                async with _open_checkpointer(self.checkpoint_path) as _cp:
+                    _g = build_coworker_agent_graph(
+                        self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store),
+                        work_mode=work_mode, language=language, access_mode=effective_access,
+                        checkpointer=_cp, approval_store=self.approval_store,
+                    )
+                    await _g.aupdate_state(config, {"plan_approved": True})
+            except Exception as exc:
+                self.trace_store.record("agent_activity", "error", current_trace_context, {"error": f"update_state: {str(exc)[:300]}", "resumed": True})
+
+        async with _open_checkpointer(self.checkpoint_path) as checkpointer:
+            graph = build_coworker_agent_graph(
+                self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store),
+                work_mode=work_mode, language=language, access_mode=effective_access,
+                checkpointer=checkpointer, approval_store=self.approval_store,
+            )
             interrupt_id = str(context.get("interrupt_id") or "")
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
             tool_state: dict[str, dict[str, Any]] = {}
@@ -1649,14 +1575,32 @@ class AgentRuntimeRegistry:
         self.provider_manager = ProviderManager(settings.data_dir / "providers.json")
         self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False)
+        self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
         self.checkpointer = SqliteSaver(self.checkpoint_conn)
 
+    def _open_sync_checkpointer(self):
+        # A fresh synchronous connection per call, committed and closed, so it
+        # never holds a lingering lock that contends with the async saver used
+        # during streaming/resume.
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
+        return SqliteSaver(conn), conn
+
     def has_runtime_checkpoint(self, session_id: str) -> bool:
-        return self.checkpointer.get({"configurable": {"thread_id": session_id}}) is not None
+        saver, conn = self._open_sync_checkpointer()
+        try:
+            return saver.get({"configurable": {"thread_id": session_id}}) is not None
+        finally:
+            conn.commit()
+            conn.close()
 
     def forget_runtime_checkpoint(self, session_id: str) -> None:
-        self.checkpointer.delete_thread(session_id)
+        saver, conn = self._open_sync_checkpointer()
+        try:
+            saver.delete_thread(session_id)
+        finally:
+            conn.commit()
+            conn.close()
 
     def _provider_for_request(self, provider_id: str | None, model: str | None) -> ProviderEntry | None:
         if provider_id:
