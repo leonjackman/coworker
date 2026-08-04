@@ -214,6 +214,7 @@ class Workspace:
         self.audit_path = audit_path
         if self.audit_path:
             self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+        self._fingerprints: dict[str, tuple[int, int, str]] = {}
 
     def resolve_path(self, file_path: str) -> Path:
         candidate = (self.root / file_path).resolve()
@@ -221,16 +222,114 @@ class Workspace:
             raise ValueError(f"Access denied: {file_path} is outside the workspace")
         return candidate
 
-    def read_text(self, file_path: str) -> str:
-        return self.resolve_path(file_path).read_text(encoding="utf-8")
+    def normalize_rel_path(self, file_path: str) -> str:
+        """Best-effort conversion of a tool-supplied path to a workspace-relative path."""
+        try:
+            return self.rel_path(self.resolve_path(file_path))
+        except (ValueError, OSError):
+            return str(file_path).lstrip("./").replace("\\", "/")
 
-    def write_text(self, file_path: str, content: str, audit_context: dict[str, Any] | None = None) -> None:
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+        except OSError:
+            return ""
+        return digest.hexdigest()
+
+    def _fingerprint(self, path: Path) -> tuple[int, int, str]:
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size, self._sha256(path)
+
+    def _record_fingerprint(self, target: Path) -> None:
+        try:
+            self._fingerprints[self.rel_path(target)] = self._fingerprint(target)
+        except (OSError, ValueError):
+            pass
+
+    def _ensure_fresh(self, target: Path) -> None:
+        """Reject edits to files that changed since the agent last read them.
+
+        Mirrors the staleness guard used by leading coding agents: writing over
+        content the model has not seen can silently clobber newer changes.
+        """
+        try:
+            rel = self.rel_path(target)
+        except ValueError:
+            return
+        recorded = self._fingerprints.get(rel)
+        if recorded is None:
+            return
+        current = self._fingerprint(target)
+        if current != recorded:
+            raise ValueError(
+                f"File changed since it was last read: {rel}. "
+                "Re-read the file before editing to avoid overwriting newer content."
+            )
+
+    def read_text(self, file_path: str) -> str:
+        target = self.resolve_path(file_path)
+        content = target.read_text(encoding="utf-8")
+        self._record_fingerprint(target)
+        return content
+
+    def _capture_change(
+        self,
+        change_store: Any,
+        audit_context: dict[str, Any] | None,
+        turn_index: int,
+        tool_name: str,
+        file_path: str,
+        kind: str,
+        before: str | None,
+        after: str | None,
+        file_existed: bool = True,
+    ) -> None:
+        if change_store is None:
+            return
+        session_id = str((audit_context or {}).get("session_id") or "")
+        if not session_id:
+            return
+        try:
+            change_store.record(
+                session_id=session_id,
+                turn_index=int(turn_index or 1),
+                tool_name=tool_name,
+                file_path=file_path,
+                kind=kind,
+                before=before,
+                after=after,
+                file_existed=bool(file_existed),
+            )
+        except Exception:
+            # Change capture must never mask the tool's real outcome.
+            return
+
+    def write_text(
+        self,
+        file_path: str,
+        content: str,
+        audit_context: dict[str, Any] | None = None,
+        change_store: Any = None,
+        turn_index: int = 1,
+    ) -> None:
         details: dict[str, Any] = {"path": file_path, "bytes": len(content.encode("utf-8"))}
+        before: str | None = None
+        file_existed = False
         try:
             target = self.resolve_path(file_path)
             details["path"] = self.rel_path(target)
+            self._ensure_fresh(target)
+            if target.is_file():
+                before = target.read_text(encoding="utf-8", errors="replace")
+                file_existed = True
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+            self._capture_change(change_store, audit_context, turn_index, "write_file", details["path"], "write", before, content, file_existed=file_existed)
+            self._record_fingerprint(target)
             self.audit_tool_action("write_file", "success", details, audit_context)
         except Exception as exc:
             self.audit_tool_action("write_file", "error", {**details, "error": str(exc)[:240]}, audit_context)
@@ -243,6 +342,8 @@ class Workspace:
         new_text: str,
         replace_all: bool = False,
         audit_context: dict[str, Any] | None = None,
+        change_store: Any = None,
+        turn_index: int = 1,
     ) -> dict[str, Any]:
         details: dict[str, Any] = {
             "path": file_path,
@@ -260,6 +361,7 @@ class Workspace:
                 raise ValueError(f"Not a file: {file_path}")
             if not self.is_text_file(target):
                 raise ValueError(f"Not a text file: {file_path}")
+            self._ensure_fresh(target)
 
             content = target.read_text(encoding="utf-8", errors="replace")
             occurrences = content.count(old_text)
@@ -276,6 +378,8 @@ class Workspace:
                 "replacements": occurrences if replace_all else 1,
                 "remaining_occurrences": 0 if replace_all else max(occurrences - 1, 0),
             }
+            self._capture_change(change_store, audit_context, turn_index, "replace_in_file", details["path"], "edit", content, updated)
+            self._record_fingerprint(target)
             self.audit_tool_action("replace_in_file", "success", {**details, **result}, audit_context)
             return result
         except Exception as exc:
@@ -287,6 +391,8 @@ class Workspace:
         file_path: str,
         edits: list[dict[str, Any]],
         audit_context: dict[str, Any] | None = None,
+        change_store: Any = None,
+        turn_index: int = 1,
     ) -> dict[str, Any]:
         details: dict[str, Any] = {"path": file_path, "edit_count": len(edits) if isinstance(edits, list) else 0}
         try:
@@ -299,6 +405,7 @@ class Workspace:
                 raise ValueError(f"Not a file: {file_path}")
             if not self.is_text_file(target):
                 raise ValueError(f"Not a text file: {file_path}")
+            self._ensure_fresh(target)
 
             content = target.read_text(encoding="utf-8", errors="replace")
             updated = content
@@ -337,6 +444,8 @@ class Workspace:
                 "replacements": sum(item["replacements"] for item in results),
                 "edits": results,
             }
+            self._capture_change(change_store, audit_context, turn_index, "apply_text_edits", details["path"], "edit", content, updated)
+            self._record_fingerprint(target)
             self.audit_tool_action("apply_text_edits", "success", {**details, **result}, audit_context)
             return result
         except Exception as exc:
@@ -501,6 +610,118 @@ class Workspace:
             return value.decode("utf-8", errors="replace")
         return value
 
+    def revert_change(self, change: dict[str, Any]) -> dict[str, Any]:
+        """Safely revert a single recorded change.
+
+        Prefers an exact whole-file restore when the file still matches the
+        recorded ``after`` state. Otherwise it falls back to a hunk-level
+        inverse edit so that edits made by *other* sessions to unrelated
+        regions of the same file are preserved. If the recorded hunks cannot
+        be matched (e.g. another session edited the same region), a conflict is
+        reported and the file is left untouched — never clobbering others'
+        changes.
+
+        Returns ``{"status": "reverted"|"conflict", path, ...}``.
+        """
+        file_path = str(change.get("file_path") or "")
+        change_id = str(change.get("id") or "")
+        result: dict[str, Any] = {"status": "conflict", "path": file_path, "reason": ""}
+        if change_id:
+            result["id"] = change_id
+        if not file_path:
+            result["reason"] = "missing file path"
+            return result
+
+        kind = str(change.get("kind") or "edit")
+        file_existed = bool(change.get("file_existed"))
+        too_large = bool(change.get("too_large"))
+        after = change.get("after")
+        before = change.get("before")
+        hunks = change.get("hunks") or []
+
+        try:
+            target = self.resolve_path(file_path)
+        except (ValueError, OSError) as exc:
+            result["reason"] = str(exc)[:200]
+            return result
+
+        if file_existed and not target.is_file():
+            result["reason"] = "file was deleted after this change"
+            return result
+        if not file_existed and not target.is_file():
+            # File never existed and still does not: nothing to revert.
+            return {"status": "reverted", "path": file_path, "kind": kind, "added": 0, "removed": 0, "noop": True, **({"id": change_id} if change_id else {})}
+
+        current = target.read_text(encoding="utf-8", errors="replace")
+
+        # New file: only a clean delete is safe.
+        if not file_existed:
+            if after is not None and current == after:
+                target.unlink(missing_ok=True)
+                self._fingerprints.pop(self.rel_path(target), None)
+                return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), "deleted": True, **({"id": change_id} if change_id else {})}
+            result["reason"] = "file changed after it was created; refusing to delete"
+            return result
+
+        # Exact whole-file restore (the common single-session case).
+        if after is not None and before is not None and current == after:
+            try:
+                if before == "":
+                    target.unlink(missing_ok=True)
+                else:
+                    target.write_text(before, encoding="utf-8")
+            except OSError as exc:
+                result["reason"] = str(exc)[:200]
+                return result
+            self._fingerprints.pop(self.rel_path(target), None)
+            return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), "deleted": before == "", **({"id": change_id} if change_id else {})}
+
+        # File diverged (another session/user edited it): try hunk-level inverse
+        # so unrelated regions stay untouched. Whole-file overwrites and
+        # oversized changes cannot be partially reverted safely.
+        if too_large or kind == "write" or not hunks:
+            result["reason"] = "file changed since this session edited it; refusing to overwrite"
+            return result
+
+        reverted_text = self._apply_inverse_hunks(current, hunks)
+        if reverted_text is None:
+            result["reason"] = "another session changed the same region; refusing to overwrite"
+            return result
+        try:
+            target.write_text(reverted_text, encoding="utf-8")
+        except OSError as exc:
+            result["reason"] = str(exc)[:200]
+            return result
+        self._fingerprints.pop(self.rel_path(target), None)
+        return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), **({"id": change_id} if change_id else {})}
+
+    @staticmethod
+    def _apply_inverse_hunks(content: str, hunks: list[dict[str, Any]]) -> str | None:
+        """Apply the inverse of structured hunks to ``content``.
+
+        Each hunk records the before-region (context + del lines) and the
+        after-region (context + add lines). Reverting replaces the after-region
+        with the before-region. Hunks are processed bottom-up so earlier line
+        positions stay valid. Returns ``None`` if any hunk cannot be located.
+        """
+        had_trailing = content.endswith("\n")
+        lines = content.splitlines()
+
+        for hunk in reversed(hunks or []):
+            after_region = [line.get("text", "") for line in hunk.get("lines", []) if line.get("type") in ("context", "add")]
+            before_region = [line.get("text", "") for line in hunk.get("lines", []) if line.get("type") in ("context", "del")]
+            if not after_region:
+                continue
+            match = _find_sequence(lines, after_region)
+            if match < 0:
+                return None
+            lines[match : match + len(after_region)] = before_region
+
+        result = "\n".join(lines)
+        if had_trailing:
+            result += "\n"
+        return result
+
     def audit_tool_action(
         self,
         operation: str,
@@ -612,6 +833,7 @@ class Workspace:
         if not self.is_text_file(target):
             return {"content": None, "binary": True, "size": target.stat().st_size}
         content = target.read_text(encoding="utf-8", errors="replace")
+        self._record_fingerprint(target)
         truncated = len(content) > max_chars
         if truncated:
             content = content[:max_chars]
@@ -696,6 +918,20 @@ class Workspace:
         return path.relative_to(self.root).as_posix()
 
 
+def _find_sequence(haystack: list[str], needle: list[str]) -> int:
+    """Return the index of the first occurrence of ``needle`` in ``haystack`` or -1."""
+    if not needle:
+        return -1
+    n = len(haystack)
+    m = len(needle)
+    if m > n:
+        return -1
+    for i in range(n - m + 1):
+        if haystack[i : i + m] == needle:
+            return i
+    return -1
+
+
 def list_tool_audit_events(audit_path: Path, limit: int = 100) -> list[dict[str, Any]]:
     safe_limit = max(1, min(int(limit or 100), 200))
     if not audit_path.exists():
@@ -712,3 +948,126 @@ def list_tool_audit_events(audit_path: Path, limit: int = 100) -> list[dict[str,
         if isinstance(event, dict):
             events.append(event)
     return list(reversed(events[-safe_limit:]))
+
+
+GIT_MAX_FILES = 500
+GIT_MAX_DIFF_CHARS = 1_000_000
+GIT_COMMAND_TIMEOUT_SECONDS = 5.0
+
+
+def git_is_repo(workspace_root: Path) -> bool:
+    probe = (workspace_root / ".git")
+    return probe.exists() or probe.is_file()
+
+
+def _git_run(workspace_root: Path, args: list[str], timeout: float = GIT_COMMAND_TIMEOUT_SECONDS) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _parse_git_diff_sections(diff_text: str) -> dict[str, str]:
+    """Split ``git diff HEAD`` output into per-file unified diff sections.
+
+    Returns a mapping of new-file path (relative to the repo root) to its
+    diff body (the ``@@`` hunks and body lines).
+    """
+    sections: dict[str, str] = {}
+    current_path: str | None = None
+    current_lines: list[str] = []
+    for line in diff_text.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            if current_path:
+                sections[current_path] = "".join(current_lines)
+            current_path = None
+            current_lines = []
+            continue
+        if line.startswith("+++ "):
+            target = line[4:].strip()
+            if target.startswith("b/"):
+                current_path = target[2:]
+            continue
+        if current_path is None:
+            continue
+        current_lines.append(line)
+    if current_path:
+        sections[current_path] = "".join(current_lines)
+    return sections
+
+
+def workspace_git_diff(workspace_root: Path) -> dict[str, Any]:
+    """Return the current working-tree diff (``git diff HEAD``) plus untracked files.
+
+    When the workspace is not a git repository (or git is unavailable) this
+    returns ``git: False`` so callers can fall back to session-scoped changes.
+    """
+    result: dict[str, Any] = {
+        "git": False,
+        "workspace": str(workspace_root),
+        "files": [],
+        "untracked": [],
+        "truncated_diff": False,
+        "note": "not a git repository",
+    }
+    if not git_is_repo(workspace_root):
+        return result
+
+    stat_proc = _git_run(workspace_root, ["diff", "HEAD", "--numstat"])
+    if stat_proc is None or stat_proc.returncode != 0:
+        result["note"] = "git unavailable"
+        return result
+
+    files: list[dict[str, Any]] = []
+    skipped = 0
+    for line in stat_proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        if len(files) >= GIT_MAX_FILES:
+            skipped += 1
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added, removed, path = parts[0], parts[1], "\t".join(parts[2:])
+        if added == "-" or removed == "-":
+            files.append({"path": path, "added": 0, "removed": 0, "binary": True, "diff": ""})
+            continue
+        files.append({"path": path, "added": int(added or 0), "removed": int(removed or 0), "binary": False, "diff": ""})
+
+    truncated_diff = False
+    diff_proc = _git_run(workspace_root, ["diff", "HEAD"])
+    if diff_proc is not None and diff_proc.returncode == 0:
+        diff_text = diff_proc.stdout
+        if len(diff_text) > GIT_MAX_DIFF_CHARS:
+            diff_text = diff_text[:GIT_MAX_DIFF_CHARS]
+            truncated_diff = True
+        sections = _parse_git_diff_sections(diff_text)
+        for file_entry in files:
+            if file_entry.get("binary"):
+                continue
+            body = sections.get(file_entry["path"], "")
+            if body:
+                file_entry["diff"] = body
+
+    untracked: list[str] = []
+    ut_proc = _git_run(workspace_root, ["ls-files", "--others", "--exclude-standard"])
+    if ut_proc is not None and ut_proc.returncode == 0:
+        untracked = [line for line in ut_proc.stdout.splitlines() if line.strip()]
+
+    result.update(
+        {
+            "git": True,
+            "files": files,
+            "untracked": untracked,
+            "truncated_diff": truncated_diff,
+            "note": "" if skipped == 0 else f"showing first {GIT_MAX_FILES} files",
+        }
+    )
+    return result

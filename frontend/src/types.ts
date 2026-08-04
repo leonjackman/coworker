@@ -15,11 +15,95 @@ export interface ComposerAttachment {
   error?: string;
 }
 
+export interface DiffLine {
+  type: 'context' | 'del' | 'add';
+  old_no: number | null;
+  new_no: number | null;
+  text: string;
+}
+
+export interface DiffHunk {
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  lines: DiffLine[];
+}
+
 export interface PartFileChange {
   path: string;
   kind: 'write' | 'edit';
   added: number;
   removed: number;
+  hunks?: DiffHunk[];
+  truncated?: boolean;
+  too_large?: boolean;
+}
+
+export interface SessionChangeRecord extends PartFileChange {
+  id: string;
+  session_id: string;
+  turn_index: number;
+  tool_name: string;
+  file_path: string;
+  before?: string;
+  after?: string;
+  timestamp: string;
+}
+
+export interface SessionChangesResponse {
+  status: string;
+  session_id: string;
+  turns: Array<{ turn_index: number; changes: SessionChangeRecord[] }>;
+  count: number;
+}
+
+export interface CurrentDiffFile {
+  path: string;
+  added: number;
+  removed: number;
+  binary: boolean;
+  diff: string;
+}
+
+export interface CurrentDiffResponse {
+  status: string;
+  git: boolean;
+  workspace: string;
+  files: CurrentDiffFile[];
+  untracked: string[];
+  truncated_diff: boolean;
+  note: string;
+}
+
+export interface RevertChangeItem {
+  id: string;
+  path: string;
+  kind?: string;
+  added: number;
+  removed: number;
+  deleted?: boolean;
+  noop?: boolean;
+}
+
+export interface RevertPreviewResponse {
+  status: string;
+  changes: SessionChangeRecord[];
+  count: number;
+}
+
+export interface RevertSummary {
+  reverted: RevertChangeItem[];
+  conflicts: Array<{ status: string; path: string; reason: string; id?: string }>;
+  total: number;
+  reverted_count: number;
+  conflict_count: number;
+}
+
+export interface RollbackResponse {
+  status: string;
+  messages: SessionMessageRecord[];
+  revert: RevertSummary;
 }
 
 export interface PartTool {

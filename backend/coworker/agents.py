@@ -16,6 +16,7 @@ from langchain.agents.middleware.types import AgentState, Runtime
 from .config import BackendSettings
 from .providers import ProviderEntry, ProviderManager
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
+from .changes import ChangeStore
 from .workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace
 
 AgentMode = Literal["single"]
@@ -113,6 +114,14 @@ class AgentRuntime(ABC):
     mode: AgentMode
     owns_runtime_messages = False
 
+    def _next_turn_index(self, session_id: str) -> int:
+        if getattr(self, "change_store", None) is None:
+            return 1
+        try:
+            return self.change_store.next_turn_index(session_id)
+        except Exception:
+            return 1
+
     @abstractmethod
     def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
         raise NotImplementedError
@@ -121,6 +130,14 @@ class AgentRuntime(ABC):
 class AgentStreamRuntime(ABC):
     mode: AgentMode
     owns_runtime_messages = False
+
+    def _next_turn_index(self, session_id: str) -> int:
+        if self.change_store is None:
+            return 1
+        try:
+            return self.change_store.next_turn_index(session_id)
+        except Exception:
+            return 1
 
     @abstractmethod
     def stream(
@@ -197,6 +214,8 @@ def build_workspace_tools(
     writable: bool,
     audit_context: dict[str, Any] | None = None,
     approval_store: CommandApprovalStore | None = None,
+    change_store: ChangeStore | None = None,
+    turn_index: int = 1,
 ) -> list[Any]:
     from langchain_core.tools import tool
 
@@ -225,7 +244,7 @@ def build_workspace_tools(
     def write_file(file_path: str, content: str) -> str:
         """Write a full UTF-8 text file."""
         try:
-            workspace.write_text(file_path, content, audit_context)
+            workspace.write_text(file_path, content, audit_context, change_store, turn_index)
             return f"Wrote {file_path}"
         except Exception as exc:
             return _error_result(exc, "write_file")
@@ -234,7 +253,7 @@ def build_workspace_tools(
     def replace_in_file(file_path: str, old_text: str, new_text: str, replace_all: bool = False) -> str:
         """Replace exact text in a UTF-8 workspace file."""
         try:
-            result = workspace.replace_text(file_path, old_text, new_text, replace_all, audit_context)
+            result = workspace.replace_text(file_path, old_text, new_text, replace_all, audit_context, change_store, turn_index)
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "replace_in_file")
@@ -247,6 +266,8 @@ def build_workspace_tools(
                 file_path,
                 [edit.model_dump() if isinstance(edit, TextEditArgs) else edit for edit in edits],
                 audit_context,
+                change_store,
+                turn_index,
             )
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
@@ -284,6 +305,33 @@ def build_workspace_tools(
 
 
 _WRITE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits", "run_command"}
+_CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
+
+
+def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
+    if not input_raw:
+        return ""
+    try:
+        args = json.loads(input_raw)
+    except Exception:
+        return ""
+    if not isinstance(args, dict):
+        return ""
+    return next((str(args[k]) for k in _WRITE_ARG_PATH_KEYS if args.get(k)), "")
+
+
+def _change_to_public(change: dict[str, Any]) -> dict[str, Any]:
+    public: dict[str, Any] = {
+        "path": change.get("file_path", ""),
+        "kind": change.get("kind", "edit"),
+        "added": int(change.get("added") or 0),
+        "removed": int(change.get("removed") or 0),
+        "truncated": bool(change.get("truncated")),
+        "too_large": bool(change.get("too_large")),
+    }
+    if change.get("hunks"):
+        public["hunks"] = change["hunks"]
+    return public
 
 
 def _command_digest_from_tool_call(tool_call: Any) -> str:
@@ -1069,7 +1117,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1079,6 +1127,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.approval_store = approval_store
         self.trace_store = trace_store
         self.checkpointer = checkpointer
+        self.change_store = change_store
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1098,9 +1147,10 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         )
         self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "run"})
         effective_access = access_mode if work_mode == "build" else "default"
+        turn_index = self._next_turn_index(session_id)
         graph = build_coworker_agent_graph(
             self.llm,
-            build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+            build_workspace_tools(self.workspace, work_mode == "build", audit_context, change_store=self.change_store, turn_index=turn_index),
             work_mode=work_mode,
             language=language,
             access_mode=effective_access,
@@ -1137,7 +1187,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1147,6 +1197,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.approval_store = approval_store
         self.trace_store = trace_store
         self.checkpoint_path = checkpoint_path
+        self.change_store = change_store
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1193,10 +1244,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         prepared_messages = prepare_agent_messages(messages, language, work_mode, access_mode)
         effective_access = access_mode if work_mode == "build" else "default"
+        turn_index = self._next_turn_index(session_id)
 
         async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
             graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context, change_store=self.change_store, turn_index=turn_index),
                 work_mode=work_mode, language=language, access_mode=effective_access,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
@@ -1216,7 +1268,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     if stream_mode == "messages":
                         msg, _meta = chunk
                         try:
-                            for event in self._handle_message_chunk(msg, content_parts, tool_state, parts):
+                            for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
                                 yield event
                         except GeneratorExit:
                             raise
@@ -1247,7 +1299,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts}
 
     def _handle_message_chunk(
-        self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]],
+        self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]], session_id: str = "",
     ) -> list[dict[str, Any]]:
         from langchain_core.messages import AIMessageChunk, ToolMessage
 
@@ -1295,7 +1347,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 tool_state[tc_id]["output"] = str(content)[:2000]
                 started_at = tool_state[tc_id].get("started_at")
                 duration_ms = round((time.time() - started_at) * 1000) if started_at else None
-                files = _estimate_file_changes(tool_state[tc_id].get("name", ""), tool_state[tc_id].get("input", ""))
+                files = self._real_file_changes(tc_id, tool_state, session_id)
                 part: dict[str, Any] = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": "success"}
                 if duration_ms is not None:
                     part["duration_ms"] = duration_ms
@@ -1309,6 +1361,19 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 events.append(part)
 
         return events
+
+    def _real_file_changes(self, tc_id: str, tool_state: dict[str, dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
+        state = tool_state.get(tc_id) or {}
+        tool_name = str(state.get("name") or "")
+        input_raw = str(state.get("input") or "")
+        if tool_name in _CHANGE_TOOL_NAMES and self.change_store is not None and session_id:
+            raw_path = _path_from_tool_input(tool_name, input_raw)
+            if raw_path:
+                normalized = self.workspace.normalize_rel_path(raw_path)
+                change = self.change_store.match_and_claim(session_id, tool_name, normalized)
+                if change is not None:
+                    return [_change_to_public(change)]
+        return _estimate_file_changes(tool_name, input_raw)
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -1336,7 +1401,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
             graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context),
+                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context, change_store=self.change_store),
                 work_mode=work_mode, language=language, access_mode=effective_access,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
@@ -1350,7 +1415,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     if stream_mode == "messages":
                         msg, _meta = chunk
                         try:
-                            for event in self._handle_message_chunk(msg, content_parts, tool_state, parts):
+                            for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
                                 events.append(event)
                         except GeneratorExit:
                             raise
@@ -1415,6 +1480,7 @@ class AgentRuntimeRegistry:
         self.default_workspace = Workspace(settings.workspace_dir, settings.data_dir / TOOL_AUDIT_FILENAME)
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
+        self.change_store = ChangeStore(settings.data_dir)
         self.provider_manager = ProviderManager(settings.data_dir / "providers.json")
         self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1446,10 +1512,10 @@ class AgentRuntimeRegistry:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
@@ -1469,7 +1535,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:

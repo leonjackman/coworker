@@ -42,8 +42,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateTitle: (sessionId, firstUserMessage) =>
     ipcRenderer.invoke('generate-title', { session_id: sessionId, first_user_message: firstUserMessage }),
   getSession: (sessionId) => ipcRenderer.invoke('get-session', sessionId),
-  rollbackMessage: (sessionId, messageId) =>
-    ipcRenderer.invoke('rollback-message', { session_id: sessionId, message_id: messageId }),
+  rollbackMessage: (sessionId, messageId, withCode) =>
+    ipcRenderer.invoke('rollback-message', { session_id: sessionId, message_id: messageId, with_code: !!withCode }),
+  getRevertPreview: (sessionId, messageId) =>
+    ipcRenderer.invoke('get-revert-preview', { session_id: sessionId, message_id: messageId }),
   streamRegenerateMessage: (requestId, sessionId, messageId, onEvent) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;
@@ -77,4 +79,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listAgentTraces: (limit) => ipcRenderer.invoke('list-agent-traces', limit),
   listCommandApprovals: () => ipcRenderer.invoke('list-command-approvals'),
   resolveCommandApproval: (approvalId, decision) => ipcRenderer.invoke('resolve-command-approval', { approval_id: approvalId, decision }),
+  getSessionChanges: (sessionId) => ipcRenderer.invoke('get-session-changes', sessionId),
+  getCurrentDiff: (options = {}) => ipcRenderer.invoke('get-current-diff', options),
 });

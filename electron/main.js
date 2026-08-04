@@ -564,7 +564,13 @@ function startStreamingRequest(requestId, path, payload, sender, eventName = 'ch
 }
 
 ipcMain.handle('rollback-message', async (event, payload) => {
-  return requestBackend(`/sessions/${payload.session_id}/messages/${payload.message_id}/rollback`, 'POST', {});
+  return requestBackend(`/sessions/${payload.session_id}/messages/${payload.message_id}/rollback`, 'POST', {
+    with_code: !!payload?.with_code,
+  });
+});
+
+ipcMain.handle('get-revert-preview', async (event, payload) => {
+  return requestBackend(`/sessions/${payload.session_id}/messages/${payload.message_id}/revert-preview`);
 });
 
 ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id }) => {
@@ -642,6 +648,18 @@ ipcMain.handle('list-agent-traces', async (event, limit) => {
 
 ipcMain.handle('list-command-approvals', async () => {
   return requestBackend('/command-approvals');
+});
+
+ipcMain.handle('get-session-changes', async (event, sessionId) => {
+  return requestBackend(`/sessions/${encodeURIComponent(sessionId)}/changes`);
+});
+
+ipcMain.handle('get-current-diff', async (event, options = {}) => {
+  const params = new URLSearchParams();
+  if (options?.projectId) params.set('project_id', options.projectId);
+  if (options?.sessionId) params.set('session_id', options.sessionId);
+  const query = params.toString();
+  return requestBackend(`/diffs/current${query ? `?${query}` : ''}`);
 });
 
 ipcMain.handle('resolve-command-approval', async (event, payload) => {

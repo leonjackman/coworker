@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, ChevronRight, FilePenLine } from 'lucide-react';
 import type { PartFileChange } from '../types';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
+import { FileDiffViewer } from './FileDiffViewer';
 
 function FileCounts({ added, removed }: { added: number; removed: number }) {
   return (
@@ -33,6 +34,7 @@ export function FileChangesCard({ files }: { files: PartFileChange[] }) {
 
   const totalAdded = files.reduce((sum, file) => sum + file.added, 0);
   const totalRemoved = files.reduce((sum, file) => sum + file.removed, 0);
+  const hasDiffs = files.some((file) => file.hunks && file.hunks.length > 0);
 
   return (
     <div className="file-changes-card">
@@ -57,6 +59,20 @@ export function FileChangesCard({ files }: { files: PartFileChange[] }) {
               </div>
             ))}
           </div>
+          {hasDiffs && (
+            <div className="file-changes-card__diffs">
+              {files
+                .filter((file) => file.hunks && file.hunks.length > 0)
+                .map((file) => (
+                  <FileDiffViewer
+                    key={`${file.kind}-${file.path}`}
+                    path={file.path}
+                    {...(file.hunks && file.hunks.length > 0 ? { hunks: file.hunks } : {})}
+                    kind={file.kind}
+                  />
+                ))}
+            </div>
+          )}
         </CollapsibleContent>
       </Collapsible>
     </div>

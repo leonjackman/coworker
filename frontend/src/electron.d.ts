@@ -7,6 +7,7 @@ import type {
   CommandApprovalsResponse,
   CreateProjectRequest,
   CreateSessionRequest,
+  CurrentDiffResponse,
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
@@ -15,6 +16,9 @@ import type {
   ProviderUpdatePayload,
   RuntimeConfig,
   RuntimeConfigUpdate,
+  RevertPreviewResponse,
+  RollbackResponse,
+  SessionChangesResponse,
   SessionDetailResponse,
   SessionMessageRecord,
   SessionResponse,
@@ -65,7 +69,10 @@ declare global {
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
       resolveCommandApproval: (approvalId: string, decision: CommandApprovalDecision) => Promise<CommandApprovalResult>;
-      rollbackMessage: (sessionId: string, messageId: string) => Promise<{ status: string; messages: SessionMessageRecord[] }>;
+      getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
+      getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
+      getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
+      rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
       streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback) => Promise<void>;
       streamEditMessage: (
         requestId: string,

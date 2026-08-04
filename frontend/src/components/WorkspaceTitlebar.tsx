@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Diff,
   MoreHorizontal,
   PanelBottom,
   PanelLeftClose,
@@ -29,11 +30,13 @@ interface WorkspaceTitlebarProps {
   sidebarCollapsed: boolean;
   rightSidebarOpen: boolean;
   bottomPanelOpen: boolean;
+  changesPanelOpen: boolean;
   canEditSession: boolean;
   pendingCount: number;
   onToggleSidebar: () => void;
   onToggleRightSidebar: () => void;
   onToggleBottomPanel: () => void;
+  onToggleChangesPanel: () => void;
   onRenameSession: () => void;
   onDeleteSession: () => void;
 }
@@ -48,11 +51,13 @@ export function WorkspaceTitlebar({
   sidebarCollapsed,
   rightSidebarOpen,
   bottomPanelOpen,
+  changesPanelOpen,
   canEditSession,
   pendingCount,
   onToggleSidebar,
   onToggleRightSidebar,
   onToggleBottomPanel,
+  onToggleChangesPanel,
   onRenameSession,
   onDeleteSession,
 }: WorkspaceTitlebarProps) {
@@ -122,6 +127,19 @@ export function WorkspaceTitlebar({
             </div>
           </Tooltip>
         )}
+        <Tooltip content={changesPanelOpen ? t('titlebar.changes_hide') : t('titlebar.changes_show')}>
+          <Button
+            type="button"
+            variant="icon"
+            size="icon-sm"
+            className={`workspace-titlebar__button ${changesPanelOpen ? 'workspace-titlebar__button--active' : ''}`}
+            onClick={onToggleChangesPanel}
+            aria-label={changesPanelOpen ? t('titlebar.changes_hide') : t('titlebar.changes_show')}
+            aria-pressed={changesPanelOpen}
+          >
+            <Diff size={16} />
+          </Button>
+        </Tooltip>
         <Tooltip content={bottomPanelOpen ? t('titlebar.bottom_hide') : t('titlebar.bottom_show')}>
           <Button
             type="button"

@@ -7,6 +7,7 @@ import type {
   CommandApprovalsResponse,
   CreateProjectRequest,
   CreateSessionRequest,
+  CurrentDiffResponse,
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
@@ -15,6 +16,9 @@ import type {
   ProviderUpdatePayload,
   RuntimeConfig,
   RuntimeConfigUpdate,
+  RevertPreviewResponse,
+  RollbackResponse,
+  SessionChangesResponse,
   SessionDetailResponse,
   SessionMessageRecord,
   SessionResponse,
@@ -83,7 +87,10 @@ export interface ChatService {
   listCommandApprovals: () => Promise<CommandApprovalsResponse>;
   resolveCommandApproval: (approvalId: string, decision: ApprovalDecisionPayload) => Promise<CommandApprovalResponse>;
   subscribeApprovalEvents: (resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
-  rollbackMessage: (sessionId: string, messageId: string) => Promise<{ status: string; messages: SessionMessageRecord[] }>;
+  getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
+  getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
+  getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
+  rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
   streamRegenerateMessage: (sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   streamEditMessage: (
     sessionId: string,
@@ -206,6 +213,26 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.listToolAudit(limit);
   }
 
+  async getSessionChanges(sessionId: string): Promise<SessionChangesResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getSessionChanges(sessionId);
+  }
+
+  async getCurrentDiff(options?: { projectId?: string; sessionId?: string }): Promise<CurrentDiffResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getCurrentDiff(options);
+  }
+
+  async getRevertPreview(sessionId: string, messageId: string): Promise<RevertPreviewResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getRevertPreview(sessionId, messageId);
+  }
+
+  async rollbackMessage(sessionId: string, messageId: string, withCode = false): Promise<RollbackResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.rollbackMessage(sessionId, messageId, withCode);
+  }
+
   async listAgentTraces(limit = 100): Promise<AgentTraceResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listAgentTraces(limit);
@@ -231,11 +258,6 @@ class ElectronChatService implements ChatService {
     } finally {
       detachAbortListener();
     }
-  }
-
-  async rollbackMessage(sessionId: string, messageId: string): Promise<{ status: string; messages: SessionMessageRecord[] }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.rollbackMessage(sessionId, messageId);
   }
 
   async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
@@ -482,6 +504,29 @@ class HttpChatService implements ChatService {
     return this.request<ToolAuditResponse>(`/audit/tool?limit=${encodeURIComponent(limit)}`);
   }
 
+  async getSessionChanges(sessionId: string): Promise<SessionChangesResponse> {
+    return this.request<SessionChangesResponse>(`/sessions/${encodeURIComponent(sessionId)}/changes`);
+  }
+
+  async getCurrentDiff(options?: { projectId?: string; sessionId?: string }): Promise<CurrentDiffResponse> {
+    const params = new URLSearchParams();
+    if (options?.projectId) params.set('project_id', options.projectId);
+    if (options?.sessionId) params.set('session_id', options.sessionId);
+    const query = params.toString();
+    return this.request<CurrentDiffResponse>(`/diffs/current${query ? `?${query}` : ''}`);
+  }
+
+  async getRevertPreview(sessionId: string, messageId: string): Promise<RevertPreviewResponse> {
+    return this.request<RevertPreviewResponse>(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/revert-preview`);
+  }
+
+  async rollbackMessage(sessionId: string, messageId: string, withCode = false): Promise<RollbackResponse> {
+    return this.request<RollbackResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/rollback`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ with_code: withCode }) },
+    );
+  }
+
   async listAgentTraces(limit = 100): Promise<AgentTraceResponse> {
     return this.request<AgentTraceResponse>(`/traces/agent?limit=${encodeURIComponent(limit)}`);
   }
@@ -532,13 +577,6 @@ class HttpChatService implements ChatService {
     } finally {
       reader.releaseLock();
     }
-  }
-
-  async rollbackMessage(sessionId: string, messageId: string): Promise<{ status: string; messages: SessionMessageRecord[] }> {
-    return this.request<{ status: string; messages: SessionMessageRecord[] }>(
-      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/rollback`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
-    );
   }
 
   async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {

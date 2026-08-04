@@ -14,7 +14,7 @@ from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
 from coworker.sessions import SessionStore
-from coworker.workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events
+from coworker.workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
 
 app = FastAPI()
@@ -309,7 +309,7 @@ async def chat_stream(request: ChatStreamRequest):
                 event["session_id"] = session_id
                 if event.get("type") == "done":
                     try:
-                        session_store.append_message(
+                        session = session_store.append_message(
                             session_id,
                             role="assistant",
                             content=event["content"],
@@ -318,6 +318,9 @@ async def chat_stream(request: ChatStreamRequest):
                             model=event.get("model") or request.model or "",
                             parts=event.get("parts") or [],
                         )
+                        last = session.messages[-1] if session.messages else None
+                        if last is not None:
+                            agent_registry.change_store.assign_message(session_id, last.id)
                     except KeyError:
                         pass
                     try:
@@ -387,6 +390,7 @@ async def delete_session(session_id: str):
     if not session_store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
     agent_registry.forget_runtime_checkpoint(session_id)
+    agent_registry.change_store.delete_session(session_id)
     return {"status": "ok"}
 
 @app.post("/sessions/{session_id}/rename")
@@ -421,6 +425,10 @@ class EditMessageRequest(BaseModel):
     content: str
     work_mode: Optional[str] = None
     access_mode: Optional[str] = None
+
+
+class RollbackRequest(BaseModel):
+    with_code: bool = False
 
 
 def request_language_for_session(session) -> str:
@@ -461,17 +469,56 @@ def _session_provider_context(session) -> tuple[str, str]:
 
 
 @app.post("/sessions/{session_id}/messages/{message_id}/rollback")
-async def rollback_message(session_id: str, message_id: str):
+async def rollback_message(session_id: str, message_id: str, request: RollbackRequest | None = None):
     """Revert the conversation to the state right before the given message.
     The target message and everything after it are truncated; the agent
-    checkpoint is reset so the next turn continues from that point."""
+    checkpoint is reset so the next turn continues from that point.
+
+    When ``with_code`` is true, the code changes made by the truncated
+    assistant messages are reverted first (safe inverse edits with conflict
+    detection — files that were changed by another session or the user are
+    reported as conflicts and left untouched).
+    """
+    with_code = bool(request and request.with_code)
     try:
+        session = session_store.require(session_id)
+        target_index = session_store.find_message_index(session_id, message_id)
+        dropped_messages = session.messages[target_index:]
+        dropped_assistant_ids = [m.id for m in dropped_messages if m.role == "assistant"]
+
+        revert_summary: dict[str, Any] = {"reverted": [], "conflicts": [], "reverted_count": 0, "conflict_count": 0, "total": 0}
+        if with_code and dropped_assistant_ids:
+            workspace = workspace_controller.workspace_for_session(session_id)
+            revert_summary = agent_registry.change_store.revert_changes(session_id, dropped_assistant_ids, workspace)
+            changed_ids = [c.get("id") for c in revert_summary.get("reverted", []) if c.get("id")]
+            if changed_ids:
+                agent_registry.change_store.delete_records(session_id, changed_ids)
+
         session_store.truncate_before(session_id, message_id)
         agent_registry.forget_runtime_checkpoint(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session = session_store.require(session_id)
-    return {"status": "ok", "messages": [m.__dict__ for m in session.messages]}
+    return {
+        "status": "ok",
+        "messages": [m.__dict__ for m in session.messages],
+        "revert": revert_summary,
+    }
+
+
+@app.get("/sessions/{session_id}/messages/{message_id}/revert-preview")
+async def revert_preview(session_id: str, message_id: str):
+    """Return the code changes that a rollback to (before) the given message
+    would revert, so the UI can show a diff preview before confirming."""
+    try:
+        session = session_store.require(session_id)
+        target_index = session_store.find_message_index(session_id, message_id)
+        dropped_messages = session.messages[target_index:]
+        dropped_assistant_ids = [m.id for m in dropped_messages if m.role == "assistant"]
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    changes = agent_registry.change_store.changes_for_message_ids(session_id, dropped_assistant_ids)
+    return {"status": "ok", "changes": changes, "count": len(changes)}
 
 
 @app.post("/sessions/{session_id}/messages/{message_id}/regenerate")
@@ -513,7 +560,7 @@ async def regenerate_message(session_id: str, message_id: str):
                 event["session_id"] = session_id
                 if event.get("type") == "done":
                     try:
-                        session_store.append_message(
+                        session = session_store.append_message(
                             session_id,
                             role="assistant",
                             content=event["content"],
@@ -522,6 +569,9 @@ async def regenerate_message(session_id: str, message_id: str):
                             model=event.get("model") or model,
                             parts=event.get("parts") or [],
                         )
+                        last = session.messages[-1] if session.messages else None
+                        if last is not None:
+                            agent_registry.change_store.assign_message(session_id, last.id)
                     except KeyError:
                         pass
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
@@ -566,7 +616,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                 event["session_id"] = session_id
                 if event.get("type") == "done":
                     try:
-                        session_store.append_message(
+                        session = session_store.append_message(
                             session_id,
                             role="assistant",
                             content=event["content"],
@@ -575,6 +625,9 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                             model=event.get("model") or model,
                             parts=event.get("parts") or [],
                         )
+                        last = session.messages[-1] if session.messages else None
+                        if last is not None:
+                            agent_registry.change_store.assign_message(session_id, last.id)
                     except KeyError:
                         pass
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
@@ -584,6 +637,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.post("/sessions/{session_id}/messages/{message_id}/rollback")
 @app.get("/projects")
 async def list_projects():
     projects = []
@@ -621,6 +675,7 @@ async def delete_project(project_id: str):
         raise HTTPException(status_code=404, detail=f"project {project_id} not found")
     for session in session_store.list_sessions(project_id):
         agent_registry.forget_runtime_checkpoint(session["id"])
+        agent_registry.change_store.delete_session(session["id"])
     session_store.delete_by_project(project_id)
     return {"status": "ok"}
 
@@ -652,6 +707,28 @@ async def workspace_file(path: str, project_id: str = ""):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.get("/sessions/{session_id}/changes")
+async def session_changes(session_id: str):
+    """All file changes made by the agent in this session, grouped by turn."""
+    try:
+        session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    turns = agent_registry.change_store.changes_by_turn(session_id)
+    return {"status": "ok", "session_id": session_id, "turns": turns, "count": sum(len(item["changes"]) for item in turns)}
+
+@app.get("/diffs/current")
+async def diffs_current(project_id: str = "", session_id: str = ""):
+    """Current working-tree diff for the workspace. Falls back to session
+    aggregate when the workspace is not a git repository."""
+    try:
+        workspace = workspace_controller.workspace_for_chat(session_id=session_id or None, project_id=project_id or None)
+        result = workspace_git_diff(workspace.root)
+        result["workspace"] = str(workspace.root)
+        return {"status": "ok", **result}
+    except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.post("/workspace/command")

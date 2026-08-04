@@ -12,6 +12,8 @@ import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
 import { WorkspaceInspector } from './components/WorkspaceInspector';
+import { ChangesPanel } from './components/ChangesPanel';
+import { RollbackDialog } from './components/RollbackDialog';
 import { getLanguage, initLanguage, t, translateError } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
@@ -55,6 +57,8 @@ function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
+  const [changesPanelOpen, setChangesPanelOpen] = useState(false);
+  const [changesRefreshKey, setChangesRefreshKey] = useState(0);
   const [workMode, setWorkMode] = useState<WorkMode>('build');
   const [accessMode, setAccessMode] = useState<AccessMode>('default');
   const [selectedModel, setSelectedModel] = useState('');
@@ -389,6 +393,7 @@ function App() {
       setRuntimeStatus('ready');
       await refreshSessions();
       await refreshProjects();
+      setChangesRefreshKey((value) => value + 1);
       _generateSessionTitleIfNeeded(message, sessionIdRef.current);
     } catch (error) {
       if (requestId !== requestSeqRef.current) return;
@@ -573,6 +578,7 @@ function App() {
       });
       await refreshSessions();
       await refreshProjects();
+      setChangesRefreshKey((value) => value + 1);
     } catch (error) {
       console.error('Failed to edit message:', error);
       if ((error as Error).name !== 'AbortError') {
@@ -710,6 +716,7 @@ function App() {
       await chatService.streamRegenerateMessage(currentSessionId, messageId, handleEvent, controller.signal);
       await refreshSessions();
       await refreshProjects();
+      setChangesRefreshKey((value) => value + 1);
     } catch (error) {
       console.error('Failed to regenerate message:', error);
       if ((error as Error).name !== 'AbortError') {
@@ -728,12 +735,18 @@ function App() {
     }
   };
 
-  const handleRollbackMessage = async (messageId: string) => {
+  const [rollbackTarget, setRollbackTarget] = useState<{ sessionId: string; messageId: string } | null>(null);
+
+  const handleRollbackMessage = (messageId: string) => {
     const currentSessionId = sessionIdRef.current;
     if (!currentSessionId) return;
-    if (!window.confirm(t('message.rollback_confirm'))) return;
+    setRollbackTarget({ sessionId: currentSessionId, messageId });
+  };
+
+  const performRollback = async (withCode: boolean) => {
+    if (!rollbackTarget) return;
     try {
-      const response = await chatService.rollbackMessage(currentSessionId, messageId);
+      const response = await chatService.rollbackMessage(rollbackTarget.sessionId, rollbackTarget.messageId, withCode);
       const remaining = response.messages.map((m) =>
         createMessage(m.role as 'user' | 'assistant', m.content, {
           id: m.id,
@@ -744,8 +757,18 @@ function App() {
       setMessages(remaining);
       await refreshSessions();
       await refreshProjects();
+      setChangesRefreshKey((value) => value + 1);
+      if (response.revert && response.revert.conflict_count > 0) {
+        window.alert(
+          t('rollback.result_with_conflicts', {
+            reverted: response.revert.reverted_count,
+            conflicts: response.revert.conflict_count,
+          }),
+        );
+      }
     } catch (error) {
       console.error('Failed to rollback message:', error);
+      window.alert(translateError(error) || t('rollback.failed'));
     }
   };
 
@@ -1239,11 +1262,13 @@ function App() {
         sidebarCollapsed={sidebarCollapsed}
         rightSidebarOpen={rightSidebarOpen}
         bottomPanelOpen={bottomPanelOpen}
+        changesPanelOpen={changesPanelOpen}
         canEditSession={Boolean(sessionId)}
         pendingCount={currentSessionPending.length}
         onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
         onToggleRightSidebar={() => setRightSidebarOpen((value) => !value)}
         onToggleBottomPanel={() => setBottomPanelOpen((value) => !value)}
+        onToggleChangesPanel={() => setChangesPanelOpen((value) => !value)}
         onRenameSession={renameCurrentSession}
         onDeleteSession={deleteCurrentSession}
       />
@@ -1271,7 +1296,7 @@ function App() {
           onDeleteProject={deleteProject}
         />
         <section className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
-          <div className="workspace-upper">
+          <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
             <section className={`workspace-shell workspace-shell--${activeView}`}>
               {activeView === 'chat' ? (
                 <>
@@ -1372,6 +1397,15 @@ function App() {
                 messageCount={messages.length}
               />
             )}
+            {changesPanelOpen && (
+              <ChangesPanel
+                open={changesPanelOpen}
+                onClose={() => setChangesPanelOpen(false)}
+                onRefreshKey={changesRefreshKey}
+                {...(sessionId ? { sessionId } : {})}
+                {...(currentProjectId ? { projectId: currentProjectId } : {})}
+              />
+            )}
           </div>
           {bottomPanelOpen && (
             <WorkspaceBottomPanel
@@ -1404,6 +1438,14 @@ function App() {
         onCreateProject={createProjectWithWorkspace}
         onStart={startProjectSession}
       />
+      {rollbackTarget && (
+        <RollbackDialog
+          sessionId={rollbackTarget.sessionId}
+          messageId={rollbackTarget.messageId}
+          onClose={() => setRollbackTarget(null)}
+          onConfirm={(withCode) => performRollback(withCode)}
+        />
+      )}
     </main>
   );
 }

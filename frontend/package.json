@@ -25,6 +25,7 @@
     "@types/react-dom": "19.2.4",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "diff": "9.0.0",
     "lucide-react": "1.28.0",
     "radix-ui": "1.6.7",
     "react": "19.2.8",
@@ -39,6 +40,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
+    "@types/diff": "7.0.2",
     "@types/node": "26.1.2",
     "@vitejs/plugin-react": "6.0.5",
     "shadcn": "4.16.1",
