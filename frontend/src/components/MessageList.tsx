@@ -1,4 +1,4 @@
-import { Bot, CheckIcon, FileText, Hammer, Loader2, ListChecks, Shield, ShieldCheck } from 'lucide-react';
+import { Bot, CheckIcon, Hammer, ListChecks, Shield, ShieldCheck } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart, PartFileChange } from '../types';
@@ -25,48 +25,12 @@ interface MessageListProps {
 
 const CONTEXT_TOOLS = new Set(['read_file', 'search_files']);
 
-function renderContext(message: ChatMessage) {
-  const chips: Array<{ key: string; icon: ReactNode; label: string }> = [];
-  if (message.work_mode) {
-    chips.push({
-      key: 'mode',
-      icon: message.work_mode === 'plan' ? <ListChecks size={13} /> : <Hammer size={13} />,
-      label: message.work_mode === 'plan' ? t('chat.mode_plan') : t('chat.mode_build'),
-    });
-  }
-  if (message.access_mode) {
-    chips.push({
-      key: 'access',
-      icon: message.access_mode === 'full' ? <ShieldCheck size={13} /> : <Shield size={13} />,
-      label: message.access_mode === 'full' ? t('chat.access_full') : t('chat.access_default'),
-    });
-  }
-  if (message.model) {
-    chips.push({
-      key: 'model',
-      icon: <Bot size={13} />,
-      label: message.provider ? `${message.provider} · ${message.model}` : message.model,
-    });
-  }
-
-  if (chips.length === 0 && !message.attachments?.length) return null;
-
-  return (
-    <div className="message-meta">
-      {chips.map((chip) => (
-        <span className="message-chip" key={chip.key}>
-          {chip.icon}
-          {chip.label}
-        </span>
-      ))}
-      {message.attachments?.map((attachment) => (
-        <span className="message-chip message-chip--attachment" key={attachment.id}>
-          <FileText size={13} />
-          {attachment.name}
-        </span>
-      ))}
-    </div>
-  );
+function formatTime(timestamp: number): string {
+  if (!timestamp) return '';
+  const d = new Date(timestamp);
+  const h = d.getHours().toString().padStart(2, '0');
+  const m = d.getMinutes().toString().padStart(2, '0');
+  return `${h}:${m}`;
 }
 
 function groupParts(parts: MessagePart[]) {
@@ -163,6 +127,9 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
     <div className="stream-row stream-row--user">
       <div className="stream-bubble-wrap">
         <div className="stream-bubble stream-bubble--user">{message.content}</div>
+        <div className="user-bubble-meta">
+          <span className="user-bubble-meta__time">{formatTime(message.timestamp)}</span>
+        </div>
         {!message.content.includes(t('chat.waiting_resolution')) && (
           <MessageActions
             role="user"
@@ -182,12 +149,37 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
   const isRunning = message.status === 'running';
   const isRunningEmpty = isRunning && !message.content;
   const isWaiting = message.content.includes(t('chat.waiting_resolution'));
-  const parts = message.parts ?? [];
-  const { planParts, reasoningParts, toolParts } = groupParts(parts);
+  const msgParts = message.parts ?? [];
+  const { planParts, reasoningParts, toolParts } = groupParts(msgParts);
   const fileChanges = collectFileChanges(toolParts);
   const hasRunningTools = isRunning && toolParts.some((part) => part.status === 'running');
   const summaryData = getTurnSummaryData(toolParts, fileChanges);
   const hasToolsOrFiles = summaryData !== null;
+
+  // Build the meta text (Plan/Build · Full access · model · duration)
+  const metaParts: string[] = [];
+  if (message.work_mode) {
+    metaParts.push(message.work_mode === 'plan' ? 'Plan' : 'Build');
+  }
+  if (message.access_mode === 'full') {
+    metaParts.push('Full access');
+  }
+  if (message.model) {
+    metaParts.push(message.provider ? `${message.provider} · ${message.model}` : message.model);
+  }
+  if (message.streamEndAt && message.streamStartAt) {
+    const durationMs = message.streamEndAt - message.streamStartAt;
+    if (durationMs >= 0 && (message.work_mode || message.access_mode === 'full' || message.model)) {
+      const s = Math.round(durationMs / 1000);
+      if (s < 60) metaParts.push(`${s.toFixed(0)}s`);
+      else metaParts.push(`${Math.floor(s / 60)}m ${s % 60}s`);
+    }
+  }
+  if (isRunning && message.streamStartAt && metaParts.length === 0) {
+    const s = Math.round((Date.now() - message.streamStartAt) / 1000);
+    metaParts.push(`${s.toFixed(0)}s`);
+  }
+  const metaText = metaParts.length > 0 ? metaParts.join(' · ') : null;
 
   return (
     <div className="stream-row stream-row--assistant">
@@ -198,7 +190,11 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
         <div className="stream-role">
           <span>{t('common.coworker')}</span>
         </div>
-        {renderContext(message)}
+        {metaText !== null && (
+          <div className="assistant-meta">
+            <span>{metaText}</span>
+          </div>
+        )}
 
         {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
         {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
@@ -290,12 +286,9 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
     lastCountRef.current = messages.length;
 
     if (hasNewUserMessage || isSessionOpen) {
-      // A user just sent a new message (or a session just opened): always reveal
-      // the latest user message regardless of the previous scroll position.
       stickToBottomRef.current = true;
       scrollToBottom('auto');
     } else if (isThinking) {
-      // Streaming agent reply: follow only when the user hasn't scrolled away.
       if (stickToBottomRef.current) {
         scrollToBottom('auto');
       }
@@ -348,7 +341,7 @@ export function MessageList(props: MessageListProps) {
   return (
     <MessageListView
       messages={messages}
-      isThinking={isThinking}
+      isThinking={isThinking ?? false}
       {...(onEditMessage ? { onEditMessage } : {})}
       {...(onRegenerateMessage ? { onRegenerateMessage } : {})}
       {...(onRollbackMessage ? { onRollbackMessage } : {})}

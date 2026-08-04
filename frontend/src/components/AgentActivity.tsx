@@ -1,9 +1,7 @@
 import { CheckIcon, Loader2 } from 'lucide-react';
-import type { MessagePart } from '../types';
 import { t } from '../lib/i18n';
 
 interface AgentActivityProps {
-  parts: MessagePart[];
   working: boolean;
 }
 

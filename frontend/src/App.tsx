@@ -229,10 +229,12 @@ function App() {
     activeAssistantMessageIdRef.current = assistantMessageId;
     let streamedContent = '';
     let localParts: MessagePart[] = [];
+    let streamStartAt = Date.now();
 
     const handleEvent = (event: StreamEvent) => {
       if (requestId !== requestSeqRef.current) return;
       if (event.type === 'start') {
+        streamStartAt = Date.now();
         if (event.session_id && !sessionIdRef.current) {
           setSessionId(event.session_id);
           sessionIdRef.current = event.session_id;
@@ -352,7 +354,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: streamedContent, status: 'done', parts: [...localParts] }
+              ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now(), streamStartAt }
               : item,
           ),
         );
@@ -476,6 +478,7 @@ function App() {
     });
     let streamedContent = '';
     let localParts: MessagePart[] = [];
+    let streamStartAt = Date.now();
     const controller = new AbortController();
     abortRef.current = controller;
     const handleEvent = (event: StreamEvent) => {
@@ -557,7 +560,7 @@ function App() {
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         setMessages((current) =>
           current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts] } : item,
+            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamStartAt, streamEndAt: Date.now() } : item,
           ),
         );
       } else if (event.type === 'error') {
@@ -618,6 +621,7 @@ function App() {
     });
     let streamedContent = '';
     let localParts: MessagePart[] = [];
+    let streamStartAt = Date.now();
     const controller = new AbortController();
     abortRef.current = controller;
     const handleEvent = (event: StreamEvent) => {
@@ -699,7 +703,7 @@ function App() {
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         setMessages((current) =>
           current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts] } : item,
+            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamStartAt, streamEndAt: Date.now() } : item,
           ),
         );
       } else if (event.type === 'error') {

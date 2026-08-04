@@ -1499,6 +1499,20 @@ body.sidebar-resizing {
   font-weight: 700;
 }
 
+.assistant-meta {
+  margin-bottom: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.assistant-meta--running {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .stream-error {
   color: #c95343;
   font-size: 13px;
@@ -3940,6 +3954,20 @@ body.sidebar-resizing {
 .agent-activity__spinner {
   animation: stream-spin 900ms linear infinite;
 }
+/* User bubble meta / timestamp */
+.user-bubble-meta {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  margin-top: 4px;
+  padding-right: 4px;
+}
+.user-bubble-meta__time {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Message actions capsule */
 .stream-bubble-wrap {
   display: flex;

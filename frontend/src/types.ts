@@ -137,6 +137,8 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   status?: 'queued' | 'running' | 'done' | 'stopped' | 'error';
+  streamStartAt?: number;
+  streamEndAt?: number;
   work_mode?: WorkMode;
   access_mode?: AccessMode;
   provider?: string;
