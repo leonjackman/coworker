@@ -1,4 +1,4 @@
-import { Bot, FileText, Hammer, ListChecks, Shield, ShieldCheck } from 'lucide-react';
+import { Bot, CheckIcon, FileText, Hammer, Loader2, ListChecks, Shield, ShieldCheck } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart, PartFileChange } from '../types';
@@ -137,6 +137,27 @@ function collectFileChanges(toolParts: Extract<MessagePart, { type: 'tool' }>[])
   return files;
 }
 
+function getTurnSummaryData(toolParts: Extract<MessagePart, { type: 'tool' }>[], fileChanges: PartFileChange[]) {
+  const count = toolParts.length;
+  if (count === 0 && fileChanges.length === 0) return null;
+
+  const distinctTools = [...new Set(toolParts.map((p) => p.name))];
+  const addedLines = fileChanges.reduce((s, f) => s + f.added, 0);
+  const removedLines = fileChanges.reduce((s, f) => s + f.removed, 0);
+  const durationMs = toolParts.reduce((s, p) => s + (p.duration_ms ?? 0), 0);
+  const fileCount = fileChanges.length;
+
+  return { count, distinctTools, fileCount, addedLines, removedLines, durationMs };
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return '<1s';
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 10) return `${(totalSeconds / 10).toFixed(1)}s`;
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
+}
+
 function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; onEdit?: (content: string) => void; onRollback?: () => void }) {
   return (
     <div className="stream-row stream-row--user">
@@ -165,6 +186,8 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
   const { planParts, reasoningParts, toolParts } = groupParts(parts);
   const fileChanges = collectFileChanges(toolParts);
   const hasRunningTools = isRunning && toolParts.some((part) => part.status === 'running');
+  const summaryData = getTurnSummaryData(toolParts, fileChanges);
+  const hasToolsOrFiles = summaryData !== null;
 
   return (
     <div className="stream-row stream-row--assistant">
@@ -179,23 +202,55 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
 
         {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
         {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
-
         {toolParts.length > 0 && <ToolChain toolParts={toolParts} />}
-        {fileChanges.length > 0 && !isRunning && <FileChangesCard files={fileChanges} />}
+        {!isRunning && fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
 
-        {isRunning && (hasRunningTools || isRunningEmpty) && <AgentActivity parts={parts} working={isRunning} />}
+        {isRunning && hasRunningTools && <AgentActivity working={isRunning} />}
 
-        {isError ? (
-          <div className="stream-error">{message.content}</div>
-        ) : isStopped ? (
-          <div className="stream-stopped">{message.content}</div>
-        ) : isRunningEmpty ? null : (
+        {!isError && !isStopped && !isRunningEmpty && !isWaiting && (
           <Suspense fallback={<div className="markdown-body">{message.content}</div>}>
             <MarkdownContent content={message.content} />
           </Suspense>
         )}
 
-        {!isRunning && !isRunningEmpty && !isWaiting && (
+        {!isRunning && hasToolsOrFiles && (
+          <div className="turn-summary">
+            <CheckIcon size={12} className="turn-summary__check" />
+            <span className="turn-summary__text">
+              {summaryData.count > 0 && (
+                <>
+                  {summaryData.count} tool{summaryData.count > 1 ? 's' : ''}
+                  {summaryData.distinctTools.length > 0 && (
+                    <> · <span className="turn-summary__tools">{summaryData.distinctTools.join(', ')}</span></>
+                  )}
+                </>
+              )}
+              {summaryData.fileCount > 0 && (
+                <>
+                  {summaryData.count > 0 && ' · '}
+                  {summaryData.fileCount} file{summaryData.fileCount > 1 ? 's' : ''}
+                  {summaryData.addedLines > 0 && (
+                    <span className="text-success"> +{summaryData.addedLines}</span>
+                  )}
+                  {summaryData.removedLines > 0 && (
+                    <span className="text-warning"> -{summaryData.removedLines}</span>
+                  )}
+                </>
+              )}
+              {summaryData.durationMs > 0 && (
+                <> · {formatDuration(summaryData.durationMs)}</>
+              )}
+            </span>
+          </div>
+        )}
+
+        {isError ? (
+          <div className="stream-error">{message.content}</div>
+        ) : isStopped ? (
+          <div className="stream-stopped">{message.content}</div>
+        ) : isRunningEmpty ? null : null}
+
+        {!isError && !isStopped && !isRunning && !isRunningEmpty && !isWaiting && (
           <MessageActions role="assistant" content={message.content} {...(onRegenerate ? { onRegenerate } : {})} />
         )}
       </div>

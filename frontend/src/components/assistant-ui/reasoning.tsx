@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 const ANIMATION_DURATION = 200;
 
 const ReasoningPreviewContext = createContext(false);
+const ReasoningStreamShimmerContext = createContext(false);
 
 const reasoningVariants = cva("aui-reasoning-root mb-4 w-full", {
   variants: {
@@ -68,8 +69,9 @@ function ReasoningRoot({
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled
     ? controlledOpen
-    : (userOpen ?? (streaming || initialOpenRef.current));
-  const isPreview = streaming === true && isOpen;
+    : (userOpen ?? initialOpenRef.current);
+  const isPreview = !isOpen && streaming === true;
+  const showStreamShimmer = streaming === true && isOpen === false;
 
   const prevStreamingRef = useRef(streaming);
   useLayoutEffect(() => {
@@ -110,7 +112,9 @@ function ReasoningRoot({
       {...props}
     >
       <ReasoningPreviewContext.Provider value={isPreview}>
-        {children}
+        <ReasoningStreamShimmerContext.Provider value={showStreamShimmer}>
+          {children}
+        </ReasoningStreamShimmerContext.Provider>
       </ReasoningPreviewContext.Provider>
     </Collapsible>
   );
@@ -165,12 +169,16 @@ function ReasoningTrigger({
   duration?: number;
   summary?: string;
 }) {
+  const fromStreamShimmer = useContext(ReasoningStreamShimmerContext);
+  const showShimmer = fromStreamShimmer || active;
   const durationText = duration !== undefined ? ` · ${formatDuration(duration)}` : "";
-  const label = active
+  const label = fromStreamShimmer
     ? "Thinking…"
-    : summary
-      ? `Thought · ${summary}`
-      : "Thought";
+    : active
+      ? "Thinking…"
+      : summary
+        ? `Thought · ${summary}`
+        : "Thought";
 
   return (
     <CollapsibleTrigger
@@ -193,7 +201,7 @@ function ReasoningTrigger({
         className="aui-reasoning-trigger-label-wrapper relative inline-block leading-none tabular-nums"
       >
         <span className="whitespace-nowrap">{label}{durationText}</span>
-        {active ? (
+        {showShimmer ? (
           <span
             aria-hidden
             data-slot="reasoning-trigger-shimmer"

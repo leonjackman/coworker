@@ -21,6 +21,7 @@
   "common.coworker": "Coworker",
   "agent.thinking": "思考中...",
   "agent.running_tools": "正在运行 {count} 个工具",
+  "turn.summary.completed": "完成",
   "tool.read_file": "读取文件",
   "tool.write_file": "写入文件",
   "tool.replace_in_file": "编辑文件",

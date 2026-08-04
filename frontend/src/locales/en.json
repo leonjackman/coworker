@@ -21,6 +21,7 @@
   "common.coworker": "Coworker",
   "agent.thinking": "Thinking...",
   "agent.running_tools": "Running {count} tools",
+  "turn.summary.completed": "Done",
   "tool.read_file": "Read file",
   "tool.write_file": "Write file",
   "tool.replace_in_file": "Edit file",

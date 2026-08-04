@@ -3791,6 +3791,36 @@ body.sidebar-resizing {
   margin-bottom: 8px;
 }
 
+/* Turn summary bar */
+.turn-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 8px 0 4px 0;
+  border-radius: 6px;
+  background: var(--material-control);
+  border: 1px solid var(--material-border);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+  user-select: none;
+}
+.turn-summary__check {
+  color: var(--success-foreground, #22c55e);
+  flex-shrink: 0;
+}
+.turn-summary__text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-summary__tools {
+  color: var(--text-base, var(--foreground));
+}
+
 /* File changes */
 .file-changes-inline {
   display: flex;
