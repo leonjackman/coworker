@@ -1,7 +1,7 @@
-import { Check, Hammer, ListChecks, Pencil, Plus, SendHorizontal, Shield, ShieldCheck, Slash, Square, X } from 'lucide-react';
+import { Check, Pencil, Plus, SendHorizontal, Shield, ShieldCheck, Slash, Square, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../lib/i18n';
-import type { AccessMode, ComposerAttachment, WorkMode } from '../types';
+import type { AccessMode, ComposerAttachment } from '../types';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Textarea } from './ui/textarea';
@@ -17,7 +17,6 @@ interface ChatInputProps {
   value: string;
   disabled: boolean;
   isThinking: boolean;
-  workMode: WorkMode;
   accessMode: AccessMode;
   selectedModel: string;
   attachments: ComposerAttachment[];
@@ -25,7 +24,6 @@ interface ChatInputProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onWorkModeChange: (value: WorkMode) => void;
   onAccessModeChange: (value: AccessMode) => void;
   onModelChange: (value: string) => void;
   onAttachmentsChange: (attachments: ComposerAttachment[]) => void;
@@ -33,7 +31,7 @@ interface ChatInputProps {
   onCancelEdit?: () => void;
 }
 
-const SLASH_COMMANDS = ['/help', '/new', '/clear', '/providers', '/settings', '/plan', '/build'];
+const SLASH_COMMANDS = ['/help', '/new', '/clear', '/providers', '/settings'];
 const MAX_ATTACHMENT_CHARS = 120_000;
 
 function isTextAttachment(file: File) {
@@ -69,7 +67,6 @@ export function ChatInput({
   value,
   disabled,
   isThinking,
-  workMode,
   accessMode,
   selectedModel,
   attachments,
@@ -77,7 +74,6 @@ export function ChatInput({
   onChange,
   onSend,
   onStop,
-  onWorkModeChange,
   onAccessModeChange,
   onModelChange,
   onAttachmentsChange,
@@ -108,9 +104,7 @@ export function ChatInput({
     setShowCommands(false);
   }
 
-  const nextWorkMode = workMode === 'plan' ? 'build' : 'plan';
   const nextAccessMode = accessMode === 'default' ? 'full' : 'default';
-  const effectiveAccessMode: AccessMode = workMode === 'build' ? accessMode : 'default';
 
   return (
     <footer className="composer">
@@ -206,18 +200,6 @@ export function ChatInput({
 
         <div className="composer__toolbar">
           <div className="composer__meta">
-            <Tooltip content={t(workMode === 'plan' ? 'chat.mode_plan_tip' : 'chat.mode_build_tip')}>
-              <button
-                type="button"
-                className="composer-toggle-button"
-                onClick={() => onWorkModeChange(nextWorkMode)}
-                aria-label={t('chat.toggle_work_mode')}
-              >
-                {workMode === 'plan' ? <ListChecks size={14} /> : <Hammer size={14} />}
-                <span>{t(workMode === 'plan' ? 'chat.mode_plan' : 'chat.mode_build')}</span>
-              </button>
-            </Tooltip>
-
             <div className="composer__select">
               <span>{t('chat.model')}</span>
               <Select value={selectedModel} onValueChange={onModelChange} disabled={modelOptions.length === 0}>
@@ -234,16 +216,15 @@ export function ChatInput({
               </Select>
             </div>
 
-            <Tooltip content={t(effectiveAccessMode === 'default' ? 'chat.access_default_tip' : 'chat.access_full_tip')}>
+            <Tooltip content={t(accessMode === 'default' ? 'chat.access_default_tip' : 'chat.access_full_tip')}>
               <button
                 type="button"
                 className="composer-toggle-button"
                 onClick={() => onAccessModeChange(nextAccessMode)}
-                disabled={workMode === 'plan'}
                 aria-label={t('chat.toggle_access_mode')}
               >
-                {effectiveAccessMode === 'default' ? <Shield size={14} /> : <ShieldCheck size={14} />}
-                <span>{t(effectiveAccessMode === 'default' ? 'chat.access_default' : 'chat.access_full')}</span>
+                {accessMode === 'default' ? <Shield size={14} /> : <ShieldCheck size={14} />}
+                <span>{t(accessMode === 'default' ? 'chat.access_default' : 'chat.access_full')}</span>
               </button>
             </Tooltip>
           </div>

@@ -412,7 +412,7 @@ export interface CommandApprovalResponse {
   resume_id?: string;
 }
 
-export type ApprovalDecisionType = 'approve' | 'reject' | 'respond' | 'always';
+export type ApprovalDecisionType = 'approve' | 'reject' | 'respond' | 'always' | 'regenerate';
 
 export interface ApprovalDecisionPayload {
   type: ApprovalDecisionType;
@@ -426,7 +426,7 @@ export interface ApprovalOption {
 
 export interface PendingRequest {
   approval_id: string;
-  kind: 'command' | 'question';
+  kind: 'command' | 'question' | 'plan';
   session_id: string;
   approval_status: string;
   messageId: string;
@@ -437,6 +437,7 @@ export interface PendingRequest {
   header?: string;
   options?: ApprovalOption[];
   multiple?: boolean;
+  plan?: string;
 }
 
 export type StreamEvent =
@@ -466,6 +467,13 @@ export type StreamEvent =
       header?: string;
       options?: ApprovalOption[];
       multiple?: boolean;
+      approval_status: string;
+      session_id?: string;
+    }
+  | {
+      type: 'plan_required';
+      approval_id: string;
+      plan: string;
       approval_status: string;
       session_id?: string;
     }

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Command, HelpCircle, Loader2 } from 'lucide-react';
+import { Command, HelpCircle, ListChecks, Loader2 } from 'lucide-react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { t } from '@/lib/i18n';
 import type { ApprovalDecisionPayload, ApprovalOption, PendingRequest } from '@/types';
@@ -198,6 +198,54 @@ function QuestionDock({ request, onResolve }: { request: PendingRequest & { kind
   );
 }
 
+function PlanDock({ request, onResolve }: { request: PendingRequest & { kind: 'plan' }; onResolve: (req: PendingRequest & { kind: 'plan' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
+  const [resolving, setResolving] = useState(false);
+
+  const dispatch = useCallback(async (decision: ApprovalDecisionPayload) => {
+    if (resolving) return;
+    setResolving(true);
+    try {
+      await onResolve(request, decision);
+    } finally {
+      setResolving(false);
+    }
+  }, [resolving, request, onResolve]);
+
+  return (
+    <div className="pending-dock__body">
+      <div className="pending-dock__question" data-slot="plan-content">
+        <p className="pending-dock__plan-text">{request.plan || ''}</p>
+      </div>
+      <div className="pending-dock__footer" data-slot="plan-actions">
+        <button
+          type="button"
+          className="button-ghost"
+          onClick={() => dispatch({ type: 'reject' })}
+          disabled={resolving}
+        >
+          {t('chat.plan_reject')}
+        </button>
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={() => dispatch({ type: 'regenerate' })}
+          disabled={resolving}
+        >
+          {t('chat.plan_regenerate')}
+        </button>
+        <button
+          type="button"
+          className="button-primary"
+          onClick={() => dispatch({ type: 'approve' })}
+          disabled={resolving}
+        >
+          {t('chat.plan_approve')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksProps) {
   return (
     <div className="pending-docks" data-slot="pending-docks">
@@ -213,10 +261,10 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
             <div className="pending-dock__header">
               <div className="pending-dock__title">
                 <span className="pending-dock__icon">
-                  {request.kind === 'command' ? <Command size={14} /> : <HelpCircle size={14} />}
+                  {request.kind === 'command' ? <Command size={14} /> : request.kind === 'question' ? <HelpCircle size={14} /> : <ListChecks size={14} />}
                 </span>
                 <span className="pending-dock__title-text">
-                  {request.kind === 'command' ? t('chat.command_pending') : t('chat.question_pending')}
+                  {request.kind === 'command' ? t('chat.command_pending') : request.kind === 'question' ? t('chat.question_pending') : t('chat.plan_pending')}
                 </span>
                 {isResolving && <Loader2 className="pending-dock__spinner" size={14} />}
               </div>
@@ -236,8 +284,10 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
             </div>
             {request.kind === 'command' ? (
               <ApprovalDock request={request as PendingRequest & { kind: 'command' }} onResolve={onResolve} />
-            ) : (
+            ) : request.kind === 'question' ? (
               <QuestionDock request={request as PendingRequest & { kind: 'question' }} onResolve={onResolve} />
+            ) : (
+              <PlanDock request={request as PendingRequest & { kind: 'plan' }} onResolve={onResolve} />
             )}
           </div>
         );

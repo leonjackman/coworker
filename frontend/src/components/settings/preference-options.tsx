@@ -1,15 +1,8 @@
-import { Hammer, Languages, ListChecks, Moon, Monitor, Shield, ShieldCheck, Sun } from 'lucide-react';
+import { Languages, Moon, Monitor, Shield, ShieldCheck, Sun } from 'lucide-react';
 import { t } from '../../lib/i18n';
-import type { AccessMode, Language, WorkMode } from '../../types';
+import type { AccessMode, Language } from '../../types';
 import type { ThemeMode } from '../../lib/theme';
 import type { SettingsToggleOption } from './SettingsList';
-
-export function workModeOptions(): SettingsToggleOption<WorkMode>[] {
-  return [
-    { value: 'plan', label: <><ListChecks size={14} />{t('chat.mode_plan')}</>, title: t('chat.mode_plan_tip') },
-    { value: 'build', label: <><Hammer size={14} />{t('chat.mode_build')}</>, title: t('chat.mode_build_tip') },
-  ];
-}
 
 export function accessModeOptions(): SettingsToggleOption<AccessMode>[] {
   return [

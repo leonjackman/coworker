@@ -1,4 +1,4 @@
-import type { AccessMode, WorkMode } from '../types';
+import type { AccessMode } from '../types';
 import { t } from '../lib/i18n';
 
 interface WorkspaceInspectorProps {
@@ -6,7 +6,6 @@ interface WorkspaceInspectorProps {
   projectName: string;
   modelName: string;
   providerName: string;
-  workMode: WorkMode;
   accessMode: AccessMode;
   attachmentCount: number;
   messageCount: number;
@@ -17,7 +16,6 @@ export function WorkspaceInspector({
   projectName,
   modelName,
   providerName,
-  workMode,
   accessMode,
   attachmentCount,
   messageCount,
@@ -32,7 +30,6 @@ export function WorkspaceInspector({
         <InfoRow label={t('inspector.project')} value={projectName} />
         <InfoRow label={t('inspector.model')} value={modelName} />
         <InfoRow label={t('inspector.provider')} value={providerName} />
-        <InfoRow label={t('inspector.work_mode')} value={workMode === 'plan' ? t('chat.mode_plan') : t('chat.mode_build')} />
         <InfoRow label={t('inspector.access_mode')} value={accessMode === 'full' ? t('chat.access_full') : t('chat.access_default')} />
         <InfoRow label={t('inspector.attachments')} value={String(attachmentCount)} />
         <InfoRow label={t('inspector.messages')} value={String(messageCount)} />

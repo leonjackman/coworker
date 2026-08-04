@@ -49,6 +49,7 @@ PLAN_MARKER = "[CW-PLAN]"
 class CoworkerAgentState(AgentState[Any]):
     work_mode: str
     language: str
+    plan_approved: bool
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,10 @@ class TextEditArgs(BaseModel):
 class ApplyTextEditsArgs(BaseModel):
     file_path: str = Field(description="Workspace-relative UTF-8 text file path.")
     edits: list[TextEditArgs] = Field(description="Ordered exact text edits. All edits must validate before the file is written.")
+
+
+class SubmitPlanArgs(BaseModel):
+    plan_text: str = Field(description="Your concise implementation plan to present to the user for approval before making changes.")
 
 
 class RunCommandArgs(BaseModel):
@@ -298,7 +303,12 @@ def build_workspace_tools(
         }
         return json.dumps(result, ensure_ascii=False)
 
-    tools = [search_files, read_file, ask_user]
+    @tool(args_schema=SubmitPlanArgs)
+    def submit_plan(plan_text: str) -> str:
+        """Present your implementation plan for approval before making any changes. Call this AFTER researching the workspace and BEFORE writing or editing files or running commands."""
+        return f"Plan submitted for approval:\n{plan_text}"
+
+    tools = [search_files, read_file, ask_user, submit_plan]
     if writable:
         tools.extend([replace_in_file, apply_text_edits, write_file, run_command])
     return tools
@@ -396,7 +406,11 @@ def interrupt_action_requests(value: dict[str, Any]) -> list[dict[str, Any]]:
 
 def interrupt_action_kind(action: dict[str, Any]) -> str:
     name = str(action.get("name") or "")
-    return "question" if name == "ask_user" else "command"
+    if name == "ask_user":
+        return "question"
+    if name == "submit_plan":
+        return "plan"
+    return "command"
 
 
 def _json_safe(value: Any) -> Any:
@@ -479,6 +493,15 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
             "header": str(args.get("header") or ""),
             "options": options,
             "multiple": bool(args.get("multiple")),
+        }
+    if kind == "plan":
+        args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
+        return {
+            **base,
+            "type": "plan_required",
+            "plan": str(args.get("plan_text") or ""),
+            "command": approval.get("command", []),
+            "cwd": approval.get("cwd", ""),
         }
     return {**base, "type": "approval_required", "command": approval.get("command", []), "cwd": approval.get("cwd", "")}
 
@@ -896,141 +919,144 @@ class ToolCallCleanerMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
 
 # ---------------------------------------------------------------------------
-# PlanGateMiddleware – enforces plan‑first semantics before the agent acts.
+# PlanApprovalMiddleware – plan-first approval gate (Claude Code style).
 # ---------------------------------------------------------------------------
 
-class PlanGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
-    """In plan mode, runs a deterministic planner LLM pass and injects the
-    result as a ``SystemMessage`` marked with ``[CW-PLAN]`` into the agent
-    state before the first model call of a turn.
+class PlanApprovalMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Plan-first approval gate.
 
-    In build mode the middleware is a no‑op (codex‑style).
+    The agent must call ``submit_plan`` to present its implementation plan and
+    receive user approval before any write/execute tool is allowed to run.
+    Mirrors Claude Code's plan mode: research first, present a plan, approve,
+    then execute. Pure Q&A turns never call ``submit_plan`` and are unaffected.
 
-    Also gates write/execute tools in plan mode via ``wrap_tool_call``.
+    * ``after_model`` intercepts ``submit_plan`` calls and raises an HITL-style
+      interrupt so the frontend can render approve / reject / regenerate.
+    * ``wrap_tool_call`` blocks write/execute tools until ``plan_approved`` is
+      set in agent state (after an approve decision).
     """
 
-    def __init__(self, planner_llm: Any, language: Language = "en"):
-        self.planner_llm = planner_llm
+    def __init__(self, language: Language = "en"):
         self.language = language
 
-    def _is_plan_mode(self, state: CoworkerAgentState) -> bool:
-        return str(state.get("work_mode", "build")) == "plan"
-
-    def _already_planned(self, state: CoworkerAgentState) -> bool:
+    def _last_ai_with_tool_calls(self, state: CoworkerAgentState):
+        from langchain_core.messages import AIMessage
         messages = state.get("messages", [])
-        for msg in messages:
-            content = getattr(msg, "content", "") or ""
-            if isinstance(content, str) and PLAN_MARKER in content:
-                return True
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                return msg
+        return None
+
+    def _is_plan_approved(self, state: CoworkerAgentState) -> bool:
+        if bool(state.get("plan_approved")):
+            return True
+        # A submitted plan is considered approved once the corresponding
+        # submit_plan tool call produced a successful ToolMessage.
+        from langchain_core.messages import AIMessage, ToolMessage
+        submit_ids: set[str] = set()
+        for msg in state.get("messages", []):
+            if isinstance(msg, AIMessage):
+                for tc in getattr(msg, "tool_calls", None) or []:
+                    if tc.get("name") == "submit_plan" and tc.get("id"):
+                        submit_ids.add(tc["id"])
+        for msg in state.get("messages", []):
+            if isinstance(msg, ToolMessage) and getattr(msg, "status", "") == "success":
+                if getattr(msg, "tool_call_id", None) in submit_ids:
+                    return True
         return False
 
-    async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        if not self._is_plan_mode(state):
+    def after_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        if self._is_plan_approved(state):
             return None
-        if self._already_planned(state):
+        return self._handle_submit_plan(state)
+
+    async def aafter_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        if self._is_plan_approved(state):
             return None
+        return self._handle_submit_plan(state)
 
-        language = str(state.get("language", "en"))
-        lang_name = "Chinese" if language == "zh" else "English"
-        prompt = (
-            f"You are the planner stage inside Coworker. Create a concise internal plan "
-            f"for the upcoming task. Reply in {lang_name}. "
-            "Mention likely files, approach, checks, and risks when relevant. "
-            "Do not use tools. Output only the plan text."
-        )
+    def _handle_submit_plan(self, state: CoworkerAgentState) -> dict[str, Any] | None:
+        from langchain_core.messages import AIMessage, ToolMessage
+        from langgraph.types import interrupt
 
-        user_message = ""
-        for msg in state.get("messages", []):
-            if getattr(msg, "type", None) == "human":
-                user_message = getattr(msg, "content", "") or ""
-                break
+        last_ai = self._last_ai_with_tool_calls(state)
+        if not last_ai:
+            return None
+        plan_calls = [tc for tc in last_ai.tool_calls if tc.get("name") == "submit_plan"]
+        if not plan_calls:
+            return None
+        plan_call = plan_calls[0]
+        plan_text = str(plan_call.get("args", {}).get("plan_text", "") or "")
 
-        plan_text = ""
+        hitl_request = {
+            "action_requests": [{"name": "submit_plan", "args": {"plan_text": plan_text}}],
+            "review_configs": [{"action_name": "submit_plan", "allowed_decisions": ["approve", "reject", "regenerate"]}],
+        }
+        import sys as _sys
+        from langgraph.config import get_config as _gc
+        from langgraph._internal._constants import CONFIG_KEY_SCRATCHPAD as _SP
         try:
-            response = await self.planner_llm.ainvoke(
-                [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": user_message or "Analyze the task and create a plan."},
-                ],
-                config={"callbacks": []},
+            _sp = _gc()["configurable"][_SP]
+            _r = list(_sp.resume) if _sp.resume else []
+        except Exception as _e:
+            _r = f"err"
+        decisions = interrupt(hitl_request)["decisions"]
+        decision = decisions[0] if decisions else {"type": "reject"}
+        dtype = str(decision.get("type", "reject"))
+
+        # Remove submit_plan from tool_calls; keep any other calls (research tools).
+        remaining_calls = [tc for tc in last_ai.tool_calls if tc.get("name") != "submit_plan"]
+        revised_ai = last_ai.model_copy(update={"tool_calls": remaining_calls})
+
+        if dtype == "approve":
+            plan_approved = True
+            tool_msg = ToolMessage(
+                content="The user approved your plan. Proceed to implement it using the write/execute tools.",
+                tool_call_id=plan_call.get("id", "unknown"),
+                status="success",
             )
-            plan_text = coerce_message_content(response).strip()
-        except Exception:
-            plan_text = "Plan could not be generated. Proceed with best-effort analysis."
-
-        if plan_text:
-            stream_writer = getattr(runtime, "stream_writer", None)
-            if stream_writer is not None:
-                stream_writer({"type": "plan_start"})
-                stream_writer({"type": "plan_delta", "content": plan_text})
-                stream_writer({"type": "plan_end", "content": plan_text})
-
-        marker_msg = {"role": "assistant", "content": f"{PLAN_MARKER}\n{plan_text}"}
-        return {"messages": [marker_msg]}
-
-    def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        if not self._is_plan_mode(state):
-            return None
-        if self._already_planned(state):
-            return None
-
-        language = str(state.get("language", "en"))
-        lang_name = "Chinese" if language == "zh" else "English"
-        prompt = (
-            f"You are the planner stage inside Coworker. Create a concise internal plan "
-            f"for the upcoming task. Reply in {lang_name}. "
-            "Mention likely files, approach, checks, and risks when relevant. "
-            "Do not use tools. Output only the plan text."
-        )
-
-        user_message = ""
-        for msg in state.get("messages", []):
-            if getattr(msg, "type", None) == "human":
-                user_message = getattr(msg, "content", "") or ""
-                break
-
-        plan_text = ""
-        try:
-            response = self.planner_llm.invoke(
-                [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": user_message or "Analyze the task and create a plan."},
-                ],
-                config={"callbacks": []},
+        elif dtype == "regenerate":
+            plan_approved = False
+            tool_msg = ToolMessage(
+                content="The user rejected your plan and asked for a revised one. Research the codebase further and call submit_plan again with a revised plan.",
+                tool_call_id=plan_call.get("id", "unknown"),
+                status="error",
             )
-            plan_text = coerce_message_content(response).strip()
-        except Exception:
-            plan_text = "Plan could not be generated. Proceed with best-effort analysis."
+        else:
+            plan_approved = False
+            tool_msg = ToolMessage(
+                content="The user rejected your plan. Do not modify any files or run commands. Explain your approach to the user instead.",
+                tool_call_id=plan_call.get("id", "unknown"),
+                status="error",
+            )
 
-        if plan_text:
-            stream_writer = getattr(runtime, "stream_writer", None)
-            if stream_writer is not None:
-                stream_writer({"type": "plan_start"})
-                stream_writer({"type": "plan_delta", "content": plan_text})
-                stream_writer({"type": "plan_end", "content": plan_text})
+        return {"messages": [revised_ai, tool_msg], "plan_approved": plan_approved}
 
-        marker_msg = {"role": "assistant", "content": f"{PLAN_MARKER}\n{plan_text}"}
-        return {"messages": [marker_msg]}
+    def _tool_name(self, request: Any) -> str:
+        tool_call = getattr(request, "tool_call", None)
+        if isinstance(tool_call, dict):
+            return str(tool_call.get("name") or "")
+        return str(getattr(tool_call, "name", "") or "")
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
-        tool_name = getattr(request, "tool_name", "") or ""
-        if tool_name in _WRITE_TOOL_NAMES:
-            from langchain_core.messages import ToolMessage
-            tc_id = request.tool_call.get("id", "unknown")
+        from langchain_core.messages import ToolMessage
+        tool_name = self._tool_name(request)
+        if tool_name in _CHANGE_TOOL_NAMES and not self._is_plan_approved(getattr(request, "state", {})):
             return ToolMessage(
-                content=f"Tool '{tool_name}' is not available in plan mode. Use read-only tools only.",
-                tool_call_id=tc_id,
+                content=f"Tool '{tool_name}' is blocked until the user approves your plan. Call submit_plan to present your implementation plan for approval first.",
+                tool_call_id=request.tool_call.get("id", "unknown"),
+                status="error",
             )
         return handler(request)
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
-        tool_name = getattr(request, "tool_name", "") or ""
-        if tool_name in _WRITE_TOOL_NAMES:
-            from langchain_core.messages import ToolMessage
-            tc_id = request.tool_call.get("id", "unknown")
+        from langchain_core.messages import ToolMessage
+        tool_name = self._tool_name(request)
+        if tool_name in _CHANGE_TOOL_NAMES and not self._is_plan_approved(getattr(request, "state", {})):
             return ToolMessage(
-                content=f"Tool '{tool_name}' is not available in plan mode. Use read-only tools only.",
-                tool_call_id=tc_id,
+                content=f"Tool '{tool_name}' is blocked until the user approves your plan. Call submit_plan to present your implementation plan for approval first.",
+                tool_call_id=request.tool_call.get("id", "unknown"),
+                status="error",
             )
         return await handler(request)
 
@@ -1061,16 +1087,18 @@ def build_coworker_agent_graph(
     middleware.append(NormalizeMessagesMiddleware())
     middleware.append(ToolCallCleanerMiddleware())
 
-    if work_mode == "plan":
-        middleware.append(PlanGateMiddleware(llm, language))
-
+    middleware.append(PlanApprovalMiddleware(language))
     middleware.extend(command_approval_middleware(access_mode, approval_store))
 
     system_prompt = (
         f"Reply in {language_name(language)}.\n"
         f"{runtime_instruction(work_mode, access_mode)}\n"
-        "Messages prefixed with [CW-PLAN] are your own internal plan for reference only. "
-        "Never repeat or quote them in your reply; use them to guide your work silently."
+        "You are a coding agent that works plan-first. Before modifying any files or "
+        "running commands, research the workspace with read-only tools (read_file, "
+        "search_files, ask_user), then call submit_plan to present your implementation "
+        "plan for the user to approve. Do NOT use write/execute tools until your plan "
+        "is approved. If the user is simply asking a question or wants a direct answer "
+        "with no file changes, answer directly without calling submit_plan."
     )
 
     kwargs: dict[str, Any] = {
@@ -1150,7 +1178,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         turn_index = self._next_turn_index(session_id)
         graph = build_coworker_agent_graph(
             self.llm,
-            build_workspace_tools(self.workspace, work_mode == "build", audit_context, change_store=self.change_store, turn_index=turn_index),
+            build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index),
             work_mode=work_mode,
             language=language,
             access_mode=effective_access,
@@ -1159,7 +1187,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         )
         try:
             result = graph.invoke(
-                {"messages": prepare_agent_messages([{"role": "user", "content": message}], language, work_mode, access_mode), "work_mode": work_mode, "language": language},
+                {"messages": prepare_agent_messages([{"role": "user", "content": message}], language, work_mode, access_mode), "work_mode": work_mode, "language": language, "plan_approved": False},
                 config=agent_run_config(
                     session_id=session_id, provider=self.provider_name, model=self.model_name,
                     language=language, work_mode=work_mode, access_mode=access_mode, streaming=False,
@@ -1248,12 +1276,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
             graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context, change_store=self.change_store, turn_index=turn_index),
+                self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index),
                 work_mode=work_mode, language=language, access_mode=effective_access,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
 
-            inputs = {"messages": prepared_messages, "work_mode": work_mode, "language": language}
+            inputs = {"messages": prepared_messages, "work_mode": work_mode, "language": language, "plan_approved": False}
             config = agent_run_config(
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
                 language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
@@ -1285,7 +1313,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, interrupt_context)
                             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
                             for approval in approvals:
-                                yield stream_event_from_interrupt(approval)
+                                event = stream_event_from_interrupt(approval)
+                                if event.get("type") == "plan_required":
+                                    parts.append({"type": "plan", "content": str(event.get("plan") or "")})
+                                yield event
                             return
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
@@ -1325,6 +1356,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 tc_args = tc.get("args") or ""
 
                 if not tc_id:
+                    continue
+
+                if tc_name == "submit_plan":
                     continue
 
                 if tc_id not in tool_state:
@@ -1375,6 +1409,109 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     return [_change_to_public(change)]
         return _estimate_file_changes(tool_name, input_raw)
 
+    async def _run_with_approved_plan(
+        self,
+        graph: Any,
+        config: dict[str, Any],
+        context: dict[str, Any],
+        approval: dict[str, Any],
+        session_id: str,
+        language: Language,
+        work_mode: WorkMode,
+        access_mode: AccessMode,
+    ) -> list[dict[str, Any]]:
+        """Re-run the agent graph with the user-approved plan injected into state.
+
+        Because LangGraph Command(resume) is unreliable when the interrupt was
+        raised inside a middleware ``after_model`` node, we instead load the
+        checkpointed message history, append a synthetic approval notice, and
+        stream a fresh invocation with ``plan_approved`` already True.
+        """
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        # Read the checkpointed messages for this thread.
+        thread_config = {"configurable": {"thread_id": session_id}}
+        checkpoint = await graph.aget_state(thread_config)
+        messages = list(checkpoint.values.get("messages", []) if checkpoint and checkpoint.values else [])
+
+        args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
+        plan_text = str(args.get("plan_text") or approval.get("plan") or "")
+
+        # The checkpoint contains an unanswered submit_plan AI message. Rebuild a
+        # clean history: drop orphan tool messages and clear tool_calls on any
+        # assistant message that lacks a matching response, so re-sending the
+        # history to the model stays API-valid.
+        cleaned: list[Any] = []
+        tool_call_ids: set[str] = set()
+        for msg in messages:
+            if isinstance(msg, AIMessage):
+                ids = [tc.get("id") for tc in (getattr(msg, "tool_calls", None) or []) if tc.get("id")]
+                if ids and not any(
+                    isinstance(m, ToolMessage) and getattr(m, "tool_call_id", None) in set(ids)
+                    for m in messages
+                ):
+                    msg = msg.model_copy(update={"tool_calls": []})
+                for tid in ids:
+                    tool_call_ids.add(tid)
+                cleaned.append(msg)
+            elif isinstance(msg, ToolMessage):
+                if getattr(msg, "tool_call_id", None) in tool_call_ids:
+                    cleaned.append(msg)
+                # else: orphan tool message, drop it
+            else:
+                cleaned.append(msg)
+        messages = cleaned
+
+        approval_notice = (
+            "The user has APPROVED the following plan. Proceed to implement it now "
+            "using the write/execute tools. Do not call submit_plan again.\n\n"
+            f"Approved plan:\n{plan_text}"
+        )
+        messages.append(HumanMessage(content=approval_notice))
+
+        content_parts: list[str] = []
+        tool_state: dict[str, dict[str, Any]] = {}
+        parts: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        try:
+            async for stream_mode, chunk in graph.astream(
+                {"messages": messages, "work_mode": work_mode, "language": language, "plan_approved": True},
+                config=config,
+                stream_mode=["messages", "custom", "updates"],
+            ):
+                if stream_mode == "messages":
+                    msg, _meta = chunk
+                    try:
+                        for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
+                            events.append(event)
+                    except GeneratorExit:
+                        raise
+                    except Exception:
+                        pass
+                elif stream_mode == "custom":
+                    if isinstance(chunk, dict) and chunk.get("type") in ("plan_start", "plan_delta", "plan_end"):
+                        parts.append(chunk)
+                        events.append(chunk)
+                elif stream_mode == "updates":
+                    if "__interrupt__" in chunk:
+                        approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
+                        self.trace_store.record("agent_activity", "pending", trace_context(session_id=session_id, provider=self.provider_name, provider_id=self.provider_id, model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True), {"approval_ids": [a.get("id", "") for a in approvals], "resumed": True})
+                        for item in approvals:
+                            event = stream_event_from_interrupt(item)
+                            if event.get("type") == "plan_required":
+                                parts.append({"type": "plan", "content": str(event.get("plan") or "")})
+                            events.append(event)
+                        continue
+        except Exception as exc:
+            self.trace_store.record("agent_activity", "error", trace_context(session_id=session_id, provider=self.provider_name, provider_id=self.provider_id, model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True), {"error": str(exc)[:400], "resumed": True})
+            raise
+
+        final_content = "".join(content_parts)
+        self.trace_store.record("agent_activity", "done", trace_context(session_id=session_id, provider=self.provider_name, provider_id=self.provider_id, model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True), {"content_chars": len(final_content), "resumed": True})
+        events.append({"type": "stage", "name": "finalizing", "status": "done"})
+        events.append({"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(parts)})
+        return events
+
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
         from langgraph.types import Command
@@ -1401,7 +1538,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         async with AsyncSqliteSaver.from_conn_string(str(self.checkpoint_path)) as checkpointer:
             graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(self.workspace, work_mode == "build", audit_context, change_store=self.change_store),
+                self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store),
                 work_mode=work_mode, language=language, access_mode=effective_access,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
@@ -1409,9 +1546,33 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
                 language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
             )
+            # Plan approvals resume by re-running the graph with the approved plan
+            # injected into state, rather than relying on LangGraph Command(resume)
+            # which is unreliable when the interrupt lives inside a middleware node.
+            is_plan = str(context.get("kind") or "") == "plan"
+            if is_plan and decisions:
+                decision = decisions[0] if isinstance(decisions, list) else decisions
+                dtype = str(decision.get("type", "") if isinstance(decision, dict) else "")
+                if dtype == "approve":
+                    events.extend(await self._run_with_approved_plan(
+                        graph, config, context, approval, session_id, language, work_mode, access_mode,
+                    ))
+                    return events
+                # reject / regenerate: do not resume the agent; finish the turn cleanly.
+                reject_msg = (
+                    "The user rejected the proposed plan. No changes were made."
+                    if dtype != "regenerate"
+                    else "The user requested a revised plan. No changes were made."
+                )
+                self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(reject_msg), "resumed": True})
+                events.append({"type": "stage", "name": "finalizing", "status": "done"})
+                events.append({"type": "done", "content": reject_msg, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": []})
+                return events
+            interrupt_id = str(context.get("interrupt_id") or "")
+            resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
             tool_state: dict[str, dict[str, Any]] = {}
             try:
-                async for stream_mode, chunk in graph.astream(Command(resume={"decisions": decisions}), config=config, stream_mode=["messages", "custom", "updates"]):
+                async for stream_mode, chunk in graph.astream(Command(resume=resume_map), config=config, stream_mode=["messages", "custom", "updates"]):
                     if stream_mode == "messages":
                         msg, _meta = chunk
                         try:
@@ -1431,7 +1592,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         if "__interrupt__" in chunk:
                             approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
                             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals], "resumed": True})
-                            events.extend(stream_event_from_interrupt(item) for item in approvals)
+                            for item in approvals:
+                                event = stream_event_from_interrupt(item)
+                                if event.get("type") == "plan_required":
+                                    parts.append({"type": "plan", "content": str(event.get("plan") or "")})
+                                events.append(event)
                             continue
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})

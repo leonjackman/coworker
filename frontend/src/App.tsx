@@ -59,7 +59,6 @@ function App() {
   const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
   const [changesPanelOpen, setChangesPanelOpen] = useState(false);
   const [changesRefreshKey, setChangesRefreshKey] = useState(0);
-  const [workMode, setWorkMode] = useState<WorkMode>('build');
   const [accessMode, setAccessMode] = useState<AccessMode>('default');
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -201,7 +200,6 @@ function App() {
       ...current,
       createMessage('user', message, {
         status: 'done',
-        work_mode: workMode,
         access_mode: accessMode,
         provider: requestProvider,
         model: requestModel,
@@ -217,7 +215,6 @@ function App() {
       createMessage('assistant', '', {
         id: assistantMessageId,
         status: 'running',
-        work_mode: workMode,
         access_mode: accessMode,
         provider: requestProvider,
         model: requestModel,
@@ -315,11 +312,11 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'approval_required' || event.type === 'question_required') {
+      } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
         const base: PendingRequest = {
           approval_id: event.approval_id,
-          kind: event.type === 'approval_required' ? 'command' : 'question',
+          kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
           session_id: sessionIdValue,
           approval_status: event.approval_status,
           messageId: assistantMessageId,
@@ -327,14 +324,19 @@ function App() {
         const pending: PendingRequest =
           event.type === 'approval_required'
             ? { ...base, command: event.command, cwd: event.cwd }
-            : {
-                ...base,
-                ...(event.question !== undefined ? { question: event.question } : {}),
-                ...(event.header !== undefined ? { header: event.header } : {}),
-                ...(event.options !== undefined ? { options: event.options } : {}),
-                ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
-              };
+            : event.type === 'question_required'
+              ? {
+                  ...base,
+                  ...(event.question !== undefined ? { question: event.question } : {}),
+                  ...(event.header !== undefined ? { header: event.header } : {}),
+                  ...(event.options !== undefined ? { options: event.options } : {}),
+                  ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+                }
+              : { ...base, plan: event.plan };
         setPendingRequests((current) => [...current, pending]);
+        if (event.type === 'plan_required') {
+          localParts.push({ type: 'plan', content: event.plan });
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -375,8 +377,7 @@ function App() {
           message,
           mode: runtimeConfig?.default_mode ?? 'single',
           language: getLanguage(),
-          work_mode: workMode,
-          access_mode: accessMode,
+            access_mode: accessMode,
           ...(selectedProvider
             ? {
                 provider_id: selectedProvider.id,
@@ -471,8 +472,7 @@ function App() {
         createMessage('assistant', '', {
           id: assistantMessageId,
           status: 'running',
-          work_mode: workMode,
-          access_mode: accessMode,
+            access_mode: accessMode,
         }),
       ];
     });
@@ -536,10 +536,10 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'approval_required' || event.type === 'question_required') {
+      } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
         const pending: PendingRequest = {
           approval_id: event.approval_id,
-          kind: event.type === 'approval_required' ? 'command' : 'question',
+          kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
           session_id: currentSessionId,
           approval_status: event.approval_status,
           messageId: assistantMessageId,
@@ -548,8 +548,12 @@ function App() {
           ...(event.type === 'question_required' && event.header !== undefined ? { header: event.header } : {}),
           ...(event.type === 'question_required' && event.options !== undefined ? { options: event.options } : {}),
           ...(event.type === 'question_required' && event.multiple !== undefined ? { multiple: event.multiple } : {}),
+          ...(event.type === 'plan_required' ? { plan: event.plan } : {}),
         };
         setPendingRequests((current) => [...current, pending]);
+        if (event.type === 'plan_required') {
+          localParts.push({ type: 'plan', content: event.plan });
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
@@ -576,7 +580,6 @@ function App() {
     try {
       await chatService.streamEditMessage(currentSessionId, messageId, trimmed, handleEvent, {
         signal: controller.signal,
-        workMode,
         accessMode,
       });
       await refreshSessions();
@@ -614,8 +617,7 @@ function App() {
         createMessage('assistant', '', {
           id: assistantMessageId,
           status: 'running',
-          work_mode: workMode,
-          access_mode: accessMode,
+            access_mode: accessMode,
         }),
       ];
     });
@@ -679,10 +681,10 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'approval_required' || event.type === 'question_required') {
+      } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
         const pending: PendingRequest = {
           approval_id: event.approval_id,
-          kind: event.type === 'approval_required' ? 'command' : 'question',
+          kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
           session_id: currentSessionId,
           approval_status: event.approval_status,
           messageId: assistantMessageId,
@@ -691,8 +693,12 @@ function App() {
           ...(event.type === 'question_required' && event.header !== undefined ? { header: event.header } : {}),
           ...(event.type === 'question_required' && event.options !== undefined ? { options: event.options } : {}),
           ...(event.type === 'question_required' && event.multiple !== undefined ? { multiple: event.multiple } : {}),
+          ...(event.type === 'plan_required' ? { plan: event.plan } : {}),
         };
         setPendingRequests((current) => [...current, pending]);
+        if (event.type === 'plan_required') {
+          localParts.push({ type: 'plan', content: event.plan });
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
@@ -809,8 +815,8 @@ function App() {
       const response = await chatService.resolveCommandApproval(request.approval_id, decision);
       resumeId = response.resume_id;
       const chained = (response.events ?? []).filter(
-        (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }> =>
-          event.type === 'approval_required' || event.type === 'question_required',
+        (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' } | { type: 'plan_required' }> =>
+          event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required',
       );
       setPendingRequests((current) => [
         ...current.filter((item) => item.approval_id !== request.approval_id),
@@ -930,7 +936,7 @@ function App() {
                   : item,
               ),
             );
-          } else if (event.type === 'approval_required' || event.type === 'question_required') {
+          } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
             setPendingRequests((current) => {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
               return [...current, pendingFromEvent(event, resumeSessionId, request.messageId)];
@@ -955,26 +961,28 @@ function App() {
   };
 
   const pendingFromEvent = (
-    event: Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }>,
+    event: Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' } | { type: 'plan_required' }>,
     sessionId: string,
     messageId: string,
   ): PendingRequest => {
     const base: PendingRequest = {
       approval_id: event.approval_id,
-      kind: event.type === 'approval_required' ? 'command' : 'question',
+      kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
       session_id: event.session_id ?? sessionId,
       approval_status: event.approval_status,
       messageId,
     };
     return event.type === 'approval_required'
       ? { ...base, command: event.command, cwd: event.cwd }
-      : {
-          ...base,
-          ...(event.question !== undefined ? { question: event.question } : {}),
-          ...(event.header !== undefined ? { header: event.header } : {}),
-          ...(event.options !== undefined ? { options: event.options } : {}),
-          ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
-        };
+      : event.type === 'question_required'
+        ? {
+            ...base,
+            ...(event.question !== undefined ? { question: event.question } : {}),
+            ...(event.header !== undefined ? { header: event.header } : {}),
+            ...(event.options !== undefined ? { options: event.options } : {}),
+            ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+          }
+        : { ...base, plan: event.plan };
   };
 
   const dismissPendingRequest = (request: PendingRequest) => {
@@ -1199,14 +1207,6 @@ function App() {
       setActiveView('settings');
       return;
     }
-    if (command === '/plan') {
-      setWorkMode('plan');
-      return;
-    }
-    if (command === '/build') {
-      setWorkMode('build');
-      return;
-    }
     setMessages((current) => [...current, createMessage('assistant', t('chat.command_help_text'), { status: 'done' })]);
   };
 
@@ -1353,7 +1353,6 @@ function App() {
                         value={editingMessage ? editDraft : input}
                         disabled={isThinking || runtimeStatus === 'connecting'}
                         isThinking={isThinking}
-                        workMode={workMode}
                         accessMode={accessMode}
                         selectedModel={selectedModel}
                         attachments={attachments}
@@ -1362,7 +1361,6 @@ function App() {
                         onChange={editingMessage ? setEditDraft : setInput}
                         onSend={editingMessage ? () => void commitEditMessage(editingMessage.id, editDraft) : sendMessage}
                         onStop={stopMessage}
-                        onWorkModeChange={setWorkMode}
                         onAccessModeChange={setAccessMode}
                         onModelChange={(providerId) => void changeSelectedModel(providerId)}
                         onAttachmentsChange={setAttachments}
@@ -1379,10 +1377,8 @@ function App() {
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}
-                  workMode={workMode}
                   accessMode={accessMode}
                   onThemeSettingsChange={changeThemeSettings}
-                  onWorkModeChange={setWorkMode}
                   onAccessModeChange={setAccessMode}
                   onLanguageChange={() => setLanguageVersion((value) => value + 1)}
                   onClose={() => setActiveView('chat')}
@@ -1395,7 +1391,6 @@ function App() {
                 projectName={activeProject?.name ?? t('sidebar.default_project')}
                 modelName={currentProvider?.model ?? runtimeConfig?.selected_model ?? t('chat.model_unselected')}
                 providerName={currentProvider?.name ?? runtimeConfig?.agent_provider ?? t('chat.model_unselected')}
-                workMode={workMode}
                 accessMode={accessMode}
                 attachmentCount={attachments.length}
                 messageCount={messages.length}

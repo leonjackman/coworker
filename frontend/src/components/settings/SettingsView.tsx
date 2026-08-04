@@ -2,20 +2,18 @@ import { X } from 'lucide-react';
 import { useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
-import type { AccessMode, WorkMode } from '../../types';
+import type { AccessMode } from '../../types';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
-import { accessModeOptions, languageOptions, themeOptions, workModeOptions } from './preference-options';
+import { accessModeOptions, languageOptions, themeOptions } from './preference-options';
 
 interface SettingsViewProps {
   themeSettings: ThemeSettings;
-  workMode: WorkMode;
   accessMode: AccessMode;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
-  onWorkModeChange: (mode: WorkMode) => void;
   onAccessModeChange: (mode: AccessMode) => void;
   onLanguageChange: () => void;
   onClose: () => void;
@@ -23,10 +21,8 @@ interface SettingsViewProps {
 
 export function SettingsView({
   themeSettings,
-  workMode,
   accessMode,
   onThemeSettingsChange,
-  onWorkModeChange,
   onAccessModeChange,
   onLanguageChange,
   onClose,
@@ -99,15 +95,6 @@ export function SettingsView({
             title: t('settings.composer_group'),
             description: t('settings.composer_group_desc'),
             items: [
-              {
-                id: 'work-mode',
-                type: 'toggle',
-                label: t('settings.work_mode'),
-                description: t('settings.work_mode_desc'),
-                value: workMode,
-                options: workModeOptions(),
-                onChange: (value) => onWorkModeChange(value as WorkMode),
-              },
               {
                 id: 'access-mode',
                 type: 'toggle',

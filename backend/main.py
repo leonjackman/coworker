@@ -783,6 +783,9 @@ async def resolve_command_approval(request: CommandApprovalResolve):
         elif decision_type == "respond":
             decision = {"type": "respond", "message": request.decision.message}
             status = "answered"
+        elif decision_type == "regenerate":
+            decision = {"type": "regenerate"}
+            status = "denied"
         else:
             decision = {
                 "type": "reject",
