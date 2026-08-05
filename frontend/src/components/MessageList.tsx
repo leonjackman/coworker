@@ -1,5 +1,5 @@
 import { Bot, CheckIcon, Hammer, ListChecks, Shield, ShieldCheck } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart, PartFileChange } from '../types';
 import { ScrollArea } from './ui/scroll-area';
@@ -149,6 +149,15 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
   const isRunning = message.status === 'running';
   const isRunningEmpty = isRunning && !message.content;
   const isWaiting = message.content.includes(t('chat.waiting_resolution'));
+
+  // 流式进行中，让计时每秒跳动（否则只在收到 token 时刷新，思考阶段会"卡住"）
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (isRunning && message.streamStartAt && !message.streamEndAt) {
+      const id = setInterval(() => forceTick((n) => n + 1), 1000);
+      return () => clearInterval(id);
+    }
+  }, [isRunning, message.streamStartAt, message.streamEndAt]);
   const msgParts = message.parts ?? [];
   const { planParts, reasoningParts, toolParts } = groupParts(msgParts);
   const fileChanges = collectFileChanges(toolParts);
@@ -191,6 +200,7 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
       <div className={`stream-content stream-content--${message.status ?? 'done'}`}>
         <div className="stream-role">
           <span>{t('common.coworker')}</span>
+          <span className="stream-role__time">{formatTime(message.timestamp)}</span>
         </div>
         {metaText !== null && (
           <div className="assistant-meta">
