@@ -55,6 +55,8 @@ function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(190);
+  const [bottomPanelResizing, setBottomPanelResizing] = useState(false);
   const [changesPanelOpen, setChangesPanelOpen] = useState(false);
   const [changesRefreshKey, setChangesRefreshKey] = useState(0);
   const [accessMode, setAccessMode] = useState<AccessMode>('default');
@@ -1328,9 +1330,9 @@ function App() {
 
   return (
     <main
-      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${sidebarResizing ? 'app-shell--resizing' : ''}`}
+      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${sidebarResizing || bottomPanelResizing ? 'app-shell--resizing' : ''}`}
       key={languageVersion}
-      style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      style={{ '--sidebar-width': `${sidebarWidth}px`, '--bottom-panel-height': `${bottomPanelHeight}px` } as CSSProperties}
     >
       <WorkspaceTitlebar
         status={runtimeStatus}
@@ -1500,6 +1502,9 @@ function App() {
               {...(currentProjectId ? { projectId: currentProjectId } : {})}
               {...(activeProject?.workspace_path ? { workspaceLabel: activeProject.workspace_path } : {})}
               onViewChange={setBottomPanelView}
+              onResizeStart={() => setBottomPanelResizing(true)}
+              onResizeEnd={() => setBottomPanelResizing(false)}
+              onResizeHeight={(height) => setBottomPanelHeight(height)}
             />
           )}
         </section>

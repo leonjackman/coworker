@@ -258,6 +258,7 @@
   "inspector.messages": "消息",
   "bottom_panel.terminal": "终端",
   "bottom_panel.logs": "日志",
+  "bottom_panel.resize": "调整底部面板高度",
   "bottom_panel.command_placeholder": "输入工作区命令，首次运行需在设置中批准",
   "bottom_panel.run": "运行",
   "bottom_panel.running": "运行中...",

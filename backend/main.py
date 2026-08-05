@@ -1,12 +1,29 @@
 import asyncio
+import json
+import os
 import shlex
+import signal
+import struct
+import subprocess
 from collections import defaultdict
 from typing import Any, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+try:
+    import fcntl
+    import pty
+    import termios
+
+    _PTY_AVAILABLE = True
+except ImportError:  # pragma: no cover - non-POSIX platforms (e.g. Windows)
+    pty = None  # type: ignore[assignment]
+    fcntl = None  # type: ignore[assignment]
+    termios = None  # type: ignore[assignment]
+    _PTY_AVAILABLE = False
 
 from coworker.agents import AgentMode, AgentRuntimeRegistry, Language, format_user_message, normalize_access_mode, normalize_work_mode
 from coworker.config import load_settings
@@ -997,6 +1014,157 @@ async def fetch_provider_models(request: ProviderFetchModelsPayload):
     except Exception as exc:
         return {"status": "error", "models": [], "error": str(exc)[:300]}
     return {"status": "ok", "models": models}
+
+@app.websocket("/ws/terminal")
+async def ws_terminal(websocket: WebSocket):
+    """Stream a real interactive shell (PTY) to the browser bottom-panel terminal.
+
+    Protocol (JSON text frames):
+      client -> server: {"type": "input", "data": "<raw keystrokes>"}
+                       {"type": "resize", "cols": N, "rows": M}
+      server -> client: raw terminal bytes (text)
+                       {"type": "error", "message": "..."}  (on spawn failure)
+    The cwd is the project's workspace when project_id is given, otherwise the
+    default workspace.
+    """
+    await websocket.accept()
+
+    project_id = websocket.query_params.get("project_id")
+
+    if not _PTY_AVAILABLE:
+        await websocket.send_text(json.dumps({"type": "error", "message": "Interactive terminal is not supported on this platform."}))
+        await websocket.close()
+        return
+
+    try:
+        if project_id:
+            workspace = workspace_controller.workspace_for_project(project_id)
+        else:
+            workspace = workspace_controller.default()
+        cwd = str(workspace.root)
+    except Exception:
+        cwd = os.path.expanduser("~")
+
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    master_fd: int | None = None
+    proc: subprocess.Popen[bytes] | None = None
+
+    try:
+        master_fd, slave_fd = pty.openpty()
+        try:
+            winsize = struct.pack("HHHH", 24, 80, 0, 0)
+            fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+        except OSError:
+            pass
+
+        env = dict(os.environ)
+        env["TERM"] = "xterm-256color"
+
+        proc = subprocess.Popen(
+            [shell],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=cwd,
+            env=env,
+            close_fds=True,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+    except Exception as exc:
+        if master_fd is not None:
+            os.close(master_fd)
+        try:
+            await websocket.send_text(json.dumps({"type": "error", "message": f"Failed to start shell: {exc}"}))
+        except Exception:
+            pass
+        await websocket.close()
+        return
+
+    loop = asyncio.get_running_loop()
+    write_queue: asyncio.Queue[str] = asyncio.Queue()
+    eof = asyncio.Event()
+
+    def on_master_readable() -> None:
+        try:
+            data = os.read(master_fd, 65536)
+        except OSError:
+            data = b""
+        if not data:
+            loop.call_soon_threadsafe(eof.set)
+            return
+        try:
+            write_queue.put_nowait(data.decode("utf-8", errors="replace"))
+        except asyncio.QueueFull:
+            pass
+
+    loop.add_reader(master_fd, on_master_readable)
+
+    async def pump() -> None:
+        while True:
+            try:
+                chunk = await write_queue.get()
+            except asyncio.CancelledError:
+                return
+            try:
+                await websocket.send_text(chunk)
+            except Exception:
+                return
+
+    pump_task = asyncio.ensure_future(pump())
+
+    cols, rows = 80, 24
+
+    def set_winsize(next_cols: int, next_rows: int) -> None:
+        nonlocal cols, rows
+        cols, rows = max(1, int(next_cols)), max(1, int(next_rows))
+        try:
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
+        except OSError:
+            pass
+
+    try:
+        while True:
+            if eof.is_set():
+                break
+            message = await websocket.receive_text()
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                os.write(master_fd, message.encode("utf-8", errors="replace"))
+                continue
+            msg_type = payload.get("type")
+            if msg_type == "resize":
+                set_winsize(payload.get("cols", cols), payload.get("rows", rows))
+            elif msg_type == "input":
+                os.write(master_fd, str(payload.get("data", "")).encode("utf-8", errors="replace"))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        loop.remove_reader(master_fd)
+        pump_task.cancel()
+        if proc is not None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=9527)

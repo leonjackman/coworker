@@ -258,6 +258,7 @@
   "inspector.messages": "Messages",
   "bottom_panel.terminal": "Terminal",
   "bottom_panel.logs": "Logs",
+  "bottom_panel.resize": "Resize panel",
   "bottom_panel.command_placeholder": "Run a workspace command; first run requires Settings approval",
   "bottom_panel.run": "Run",
   "bottom_panel.running": "Running...",

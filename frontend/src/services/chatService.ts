@@ -37,6 +37,13 @@ const BACKEND_URL = import.meta.env.VITE_COWORKER_BACKEND_URL || 'http://localho
 
 export type StreamEventCallback = (event: StreamEvent) => void;
 
+/** Build the WebSocket URL for the backend PTY terminal. */
+function buildTerminalUrl(projectId?: string): string {
+  const wsBase = BACKEND_URL.replace(/^http/, 'ws');
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  return `${wsBase}/ws/terminal${query}`;
+}
+
 type AbortSignalLike = {
   aborted?: boolean;
   addEventListener?: AbortSignal['addEventListener'];
@@ -93,6 +100,7 @@ export interface ChatService {
   getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
   getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
   rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
+  getTerminalUrl: (projectId?: string) => string;
   streamRegenerateMessage: (sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   streamEditMessage: (
     sessionId: string,
@@ -238,6 +246,10 @@ class ElectronChatService implements ChatService {
   async rollbackMessage(sessionId: string, messageId: string, withCode = false): Promise<RollbackResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.rollbackMessage(sessionId, messageId, withCode);
+  }
+
+  getTerminalUrl(projectId?: string): string {
+    return buildTerminalUrl(projectId);
   }
 
   async listAgentTraces(limit = 100): Promise<AgentTraceResponse> {
@@ -539,6 +551,10 @@ class HttpChatService implements ChatService {
       `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/rollback`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ with_code: withCode }) },
     );
+  }
+
+  getTerminalUrl(projectId?: string): string {
+    return buildTerminalUrl(projectId);
   }
 
   async listAgentTraces(limit = 100): Promise<AgentTraceResponse> {
