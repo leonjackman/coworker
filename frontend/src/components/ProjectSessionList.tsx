@@ -44,6 +44,8 @@ export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession
 
   return (
     <WorkspacePage
+      className="workspace-page--sessions"
+      contentClassName="workspace-page__content--sessions"
       eyebrow={project.workspace_path}
       title={project.name}
       description={sessions.length === 0 ? t('project_session.empty_state') : t('project_session.project_sessions_count', { count: sessions.length })}
@@ -104,7 +106,7 @@ export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession
           )}
         </div>
 
-        <Button type="button" onClick={() => onNewChat(project.id)}>
+        <Button type="button" className="project-session-list__new" onClick={() => onNewChat(project.id)}>
           <MessageSquarePlus size={16} />
           {t('project_session.new_chat_for_project', { name: project.name })}
         </Button>
