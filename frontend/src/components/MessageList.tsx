@@ -167,17 +167,19 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
   if (message.model) {
     metaParts.push(message.provider ? `${message.provider} · ${message.model}` : message.model);
   }
-  if (message.streamEndAt && message.streamStartAt) {
-    const durationMs = message.streamEndAt - message.streamStartAt;
-    if (durationMs >= 0 && (message.work_mode || message.access_mode === 'full' || message.model)) {
-      const s = Math.round(durationMs / 1000);
-      if (s < 60) metaParts.push(`${s.toFixed(0)}s`);
-      else metaParts.push(`${Math.floor(s / 60)}m ${s % 60}s`);
+  // 任务总计时：收到任务开始计时，done/error/stopped 结束
+  if (message.streamStartAt) {
+    if (message.streamEndAt) {
+      const durationMs = message.streamEndAt - message.streamStartAt;
+      if (durationMs >= 0) {
+        const s = Math.round(durationMs / 1000);
+        if (s < 60) metaParts.push(`${s}s`);
+        else metaParts.push(`${Math.floor(s / 60)}m ${s % 60}s`);
+      }
+    } else if (isRunning) {
+      const s = Math.round((Date.now() - message.streamStartAt) / 1000);
+      metaParts.push(`${s}s`);
     }
-  }
-  if (isRunning && message.streamStartAt && metaParts.length === 0) {
-    const s = Math.round((Date.now() - message.streamStartAt) / 1000);
-    metaParts.push(`${s.toFixed(0)}s`);
   }
   const metaText = metaParts.length > 0 ? metaParts.join(' · ') : null;
 

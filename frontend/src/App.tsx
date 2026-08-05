@@ -69,6 +69,7 @@ function App() {
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
   const activeAssistantMessageIdRef = useRef<string | undefined>(undefined);
+  const streamStartAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -213,6 +214,7 @@ function App() {
     setMessages((current) => [
       ...current,
       createMessage('assistant', '', {
+        streamStartAt: Date.now(),
         id: assistantMessageId,
         status: 'running',
         access_mode: accessMode,
@@ -227,6 +229,7 @@ function App() {
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let streamStartAt = Date.now();
+    streamStartAtRef.current = streamStartAt;
 
     const handleEvent = (event: StreamEvent) => {
       if (requestId !== requestSeqRef.current) return;
@@ -356,7 +359,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now(), streamStartAt }
+              ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -364,7 +367,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts] }
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts], streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -405,7 +408,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: streamedContent || t('chat.stopped'), status: 'stopped' }
+              ? { ...item, content: streamedContent || t('chat.stopped'), status: 'stopped', streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -414,7 +417,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error' }
+              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -436,7 +439,7 @@ function App() {
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped' }
+            ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped', streamStartAt: streamStartAtRef.current ?? Date.now(), streamEndAt: Date.now() }
             : item,
         ),
       );
@@ -470,6 +473,7 @@ function App() {
       return [
         ...truncated.map((m) => (m.id === messageId ? { ...m, content: trimmed, status: 'done' as const } : m)),
         createMessage('assistant', '', {
+        streamStartAt: Date.now(),
           id: assistantMessageId,
           status: 'running',
             access_mode: accessMode,
@@ -479,6 +483,7 @@ function App() {
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let streamStartAt = Date.now();
+    streamStartAtRef.current = streamStartAt;
     const controller = new AbortController();
     abortRef.current = controller;
     const handleEvent = (event: StreamEvent) => {
@@ -564,14 +569,14 @@ function App() {
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         setMessages((current) =>
           current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamStartAt, streamEndAt: Date.now() } : item,
+            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
           ),
         );
       } else if (event.type === 'error') {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts] }
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts], streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -591,7 +596,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error' }
+              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -615,6 +620,7 @@ function App() {
       return [
         ...truncated,
         createMessage('assistant', '', {
+        streamStartAt: Date.now(),
           id: assistantMessageId,
           status: 'running',
             access_mode: accessMode,
@@ -624,6 +630,7 @@ function App() {
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let streamStartAt = Date.now();
+    streamStartAtRef.current = streamStartAt;
     const controller = new AbortController();
     abortRef.current = controller;
     const handleEvent = (event: StreamEvent) => {
@@ -709,14 +716,14 @@ function App() {
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         setMessages((current) =>
           current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamStartAt, streamEndAt: Date.now() } : item,
+            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
           ),
         );
       } else if (event.type === 'error') {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts] }
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts], streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -733,7 +740,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error' }
+              ? { ...item, content: translateError(error) || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -945,7 +952,7 @@ function App() {
             setMessages((current) =>
               current.map((item) =>
                 item.id === request.messageId
-                  ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error' }
+                  ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() }
                   : item,
               ),
             );
