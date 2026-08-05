@@ -1411,6 +1411,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     tool_state[tc_id]["input"] = tool_state[tc_id].get("input", "") + tc_args
                     if tc_name:
                         tool_state[tc_id]["name"] = tc_name
+                        # 名字可能在后续流式 chunk 才到达，回填已推送的 tool_start part，
+                        # 避免持久化后 tool 名称为空（显示 "Used tool:"）。
+                        for existing_part in parts:
+                            if existing_part.get("type") == "tool_start" and existing_part.get("id") == tc_id:
+                                existing_part["name"] = tc_name
+                                break
                     part = {"type": "tool_delta", "id": tc_id, "input": tc_args}
                     parts.append(part)
                     events.append(part)
@@ -1451,7 +1457,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     return [_change_to_public(change)]
         return _estimate_file_changes(tool_name, input_raw)
 
-    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
+        """Resume an interrupted turn, yielding progress events in real time.
+
+        Yields events as they are produced (deltas, tool activity, newly hit
+        interrupts) so the event bus can stream them to the frontend immediately,
+        instead of buffering everything until the resume fully finishes.
+        """
         from langgraph.types import Command
 
         context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
@@ -1468,7 +1480,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
         )
         content_parts: list[str] = []
-        events: list[dict[str, Any]] = []
         parts: list[dict[str, Any]] = []
         decision_types = ", ".join(str(item.get("type")) for item in decisions)
         self.trace_store.record("agent_activity", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
@@ -1499,25 +1510,56 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             else:
                 stop_msg = "The user rejected the command. The task has been stopped."
             self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(stop_msg), "resumed": True})
-            events.append({"type": "stage", "name": "finalizing", "status": "done"})
-            events.append({"type": "done", "content": stop_msg, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": []})
-            return events
+            yield {"type": "stage", "name": "finalizing", "status": "done"}
+            yield {"type": "done", "content": stop_msg, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": []}
+            return
 
         if is_plan and decisions:
             # Approve: resume the SAME graph execution (official LangGraph
-            # interrupt/resume). Before resuming, persist plan_approved=True
-            # into the thread state so the resumed agent sees the plan as
-            # approved and write/execute tools pass the gate. Done in a fully
-            # closed checkpoint connection before the resume connection opens,
-            # to avoid SQLite write-lock contention.
+            # interrupt/resume). Persist plan_approved=True AND inject an
+            # explicit "plan approved" ToolMessage into the thread state.
+            # Setting plan_approved alone short-circuits
+            # PlanApprovalMiddleware.after_model, which then never emits the
+            # approval message and the resumed model keeps saying it is still
+            # waiting for approval instead of executing.
             try:
+                from langchain_core.messages import AIMessage, ToolMessage
+
                 async with _open_checkpointer(self.checkpoint_path) as _cp:
                     _g = build_coworker_agent_graph(
                         self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store),
                         work_mode=work_mode, language=language, access_mode=effective_access,
                         checkpointer=_cp, approval_store=self.approval_store,
                     )
-                    await _g.aupdate_state(config, {"plan_approved": True})
+                    submit_id = ""
+                    try:
+                        _state = await _g.aget_state(config)
+                        for _msg in reversed(list(_state.values.get("messages", []))):
+                            if isinstance(_msg, AIMessage):
+                                for _tc in getattr(_msg, "tool_calls", None) or []:
+                                    if str(_tc.get("name", "")) == "submit_plan" and _tc.get("id"):
+                                        submit_id = _tc["id"]
+                                        break
+                            if submit_id:
+                                break
+                    except Exception:
+                        submit_id = ""
+                    if submit_id:
+                        await _g.aupdate_state(
+                            config,
+                            {
+                                "plan_approved": True,
+                                "messages": [
+                                    ToolMessage(
+                                        content="The user approved your plan. Proceed to implement it using the write/execute tools.",
+                                        tool_call_id=submit_id,
+                                        status="success",
+                                    )
+                                ],
+                            },
+                        )
+                    else:
+                        await _g.aupdate_state(config, {"plan_approved": True})
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": f"update_state: {str(exc)[:300]}", "resumed": True})
 
@@ -1536,7 +1578,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         msg, _meta = chunk
                         try:
                             for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
-                                events.append(event)
+                                yield event
                         except GeneratorExit:
                             raise
                         except Exception:
@@ -1546,7 +1588,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             event_type = chunk.get("type", "")
                             if event_type in ("plan_start", "plan_delta", "plan_end"):
                                 parts.append(chunk)
-                                events.append(chunk)
+                                yield chunk
                     elif stream_mode == "updates":
                         if "__interrupt__" in chunk:
                             approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
@@ -1555,7 +1597,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                 event = stream_event_from_interrupt(item)
                                 if event.get("type") == "plan_required":
                                     parts.append({"type": "plan", "content": str(event.get("plan") or "")})
-                                events.append(event)
+                                yield event
                             continue
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})
@@ -1564,9 +1606,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         final_content = "".join(content_parts)
         final_content = _strip_plan_leak(final_content, parts)
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
-        events.append({"type": "stage", "name": "finalizing", "status": "done"})
-        events.append({"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(parts)})
-        return events
+        yield {"type": "stage", "name": "finalizing", "status": "done"}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(parts)}
+        return
 
 
 class SimulatedStreamRuntime(AgentStreamRuntime):
@@ -1680,11 +1722,12 @@ class AgentRuntimeRegistry:
             return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
-    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
         """Resume an interrupted agent turn (HITL approval) using the stream runtime.
 
         The approval context carries the provider id, workspace path, and session
         metadata so the same graph can be rebuilt against the existing checkpoint.
+        Events are forwarded in real time from the runtime generator.
         """
         context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
         provider_id = str(context.get("provider_id") or "")
@@ -1695,7 +1738,8 @@ class AgentRuntimeRegistry:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
         runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace)
-        return await runtime.resume_interrupt(approval, decisions)
+        async for event in runtime.resume_interrupt(approval, decisions):
+            yield event
 
     def _stream_runtime_from_context(self, context: dict[str, Any]) -> AgentStreamRuntime:
         provider_id = str(context.get("provider_id") or "")

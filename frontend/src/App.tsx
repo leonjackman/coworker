@@ -20,6 +20,43 @@ import { chatService } from './services/chatService';
 import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
+function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
+  const merged = [...base];
+  for (const part of extra) {
+    if (part.type === 'tool') {
+      const index = merged.findIndex((p) => p.type === 'tool' && (p as Extract<MessagePart, { type: 'tool' }>).id === part.id);
+      if (index >= 0) {
+        const prev = merged[index] as Extract<MessagePart, { type: 'tool' }>;
+        merged[index] = {
+          ...prev,
+          ...part,
+          name: part.name || prev.name || '',
+          input: part.input || prev.input || '',
+        } as MessagePart;
+      } else {
+        merged.push(part);
+      }
+    } else if (part.type === 'plan') {
+      const index = merged.findIndex((p) => p.type === 'plan');
+      if (index >= 0) {
+        merged[index] = { ...merged[index], ...part };
+      } else {
+        merged.push(part);
+      }
+    } else if (part.type === 'reasoning') {
+      const index = merged.findIndex((p) => p.type === 'reasoning');
+      if (index >= 0) {
+        merged[index] = { ...merged[index], ...part };
+      } else {
+        merged.push(part);
+      }
+    } else {
+      merged.push(part);
+    }
+  }
+  return merged;
+}
+
 function createMessage(
   role: ChatMessage['role'],
   content: string,
@@ -886,7 +923,8 @@ function App() {
   const resolvePendingRequest = async (request: PendingRequest, decision: ApprovalDecisionPayload) => {
     if (resolvingRef.current) return;
     // 记录当前 requestId，使 handleEvent 中的陈旧检查生效（P1 守卫）
-    const requestId = requestSeqRef.current + 1;
+    const requestId = requestSeqRef.current;
+    const targetMessageId = request.messageId || [...messages].reverse().find((m) => m.role === 'assistant')?.id || '';
     resolvingRef.current = true;
     setPendingRequests((current) =>
       current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
@@ -901,12 +939,12 @@ function App() {
       );
       setPendingRequests((current) => [
         ...current.filter((item) => item.approval_id !== request.approval_id),
-        ...chained.map((event): PendingRequest => pendingFromEvent(event, request.session_id, request.messageId)),
+        ...chained.map((event): PendingRequest => pendingFromEvent(event, request.session_id, targetMessageId)),
       ]);
       if (response.resumed === false && !response.resume_id) {
         setMessages((current) =>
           current.map((item) => {
-            if (item.id !== request.messageId) return item;
+            if (item.id !== targetMessageId) return item;
             return item;
           }),
         );
@@ -929,6 +967,15 @@ function App() {
     const resumeSessionId = request.session_id || sessionIdRef.current || '';
     let resumeContent = '';
     let resumeParts: MessagePart[] = [];
+    const applyResume = (status: 'running' | 'done') => {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id !== targetMessageId
+            ? item
+            : { ...item, content: resumeContent, status, parts: mergeMessageParts(item.parts || [], resumeParts) },
+        ),
+      );
+    };
     try {
       await chatService.subscribeApprovalEvents(
         resumeId,
@@ -940,18 +987,10 @@ function App() {
             if (event.parts && event.parts.length > 0) {
               resumeParts = event.parts;
             }
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'done' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('done');
           } else if (event.type === 'delta') {
             resumeContent += event.content;
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'reasoning_delta') {
             const last = resumeParts[resumeParts.length - 1];
             if (last && last.type === 'reasoning') {
@@ -959,77 +998,49 @@ function App() {
             } else {
               resumeParts.push({ type: 'reasoning', content: event.content });
             }
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'tool_start') {
             resumeParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'tool_delta') {
             const tp = resumeParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
             if (tp) tp.input = (tp.input || '') + (event.input || '');
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'tool_end') {
             const tp = resumeParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
             if (tp) {
               tp.status = event.status === 'success' ? 'success' : 'error';
               if (event.output) tp.output = event.output;
             }
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'plan_start') {
             resumeParts.push({ type: 'plan', content: '' });
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'plan_delta') {
             const pp = resumeParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
             if (pp) pp.content += event.content;
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'plan_end') {
             const pp = resumeParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
             if (pp && event.content) pp.content = event.content;
-            setMessages((current) =>
-              current.map((item) =>
-                item.id !== request.messageId ? item : { ...item, content: resumeContent, status: 'running' as const, parts: [...resumeParts] },
-              ),
-            );
+            applyResume('running');
           } else if (event.type === 'stage') {
             setMessages((current) =>
               current.map((item) =>
-                item.id === request.messageId
-                  ? { ...item, content: `${t('chat.waiting_resolution')} · ${event.name}`, status: 'running' as const }
+                item.id === targetMessageId
+                  ? { ...item, content: `${t('chat.waiting_resolution')} · ${event.name}`, status: 'running' as const, parts: mergeMessageParts(item.parts || [], resumeParts) }
                   : item,
               ),
             );
           } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
             setPendingRequests((current) => {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
-              return [...current, pendingFromEvent(event, resumeSessionId, request.messageId)];
+              return [...current, pendingFromEvent(event, resumeSessionId, targetMessageId)];
             });
           } else if (event.type === 'error') {
             setMessages((current) =>
               current.map((item) =>
-                item.id === request.messageId
+                item.id === targetMessageId
                   ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() }
                   : item,
               ),
@@ -1166,10 +1177,13 @@ function App() {
         }
       }
       if (restored.length === 0) return;
-      setPendingRequests((current) => [
-        ...current.filter((item) => item.session_id !== targetSessionId),
-        ...restored,
-      ]);
+      setPendingRequests((current) => {
+        const existing = current.filter((item) => item.session_id === targetSessionId);
+        const existingIds = new Set(existing.map((item) => item.approval_id));
+        const additions = restored.filter((item) => !existingIds.has(item.approval_id));
+        if (additions.length === 0) return current;
+        return [...current.filter((item) => item.session_id !== targetSessionId), ...existing, ...additions];
+      });
     } catch (error) {
       console.error('Failed to restore pending approvals:', error);
     }
@@ -1208,6 +1222,14 @@ function App() {
       pendingProjectIdRef.current = undefined;
       setPendingRequests((current) => current.filter((item) => item.session_id !== sessionIdToOpen));
       void restorePendingForSession(sessionIdToOpen);
+      // 后台 resume 可能仍在运行：切回时首扫可能早于新审批创建，延迟重扫兜底。
+      for (const delay of [5000, 15000]) {
+        setTimeout(() => {
+          if (sessionIdRef.current === sessionIdToOpen) {
+            void restorePendingForSession(sessionIdToOpen);
+          }
+        }, delay);
+      }
       setActiveProjectId(response.session.project_id || undefined);
       // 归而非覆盖：保留本地 status === 'running' 的消息（半截回复可能由 AbortError 兜底已写入）
       setMessages((current) => {

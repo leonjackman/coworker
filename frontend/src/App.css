@@ -3699,7 +3699,7 @@ body.bottom-panel-resizing {
   width: 100%;
   margin: 0 auto;
   display: grid;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -3853,7 +3853,8 @@ body.bottom-panel-resizing {
 .pending-dock__command {
   display: grid;
   gap: 4px;
-  padding: 9px 11px;
+  padding: 10px 12px;
+  border: 1px solid var(--material-border);
   border-radius: 10px;
   background: color-mix(in oklab, var(--material-control) 55%, transparent);
 }
@@ -3926,9 +3927,20 @@ body.bottom-panel-resizing {
   color: var(--foreground);
   text-align: left;
   background: color-mix(in oklab, var(--material-control) 45%, transparent);
+  cursor: pointer;
   transition:
     border-color 120ms ease,
     background 120ms ease;
+}
+
+/* 原生 radio/checkbox 视觉隐藏，仅保留键盘与读屏语义 */
+.pending-dock__option-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .pending-dock__options [data-slot="question-option"]:hover {

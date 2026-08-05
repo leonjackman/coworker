@@ -181,6 +181,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 900,
+    minHeight: 1200,
     show: false,
     icon: themedMonochromeAssetPath('cw-icon'),
     backgroundColor: '#111417',

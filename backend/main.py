@@ -891,6 +891,40 @@ async def resolve_command_approval(request: CommandApprovalResolve):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _merge_message_parts(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge newly emitted resume parts into the assistant message's accumulated parts.
+
+    Tools are merged by id (the newest entry wins), reasoning/plan blocks are
+    coalesced so repeated resumes of the same turn do not duplicate blocks.
+    """
+    merged = list(existing)
+    for part in incoming:
+        ptype = part.get("type")
+        if ptype == "tool":
+            tool_id = part.get("id")
+            index = next((i for i, p in enumerate(merged) if p.get("type") == "tool" and p.get("id") == tool_id), None)
+            if index is not None:
+                prev = merged[index]
+                merged[index] = {
+                    **prev,
+                    **part,
+                    # 不应用空值覆盖已有内容，避免后续 resume 的空字段抹掉工具名/参数
+                    "name": part.get("name") or prev.get("name") or "",
+                    "input": part.get("input") or prev.get("input") or "",
+                }
+            else:
+                merged.append(dict(part))
+        elif ptype in ("plan", "reasoning"):
+            index = next((i for i, p in enumerate(merged) if p.get("type") == ptype), None)
+            if index is not None:
+                merged[index] = {**merged[index], **part}
+            else:
+                merged.append(dict(part))
+        else:
+            merged.append(dict(part))
+    return merged
+
+
 async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblings: list[dict[str, Any]]) -> None:
     """Run the agent resume in the background and stream events via the event bus."""
     ordered = sorted(
@@ -904,23 +938,42 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
         if not decisions:
             approval_event_bus.close(resume_id)
             return
-        events = await agent_registry.resume_interrupt(approval, decisions)
-        done = next((event for event in reversed(events) if event.get("type") == "done"), None)
-        for event in events:
+        done: dict[str, Any] | None = None
+        # resume_interrupt now yields events in real time, so each one is pushed
+        # to the SSE bus as soon as it is produced instead of buffering the whole
+        # resume. This gives the frontend live progress during the agent's resume
+        # and surfaces newly hit approvals immediately.
+        async for event in agent_registry.resume_interrupt(approval, decisions):
+            if event.get("type") == "done":
+                done = event
             event["session_id"] = session_id
             event["resume_id"] = resume_id
             await approval_event_bus.publish(resume_id, event)
         if done and session_id:
             try:
-                session_store.append_message(
-                    session_id,
-                    role="assistant",
-                    content=str(done.get("content") or ""),
-                    mode="single",
-                    provider=str(done.get("provider") or ""),
-                    model=str(done.get("model") or ""),
-                    parts=done.get("parts") or [],
-                )
+                session = session_store.require(session_id)
+                last = session.messages[-1] if session.messages else None
+                if last is not None and last.role == "assistant":
+                    # 同一次 agent turn 的多次 resume 共享同一条 assistant 消息：
+                    # 把本次 resume 的 parts 合并进最后一条消息，而不是每次 append 新消息，
+                    # 避免切换会话重载后同一次回复被拆成多个气泡。
+                    last.parts = _merge_message_parts(last.parts, done.get("parts") or [])
+                    last.content = str(done.get("content") or last.content or "")
+                    last.provider = str(done.get("provider") or last.provider or "")
+                    last.model = str(done.get("model") or last.model or "")
+                    session_store.save(session)
+                    done["content"] = last.content
+                    done["parts"] = last.parts
+                else:
+                    session_store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=str(done.get("content") or ""),
+                        mode="single",
+                        provider=str(done.get("provider") or ""),
+                        model=str(done.get("model") or ""),
+                        parts=done.get("parts") or [],
+                    )
             except KeyError:
                 pass
         for item in ordered:

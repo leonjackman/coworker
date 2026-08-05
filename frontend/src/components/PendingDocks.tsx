@@ -210,6 +210,8 @@ function QuestionDock({ request, index, total, onResolve }: { request: PendingRe
           .map((i) => request.options?.[i]?.label)
           .filter(Boolean)
           .join(', ') });
+      } else if (!request.multiple && picked.length > 0 && request.options) {
+        await dispatch({ type: 'respond', message: request.options[picked[0]!]?.label ?? '' });
       } else if (customAnswer.trim()) {
         await dispatch({ type: 'respond', message: customAnswer.trim() });
       } else {
@@ -240,7 +242,7 @@ function QuestionDock({ request, index, total, onResolve }: { request: PendingRe
             return (
               <label
                 key={`${option.label}-${optionIndex}`}
-                className="pending-dock__option-box"
+                className="pending-dock__option"
                 data-slot="question-option"
                 data-type={request.multiple ? 'checkbox' : 'radio'}
                 data-picked={isPicked}
@@ -262,11 +264,20 @@ function QuestionDock({ request, index, total, onResolve }: { request: PendingRe
                       );
                     }
                   }}
+                  className="pending-dock__option-native"
                 />
-                <div className="pending-dock__option-main">
+                <span
+                  className="pending-dock__option-box"
+                  data-type={request.multiple ? 'checkbox' : 'radio'}
+                  data-picked={isPicked}
+                  aria-hidden="true"
+                >
+                  <span className="pending-dock__option-check" />
+                </span>
+                <span className="pending-dock__option-main">
                   <span className="pending-dock__option-label">{option.label}</span>
                   {option.description ? <span className="pending-dock__option-description">{option.description}</span> : null}
-                </div>
+                </span>
               </label>
             );
           })}
