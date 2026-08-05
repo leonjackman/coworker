@@ -14,7 +14,7 @@ import { WorkspaceBottomPanel, type BottomPanelView } from './components/Workspa
 import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { ChangesPanel } from './components/ChangesPanel';
 import { RollbackDialog } from './components/RollbackDialog';
-import { getLanguage, initLanguage, t, translateError } from './lib/i18n';
+import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
 import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
@@ -46,7 +46,7 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [draftMode, setDraftMode] = useState(false);
-  const [languageVersion, setLanguageVersion] = useState(0);
+  const _language = useLanguage();
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -120,7 +120,6 @@ function App() {
       applyTheme(themeSettings);
       await initLanguage();
       if (!mounted) return;
-      setLanguageVersion((value) => value + 1);
 
       try {
         const config = await chatService.getRuntimeConfig();
@@ -159,7 +158,7 @@ function App() {
 
   useEffect(() => {
     document.title = t('app.title');
-  }, [languageVersion]);
+  }, []);
 
   useEffect(() => {
     if (sessionId || messages.length > 0 || projects.length === 0 || sessions.length > 0) return;
@@ -1395,10 +1394,9 @@ function App() {
     setThemeSettings(nextSettings);
   };
 
-  return (
+    return (
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${sidebarResizing || bottomPanelResizing ? 'app-shell--resizing' : ''}`}
-      key={languageVersion}
       style={{ '--sidebar-width': `${sidebarWidth}px`, '--bottom-panel-height': `${bottomPanelHeight}px` } as CSSProperties}
     >
       <WorkspaceTitlebar
@@ -1532,7 +1530,6 @@ function App() {
                   accessMode={accessMode}
                   onThemeSettingsChange={changeThemeSettings}
                   onAccessModeChange={setAccessMode}
-                  onLanguageChange={() => setLanguageVersion((value) => value + 1)}
                   onClose={() => setActiveView('chat')}
                 />
               )}

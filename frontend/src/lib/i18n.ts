@@ -1,9 +1,24 @@
 const STORAGE_KEY = 'coworker-language';
+import { createContext, useState, useCallback, useEffect } from 'react';
 
 export type Language = 'zh' | 'en';
 
 let currentLanguage: Language = 'zh';
 let dictionary: Record<string, string> = {};
+
+// React state for triggering re-renders on language change
+const languageListeners = new Set<() => void>();
+
+export function subscribeToLanguageChange(listener: () => void): () => void {
+  languageListeners.add(listener);
+  return () => languageListeners.delete(listener);
+}
+
+export function notifyLanguageChange(): void {
+  for (const listener of languageListeners) {
+    try { listener(); } catch { /* ignore */ }
+  }
+}
 
 export function getLanguage(): Language {
   return currentLanguage;
@@ -17,6 +32,7 @@ export async function setLanguage(language: Language): Promise<void> {
     // localStorage may be unavailable in restricted renderer contexts.
   }
   await loadDictionary();
+  notifyLanguageChange();
 }
 
 export async function initLanguage(): Promise<Language> {
@@ -57,4 +73,13 @@ export function translateError(error: unknown): string {
   if (message.includes('Failed to connect to backend')) return t('error.connection_refused');
   if (message.includes('Electron API is unavailable')) return t('error.electron_api_unavailable');
   return message || t('common.unknown_error');
+}
+
+// React hook to trigger re-render on language change
+export function useLanguage(): Language {
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    return subscribeToLanguageChange(() => setVersion((v) => v + 1));
+  }, []);
+  return currentLanguage;
 }

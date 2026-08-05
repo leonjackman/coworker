@@ -445,6 +445,9 @@ export interface PendingRequest {
   options?: ApprovalOption[];
   multiple?: boolean;
   plan?: string;
+  // Internal: preserved form state across remount (not sent to backend)
+  _savedPicked?: number[];
+  _savedAnswer?: string;
 }
 
 export type StreamEvent =

@@ -297,14 +297,15 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
     lastUserMessageIdRef.current = lastUserMessageId;
     lastCountRef.current = messages.length;
 
+    // Only auto-scroll when: (1) new user message sent, (2) session just opened, or (3) agent is thinking and user was at bottom
     if (hasNewUserMessage || isSessionOpen) {
       stickToBottomRef.current = true;
       scrollToBottom('auto');
-    } else if (isThinking) {
-      if (stickToBottomRef.current) {
-        scrollToBottom('auto');
-      }
+    } else if (isThinking && stickToBottomRef.current) {
+      // During streaming: only scroll if user hasn't scrolled up
+      scrollToBottom('smooth');
     }
+    // If user scrolled up and agent continues, preserve their position
   }, [messages, isThinking]);
 
   return (

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Command, HelpCircle, ListChecks } from 'lucide-react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { t } from '@/lib/i18n';
@@ -167,8 +167,24 @@ function ApprovalDock({ request, onResolve }: { request: PendingRequest & { kind
 
 function QuestionDock({ request, index, total, onResolve }: { request: PendingRequest & { kind: 'question' }; index?: number; total?: number; onResolve: (req: PendingRequest & { kind: 'question' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
   const [resolving, setResolving] = useState(false);
-  const [picked, setPicked] = useState<number[]>([]);
-  const [customAnswer, setCustomAnswer] = useState('');
+  // Use refs to preserve form state across view switches (component unmount/remount)
+  const pickedRef = useRef<number[]>([]);
+  const customAnswerRef = useRef('');
+  // Sync refs to state for rendering, but only once on mount
+  const [picked, setPicked] = useState(() => { pickedRef.current = request._savedPicked || []; return pickedRef.current; });
+  const [customAnswer, setCustomAnswer] = useState(() => { customAnswerRef.current = request._savedAnswer || ''; return customAnswerRef.current; });
+
+  // Save state before unmount
+  useEffect(() => {
+    return () => {
+      request._savedPicked = [...pickedRef.current];
+      request._savedAnswer = customAnswerRef.current;
+    };
+  }, []);
+
+  // Sync state → ref on change
+  useEffect(() => { pickedRef.current = picked; }, [picked]);
+  useEffect(() => { customAnswerRef.current = customAnswer; }, [customAnswer]);
 
   const hasAnswer = request.options
     ? (request.multiple

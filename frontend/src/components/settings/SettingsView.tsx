@@ -15,7 +15,7 @@ interface SettingsViewProps {
   accessMode: AccessMode;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAccessModeChange: (mode: AccessMode) => void;
-  onLanguageChange: () => void;
+  onLanguageChange?: () => void;
   onClose: () => void;
 }
 
@@ -33,7 +33,7 @@ export function SettingsView({
     if (language !== 'zh' && language !== 'en') return;
     if (language === getLanguage()) return;
     await setLanguage(language as Language);
-    onLanguageChange();
+    // No need to trigger re-render — useLanguage() hook handles it automatically
   }
 
   const currentPreset = THEME_PRESETS.find((preset) => preset.id === themeSettings.presetId);
