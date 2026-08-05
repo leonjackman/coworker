@@ -14,7 +14,7 @@ from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
 from coworker.sessions import SessionStore
-from coworker.workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, workspace_git_diff
+from coworker.workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
 
 app = FastAPI()
@@ -761,6 +761,17 @@ async def diffs_current(project_id: str = "", session_id: str = ""):
         return {"status": "ok", **result}
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.get("/workspace/branch")
+async def workspace_branch(project_id: str = ""):
+    """Current git branch for the project workspace (read-only status)."""
+    try:
+        workspace = workspace_controller.workspace_for_project(project_id) if project_id else workspace_controller.default()
+        result = workspace_git_branch(workspace.root)
+        return {"status": "ok", **result}
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 @app.post("/workspace/command")
 async def workspace_command(request: WorkspaceCommandRequest):

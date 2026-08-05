@@ -334,6 +334,13 @@ export interface WorkspaceFileResponse {
   };
 }
 
+export interface WorkspaceBranchResponse {
+  status: string;
+  is_repo: boolean;
+  branch: string | null;
+  workspace?: string;
+}
+
 export interface WorkspaceCommandRequest {
   command: string;
   cwd?: string;

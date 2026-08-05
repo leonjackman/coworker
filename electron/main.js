@@ -662,6 +662,13 @@ ipcMain.handle('get-current-diff', async (event, options = {}) => {
   return requestBackend(`/diffs/current${query ? `?${query}` : ''}`);
 });
 
+ipcMain.handle('get-workspace-branch', async (event, projectId) => {
+  const params = new URLSearchParams();
+  if (projectId) params.set('project_id', projectId);
+  const query = params.toString();
+  return requestBackend(`/workspace/branch${query ? `?${query}` : ''}`);
+});
+
 ipcMain.handle('resolve-command-approval', async (event, payload) => {
   return requestBackend('/command-approvals/resolve', 'POST', {
     approval_id: payload?.approval_id || '',

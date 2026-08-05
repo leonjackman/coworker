@@ -30,6 +30,7 @@ import type {
   WorkspaceDirResponse,
   WorkspaceFileResponse,
   WorkspaceTreeResponse,
+  WorkspaceBranchResponse,
 } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_COWORKER_BACKEND_URL || 'http://localhost:9527';
@@ -89,6 +90,7 @@ export interface ChatService {
   subscribeApprovalEvents: (resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
   getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
+  getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
   getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
   rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
   streamRegenerateMessage: (sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
@@ -221,6 +223,11 @@ class ElectronChatService implements ChatService {
   async getCurrentDiff(options?: { projectId?: string; sessionId?: string }): Promise<CurrentDiffResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.getCurrentDiff(options);
+  }
+
+  async getWorkspaceBranch(projectId?: string): Promise<WorkspaceBranchResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceBranch(projectId);
   }
 
   async getRevertPreview(sessionId: string, messageId: string): Promise<RevertPreviewResponse> {
@@ -514,6 +521,13 @@ class HttpChatService implements ChatService {
     if (options?.sessionId) params.set('session_id', options.sessionId);
     const query = params.toString();
     return this.request<CurrentDiffResponse>(`/diffs/current${query ? `?${query}` : ''}`);
+  }
+
+  async getWorkspaceBranch(projectId?: string): Promise<WorkspaceBranchResponse> {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project_id', projectId);
+    const query = params.toString();
+    return this.request<WorkspaceBranchResponse>(`/workspace/branch${query ? `?${query}` : ''}`);
   }
 
   async getRevertPreview(sessionId: string, messageId: string): Promise<RevertPreviewResponse> {

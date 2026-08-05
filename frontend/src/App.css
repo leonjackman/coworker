@@ -2140,6 +2140,37 @@ body.sidebar-resizing {
   background: var(--panel-hover);
 }
 
+/* read-only git branch status chip — display only, not editable */
+.composer__branch {
+  min-width: 0;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid color-mix(in oklab, #3b6d11 32%, var(--material-border));
+  border-radius: 999px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, #3b6d11 16%, transparent);
+  cursor: default;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 640;
+  white-space: nowrap;
+}
+.composer__branch svg {
+  color: #7bb33f;
+  flex: 0 0 auto;
+}
+.composer__branch--muted {
+  border-color: var(--material-border);
+  background: var(--material-control);
+}
+.composer__branch--muted svg {
+  color: var(--muted-foreground);
+}
+
 .composer__file-input {
   display: none;
 }

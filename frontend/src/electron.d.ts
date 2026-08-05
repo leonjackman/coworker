@@ -29,6 +29,7 @@ import type {
   WorkspaceDirResponse,
   WorkspaceFileResponse,
   WorkspaceTreeResponse,
+  WorkspaceBranchResponse,
 } from './types';
 
 export type StreamEventCallback = (event: StreamEvent) => void;
@@ -64,6 +65,7 @@ declare global {
       getWorkspaceTree: (projectId?: string) => Promise<WorkspaceTreeResponse>;
       getWorkspaceDir: (path: string, projectId?: string) => Promise<WorkspaceDirResponse>;
       getWorkspaceFile: (path: string, projectId?: string) => Promise<WorkspaceFileResponse>;
+      getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
       runWorkspaceCommand: (payload: WorkspaceCommandRequest) => Promise<WorkspaceCommandResponse>;
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;

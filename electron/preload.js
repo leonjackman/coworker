@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWorkspaceTree: (projectId) => ipcRenderer.invoke('get-workspace-tree', projectId),
   getWorkspaceDir: (path, projectId) => ipcRenderer.invoke('get-workspace-dir', { path, project_id: projectId || '' }),
   getWorkspaceFile: (path, projectId) => ipcRenderer.invoke('get-workspace-file', { path, project_id: projectId || '' }),
+  getWorkspaceBranch: (projectId) => ipcRenderer.invoke('get-workspace-branch', projectId),
   runWorkspaceCommand: (payload) => ipcRenderer.invoke('run-workspace-command', payload),
   listToolAudit: (limit) => ipcRenderer.invoke('list-tool-audit', limit),
   listAgentTraces: (limit) => ipcRenderer.invoke('list-agent-traces', limit),

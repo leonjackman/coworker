@@ -1,5 +1,6 @@
 import {
   Check,
+  GitBranch,
   Paperclip,
   Pencil,
   Plus,
@@ -47,6 +48,8 @@ interface ChatInputProps {
   onAttachmentsChange: (attachments: ComposerAttachment[]) => void;
   editing?: boolean;
   onCancelEdit?: () => void;
+  branchStatus?: { isRepo: boolean; branch: string | null } | null;
+  workspaceLabel?: string;
 }
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/providers", "/settings"];
@@ -104,6 +107,8 @@ export function ChatInput({
   onAttachmentsChange,
   editing = false,
   onCancelEdit,
+  branchStatus = null,
+  workspaceLabel,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showCommands, setShowCommands] = useState(false);
@@ -220,6 +225,15 @@ export function ChatInput({
                       <span>{t(accessMode === "default"? "chat.access_default": "chat.access_full")}</span>
                     </button>
                   </Tooltip>
+                  {branchStatus && (
+                    <span
+                      className={`composer__branch ${branchStatus.branch ? "" : "composer__branch--muted"}`}
+                      title={branchStatus.branch ? `当前分支（仅显示，不可编辑）：${branchStatus.branch}` : (branchStatus.isRepo ? "当前处于 detached HEAD（无分支名）" : "当前项目不是 git 仓库")}
+                    >
+                      <GitBranch size={14} />
+                      <span>{branchStatus.branch ?? (branchStatus.isRepo ? "detached" : "no repo")}</span>
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

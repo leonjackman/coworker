@@ -64,6 +64,7 @@ function App() {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
+  const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
   const requestSeqRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
@@ -1282,6 +1283,31 @@ function App() {
     ? pendingRequests.filter((item) => item.session_id === sessionId)
     : [];
 
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchBranch() {
+      if (!currentProjectId) {
+        setBranchStatus(null);
+        return;
+      }
+      try {
+        const res = await chatService.getWorkspaceBranch(currentProjectId);
+        if (!cancelled) setBranchStatus({ isRepo: res.is_repo, branch: res.branch });
+      } catch {
+        if (!cancelled) setBranchStatus({ isRepo: false, branch: null });
+      }
+    }
+    void fetchBranch();
+    const interval = setInterval(() => void fetchBranch(), 15000);
+    const onFocus = () => void fetchBranch();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [currentProjectId]);
+
   const changeThemeSettings = (nextSettings: ThemeSettings) => {
     setThemeSettingsState(nextSettings);
     setThemeSettings(nextSettings);
@@ -1403,6 +1429,8 @@ function App() {
                           setEditingMessage(null);
                           setEditDraft('');
                         }}
+                        branchStatus={branchStatus}
+                        workspaceLabel={activeProject?.workspace_path}
                       />
                     )
                   )}

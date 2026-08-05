@@ -1071,3 +1071,22 @@ def workspace_git_diff(workspace_root: Path) -> dict[str, Any]:
         }
     )
     return result
+
+
+def workspace_git_branch(workspace_root: Path) -> dict[str, Any]:
+    """Return the current git branch for the workspace.
+
+    Returns ``is_repo=False`` when the path is not a git repository, and
+    ``branch=None`` when it is a repository but in a detached HEAD state.
+    """
+    if not git_is_repo(workspace_root):
+        return {"is_repo": False, "branch": None}
+    proc = _git_run(workspace_root, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if proc is None or proc.returncode != 0:
+        return {"is_repo": True, "branch": None}
+    branch = proc.stdout.strip()
+    if not branch or branch == "HEAD":
+        # Detached HEAD — surface the short commit hash for context.
+        sha_proc = _git_run(workspace_root, ["rev-parse", "--short", "HEAD"])
+        branch = sha_proc.stdout.strip() if sha_proc and sha_proc.returncode == 0 else None
+    return {"is_repo": True, "branch": branch or None}
