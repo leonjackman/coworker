@@ -674,6 +674,8 @@ body.sidebar-resizing {
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   background: transparent;
   overflow: hidden;
+  /* 让 composer 等子节点按“工作区实际宽度”自适应（而非视口宽度） */
+  container-type: inline-size;
 }
 
 .workspace-shell--providers,
@@ -2366,6 +2368,37 @@ body.bottom-panel-resizing {
   color: var(--foreground);
 }
 
+/* 工作区被侧栏/右侧面板/Changes 挤窄时，composer 工具栏按容器宽度换行而非溢出
+   （以 .workspace-shell 的 inline-size 为基准，而不是整个窗口宽度） */
+@container (max-width: 620px) {
+  .composer__input-actions {
+    flex-wrap: wrap;
+  }
+
+  .composer__toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .composer__meta {
+    order: -1;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin: 0;
+  }
+
+  .composer__select {
+    flex: 1 1 190px;
+  }
+
+  .composer__model-trigger {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
 .workspace-page {
   min-height: 0;
   box-sizing: border-box;
@@ -3690,7 +3723,7 @@ body.bottom-panel-resizing {
 }
 
 .pending-dock__header {
-  height: 38px;
+  height: 42px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3714,9 +3747,16 @@ body.bottom-panel-resizing {
 }
 
 .pending-dock__icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
   display: grid;
   place-items: center;
-  color: var(--accent-hover);
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  line-height: 1;
+  font-size: 14px;
 }
 
 .pending-dock__kind {
@@ -3736,7 +3776,7 @@ body.bottom-panel-resizing {
   border: 1px solid var(--material-border);
   border-radius: 999px;
   padding: 3px 10px;
-  background: color-mix(in oklab, var(--accent-hover) 14%, var(--material-control));
+  background: var(--material-control);
 }
 
 .pending-dock__progress {
@@ -3764,7 +3804,7 @@ body.bottom-panel-resizing {
 }
 
 .pending-dock__body {
-  padding: 12px 14px 14px;
+  padding: 14px 14px 14px;
 }
 
 .pending-dock__intent {
@@ -3834,7 +3874,7 @@ body.bottom-panel-resizing {
 }
 
 .pending-dock__footer {
-  margin-top: 12px;
+  margin-top: 14px;
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -3848,8 +3888,9 @@ body.bottom-panel-resizing {
 .pending-dock__question-text {
   margin: 0;
   color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.55;
 }
 
 .pending-dock__question-hint {
@@ -3956,11 +3997,11 @@ body.bottom-panel-resizing {
 .pending-dock__option-input {
   box-sizing: border-box;
   width: 100%;
-  height: 28px;
-  margin-top: 2px;
-  padding: 0 9px;
+  height: 32px;
+  margin-top: 8px;
+  padding: 0 11px;
   border: 1px solid var(--material-border);
-  border-radius: 8px;
+  border-radius: 9px;
   color: var(--foreground);
   font-size: 12.5px;
   background: var(--material-control);
@@ -3969,6 +4010,80 @@ body.bottom-panel-resizing {
 
 .pending-dock__option-input:focus {
   border-color: var(--accent);
+}
+
+/* ========== 覆盖 shadcn button 样式，使其与设计稿一致 ========== */
+
+/* ✕ dismiss button: 设计稿是透明圆形按钮 */
+.pending-dock .pending-action-button {
+  height: 28px !important;
+  padding: 0 !important;
+  min-width: 28px !important;
+  border: none !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  color: var(--muted-foreground) !important;
+  line-height: 1 !important;
+  font-size: 13px !important;
+  width: 28px !important;
+}
+
+.pending-dock .pending-action-button:hover {
+  background: var(--panel-hover) !important;
+  color: var(--foreground) !important;
+}
+
+/* Footer 按钮：设计稿 .btn 风格 */
+.pending-dock__footer button.button-ghost,
+.pending-dock__footer button[data-slot="button"][data-variant="ghost"] {
+  height: 32px !important;
+  padding: 0 14px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  border: none !important;
+  background: transparent !important;
+  color: var(--muted-foreground) !important;
+}
+
+.pending-dock__footer button.button-ghost:hover,
+.pending-dock__footer button[data-slot="button"][data-variant="ghost"]:hover {
+  background: var(--panel-hover) !important;
+  color: var(--foreground) !important;
+}
+
+.pending-dock__footer button.button-secondary,
+.pending-dock__footer button[data-slot="button"][data-variant="secondary"] {
+  height: 32px !important;
+  padding: 0 14px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  border: 1px solid var(--material-border) !important;
+  background: var(--material-control) !important;
+  color: var(--foreground) !important;
+}
+
+.pending-dock__footer button.button-secondary:hover,
+.pending-dock__footer button[data-slot="button"][data-variant="secondary"]:hover {
+  background: var(--panel-hover) !important;
+}
+
+.pending-dock__footer button.button-primary,
+.pending-dock__footer button[data-slot="button"][data-variant="primary"] {
+  height: 32px !important;
+  padding: 0 14px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  border: none !important;
+  background: var(--accent) !important;
+  color: var(--accent-foreground) !important;
+}
+
+.pending-dock__footer button.button-primary:hover,
+.pending-dock__footer button[data-slot="button"][data-variant="primary"]:hover {
+  filter: brightness(1.08);
 }
 
 @media (max-width: 640px) {
