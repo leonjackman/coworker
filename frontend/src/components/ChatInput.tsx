@@ -1,11 +1,29 @@
-import { Check, Pencil, Plus, SendHorizontal, Shield, ShieldCheck, Slash, Square, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import { t } from '../lib/i18n';
-import type { AccessMode, ComposerAttachment } from '../types';
-import { Button } from './ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Textarea } from './ui/textarea';
-import { Tooltip } from './ui/tooltip';
+import {
+  Check,
+  Paperclip,
+  Pencil,
+  Plus,
+  Send,
+  SendHorizontal,
+  Shield,
+  ShieldCheck,
+  Slash,
+  Square,
+  X,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { t } from "../lib/i18n";
+import type { AccessMode, ComposerAttachment } from "../types";
+import { Button } from "./ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import { Textarea } from "./ui/textarea";
+import { Tooltip } from "./ui/tooltip";
 
 export interface ModelOption {
   id: string;
@@ -31,12 +49,14 @@ interface ChatInputProps {
   onCancelEdit?: () => void;
 }
 
-const SLASH_COMMANDS = ['/help', '/new', '/clear', '/providers', '/settings'];
+const SLASH_COMMANDS = ["/help", "/new", "/clear", "/providers", "/settings"];
 const MAX_ATTACHMENT_CHARS = 120_000;
 
 function isTextAttachment(file: File) {
-  if (file.type.startsWith('text/')) return true;
-  return /\.(c|cc|cpp|cs|css|csv|go|h|hpp|html|java|js|json|jsx|kt|log|md|mdx|php|py|rb|rs|sh|sql|swift|toml|ts|tsx|txt|vue|xml|yaml|yml)$/i.test(file.name);
+  if (file.type.startsWith("text/")) return true;
+  return /\.(c|cc|cpp|cs|css|csv|go|h|hpp|html|java|js|json|jsx|kt|log|md|mdx|php|py|rb|rs|sh|sql|swift|toml|ts|tsx|txt|vue|xml|yaml|yml)$/i.test(
+    file.name,
+  );
 }
 
 async function buildAttachment(file: File): Promise<ComposerAttachment> {
@@ -44,7 +64,7 @@ async function buildAttachment(file: File): Promise<ComposerAttachment> {
     id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     name: file.name,
     size: file.size,
-    type: file.type || 'file',
+    type: file.type || "file",
   };
   if (!isTextAttachment(file)) {
     return { ...base, binary: true };
@@ -59,7 +79,12 @@ async function buildAttachment(file: File): Promise<ComposerAttachment> {
       binary: false,
     };
   } catch (error) {
-    return { ...base, binary: true, error: error instanceof Error ? error.message : 'Unable to read attachment' };
+    return {
+      ...base,
+      binary: true,
+      error:
+        error instanceof Error ? error.message : "Unable to read attachment",
+    };
   }
 }
 
@@ -85,18 +110,22 @@ export function ChatInput({
   const canSend = Boolean(value.trim() || attachments.length > 0);
 
   useEffect(() => {
-    setShowCommands(value.trim().startsWith('/'));
+    setShowCommands(value.trim().startsWith("/"));
   }, [value]);
 
   async function addFiles(files: FileList | null) {
     if (!files) return;
-    const nextAttachments = await Promise.all(Array.from(files).map((file) => buildAttachment(file)));
+    const nextAttachments = await Promise.all(
+      Array.from(files).map((file) => buildAttachment(file)),
+    );
     onAttachmentsChange([...attachments, ...nextAttachments]);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function removeAttachment(id: string) {
-    onAttachmentsChange(attachments.filter((attachment) => attachment.id !== id));
+    onAttachmentsChange(
+      attachments.filter((attachment) => attachment.id !== id),
+    );
   }
 
   function insertCommand(command: string) {
@@ -104,20 +133,25 @@ export function ChatInput({
     setShowCommands(false);
   }
 
-  const nextAccessMode = accessMode === 'default' ? 'full' : 'default';
+  const nextAccessMode = accessMode === "default" ? "full" : "default";
 
   return (
     <footer className="composer">
-      <div className="composer__surface">
+      <div className="composer__card">
         {editing && (
           <div className="composer__edit-bar">
             <span className="composer__edit-label">
               <Pencil size={13} />
-              {t('message.edit')}
+              {t("message.edit")}
             </span>
-            <Button variant="ghost" size="xs" onClick={onCancelEdit} aria-label={t('message.edit_cancel')}>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={onCancelEdit}
+              aria-label={t("message.edit_cancel")}
+            >
               <X size={13} />
-              {t('message.edit_cancel')}
+              {t("message.edit_cancel")}
             </Button>
           </div>
         )}
@@ -128,29 +162,17 @@ export function ChatInput({
               value={value}
               onChange={(event) => onChange(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
+                if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   onSend();
                 }
-                if (event.key === 'Escape') {
+                if (event.key === "Escape") {
                   setShowCommands(false);
                 }
               }}
-              placeholder={t('chat.placeholder')}
+              placeholder={t("chat.placeholder")}
               disabled={disabled}
             />
-
-            {showCommands && (
-              <div className="slash-menu">
-                {SLASH_COMMANDS.map((command) => (
-                  <button type="button" key={command} onClick={() => insertCommand(command)}>
-                    <Slash size={13} />
-                    <span>{command}</span>
-                    <small>{t(`chat.command_${command.slice(1)}`)}</small>
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           {attachments.length > 0 && (
@@ -158,7 +180,11 @@ export function ChatInput({
               {attachments.map((attachment) => (
                 <span className="attachment-chip" key={attachment.id}>
                   {attachment.name}
-                  <button type="button" onClick={() => removeAttachment(attachment.id)} aria-label={t('chat.remove_attachment')}>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(attachment.id)}
+                    aria-label={t("chat.remove_attachment")}
+                  >
                     <X size={12} />
                   </button>
                 </span>
@@ -168,68 +194,63 @@ export function ChatInput({
 
           <div className="composer__input-actions">
             <div className="composer__tools">
-              <input ref={fileInputRef} type="file" multiple className="composer__file-input" onChange={(event) => addFiles(event.target.files)} />
-              <Tooltip content={t('chat.attach_tooltip')}>
-                <Button variant="icon" onClick={() => fileInputRef.current?.click()} aria-label={t('chat.attach_tooltip')}>
-                  <Plus size={19} />
+              <input ref={fileInputRef}type="file" multiple className="composer__file-input" onChange={(event) => addFiles(event.target.files)}/>
+              <Tooltip content={t("chat.attach_tooltip")}>
+                <Button variant="icon" onClick={() => fileInputRef.current?.click()} aria-label={t("chat.attach_tooltip")}>
+                  <Paperclip size={19} />
                 </Button>
               </Tooltip>
-              <Tooltip content={t('chat.slash_tooltip')}>
-                <Button variant="icon" onClick={() => onChange(value.trim().startsWith('/') ? value : `${value}/`)} aria-label={t('chat.slash_tooltip')}>
-                  <Slash size={17} />
-                </Button>
-              </Tooltip>
+              <div className="composer__toolbar">
+                <div className="composer__meta">
+                  <div className="composer__select">
+                    <span>{t("chat.model")}</span>
+                    <Select value={selectedModel}onValueChange={onModelChange}disabled={modelOptions.length === 0}>
+                      <SelectTrigger className="composer__model-trigger" size="sm">
+                        <SelectValue placeholder={t("chat.model_unselected")} />
+                      </SelectTrigger>
+                      <SelectContent position="popper" align="start">
+                        {modelOptions.map((model) => (<SelectItem key={model.id} value={model.id}>{model.provider? `${model.provider} · ${model.label}`: model.label}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <Tooltip content={t(accessMode === "default"? "chat.access_default_tip": "chat.access_full_tip")}>
+                    <button type="button"className="composer-toggle-button"onClick={() => onAccessModeChange(nextAccessMode)}aria-label={t("chat.toggle_access_mode")}>
+                      {accessMode === "default" ? (<Shield size={14} />) : (<ShieldCheck size={14} />)}
+                      <span>{t(accessMode === "default"? "chat.access_default": "chat.access_full")}</span>
+                    </button>
+                  </Tooltip>
+                </div>
+              </div>
             </div>
 
             {isThinking ? (
-              <Button
-                variant="secondary"
-                className="composer__send-button composer__send-button--stop"
-                onClick={onStop}
-                aria-label={t('chat.stop')}
-              >
+              <Button variant="secondary"className="composer__send-button composer__send-button--stop"onClick={onStop}aria-label={t("chat.stop")}>
                 <Square size={15} fill="currentColor" />
               </Button>
             ) : (
-              <Button variant="primary" className="composer__send-button" onClick={onSend} disabled={disabled || !canSend} aria-label={editing ? t('message.edit_save') : t('common.send')}>
-                {editing ? <Check size={17} /> : <SendHorizontal size={17} />}
+              <Button variant="primary"className="composer__send-button"onClick={onSend}disabled={disabled || !canSend}aria-label={editing ? t("message.edit_save") : t("common.send")}>
+                {editing ? <Check size={17} /> : <Send size={17} />}
               </Button>
             )}
           </div>
         </div>
-
-        <div className="composer__toolbar">
-          <div className="composer__meta">
-            <div className="composer__select">
-              <span>{t('chat.model')}</span>
-              <Select value={selectedModel} onValueChange={onModelChange} disabled={modelOptions.length === 0}>
-                <SelectTrigger className="composer__model-trigger" size="sm">
-                  <SelectValue placeholder={t('chat.model_unselected')} />
-                </SelectTrigger>
-                <SelectContent position="popper" align="start">
-                  {modelOptions.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.provider ? `${model.provider} · ${model.label}` : model.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <Tooltip content={t(accessMode === 'default' ? 'chat.access_default_tip' : 'chat.access_full_tip')}>
-              <button
-                type="button"
-                className="composer-toggle-button"
-                onClick={() => onAccessModeChange(nextAccessMode)}
-                aria-label={t('chat.toggle_access_mode')}
-              >
-                {accessMode === 'default' ? <Shield size={14} /> : <ShieldCheck size={14} />}
-                <span>{t(accessMode === 'default' ? 'chat.access_default' : 'chat.access_full')}</span>
-              </button>
-            </Tooltip>
-          </div>
-        </div>
       </div>
+
+      {showCommands && (
+        <div className="slash-menu">
+          {SLASH_COMMANDS.map((command) => (
+            <button
+              type="button"
+              key={command}
+              onClick={() => insertCommand(command)}
+            >
+              <span>{command}</span>
+              <small>{t(`chat.command_${command.slice(1)}`)}</small>
+            </button>
+          ))}
+        </div>
+      )}
     </footer>
   );
 }

@@ -1900,28 +1900,34 @@ body.sidebar-resizing {
 
 .composer {
   grid-row: 4;
+  position: relative;
   box-sizing: border-box;
   width: min(1024px, calc(100% - 48px));
   margin: 0 auto 20px;
-  padding: 0 32px;
 }
 
-.composer__surface {
-  padding: 10px;
+.composer__card {
+  position: relative;
+  z-index: 2;
   border: 1px solid var(--material-border);
-  border-radius: 22px;
+  border-radius: 20px;
+  padding: 8px 10px 10px;
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--material-panel) 55%, transparent), color-mix(in oklab, var(--material-panel-solid) 45%, transparent)),
     var(--material-panel);
-  box-shadow: none;
+  box-shadow: 0 10px 34px -8px var(--material-shadow);
   backdrop-filter: var(--material-blur);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+.composer__card:focus-within {
+  border-color: color-mix(in oklab, var(--ring) 55%, var(--material-border));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 22%, transparent), 0 10px 34px -8px var(--material-shadow);
 }
 
 .composer__input-box {
-  overflow: hidden;
-  border: 1px solid color-mix(in oklab, var(--foreground) 20%, var(--material-border));
-  border-radius: 20px;
-  background: color-mix(in oklab, var(--material-panel-solid) 55%, transparent);
+  display: flex;
+  flex-direction: column;
 }
 
 .composer__select {
@@ -1997,15 +2003,16 @@ body.sidebar-resizing {
 }
 
 .composer__input {
-  min-height: 112px;
+  min-height: 54px;
+  max-height: 200px;
   border: 0;
   border-radius: 0;
-  padding: 18px 18px 4px;
+  padding: 14px 16px 12px;
   color: var(--foreground);
   background: transparent;
   box-shadow: none;
   font-size: 15px;
-  line-height: 1.6;
+  line-height: 1.5;
   resize: none;
 }
 
@@ -2017,16 +2024,29 @@ body.sidebar-resizing {
   position: absolute;
   left: 8px;
   right: 8px;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% - 12px);
+  z-index: 1;
   display: grid;
-  gap: 4px;
+  gap: 3px;
   padding: 6px;
   border: 1px solid var(--material-border);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--material-panel-solid);
-  box-shadow: 0 4px 12px -2px var(--material-shadow);
+  box-shadow: 0 16px 34px -12px var(--material-shadow);
   backdrop-filter: var(--material-blur);
-  z-index: 10;
+  transform-origin: bottom center;
+  animation: slashPullUp .17s ease both;
+}
+
+@keyframes slashPullUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .slash-menu button {
@@ -2060,7 +2080,7 @@ body.sidebar-resizing {
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  padding: 12px 4px 0;
+  padding: 0;
 }
 
 .composer__input-actions {
@@ -2068,7 +2088,7 @@ body.sidebar-resizing {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 10px 10px 12px;
+  padding: 4px 8px 2px;
 }
 
 .composer__tools {
@@ -2878,10 +2898,14 @@ body.sidebar-resizing {
   }
 
   .workspace-page,
-  .messages__inner,
-  .composer {
+  .messages__inner {
     padding-right: 14px;
     padding-left: 14px;
+  }
+
+  .workspace-page,
+  .messages__inner,
+  .composer {
     padding-bottom: 100px;
   }
 
