@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Command, HelpCircle, ListChecks } from 'lucide-react';
 import { Tooltip } from '@/components/ui/tooltip';
+import { CardSlot } from '@/components/ui/card-slot';
 import { t } from '@/lib/i18n';
 import type { ApprovalDecisionPayload, ApprovalOption, PendingRequest } from '@/types';
 
@@ -388,7 +389,7 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
         const progressPct = showProgress && qTotal ? Math.round(((qIndex ?? 1) / qTotal) * 100) : 0;
 
         return (
-          <div
+          <CardSlot
             key={request.approval_id}
             className={`pending-dock ${isResolving ? 'pending-dock--resolving' : ''}`}
             data-slot="pending-dock"
@@ -433,7 +434,7 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
             ) : (
               <PlanDock request={request as PendingRequest & { kind: 'plan' }} onResolve={onResolve} />
             )}
-          </div>
+          </CardSlot>
         );
       })}
     </div>

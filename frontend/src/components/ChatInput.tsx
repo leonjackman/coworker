@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import type { AccessMode, ComposerAttachment } from "../types";
 import { Button } from "./ui/button";
+import { CardSlot } from "./ui/card-slot";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -172,7 +173,7 @@ export function ChatInput({
 
   return (
     <footer className="composer">
-      <div className="composer__card">
+      <CardSlot className="composer__card">
         {editing && (
           <div className="composer__edit-bar">
             <span className="composer__edit-label">
@@ -330,7 +331,7 @@ export function ChatInput({
             )}
           </div>
         </div>
-      </div>
+      </CardSlot>
 
       {showCommands && (
         <div className="slash-menu">

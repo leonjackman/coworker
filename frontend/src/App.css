@@ -1955,33 +1955,50 @@ body.bottom-panel-resizing {
   background: var(--material-control);
 }
 
+/* composer 与底部审批/问答卡片共用宽度 */
+:root {
+  --bottom-card-width: min(1024px, calc(100% - 48px));
+}
+
 .composer {
   grid-row: 4;
   position: relative;
   box-sizing: border-box;
-  width: min(1024px, calc(100% - 48px));
+  width: var(--bottom-card-width);
   min-width: 0;
   margin: 0 auto 20px;
 }
 
-.composer__card {
+/* 底部卡片共用外壳（composer / 提问 / 回答 / 批准共用）：
+   高度由内部容器撑起，内部容器顶满 slot 宽度 */
+.card-slot {
   position: relative;
   z-index: 2;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   border: 1px solid var(--material-border);
   border-radius: 20px;
-  padding: 8px 10px 10px;
-  min-width: 0;
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--material-panel) 55%, transparent), color-mix(in oklab, var(--material-panel-solid) 45%, transparent)),
     var(--material-panel);
   box-shadow: 0 10px 34px -8px var(--material-shadow);
   backdrop-filter: var(--material-blur);
-  transition: border-color .2s ease, box-shadow .2s ease;
+  overflow: hidden;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-.composer__card:focus-within {
+.card-slot:hover {
+  border-color: color-mix(in oklab, var(--ring) 45%, var(--material-border));
+}
+
+.card-slot:focus-within {
   border-color: color-mix(in oklab, var(--ring) 55%, var(--material-border));
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 22%, transparent), 0 10px 34px -8px var(--material-shadow);
+}
+
+.composer__card {
+  padding: 8px 10px 10px;
 }
 
 .composer__input-box {
@@ -3684,9 +3701,9 @@ body.bottom-panel-resizing {
   min-height: 0;
   max-height: 60vh;
   box-sizing: border-box;
-  width: min(760px, calc(100% - 48px));
+  width: var(--bottom-card-width);
   margin: 0 auto 16px;
-  padding: 0 32px 8px;
+  padding: 0 0 8px;
   overflow-y: auto;
   overflow-x: hidden;
   transition: max-height 200ms ease;
@@ -3703,25 +3720,7 @@ body.bottom-panel-resizing {
   min-width: 0;
 }
 
-.pending-dock {
-  box-sizing: border-box;
-  border: 1px solid var(--material-border);
-  border-radius: 20px;
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--material-panel) 55%, transparent), color-mix(in oklab, var(--material-panel-solid) 45%, transparent)),
-    var(--material-panel);
-  box-shadow: 0 10px 34px -8px var(--material-shadow);
-  backdrop-filter: var(--material-blur);
-  overflow: hidden;
-  position: relative;
-  z-index: 1;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
-}
-
-.pending-dock:hover {
-  border-color: color-mix(in oklab, var(--ring) 45%, var(--material-border));
-}
-
+/* 外壳由共用 .card-slot 提供；.pending-dock 仅作命名空间/修饰类保留 */
 .pending-dock__header {
   height: 42px;
   display: flex;
