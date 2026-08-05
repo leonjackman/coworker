@@ -304,36 +304,67 @@ async def chat_stream(request: ChatStreamRequest):
         messages = history + [user_message]
 
     async def event_stream():
+        terminal_sent = False
+        accumulated_content = ""
+
+        def _persist_assistant(content, mode, provider, model, parts):
+            try:
+                session = session_store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=content,
+                    mode=mode or request.mode,
+                    provider=provider or "",
+                    model=model or request.model or "",
+                    parts=parts or [],
+                )
+                last = session.messages[-1] if session.messages else None
+                if last is not None:
+                    agent_registry.change_store.assign_message(session_id, last.id)
+            except KeyError:
+                pass
+
         try:
             async for event in runtime.stream(messages, session_id, request.language, work_mode, access_mode):
                 event["session_id"] = session_id
-                if event.get("type") == "done":
-                    try:
-                        session = session_store.append_message(
-                            session_id,
-                            role="assistant",
-                            content=event["content"],
-                            mode=event.get("mode") or request.mode,
-                            provider=event.get("provider") or "",
-                            model=event.get("model") or request.model or "",
-                            parts=event.get("parts") or [],
-                        )
-                        last = session.messages[-1] if session.messages else None
-                        if last is not None:
-                            agent_registry.change_store.assign_message(session_id, last.id)
-                    except KeyError:
-                        pass
+                etype = event.get("type")
+                if etype == "delta" and event.get("content"):
+                    accumulated_content += event.get("content", "")
+                if etype == "done":
+                    _persist_assistant(
+                        event.get("content", ""),
+                        event.get("mode"),
+                        event.get("provider"),
+                        event.get("model"),
+                        event.get("parts"),
+                    )
                     try:
                         session_store.update_modes(session_id, work_mode, access_mode)
                     except KeyError:
                         pass
+                    terminal_sent = True
+                elif etype == "error":
+                    terminal_sent = True
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as exc:
             try:
                 session_store.update_modes(session_id, work_mode, access_mode)
             except KeyError:
                 pass
+            terminal_sent = True
             yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
+        else:
+            # The stream completed without raising, but no terminal frame
+            # (done/error) was emitted. This happens when the agent runtime
+            # exits without yielding `done`. Guarantee a terminal frame so the
+            # client never gets stuck showing the "running" (blue bar) state.
+            if not terminal_sent:
+                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+                try:
+                    session_store.update_modes(session_id, work_mode, access_mode)
+                except KeyError:
+                    pass
+                yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id, 'content': accumulated_content, 'stream_end': True}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),

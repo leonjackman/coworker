@@ -427,6 +427,16 @@ function App() {
         setIsThinking(false);
         abortRef.current = null;
         activeAssistantMessageIdRef.current = undefined;
+        // Safety net: if the stream ended without a terminal event reaching us
+        // (e.g. the backend dropped the `done` frame), force the assistant
+        // message out of the "running" state so the blue bar always clears.
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId && item.status === 'running'
+              ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
+              : item,
+          ),
+        );
       }
     }
   };
@@ -604,6 +614,15 @@ function App() {
     } finally {
       setIsThinking(false);
       abortRef.current = null;
+      // Safety net: ensure the assistant message leaves the "running" state
+      // even if the terminal event was dropped by the backend.
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId && item.status === 'running'
+            ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
+            : item,
+        ),
+      );
       requestSeqRef.current += 1;
     }
   };
@@ -748,6 +767,15 @@ function App() {
     } finally {
       setIsThinking(false);
       abortRef.current = null;
+      // Safety net: ensure the assistant message leaves the "running" state
+      // even if the terminal event was dropped by the backend.
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId && item.status === 'running'
+            ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
+            : item,
+        ),
+      );
       requestSeqRef.current += 1;
     }
   };
