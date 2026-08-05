@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Folder, FolderOpen, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -81,8 +81,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
   const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || activeProjectId === project.id;
 
   const handleTitleClick = () => {
-    setExpanded(true);
-    onOpenProject(project.id);
+    setExpanded((v) => !v);
   };
 
   return (
@@ -115,6 +114,10 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
             <DropdownMenuItem onClick={() => onNewChat(project.id)}>
               <MessageSquarePlus size={14} />
               {t('sidebar.new_chat')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onOpenProject(project.id)}>
+              <MessageSquare size={14} />
+              {t('sidebar.session_history')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => onRenameProject(project)}>

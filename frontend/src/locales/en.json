@@ -259,6 +259,7 @@
   "sidebar.project_new": "New project",
   "sidebar.project_rename": "Rename project",
   "sidebar.project_delete": "Delete project",
+  "sidebar.session_history": "Session history",
   "sidebar.project_delete_confirm": "Deleting the project will also delete all of its sessions. Continue?",
   "project_session.project_sessions_count": "{count} sessions",
   "project_session.empty_state": "No sessions yet",

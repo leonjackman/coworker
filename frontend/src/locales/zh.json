@@ -259,6 +259,7 @@
   "sidebar.project_new": "新项目",
   "sidebar.project_rename": "重命名项目",
   "sidebar.project_delete": "删除项目",
+  "sidebar.session_history": "会话历史",
   "sidebar.project_delete_confirm": "删除该项目会同时删除其全部会话，确定吗？",
   "project_session.project_sessions_count": "{count} 个会话",
   "project_session.empty_state": "该项目暂无会话",
