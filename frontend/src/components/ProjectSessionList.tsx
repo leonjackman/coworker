@@ -1,9 +1,9 @@
-import { ChevronDown, ChevronUp, MessageSquare, MessageSquarePlus, MoreHorizontal, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, MessageSquare, MoreHorizontal, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { WorkspacePage } from './ui/workspace-page';
 import { t } from '../lib/i18n';
+import { formatTimeAgo } from '../lib/utils';
 import type { ProjectEntry, SessionSummary } from '../types';
 
 interface ProjectSessionListProps {
@@ -12,21 +12,6 @@ interface ProjectSessionListProps {
   onNewChat: (projectId?: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
-}
-
-function formatTimeAgo(updatedAt: string): string {
-  const now = Date.now();
-  const then = new Date(updatedAt).getTime();
-  const diffMs = Math.abs(now - then);
-  const diffMinutes = Math.floor(diffMs / 60000);
-  if (diffMinutes < 1) return t('project_session.just_now');
-  if (diffMinutes < 60) return `${diffMinutes}m`;
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h`;
-  const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 7) return `${diffDays}d`;
-  const diffWeeks = Math.floor(diffDays / 7);
-  return `${diffWeeks}w`;
 }
 
 export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession, onDeleteSession }: ProjectSessionListProps) {
@@ -105,11 +90,6 @@ export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession
             </>
           )}
         </div>
-
-        <Button type="button" className="project-session-list__new" onClick={() => onNewChat(project.id)}>
-          <MessageSquarePlus size={16} />
-          {t('project_session.new_chat_for_project', { name: project.name })}
-        </Button>
       </section>
     </WorkspacePage>
   );

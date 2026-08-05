@@ -1,7 +1,8 @@
-import { ChevronDown, ChevronRight, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { ArrowRight, ChevronDown, ChevronRight, ChevronUp, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
+import { formatTimeAgo } from '../lib/utils';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { Tooltip } from './ui/tooltip';
@@ -42,6 +43,7 @@ function SessionRow({ session, active, onOpen, onDelete }: SessionRowProps) {
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
         <span className="sidebar-session__title">{session.title}</span>
+        <span className="sidebar-session__time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger className="sidebar-session__more-trigger" aria-label="Session actions">
@@ -78,6 +80,21 @@ interface ProjectRowProps {
 
 function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const [listExpanded, setListExpanded] = useState(false);
+  const sortedSessions = useMemo(
+    () =>
+      [...sessions].sort((a, b) => {
+        const ta = new Date(a.updated_at || a.created_at).getTime();
+        const tb = new Date(b.updated_at || b.created_at).getTime();
+        return tb - ta;
+      }),
+    [sessions],
+  );
+  const LIMIT = 10;
+  const MAX = 20;
+  const hasMore = sortedSessions.length > LIMIT;
+  const shownCount = listExpanded ? Math.min(MAX, sortedSessions.length) : LIMIT;
+  const displaySessions = sortedSessions.slice(0, shownCount);
   const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || activeProjectId === project.id;
 
   const handleTitleClick = () => {
@@ -104,9 +121,18 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
           </span>
           {expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
           <span>{project.name}</span>
-          {project.session_count > 0 && <small className="sidebar-project__count">{project.session_count}</small>}
         </button>
-        <DropdownMenu>
+        <div className="sidebar-project__actions">
+          <button
+            type="button"
+            className="sidebar-project__new-trigger"
+            onClick={() => onNewChat(project.id)}
+            title={t('sidebar.new_chat')}
+            aria-label={t('sidebar.new_chat')}
+          >
+            <MessageSquarePlus size={15} />
+          </button>
+          <DropdownMenu>
           <DropdownMenuTrigger className="sidebar-project__more-trigger" aria-label="Project actions">
             <MoreHorizontal size={15} />
           </DropdownMenuTrigger>
@@ -130,24 +156,54 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
 
       {expanded && (
         <div className="sidebar-project__sessions">
-          <button type="button" className="sidebar-project__new-session" onClick={() => onNewChat(project.id)}>
-            <Plus size={13} />
-            {t('sidebar.new_chat')}
-          </button>
-          {sessions.map((session) => (
-            <SessionRow
-              key={session.id}
-              session={session}
-              active={session.id === activeSessionId}
-              onOpen={onOpenSession}
-              onDelete={onDeleteSession}
-            />
-          ))}
-          {sessions.length === 0 && <p className="sidebar-project__empty">{t('sidebar.project_empty')}</p>}
+          {sortedSessions.length === 0 ? (
+            <p className="sidebar-project__empty">{t('sidebar.project_empty')}</p>
+          ) : (
+            <>
+              {displaySessions.map((session) => (
+                <SessionRow
+                  key={session.id}
+                  session={session}
+                  active={session.id === activeSessionId}
+                  onOpen={onOpenSession}
+                  onDelete={onDeleteSession}
+                />
+              ))}
+              {hasMore && (
+                <>
+                  <div className="sidebar-project__footer-meta">
+                    {listExpanded
+                      ? t('sidebar.sessions_shown', { shown: shownCount, total: sortedSessions.length })
+                      : t('sidebar.sessions_recent', { shown: shownCount, total: sortedSessions.length })}
+                  </div>
+                  <div className="sidebar-project__footer">
+                    {listExpanded ? (
+                      <>
+                        <button type="button" className="pg-btn" onClick={() => setListExpanded(false)}>
+                          <ChevronUp size={14} />
+                          <span>{t('sidebar.collapse_list')}</span>
+                        </button>
+                        <button type="button" className="pg-btn pg-btn--accent" onClick={() => onOpenProject(project.id)}>
+                          <span>{t('sidebar.view_all')}</span>
+                          <ArrowRight size={14} />
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" className="pg-btn pg-btn--accent" onClick={() => setListExpanded(true)}>
+                        <ChevronDown size={14} />
+                        <span>{t('sidebar.expand_more')}</span>
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>
