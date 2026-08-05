@@ -363,7 +363,13 @@ async def chat_stream(request: ChatStreamRequest):
                 elif etype == "error":
                     terminal_sent = True
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as exc:
+        except BaseException as exc:
+            # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
+            # Persist the accumulated content so the partial reply survives a
+            # stale stream (client-side abort / tab switch / network blip).
+            _persist_assistant(
+                accumulated_content, request.mode, "", request.model or "", []
+            ) if accumulated_content else None
             try:
                 session_store.update_modes(session_id, work_mode, access_mode)
             except KeyError:

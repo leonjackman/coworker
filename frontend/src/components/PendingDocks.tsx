@@ -381,13 +381,13 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
                 {showProgress ? (
                   <span className="pending-dock__counter">{qIndex} / {qTotal}</span>
                 ) : null}
-                <Tooltip content={t('chat.approval_ignore_tooltip')}>
+                <Tooltip content={t('chat.approval_reject_close')}>
                   <button
                     type="button"
                     className="pending-action-button button-ghost"
                     onClick={() => onDismiss?.(request)}
                     disabled={isResolving}
-                    aria-label={t('chat.approval_disagree')}
+                    aria-label={t('chat.approval_reject_close')}
                   >
                     ✕
                   </button>

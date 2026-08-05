@@ -499,7 +499,10 @@ function App() {
     streamStartAtRef.current = streamStartAt;
     const controller = new AbortController();
     abortRef.current = controller;
+    const requestId = requestSeqRef.current;
     const handleEvent = (event: StreamEvent) => {
+      // P1 陈旧守卫
+      if (requestId !== requestSeqRef.current) return;
       if (event.type === 'delta') {
         streamedContent += event.content;
         setMessages((current) =>
@@ -520,7 +523,16 @@ function App() {
           ),
         );
       } else if (event.type === 'tool_start') {
+        // 编辑/重生成路径支持 tool_delta（P1 修复）
         localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_delta') {
+        const td = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+        if (td) td.input = (td.input || '') + (event.input || '');
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -583,6 +595,15 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
+          ),
+        );
+      } else if (event.type === 'stage') {
+        // P1 补充 stage 处理（编辑/重生成路径）
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: `${t('chat.waiting_resolution')} · ${event.name}`, status: 'running' as const }
+              : item,
           ),
         );
       } else if (event.type === 'error') {
@@ -655,7 +676,10 @@ function App() {
     streamStartAtRef.current = streamStartAt;
     const controller = new AbortController();
     abortRef.current = controller;
+    const requestId = requestSeqRef.current;
     const handleEvent = (event: StreamEvent) => {
+      // P1 陈旧守卫
+      if (requestId !== requestSeqRef.current) return;
       if (event.type === 'delta') {
         streamedContent += event.content;
         setMessages((current) =>
@@ -676,7 +700,16 @@ function App() {
           ),
         );
       } else if (event.type === 'tool_start') {
+        // 编辑/重生成路径支持 tool_delta（P1 修复）
         localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'tool_delta') {
+        const td = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+        if (td) td.input = (td.input || '') + (event.input || '');
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -739,6 +772,15 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
+          ),
+        );
+      } else if (event.type === 'stage') {
+        // P1 补充 stage 处理（编辑/重生成路径）
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: `${t('chat.waiting_resolution')} · ${event.name}`, status: 'running' as const }
+              : item,
           ),
         );
       } else if (event.type === 'error') {
@@ -844,6 +886,8 @@ function App() {
 
   const resolvePendingRequest = async (request: PendingRequest, decision: ApprovalDecisionPayload) => {
     if (resolvingRef.current) return;
+    // 记录当前 requestId，使 handleEvent 中的陈旧检查生效（P1 守卫）
+    const requestId = requestSeqRef.current + 1;
     resolvingRef.current = true;
     setPendingRequests((current) =>
       current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
@@ -880,7 +924,9 @@ function App() {
     }
 
     if (!resumeId) return;
-    const controller = new AbortController();
+    // 将 resume 流的 controller 写入 abortRef，使会话切换能正确中断它（幽灵流修复）
+    const resumeController = new AbortController();
+    abortRef.current = resumeController;
     const resumeSessionId = request.session_id || sessionIdRef.current || '';
     let resumeContent = '';
     let resumeParts: MessagePart[] = [];
@@ -888,6 +934,8 @@ function App() {
       await chatService.subscribeApprovalEvents(
         resumeId,
         (event) => {
+          // P1 陈旧请求守卫（P1 修复）
+          if (requestId !== requestSeqRef.current) return;
           if (event.type === 'done') {
             resumeContent = event.content || resumeContent;
             if (event.parts && event.parts.length > 0) {
@@ -989,11 +1037,17 @@ function App() {
             );
           }
         },
-        controller.signal,
+        resumeController.signal,
       );
     } catch (error) {
       if ((error as Error).name !== 'AbortError') {
         console.error('Approval event stream failed:', error);
+      }
+    } finally {
+      // P0 并发双流修复：resume 流结束后清除 isThinking 和 abortRef
+      setIsThinking(false);
+      if (abortRef.current === resumeController) {
+        abortRef.current = null;
       }
     }
   };
@@ -1123,6 +1177,12 @@ function App() {
   };
 
   const openSession = async (sessionIdToOpen: string) => {
+    // 同会话短路：已经在流该会话 → 只需切回 chat 视图
+    if (sessionIdRef.current === sessionIdToOpen) {
+      setActiveView('chat');
+      return;
+    }
+    // 若已有正在运行的流，先正常中断（保留 AbortError 兜底让 finally 将已收到的内容落盘）
     abortRef.current?.abort();
     requestSeqRef.current += 1;
     activeAssistantMessageIdRef.current = undefined;
@@ -1150,7 +1210,14 @@ function App() {
       setPendingRequests((current) => current.filter((item) => item.session_id !== sessionIdToOpen));
       void restorePendingForSession(sessionIdToOpen);
       setActiveProjectId(response.session.project_id || undefined);
-      setMessages(loaded);
+      // 归而非覆盖：保留本地 status === 'running' 的消息（半截回复可能由 AbortError 兜底已写入）
+      setMessages((current) => {
+        const running = current.filter((m) => m.status === 'running');
+        if (running.length === 0) return loaded;
+        const loadedIds = new Set(loaded.map((m) => m.id));
+        const merged = running.filter((m) => !loadedIds.has(m.id));
+        return [...loaded, ...merged];
+      });
       setAttachments([]);
     } catch (error) {
       console.error('Failed to open session:', error);

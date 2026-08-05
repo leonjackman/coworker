@@ -586,7 +586,11 @@ class Workspace:
         executable_path = Path(executable)
         command_name = executable_path.name
         if command_name not in ALLOWED_COMMANDS:
-            raise ValueError(f"Command is not allowed: {command_name}")
+            raise ValueError(
+                f"Command is not allowed: {command_name}. "
+                "This is a fixed workspace restriction that user approval cannot override. "
+                f"Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}."
+            )
 
         if executable_path.is_absolute():
             resolved = executable_path.resolve()

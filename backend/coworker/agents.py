@@ -17,7 +17,7 @@ from .config import BackendSettings
 from .providers import ProviderEntry, ProviderManager
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .changes import ChangeStore
-from .workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace
+from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace
 
 AgentMode = Literal["single"]
 Language = Literal["zh", "en"]
@@ -383,6 +383,22 @@ def _command_digest_from_tool_call(tool_call: Any) -> str:
     return ""
 
 
+def _command_is_allowed(tool_call: Any) -> bool:
+    """Whether this tool call's executable can pass the workspace allowlist.
+
+    Used to avoid prompting the user to approve a command that the tool layer
+    will refuse regardless of the decision.
+    """
+    args = tool_call.get("args") if isinstance(tool_call, dict) else {}
+    command = args.get("command") if isinstance(args, dict) else None
+    if not isinstance(command, list) or not command:
+        return True
+    executable = command[0]
+    if not isinstance(executable, str) or not executable:
+        return True
+    return Path(executable).name in ALLOWED_COMMANDS
+
+
 def command_approval_middleware(
     access_mode: AccessMode,
     approval_store: CommandApprovalStore | None = None,
@@ -393,9 +409,15 @@ def command_approval_middleware(
         return []
 
     def _needs_approval(req: Any) -> bool:
+        tool_call = getattr(req, "tool_call", None)
+        # A command outside the executable allowlist is refused by the tool layer
+        # even after the user approves it. Skip the approval prompt entirely so the
+        # user is never asked to authorise something that cannot run; the tool layer
+        # then returns an explicit "not allowed" error the agent can recover from.
+        if not _command_is_allowed(tool_call):
+            return False
         if approval_store is None:
             return True
-        tool_call = getattr(req, "tool_call", None)
         digest = _command_digest_from_tool_call(tool_call)
         if digest and approval_store.is_always_allowed(digest):
             return False
@@ -1452,25 +1474,36 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.trace_store.record("agent_activity", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
         effective_access = access_mode if work_mode == "build" else "default"
 
-        is_plan = str(context.get("kind") or "") == "plan"
+        kind = str(context.get("kind") or "")
+        is_plan = kind == "plan"
         config = agent_run_config(
             session_id=session_id, provider=self.provider_name, model=self.model_name,
             language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
         )
-        if is_plan and decisions:
-            decision = decisions[0] if isinstance(decisions, list) else decisions
-            dtype = str(decision.get("type", "") if isinstance(decision, dict) else "")
-            if dtype != "approve":
-                # reject / regenerate: do not resume the agent; finish the turn cleanly.
-                reject_msg = (
-                    "The user rejected the proposed plan. No changes were made."
-                    if dtype != "regenerate"
-                    else "The user requested a revised plan. No changes were made."
+        decision_list = decisions if isinstance(decisions, list) else [decisions]
+        decision_types = [str(item.get("type", "")) for item in decision_list if isinstance(item, dict)]
+        # Terminal decisions (reject / regenerate) finish the turn cleanly instead of
+        # resuming the graph. This applies to every interrupt kind so that "Reject"
+        # consistently stops the current turn: previously only plan interrupts stopped,
+        # while question/command rejections resumed the agent, which allowed the model
+        # to immediately ask again and left the user without a hard stop.
+        if decision_types and all(dt in ("reject", "regenerate") for dt in decision_types):
+            if is_plan:
+                stop_msg = (
+                    "The user requested a revised plan. No changes were made."
+                    if "regenerate" in decision_types
+                    else "The user rejected the proposed plan. No changes were made."
                 )
-                self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(reject_msg), "resumed": True})
-                events.append({"type": "stage", "name": "finalizing", "status": "done"})
-                events.append({"type": "done", "content": reject_msg, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": []})
-                return events
+            elif kind == "question":
+                stop_msg = "The user declined to answer the question. The task has been stopped."
+            else:
+                stop_msg = "The user rejected the command. The task has been stopped."
+            self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(stop_msg), "resumed": True})
+            events.append({"type": "stage", "name": "finalizing", "status": "done"})
+            events.append({"type": "done", "content": stop_msg, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": []})
+            return events
+
+        if is_plan and decisions:
             # Approve: resume the SAME graph execution (official LangGraph
             # interrupt/resume). Before resuming, persist plan_approved=True
             # into the thread state so the resumed agent sees the plan as
