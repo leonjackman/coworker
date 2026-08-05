@@ -104,59 +104,42 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
   return (
     <div className="sidebar-project">
       <div className={`sidebar-project__title-row ${active ? 'sidebar-project__title-row--active' : ''}`}>
-        <button
-          type="button"
-          className="sidebar-project__title"
-          onClick={handleTitleClick}
-          aria-expanded={expanded}
-        >
-          <span
-            className="sidebar-project__chevron-icon"
-            onClick={(e) => {
-              e.stopPropagation();
-              setExpanded((v) => !v);
-            }}
-          >
-            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-          </span>
+        <button type="button"className="sidebar-project__title"onClick={handleTitleClick}aria-expanded={expanded}>
           {expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
           <span>{project.name}</span>
+          <span className="sidebar-project__chevron-icon"onClick={(e) => {e.stopPropagation();setExpanded((v) => !v);}}>
+            {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+          </span>
+          <div className="sidebar-project__actions">
+            <DropdownMenu>
+              <DropdownMenuTrigger className="sidebar-project__more-trigger" aria-label="Project actions">
+                <MoreHorizontal size={15} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" alignOffset={-8}>
+                <DropdownMenuItem onClick={() => onNewChat(project.id)}>
+                  <MessageSquarePlus size={14} />
+                  {t('sidebar.new_chat')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onOpenProject(project.id)}>
+                  <MessageSquare size={14} />
+                  {t('sidebar.session_history')}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => onRenameProject(project)}>
+                  <Pencil size={14} />
+                  {t('sidebar.project_rename')}
+                </DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onClick={() => onDeleteProject(project.id)}>
+                  <Trash2 size={14} />
+                  {t('sidebar.project_delete')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <button type="button" className="sidebar-project__new-trigger" onClick={() => onNewChat(project.id)} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>
+              <MessageSquarePlus size={15} />
+            </button>
+          </div>
         </button>
-        <div className="sidebar-project__actions">
-          <button
-            type="button"
-            className="sidebar-project__new-trigger"
-            onClick={() => onNewChat(project.id)}
-            title={t('sidebar.new_chat')}
-            aria-label={t('sidebar.new_chat')}
-          >
-            <MessageSquarePlus size={15} />
-          </button>
-          <DropdownMenu>
-          <DropdownMenuTrigger className="sidebar-project__more-trigger" aria-label="Project actions">
-            <MoreHorizontal size={15} />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" alignOffset={-8}>
-            <DropdownMenuItem onClick={() => onNewChat(project.id)}>
-              <MessageSquarePlus size={14} />
-              {t('sidebar.new_chat')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onOpenProject(project.id)}>
-              <MessageSquare size={14} />
-              {t('sidebar.session_history')}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => onRenameProject(project)}>
-              <Pencil size={14} />
-              {t('sidebar.project_rename')}
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onClick={() => onDeleteProject(project.id)}>
-              <Trash2 size={14} />
-              {t('sidebar.project_delete')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        </div>
       </div>
 
       {expanded && (
