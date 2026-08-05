@@ -314,19 +314,6 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
       onViewportScroll={handleViewportScroll}
     >
       <section className="stream-wall" aria-live="polite">
-        {messages.length === 0 && (
-          <div className="empty-state">
-            <p className="empty-state__eyebrow">{t('app.eyebrow')}</p>
-            <p className="empty-state__title">{t('app.title')}</p>
-            <p className="empty-state__body">{t('app.subtitle')}</p>
-            <div className="empty-state__hints">
-              <span>{t('chat.empty_hint_plan')}</span>
-              <span>{t('chat.empty_hint_build')}</span>
-              <span>{t('chat.empty_hint_slash')}</span>
-            </div>
-          </div>
-        )}
-
         {messages.map((message) =>
           message.role === 'user' ? (
             <UserMessage

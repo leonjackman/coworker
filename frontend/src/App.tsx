@@ -6,7 +6,7 @@ import { ProvidersPanel } from './components/ProvidersPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
-import { NewSessionDialog } from './components/NewSessionDialog';
+import { NewChatHero } from './components/NewChatHero';
 import { SettingsView } from './components/settings/SettingsView';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
@@ -45,9 +45,7 @@ function App() {
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
-  const [newSessionDialogOpen, setNewSessionDialogOpen] = useState(false);
-  const [newSessionInitialProjectId, setNewSessionInitialProjectId] = useState<string | undefined>();
-  const [newSessionInitialMessage, setNewSessionInitialMessage] = useState('');
+  const [draftMode, setDraftMode] = useState(false);
   const [languageVersion, setLanguageVersion] = useState(0);
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
@@ -183,11 +181,13 @@ function App() {
 
     const requestProjectId = override?.projectId || pendingProjectIdRef.current;
 
+    // 未选择 workspace 时不发送，停留在草稿态提示用户先选工作空间
     if (!sessionIdRef.current && !requestProjectId) {
-      openNewSessionDialog(undefined, typedMessage);
-      setInput('');
+      setDraftMode(true);
       return;
     }
+
+    setDraftMode(false);
 
     const message = typedMessage || t('chat.attachment_only_message');
     const requestId = requestSeqRef.current + 1;
@@ -1027,7 +1027,7 @@ function App() {
 
   const isResolving = () => resolvingRef.current;
 
-  const startProjectDraft = (projectId: string, firstMessage = '') => {
+  const startProjectDraft = (projectId?: string, firstMessage = '') => {
     abortRef.current?.abort();
     requestSeqRef.current += 1;
     activeAssistantMessageIdRef.current = undefined;
@@ -1043,21 +1043,24 @@ function App() {
     setActiveView('chat');
   };
 
-  const openNewSessionDialog = (projectId?: string, initialMessage = '') => {
-    setNewSessionInitialProjectId(projectId || activeProjectId);
-    setNewSessionInitialMessage(initialMessage);
-    setNewSessionDialogOpen(true);
+  // 新对话：不再弹窗。在项目内新建则继承该项目 workspace；
+  // 全局新建则进入空态，由 composer 顶部的 workspace 选择器指定。
+  const startNewChat = (projectId?: string) => {
+    startProjectDraft(projectId);
+    setDraftMode(true);
+  };
+
+  // 草稿态下切换 workspace：仅改归属，不清空已输入内容
+  const selectDraftWorkspace = (projectId: string) => {
+    pendingProjectIdRef.current = projectId;
+    setActiveProjectId(projectId);
+    setDraftMode(true);
+    setActiveView('chat');
   };
 
   const openProject = (projectId: string) => {
     startProjectDraft(projectId);
-  };
-
-  const startProjectSession = (projectId: string, firstMessage: string) => {
-    startProjectDraft(projectId);
-    if (firstMessage.trim()) {
-      void sendMessage({ message: firstMessage, projectId });
-    }
+    setDraftMode(false);
   };
 
   const pickWorkspaceDirectory = async () => {
@@ -1068,6 +1071,9 @@ function App() {
     const response = await chatService.createProject(payload);
     await refreshProjects();
     setActiveProjectId(response.project.id);
+    if (!sessionIdRef.current) {
+      pendingProjectIdRef.current = response.project.id;
+    }
     return response.project;
   };
 
@@ -1120,6 +1126,7 @@ function App() {
     activeAssistantMessageIdRef.current = undefined;
     setIsThinking(false);
     setActiveView('chat');
+    setDraftMode(false);
     try {
       const response = await chatService.getSession(sessionIdToOpen);
       const records = response.session.messages ?? [];
@@ -1232,7 +1239,7 @@ function App() {
       return;
     }
     if (command === '/new') {
-      openNewSessionDialog();
+      startNewChat(activeProjectId);
       return;
     }
     if (command === '/providers') {
@@ -1277,8 +1284,14 @@ function App() {
   const activeProject = projects.find((project) => project.id === currentProjectId);
   const titlebarProjectName = activeProject?.name ?? t('sidebar.default_project');
   const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
-  const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0;
-  const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && runtimeStatus === 'ready';
+  const showNewChatHero = activeView === 'chat' && !sessionId && messages.length === 0 && runtimeStatus === 'ready' && (!activeProject || draftMode);
+  const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0 && !draftMode;
+  const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && runtimeStatus === 'ready' && !draftMode;
+  const workspaceOptions = projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    path: project.workspace_path,
+  }));
   const currentSessionPending = sessionId
     ? pendingRequests.filter((item) => item.session_id === sessionId)
     : [];
@@ -1352,7 +1365,7 @@ function App() {
           }}
           {...(sessionId ? { activeSessionId: sessionId } : {})}
           onViewChange={setActiveView}
-          onNewChat={openNewSessionDialog}
+          onNewChat={startNewChat}
           onOpenProject={openProject}
           onOpenSession={openSession}
           onDeleteSession={deleteSession}
@@ -1376,12 +1389,14 @@ function App() {
                     </section>
                   )}
                   {showFirstRunStart ? (
-                    <FirstRunStart onCreateProject={createProject} onNewSession={() => openNewSessionDialog()} />
+                    <FirstRunStart onCreateProject={createProject} onNewSession={() => startNewChat()} />
+                  ) : showNewChatHero ? (
+                    <NewChatHero {...(activeProject?.name ? { workspaceName: activeProject.name } : {})} />
                   ) : showProjectSessionList ? (
                     <ProjectSessionList
                       project={activeProject}
                       sessions={activeProjectSessions}
-                      onNewChat={openNewSessionDialog}
+                      onNewChat={startNewChat}
                       onOpenSession={openSession}
                       onDeleteSession={deleteSession}
                     />
@@ -1430,7 +1445,12 @@ function App() {
                           setEditDraft('');
                         }}
                         branchStatus={branchStatus}
-                        workspaceLabel={activeProject?.workspace_path}
+                        {...(activeProject?.workspace_path ? { workspaceLabel: activeProject.workspace_path } : {})}
+                        showWorkspacePicker={showNewChatHero}
+                        workspaceOptions={workspaceOptions}
+                        {...(currentProjectId ? { activeWorkspaceId: currentProjectId } : {})}
+                        onSelectWorkspace={selectDraftWorkspace}
+                        onCreateWorkspace={createProject}
                       />
                     )
                   )}
@@ -1489,16 +1509,6 @@ function App() {
         onClose={() => setCreateProjectDialogOpen(false)}
         onPickWorkspace={pickWorkspaceDirectory}
         onCreate={createProjectWithWorkspace}
-      />
-      <NewSessionDialog
-        open={newSessionDialogOpen}
-        projects={projects}
-        {...(newSessionInitialProjectId ? { initialProjectId: newSessionInitialProjectId } : {})}
-        {...(newSessionInitialMessage ? { initialMessage: newSessionInitialMessage } : {})}
-        onClose={() => setNewSessionDialogOpen(false)}
-        onPickWorkspace={pickWorkspaceDirectory}
-        onCreateProject={createProjectWithWorkspace}
-        onStart={startProjectSession}
       />
       {rollbackTarget && (
         <RollbackDialog

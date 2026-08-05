@@ -1,14 +1,14 @@
 import {
   Check,
+  ChevronDown,
+  Folder,
+  FolderPlus,
   GitBranch,
   Paperclip,
   Pencil,
-  Plus,
   Send,
-  SendHorizontal,
   Shield,
   ShieldCheck,
-  Slash,
   Square,
   X,
 } from "lucide-react";
@@ -16,6 +16,14 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import type { AccessMode, ComposerAttachment } from "../types";
 import { Button } from "./ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -30,6 +38,12 @@ export interface ModelOption {
   id: string;
   label: string;
   provider?: string;
+}
+
+export interface WorkspaceOption {
+  id: string;
+  name: string;
+  path: string;
 }
 
 interface ChatInputProps {
@@ -50,6 +64,12 @@ interface ChatInputProps {
   onCancelEdit?: () => void;
   branchStatus?: { isRepo: boolean; branch: string | null } | null;
   workspaceLabel?: string;
+  /** 新对话草稿态：在 composer 顶部显示 workspace 选择器 */
+  showWorkspacePicker?: boolean;
+  workspaceOptions?: WorkspaceOption[];
+  activeWorkspaceId?: string;
+  onSelectWorkspace?: (projectId: string) => void;
+  onCreateWorkspace?: () => void;
 }
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/providers", "/settings"];
@@ -109,10 +129,20 @@ export function ChatInput({
   onCancelEdit,
   branchStatus = null,
   workspaceLabel,
+  showWorkspacePicker = false,
+  workspaceOptions = [],
+  activeWorkspaceId,
+  onSelectWorkspace,
+  onCreateWorkspace,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showCommands, setShowCommands] = useState(false);
-  const canSend = Boolean(value.trim() || attachments.length > 0);
+  const activeWorkspace = workspaceOptions.find(
+    (option) => option.id === activeWorkspaceId,
+  );
+  const workspaceMissing = showWorkspacePicker && !activeWorkspace;
+  const canSend =
+    Boolean(value.trim() || attachments.length > 0) && !workspaceMissing;
 
   useEffect(() => {
     setShowCommands(value.trim().startsWith("/"));
@@ -160,6 +190,57 @@ export function ChatInput({
             </Button>
           </div>
         )}
+        {showWorkspacePicker && (
+          <div className="composer__context">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={`composer__ws-chip ${workspaceMissing ? "composer__ws-chip--empty" : ""}`}
+                aria-label={t("chat.workspace_pick")}
+                title={activeWorkspace?.path ?? t("chat.workspace_pick")}
+              >
+                <span className="composer__ws-icon">
+                  <Folder size={11} />
+                </span>
+                <span className="composer__ws-value">
+                  {activeWorkspace ? activeWorkspace.name : t("chat.workspace_pick")}
+                </span>
+                <ChevronDown size={13} className="composer__ws-chevron" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="composer__ws-menu">
+                {workspaceOptions.length > 0 && (
+                  <DropdownMenuLabel>{t("chat.workspace_switch")}</DropdownMenuLabel>
+                )}
+                {workspaceOptions.map((option) => (
+                  <DropdownMenuItem
+                    key={option.id}
+                    className="composer__ws-item"
+                    onClick={() => onSelectWorkspace?.(option.id)}
+                  >
+                    <Folder size={14} />
+                    <span className="composer__ws-item-text">
+                      <span className="composer__ws-item-name">{option.name}</span>
+                      <span className="composer__ws-item-path">{option.path}</span>
+                    </span>
+                    {option.id === activeWorkspaceId && (
+                      <Check size={14} className="composer__ws-item-check" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+                {workspaceOptions.length > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuItem onClick={() => onCreateWorkspace?.()}>
+                  <FolderPlus size={14} />
+                  {t("chat.workspace_new")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {activeWorkspace && (
+              <span className="composer__ws-path" title={activeWorkspace.path}>
+                {activeWorkspace.path}
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="composer__input-box">
           <div className="composer__editor">
             <Textarea
@@ -227,7 +308,7 @@ export function ChatInput({
                   </Tooltip>
                   {branchStatus && (
                     <span
-                      className={`composer__branch ${branchStatus.branch ? "" : "composer__branch--muted"}`}
+                     style={{ display: "flex", alignItems: "center", gap: "4px" ,color: "#666666"}}
                       title={branchStatus.branch ? `当前分支（仅显示，不可编辑）：${branchStatus.branch}` : (branchStatus.isRepo ? "当前处于 detached HEAD（无分支名）" : "当前项目不是 git 仓库")}
                     >
                       <GitBranch size={14} />

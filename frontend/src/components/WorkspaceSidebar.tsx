@@ -116,10 +116,6 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
                 <MoreHorizontal size={15} />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" alignOffset={-8}>
-                <DropdownMenuItem onClick={() => onNewChat(project.id)}>
-                  <MessageSquarePlus size={14} />
-                  {t('sidebar.new_chat')}
-                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => onOpenProject(project.id)}>
                   <MessageSquare size={14} />
                   {t('sidebar.session_history')}
