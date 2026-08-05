@@ -177,6 +177,7 @@ textarea {
 .app-shell {
   height: 100vh;
   min-height: 100vh;
+  min-width: 360px;
   display: grid;
   grid-template-rows: 46px minmax(0, 1fr);
   background: transparent;
@@ -1560,13 +1561,14 @@ body.bottom-panel-resizing {
 }
 
 .stream-bubble {
-  min-width: max-content;
+  min-width: 0;
   max-width: min(560px, 86%);
   border-radius: 16px;
   padding: 12px 16px;
   font-size: 14px;
   line-height: 1.6;
   word-break: break-word;
+  overflow-wrap: break-word;
   white-space: pre-wrap;
 }
 
@@ -1956,6 +1958,7 @@ body.bottom-panel-resizing {
   position: relative;
   box-sizing: border-box;
   width: min(1024px, calc(100% - 48px));
+  min-width: 0;
   margin: 0 auto 20px;
 }
 
@@ -1965,6 +1968,7 @@ body.bottom-panel-resizing {
   border: 1px solid var(--material-border);
   border-radius: 20px;
   padding: 8px 10px 10px;
+  min-width: 0;
   background:
     linear-gradient(180deg, color-mix(in oklab, var(--material-panel) 55%, transparent), color-mix(in oklab, var(--material-panel-solid) 45%, transparent)),
     var(--material-panel);
@@ -2294,6 +2298,7 @@ body.bottom-panel-resizing {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  flex-shrink: 1;
   border: 1px solid var(--material-border);
   border-radius: 999px;
   padding: 0 9px;
@@ -2302,6 +2307,9 @@ body.bottom-panel-resizing {
   cursor: pointer;
   font-size: 13px;
   font-weight: 640;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
@@ -2319,6 +2327,7 @@ body.bottom-panel-resizing {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  flex-shrink: 1;
   border: 1px solid color-mix(in oklab, #3b6d11 32%, var(--material-border));
   border-radius: 999px;
   padding: 0 10px;
@@ -2328,6 +2337,8 @@ body.bottom-panel-resizing {
   user-select: none;
   font-size: 13px;
   font-weight: 640;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .composer__branch svg {
