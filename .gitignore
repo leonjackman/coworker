@@ -42,3 +42,6 @@ release/
 out/
 *.dmg
 *.zip
+
+.opencode/
+.workbuddy/
