@@ -464,7 +464,7 @@ function App() {
       await refreshSessions();
       await refreshProjects();
       setChangesRefreshKey((value) => value + 1);
-      _generateSessionTitleIfNeeded(message, sessionIdRef.current);
+      _generateSessionTitleIfNeeded(message, streamedContent, sessionIdRef.current);
     } catch (error) {
       if (requestId !== requestSeqRef.current) return;
       console.error('Failed to stream message:', error);
@@ -929,13 +929,10 @@ function App() {
   }, [pendingRequests]);
   const resolvingRef = useRef(false);
 
-  const _generateSessionTitleIfNeeded = (firstMessageContent: string, sessionSessionId?: string) => {
+  const _generateSessionTitleIfNeeded = (firstMessageContent: string, assistantResponse: string, sessionSessionId?: string) => {
     if (!sessionSessionId) return;
-    const userMessages = messages.filter((m) => m.role === 'user');
-    const currentSession = sessions.find((s) => s.id === sessionSessionId);
-    if (!currentSession || currentSession.title !== '新会话') return;
-    if (userMessages.length > 1) return;
-    chatService.generateTitle(sessionSessionId, firstMessageContent).then(
+    if (messages.length > 0) return;
+    chatService.generateTitle(sessionSessionId, firstMessageContent, assistantResponse).then(
       (newTitle) => {
         if (newTitle && newTitle !== '新会话') {
           setSessions((current) => current.map((s) => (s.id === sessionSessionId ? { ...s, title: newTitle } : s)));

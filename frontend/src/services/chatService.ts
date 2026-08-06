@@ -81,7 +81,7 @@ export interface ChatService {
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
   getSession: (sessionId: string) => Promise<SessionDetailResponse>;
-  generateTitle: (sessionId: string, firstUserMessage: string) => Promise<string>;
+  generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string) => Promise<string>;
   listProjects: () => Promise<ProjectsListResponse>;
   createProject: (request: CreateProjectRequest) => Promise<ProjectResponse>;
   renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
@@ -356,9 +356,9 @@ class ElectronChatService implements ChatService {
     return response.error ? { models: response.models, error: response.error } : { models: response.models };
   }
 
-  async generateTitle(sessionId: string, firstUserMessage: string): Promise<string> {
+  async generateTitle(sessionId: string, firstUserMessage: string, assistantResponse?: string): Promise<string> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    const response = await window.electronAPI.generateTitle(sessionId, firstUserMessage);
+    const response = await window.electronAPI.generateTitle(sessionId, firstUserMessage, assistantResponse);
     return response.title;
   }
 }
@@ -720,11 +720,11 @@ class HttpChatService implements ChatService {
     });
   }
 
-  async generateTitle(sessionId: string, firstUserMessage: string): Promise<string> {
+  async generateTitle(sessionId: string, firstUserMessage: string, assistantResponse?: string): Promise<string> {
     const response = await this.request<{ status: string; title: string }>(`/sessions/${sessionId}/generateTitle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ first_user_message: firstUserMessage }),
+      body: JSON.stringify({ first_user_message: firstUserMessage, assistant_response: assistantResponse || '' }),
     });
     return response.title;
   }

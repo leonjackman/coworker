@@ -39,8 +39,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createSession: (payload) => ipcRenderer.invoke('create-session', payload),
   deleteSession: (sessionId) => ipcRenderer.invoke('delete-session', sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke('rename-session', { session_id: sessionId, title }),
-  generateTitle: (sessionId, firstUserMessage) =>
-    ipcRenderer.invoke('generate-title', { session_id: sessionId, first_user_message: firstUserMessage }),
+  generateTitle: (sessionId, firstUserMessage, assistantResponse) =>
+    ipcRenderer.invoke('generate-title', {
+      session_id: sessionId,
+      first_user_message: firstUserMessage,
+      assistant_response: assistantResponse || '',
+    }),
   getSession: (sessionId) => ipcRenderer.invoke('get-session', sessionId),
   rollbackMessage: (sessionId, messageId, withCode) =>
     ipcRenderer.invoke('rollback-message', { session_id: sessionId, message_id: messageId, with_code: !!withCode }),

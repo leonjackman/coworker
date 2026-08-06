@@ -244,7 +244,7 @@ async def chat(request: ChatRequest):
             project_id=request.project_id,
         )
         if not session_id:
-            created_session = session_store.new_session(request.message, project_id=request.project_id or "")
+            created_session = session_store.new_session("", project_id=request.project_id or "")
             session_id = created_session.id
         runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
         reply = runtime.run(format_user_message(request.message, request.attachments, references), session_id, request.language, work_mode, access_mode)
@@ -337,7 +337,7 @@ async def chat_stream(request: ChatStreamRequest):
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     else:
-        session = session_store.create(request.message, project_id=request.project_id or "")
+        session = session_store.create("", project_id=request.project_id or "")
         session_id = session.id
 
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references)}
@@ -484,7 +484,8 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
 
 
 class GenerateTitleRequest(BaseModel):
-    first_user_message: str
+    first_user_message: str = ""
+    assistant_response: str = ""
 
 
 @app.post("/sessions/{session_id}/generateTitle")
@@ -493,13 +494,24 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
         session = session_store.require(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if session.title != "新会话":
+    if not session.title_auto:
+        return {"status": "ok", "title": session.title}
+    user_message = ""
+    assistant_message = ""
+    for message in session.messages:
+        if message.role == "user" and not user_message:
+            user_message = message.content
+        elif message.role == "assistant" and not assistant_message:
+            assistant_message = message.content
+        if user_message and assistant_message:
+            break
+    if not user_message:
         return {"status": "ok", "title": session.title}
     from coworker.agents import generate_title
-    new_title = generate_title(request.first_user_message)
-    if new_title and new_title != session.title:
-        session_store.rename(session_id, new_title)
-    return {"status": "ok", "title": new_title}
+    new_title = generate_title(user_message, assistant_message or request.assistant_response or "")
+    final_title = new_title or session.title
+    session_store.rename(session_id, final_title)
+    return {"status": "ok", "title": final_title}
 
 
 class EditMessageRequest(BaseModel):

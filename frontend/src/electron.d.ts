@@ -56,7 +56,7 @@ declare global {
       deleteSession: (sessionId: string) => Promise<{ status: string }>;
       renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
       getSession: (sessionId: string) => Promise<SessionDetailResponse>;
-      generateTitle: (sessionId: string, firstUserMessage: string) => Promise<{ status: string; title: string }>;
+      generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string) => Promise<{ status: string; title: string }>;
       listProjects: () => Promise<ProjectsListResponse>;
       createProject: (payload: CreateProjectRequest) => Promise<ProjectResponse>;
       openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;

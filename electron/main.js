@@ -495,7 +495,10 @@ ipcMain.handle('get-session', async (event, sessionId) => {
 });
 
 ipcMain.handle('generate-title', async (event, payload) => {
-  return requestBackend(`/sessions/${payload.session_id}/generateTitle`, 'POST', { first_user_message: payload.first_user_message });
+  return requestBackend(`/sessions/${payload.session_id}/generateTitle`, 'POST', {
+    first_user_message: payload.first_user_message,
+    assistant_response: payload.assistant_response || '',
+  });
 });
 
 function startStreamingRequest(requestId, path, payload, sender, eventName = 'chat-stream-event') {

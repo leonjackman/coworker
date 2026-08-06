@@ -14,7 +14,7 @@ def _title_from_message(message: str) -> str:
     cleaned = " ".join(message.split())
     if not cleaned:
         return "新会话"
-    return cleaned[:40] + ("…" if len(cleaned) > 40 else "")
+    return cleaned[:20] + ("…" if len(cleaned) > 20 else "")
 
 
 @dataclass
@@ -40,6 +40,7 @@ class Session:
     project_id: str = ""
     work_mode: str = "build"
     access_mode: str = "default"
+    title_auto: bool = False
     messages: list[SessionMessage] = field(default_factory=list)
 
     @classmethod
@@ -52,6 +53,7 @@ class Session:
             project_id=str(payload.get("project_id", "")),
             work_mode=str(payload.get("work_mode", "build")),
             access_mode=str(payload.get("access_mode", "default")),
+            title_auto=bool(payload.get("title_auto", False)),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
 
@@ -171,6 +173,7 @@ class SessionStore:
         cleaned = title.strip()
         if cleaned:
             session.title = cleaned[:40]
+            session.title_auto = False
             self.save(session)
         return session
 
@@ -204,6 +207,7 @@ class SessionStore:
         )
         if role == "user" and session.title == "新会话":
             session.title = _title_from_message(content)
+            session.title_auto = True
         self.save(session)
         return session
 

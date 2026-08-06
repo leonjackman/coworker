@@ -32,6 +32,8 @@ SYSTEM_PROMPT = (
 TITLE_SYSTEM_PROMPT = (
     "You are a thread title generator. Output ONLY the title string. Nothing else. No code fences, no quotes, no explanation."
     "Rules:"
+    " - The input is the first exchange of a conversation: the user's message and the AI's reply."
+    " - Summarize the exchange into a short title that captures the main topic, question, or task."
     " - Use the same language as the user's first message."
     " - Title must be a complete meaningful phrase."
     " - Never include tool names like read tool, bash tool, edit tool."
@@ -815,8 +817,12 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
-def generate_title(user_message: str) -> str:
+def generate_title(first_user_message: str, assistant_response: str = "") -> str:
     from langchain_openai import ChatOpenAI
+    if assistant_response and assistant_response.strip():
+        conversation = f"用户: {first_user_message}\n\nAI: {assistant_response}"
+    else:
+        conversation = first_user_message
     try:
         from .config import load_settings
         from .providers import ProviderManager
@@ -827,21 +833,21 @@ def generate_title(user_message: str) -> str:
             llm = ChatOpenAI(model=dp.model, temperature=0, api_key=dp.api_key, base_url=dp.base_url or None)
             response = llm.invoke([
                 {"role": "system", "content": TITLE_SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
+                {"role": "user", "content": conversation},
             ])
             title = coerce_message_content(response).strip().strip('"').strip("'")
             if title and 3 <= len(title) <= 50:
                 return title
     except Exception:
         pass
-    return _default_title_from_message(user_message)
+    return _default_title_from_message(first_user_message)
 
 
 def _default_title_from_message(user_message: str) -> str:
     text = user_message.strip()
-    if len(text) <= 40:
+    if len(text) <= 20:
         return text
-    return text[:40].rstrip()[:40]
+    return text[:20].rstrip()[:20]
 
 
 def prepare_agent_messages(
