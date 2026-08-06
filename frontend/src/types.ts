@@ -15,6 +15,11 @@ export interface ComposerAttachment {
   error?: string;
 }
 
+export interface SessionReference {
+  id: string;
+  title: string;
+}
+
 export interface DiffLine {
   type: 'context' | 'del' | 'add';
   old_no: number | null;
@@ -145,6 +150,7 @@ export interface ChatMessage {
   model?: string;
   attachments?: ComposerAttachment[];
   parts?: MessagePart[];
+  references?: SessionReference[];
 }
 
 export interface RuntimeConfig {
@@ -173,6 +179,7 @@ export interface ChatRequest {
   model?: string;
   project_id?: string;
   attachments?: ComposerAttachment[];
+  referenced_sessions?: string[];
 }
 
 export interface ChatResponse {
@@ -265,6 +272,7 @@ export interface SessionMessageRecord {
   model?: string;
   attachments?: ComposerAttachment[];
   parts?: MessagePart[];
+  references?: SessionReference[];
 }
 
 export interface SessionDetail {

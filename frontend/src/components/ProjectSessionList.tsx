@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, MessageSquare, MoreHorizontal, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, MessageSquare, MoreHorizontal, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { WorkspacePage } from './ui/workspace-page';
@@ -16,10 +16,21 @@ interface ProjectSessionListProps {
 
 export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession, onDeleteSession }: ProjectSessionListProps) {
   const [expanded, setExpanded] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const LIMIT = 10;
   const displaySessions = expanded ? sessions : sessions.slice(0, LIMIT);
   const hasMore = sessions.length > LIMIT;
   const isShowingMore = expanded;
+
+  const handleCopyId = async (sessionId: string) => {
+    try {
+      await navigator.clipboard.writeText(sessionId);
+      setCopiedId(sessionId);
+      window.setTimeout(() => setCopiedId(null), 1200);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
 
   const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -64,6 +75,10 @@ export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession
                       <DropdownMenuItem onClick={() => onOpenSession(session.id)}>
                         <MessageSquare size={14} />
                         {t('sidebar.session_open')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleCopyId(session.id)}>
+                        {copiedId === session.id ? <Check size={14} /> : <Copy size={14} />}
+                        {copiedId === session.id ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id')}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         variant="destructive"

@@ -48,10 +48,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 settings = load_settings()
-agent_registry = AgentRuntimeRegistry(settings)
+session_store = SessionStore(settings.data_dir / "sessions")
+agent_registry = AgentRuntimeRegistry(settings, session_store)
 provider_manager = ProviderManager(settings.data_dir / "providers.json")
 config_controller = AppConfigController(settings, provider_manager)
-session_store = SessionStore(settings.data_dir / "sessions")
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
@@ -118,6 +118,28 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
     project_id: Optional[str] = None
     attachments: list[dict[str, Any]] = Field(default_factory=list)
+    referenced_sessions: list[str] = Field(
+        default_factory=list,
+        description="Session ids the user explicitly referenced in this message; the agent may read them via the read_session tool.",
+    )
+
+
+def _resolve_references(referenced_ids: list[str]) -> list[dict[str, Any]]:
+    """Resolve pasted session ids to {id, title} entries, dropping unknown ids."""
+    resolved: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_id in referenced_ids:
+        session_id = str(raw_id or "").strip()
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        try:
+            session = session_store.load(session_id)
+        except Exception:
+            session = None
+        if session is not None:
+            resolved.append({"id": session.id, "title": session.title})
+    return resolved
 
 class ChatResponse(BaseModel):
     response: str
@@ -214,6 +236,8 @@ async def chat(request: ChatRequest):
     session_id = request.session_id
     work_mode = normalize_work_mode(request.work_mode)
     access_mode = normalize_access_mode(request.access_mode)
+    references = _resolve_references(request.referenced_sessions)
+    referenced_ids = {ref["id"] for ref in references}
     try:
         resolved_workspace = workspace_controller.workspace_for_chat(
             session_id=session_id,
@@ -222,8 +246,8 @@ async def chat(request: ChatRequest):
         if not session_id:
             created_session = session_store.new_session(request.message, project_id=request.project_id or "")
             session_id = created_session.id
-        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace)
-        reply = runtime.run(format_user_message(request.message, request.attachments), session_id, request.language, work_mode, access_mode)
+        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
+        reply = runtime.run(format_user_message(request.message, request.attachments, references), session_id, request.language, work_mode, access_mode)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -237,6 +261,7 @@ async def chat(request: ChatRequest):
                 content=request.message,
                 mode=request.mode,
                 attachments=request.attachments,
+                references=references,
             )
             session_store.append_message(
                 session_id,
@@ -251,7 +276,7 @@ async def chat(request: ChatRequest):
             session = created_session or session_store.require(session_id)
             if created_session:
                 session_store.save(session)
-            session_store.append_message(session.id, role="user", content=request.message, mode=request.mode, attachments=request.attachments)
+            session_store.append_message(session.id, role="user", content=request.message, mode=request.mode, attachments=request.attachments, references=references)
             session_store.append_message(
                 session.id,
                 role="assistant",
@@ -288,12 +313,14 @@ async def chat_stream(request: ChatStreamRequest):
         raise HTTPException(status_code=400, detail="project_id is required to start a new chat")
     work_mode = normalize_work_mode(request.work_mode)
     access_mode = normalize_access_mode(request.access_mode)
+    references = _resolve_references(request.referenced_sessions)
+    referenced_ids = {ref["id"] for ref in references}
     try:
         resolved_workspace = workspace_controller.workspace_for_chat(
             session_id=request.session_id or None,
             project_id=request.project_id,
         )
-        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace)
+        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -303,7 +330,7 @@ async def chat_stream(request: ChatStreamRequest):
         try:
             session = session_store.require(request.session_id)
             history = [
-                {"role": m.role, "content": format_user_message(m.content, m.attachments) if m.role == "user" else m.content}
+                {"role": m.role, "content": format_user_message(m.content, m.attachments, m.references) if m.role == "user" else m.content}
                 for m in session.messages
                 if m.role in {"user", "assistant"} and m.content
             ]
@@ -313,8 +340,8 @@ async def chat_stream(request: ChatStreamRequest):
         session = session_store.create(request.message, project_id=request.project_id or "")
         session_id = session.id
 
-    user_message = {"role": "user", "content": format_user_message(request.message, request.attachments)}
-    session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, attachments=request.attachments)
+    user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references)}
+    session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, attachments=request.attachments, references=references)
     if runtime.owns_runtime_messages and agent_registry.has_runtime_checkpoint(session_id):
         messages = [user_message]
     else:
@@ -509,10 +536,24 @@ def _session_message_history(session) -> list[dict[str, Any]]:
         if message.role not in {"user", "assistant"} or not message.content:
             continue
         if message.role == "user":
-            history.append({"role": "user", "content": format_user_message(message.content, message.attachments)})
+            history.append({"role": "user", "content": format_user_message(message.content, message.attachments, message.references)})
         else:
             history.append({"role": "assistant", "content": message.content})
     return history
+
+
+def _session_referenced_ids(session) -> set[str]:
+    """Collect every session id the user referenced across the session's user
+    messages (used to restore the read_session allowlist on rerun paths)."""
+    ids: set[str] = set()
+    for message in session.messages:
+        if message.role != "user":
+            continue
+        for ref in message.references or []:
+            ref_id = str(ref.get("id") or "").strip()
+            if ref_id:
+                ids.add(ref_id)
+    return ids
 
 
 def _session_provider_context(session) -> tuple[str, str]:
@@ -597,6 +638,7 @@ async def regenerate_message(session_id: str, message_id: str):
         agent_registry.forget_runtime_checkpoint(session_id)
         session = session_store.require(session_id)
         history = _session_message_history(session)
+        referenced_ids = _session_referenced_ids(session)
         provider_name, model = _session_provider_context(session)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -609,7 +651,7 @@ async def regenerate_message(session_id: str, message_id: str):
     async def event_stream():
         try:
             async for event in agent_registry.rerun_stream(
-                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model,
+                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
             ):
                 event["session_id"] = session_id
                 if event.get("type") == "done":
@@ -648,6 +690,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         agent_registry.forget_runtime_checkpoint(session_id)
         session = session_store.require(session_id)
         history = _session_message_history(session)
+        referenced_ids = _session_referenced_ids(session)
         provider_name, model = _session_provider_context(session)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -665,7 +708,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     async def event_stream():
         try:
             async for event in agent_registry.rerun_stream(
-                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model,
+                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
             ):
                 event["session_id"] = session_id
                 if event.get("type") == "done":

@@ -12,9 +12,9 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { t } from "../lib/i18n";
-import type { AccessMode, ComposerAttachment } from "../types";
+import type { AccessMode, ComposerAttachment, SessionReference } from "../types";
 import { Button } from "./ui/button";
 import { CardSlot } from "./ui/card-slot";
 import {
@@ -54,6 +54,7 @@ interface ChatInputProps {
   accessMode: AccessMode;
   selectedModel: string;
   attachments: ComposerAttachment[];
+  references: SessionReference[];
   modelOptions: ModelOption[];
   onChange: (value: string) => void;
   onSend: () => void;
@@ -61,6 +62,8 @@ interface ChatInputProps {
   onAccessModeChange: (value: AccessMode) => void;
   onModelChange: (value: string) => void;
   onAttachmentsChange: (attachments: ComposerAttachment[]) => void;
+  onReferencesChange: (references: SessionReference[]) => void;
+  onResolveSession?: (sessionId: string) => Promise<SessionReference | null>;
   editing?: boolean;
   onCancelEdit?: () => void;
   branchStatus?: { isRepo: boolean; branch: string | null } | null;
@@ -75,6 +78,12 @@ interface ChatInputProps {
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/providers", "/settings"];
 const MAX_ATTACHMENT_CHARS = 120_000;
+
+const SESSION_ID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+
+export function extractSessionIds(text: string): string[] {
+  return Array.from(text.matchAll(SESSION_ID_RE), (match) => match[0].toLowerCase());
+}
 
 function isTextAttachment(file: File) {
   if (file.type.startsWith("text/")) return true;
@@ -119,6 +128,7 @@ export function ChatInput({
   accessMode,
   selectedModel,
   attachments,
+  references,
   modelOptions,
   onChange,
   onSend,
@@ -126,6 +136,8 @@ export function ChatInput({
   onAccessModeChange,
   onModelChange,
   onAttachmentsChange,
+  onReferencesChange,
+  onResolveSession,
   editing = false,
   onCancelEdit,
   branchStatus = null,
@@ -162,6 +174,38 @@ export function ChatInput({
     onAttachmentsChange(
       attachments.filter((attachment) => attachment.id !== id),
     );
+  }
+
+  async function addReferenceFromText(text: string) {
+    if (!onResolveSession) return;
+    const candidateIds = [...new Set(extractSessionIds(text))];
+    const existing = new Set(references.map((reference) => reference.id));
+    const pending = candidateIds.filter((id) => !existing.has(id));
+    if (pending.length === 0) return;
+    const resolved = (await Promise.all(pending.map((id) => onResolveSession(id)))).filter(
+      (reference): reference is SessionReference => reference !== null,
+    );
+    if (resolved.length === 0) return;
+    const merged = [...references];
+    const mergedIds = new Set(merged.map((reference) => reference.id));
+    for (const reference of resolved) {
+      if (!mergedIds.has(reference.id)) {
+        merged.push(reference);
+        mergedIds.add(reference.id);
+      }
+    }
+    onReferencesChange(merged);
+  }
+
+  async function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const pasted = event.clipboardData.getData("text");
+    if (pasted && extractSessionIds(pasted).length > 0) {
+      void addReferenceFromText(pasted);
+    }
+  }
+
+  function removeReference(id: string) {
+    onReferencesChange(references.filter((reference) => reference.id !== id));
   }
 
   function insertCommand(command: string) {
@@ -248,6 +292,7 @@ export function ChatInput({
               className="composer__input"
               value={value}
               onChange={(event) => onChange(event.target.value)}
+              onPaste={(event) => void handlePaste(event)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
@@ -261,6 +306,24 @@ export function ChatInput({
               disabled={disabled}
             />
           </div>
+
+          {references.length > 0 && (
+            <div className="composer__references">
+              {references.map((reference) => (
+                <span className="reference-chip" key={reference.id}>
+                  <span className="reference-chip__title">{reference.title}</span>
+                  <span className="reference-chip__id">{reference.id.slice(0, 8)}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeReference(reference.id)}
+                    aria-label={t("chat.remove_reference")}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
 
           {attachments.length > 0 && (
             <div className="composer__attachments">

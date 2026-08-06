@@ -2178,6 +2178,64 @@ body.bottom-panel-resizing {
   padding: 0 14px 8px;
 }
 
+.composer__references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+
+.reference-chip {
+  max-width: 240px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid var(--accent, #5b8def);
+  border-radius: 999px;
+  color: var(--foreground);
+  background: var(--material-control);
+  font-size: 12px;
+}
+
+.reference-chip__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-chip__id {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+}
+
+.reference-chip button {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.reference-chip button:hover {
+  color: var(--foreground);
+  background: var(--panel-hover);
+}
+
+.user-bubble-references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .attachment-chip {
   max-width: 220px;
   min-height: 28px;

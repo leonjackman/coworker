@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ChatInput } from './components/ChatInput';
+import { ChatInput, extractSessionIds } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { ProvidersPanel } from './components/ProvidersPanel';
@@ -17,7 +17,7 @@ import { RollbackDialog } from './components/RollbackDialog';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -99,6 +99,7 @@ function App() {
   const [accessMode, setAccessMode] = useState<AccessMode>('default');
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [references, setReferences] = useState<SessionReference[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
@@ -206,6 +207,15 @@ function App() {
     setActiveProjectId(firstProject.id);
   }, [activeProjectId, messages.length, projects, sessionId, sessions.length]);
 
+  const resolveSessionReference = async (sessionId: string): Promise<SessionReference | null> => {
+    try {
+      const response = await chatService.getSession(sessionId);
+      return { id: response.session.id, title: response.session.title };
+    } catch {
+      return null;
+    }
+  };
+
   const sendMessage = async (override?: { message: string; projectId?: string }) => {
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) return;
@@ -236,6 +246,18 @@ function App() {
     const requestProvider = selectedProvider?.name ?? runtimeConfig?.agent_provider ?? '';
     const requestSessionId = sessionIdRef.current;
 
+    // 引用会话：先采用 composer 中已确认的 chips，再兜底扫描消息文本里出现的会话 id
+    const requestReferences = [...references];
+    const referencedIds = new Set(requestReferences.map((reference) => reference.id));
+    for (const sessionIdInText of extractSessionIds(message)) {
+      if (referencedIds.has(sessionIdInText)) continue;
+      const resolved = await resolveSessionReference(sessionIdInText);
+      if (resolved) {
+        requestReferences.push(resolved);
+        referencedIds.add(resolved.id);
+      }
+    }
+
     setMessages((current) => [
       ...current,
       createMessage('user', message, {
@@ -244,6 +266,7 @@ function App() {
         provider: requestProvider,
         model: requestModel,
         attachments: requestAttachments,
+        ...(requestReferences.length > 0 ? { references: requestReferences } : {}),
       }),
     ]);
     setInput('');
@@ -427,6 +450,7 @@ function App() {
               }
             : {}),
           ...(requestAttachments.length > 0 ? { attachments: requestAttachments } : {}),
+          ...(requestReferences.length > 0 ? { referenced_sessions: requestReferences.map((reference) => reference.id) } : {}),
           ...(requestSessionId ? { session_id: requestSessionId } : {}),
           ...(requestProjectId ? { project_id: requestProjectId } : {}),
         },
@@ -435,6 +459,7 @@ function App() {
       );
       if (requestId !== requestSeqRef.current) return;
       setAttachments([]);
+      setReferences([]);
       setRuntimeStatus('ready');
       await refreshSessions();
       await refreshProjects();
@@ -1214,6 +1239,7 @@ function App() {
           ...(record.model ? { model: record.model } : {}),
           ...(record.attachments?.length ? { attachments: record.attachments } : {}),
           ...(record.parts?.length ? { parts: record.parts as MessagePart[] } : {}),
+          ...(record.references?.length ? { references: record.references } : {}),
           timestamp: new Date(record.created_at).getTime(),
         }),
       );
@@ -1521,6 +1547,7 @@ function App() {
                         accessMode={accessMode}
                         selectedModel={selectedModel}
                         attachments={attachments}
+                        references={references}
                         modelOptions={modelOptions}
                         editing={Boolean(editingMessage)}
                         onChange={editingMessage ? setEditDraft : setInput}
@@ -1529,6 +1556,8 @@ function App() {
                         onAccessModeChange={setAccessMode}
                         onModelChange={(providerId) => void changeSelectedModel(providerId)}
                         onAttachmentsChange={setAttachments}
+                        onReferencesChange={setReferences}
+                        onResolveSession={resolveSessionReference}
                         onCancelEdit={() => {
                           setEditingMessage(null);
                           setEditDraft('');

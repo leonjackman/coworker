@@ -126,6 +126,16 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
   return (
     <div className="stream-row stream-row--user">
       <div className="stream-bubble-wrap">
+        {message.references && message.references.length > 0 && (
+          <div className="user-bubble-references">
+            {message.references.map((reference) => (
+              <span className="reference-chip" key={reference.id} title={reference.id}>
+                <span className="reference-chip__title">{reference.title}</span>
+                <span className="reference-chip__id">{reference.id.slice(0, 8)}</span>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="stream-bubble stream-bubble--user">{message.content}</div>
         <div className="user-bubble-meta">
           <span className="user-bubble-meta__time">{formatTime(message.timestamp)}</span>

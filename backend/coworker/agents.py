@@ -17,6 +17,7 @@ from .config import BackendSettings
 from .providers import ProviderEntry, ProviderManager
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .changes import ChangeStore
+from .sessions import SessionStore
 from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace
 
 AgentMode = Literal["single"]
@@ -42,6 +43,7 @@ TITLE_SYSTEM_PROMPT = (
     " - The title must be a single line, 3-40 characters, no explanations."
 )
 MAX_ATTACHMENT_CHARS = 120_000
+MAX_REFERENCE_SESSION_CHARS = 60_000
 
 PLAN_MARKER = "[CW-PLAN]"
 
@@ -113,6 +115,11 @@ class AskUserArgs(BaseModel):
     options: list[AskUserOption] = Field(description="Available choices, each with a label and optional description.")
     multiple: bool = Field(default=False, description="Allow selecting multiple choices.")
     header: str = Field(default="", description="Very short label (max 30 chars) for the prompt.")
+
+
+class ReadSessionArgs(BaseModel):
+    session_id: str = Field(description="The id of a session the user explicitly referenced in this conversation (pasted session id).")
+    max_messages: int = Field(default=0, ge=0, le=50, description="Optional cap on how many recent messages to read (0 = no cap).")
 
 
 class AgentRuntime(ABC):
@@ -251,6 +258,8 @@ def build_workspace_tools(
     approval_store: CommandApprovalStore | None = None,
     change_store: ChangeStore | None = None,
     turn_index: int = 1,
+    session_store: SessionStore | None = None,
+    referenced_sessions: set[str] | None = None,
 ) -> list[Any]:
     from langchain_core.tools import tool
 
@@ -338,7 +347,54 @@ def build_workspace_tools(
         """Present your implementation plan for approval before making any changes. Call this AFTER researching the workspace and BEFORE writing or editing files or running commands."""
         return f"Plan submitted for approval:\n{plan_text}"
 
+    allowed_references = referenced_sessions or set()
+
+    @tool(args_schema=ReadSessionArgs)
+    def read_session(session_id: str, max_messages: int = 0) -> str:
+        """Read a conversation session that the user explicitly referenced in this chat (they pasted its session id). Use it to recall prior decisions, code, or context from another session. Only sessions the user pasted into this conversation can be read; anything else is rejected."""
+        if session_store is None:
+            return json.dumps({"error": "unavailable", "message": "Session reading is not available in this runtime."}, ensure_ascii=False)
+        if session_id not in allowed_references:
+            return json.dumps(
+                {"error": "not_authorized", "message": f"Session {session_id} was not referenced by the user in this conversation. Ask the user to paste that session's id into the chat."},
+                ensure_ascii=False,
+            )
+        try:
+            session = session_store.load(session_id)
+        except Exception as exc:
+            return _error_result(exc, "read_session")
+        if session is None:
+            return json.dumps({"error": "not_found", "message": f"Session {session_id} does not exist."}, ensure_ascii=False)
+        messages: list[dict[str, str]] = []
+        for message in session.messages:
+            if message.role not in {"user", "assistant"} or not message.content:
+                continue
+            messages.append({"role": message.role, "content": message.content})
+        if max_messages > 0:
+            messages = messages[-max_messages:]
+        capped: list[dict[str, str]] = []
+        total = 0
+        truncated = False
+        for message in messages:
+            total += len(message["content"])
+            if total > MAX_REFERENCE_SESSION_CHARS:
+                truncated = True
+                break
+            capped.append(message)
+        return json.dumps(
+            {
+                "session_id": session.id,
+                "title": session.title,
+                "message_count": len(session.messages),
+                "messages": capped,
+                "truncated": truncated,
+            },
+            ensure_ascii=False,
+        )
+
     tools = [search_files, read_file, ask_user, submit_plan]
+    if session_store is not None:
+        tools.append(read_session)
     if writable:
         tools.extend([replace_in_file, apply_text_edits, write_file, run_command])
     return tools
@@ -809,24 +865,30 @@ def prepare_agent_messages(
     return [{"role": "user", "content": instruction}]
 
 
-def format_user_message(message: str, attachments: list[dict[str, Any]] | None = None) -> str:
-    if not attachments:
-        return message
-    parts = [message, "\n\nAttachments:"]
-    for attachment in attachments:
-        name = str(attachment.get("name") or "attachment")
-        size = int(attachment.get("size") or 0)
-        kind = str(attachment.get("type") or "file")
-        content = attachment.get("content")
-        if isinstance(content, str) and content:
-            safe_content = content[:MAX_ATTACHMENT_CHARS]
-            was_truncated = attachment.get("truncated") or len(content) > MAX_ATTACHMENT_CHARS
-            truncated = "\n[Attachment truncated by Coworker.]" if was_truncated else ""
-            parts.append(f"\n--- {name} ({kind}, {size} bytes) ---\n{safe_content}{truncated}\n--- end {name} ---")
-        elif attachment.get("binary"):
-            parts.append(f"\n- {name} ({kind}, {size} bytes): binary or unsupported attachment; content not included.")
-        else:
-            parts.append(f"\n- {name} ({kind}, {size} bytes): no readable content included.")
+def format_user_message(message: str, attachments: list[dict[str, Any]] | None = None, references: list[dict[str, Any]] | None = None) -> str:
+    parts = [message]
+    if references:
+        parts.append("\n\nReferenced sessions (readable via the read_session tool):")
+        for reference in references:
+            ref_id = str(reference.get("id") or "")
+            ref_title = str(reference.get("title") or ref_id)
+            parts.append(f"- {ref_title} (session id: {ref_id})")
+    if attachments:
+        parts.append("\n\nAttachments:")
+        for attachment in attachments:
+            name = str(attachment.get("name") or "attachment")
+            size = int(attachment.get("size") or 0)
+            kind = str(attachment.get("type") or "file")
+            content = attachment.get("content")
+            if isinstance(content, str) and content:
+                safe_content = content[:MAX_ATTACHMENT_CHARS]
+                was_truncated = attachment.get("truncated") or len(content) > MAX_ATTACHMENT_CHARS
+                truncated = "\n[Attachment truncated by Coworker.]" if was_truncated else ""
+                parts.append(f"\n--- {name} ({kind}, {size} bytes) ---\n{safe_content}{truncated}\n--- end {name} ---")
+            elif attachment.get("binary"):
+                parts.append(f"\n- {name} ({kind}, {size} bytes): binary or unsupported attachment; content not included.")
+            else:
+                parts.append(f"\n- {name} ({kind}, {size} bytes): no readable content included.")
     return "\n".join(parts)
 
 
@@ -1165,7 +1227,7 @@ def build_coworker_agent_graph(
 class SimulatedSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
 
-    def __init__(self, settings: BackendSettings, workspace: Workspace):
+    def __init__(self, settings: BackendSettings, workspace: Workspace, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None):
         self.settings = settings
         self.workspace = workspace
 
@@ -1189,7 +1251,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1200,6 +1262,8 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.trace_store = trace_store
         self.checkpointer = checkpointer
         self.change_store = change_store
+        self.session_store = session_store
+        self.referenced_sessions = set(referenced_sessions or set())
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1222,7 +1286,10 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         turn_index = self._next_turn_index(session_id)
         graph = build_coworker_agent_graph(
             self.llm,
-            build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index),
+            build_workspace_tools(
+                self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index,
+                session_store=self.session_store, referenced_sessions=self.referenced_sessions,
+            ),
             work_mode=work_mode,
             language=language,
             access_mode=effective_access,
@@ -1243,7 +1310,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         if "__interrupt__" in result:
             approvals = record_runtime_interrupts(
                 result["__interrupt__"], self.approval_store,
-                {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode},
+                {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode, "referenced_sessions": list(self.referenced_sessions)},
             )
             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
             approval_ids = ", ".join(str(a.get("id", "")) for a in approvals)
@@ -1259,7 +1326,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1270,6 +1337,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.trace_store = trace_store
         self.checkpoint_path = checkpoint_path
         self.change_store = change_store
+        self.session_store = session_store
+        self.referenced_sessions = set(referenced_sessions or set())
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1307,7 +1376,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
             model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
         )
-        interrupt_context = {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode}
+        interrupt_context = {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode, "referenced_sessions": list(self.referenced_sessions)}
         self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "rerun" if rerun else "stream"})
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
         yield {"type": "stage", "name": "executing", "status": "running"}
@@ -1318,7 +1387,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index),
+                self.llm, build_workspace_tools(
+                    self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index,
+                    session_store=self.session_store, referenced_sessions=self.referenced_sessions,
+                ),
                 work_mode=work_mode, language=language, access_mode=effective_access,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
@@ -1527,7 +1599,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
                 async with _open_checkpointer(self.checkpoint_path) as _cp:
                     _g = build_coworker_agent_graph(
-                        self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store),
+                        self.llm, build_workspace_tools(
+                        self.workspace, True, audit_context, change_store=self.change_store,
+                        session_store=self.session_store, referenced_sessions=self.referenced_sessions,
+                    ),
                         work_mode=work_mode, language=language, access_mode=effective_access,
                         checkpointer=_cp, approval_store=self.approval_store,
                     )
@@ -1565,7 +1640,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(self.workspace, True, audit_context, change_store=self.change_store),
+                self.llm, build_workspace_tools(
+                        self.workspace, True, audit_context, change_store=self.change_store,
+                        session_store=self.session_store, referenced_sessions=self.referenced_sessions,
+                    ),
                 work_mode=work_mode, language=language, access_mode=effective_access,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
@@ -1614,11 +1692,19 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 class SimulatedStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
 
-    def __init__(self, settings: BackendSettings, workspace: Workspace):
+    def __init__(self, settings: BackendSettings, workspace: Workspace, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None):
         self.settings = settings
         self.workspace = workspace
 
     async def stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AsyncGenerator[dict[str, Any], None]:
+        async for event in self._stream(messages, session_id, language, work_mode, access_mode):
+            yield event
+
+    async def stream_rerun(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AsyncGenerator[dict[str, Any], None]:
+        async for event in self._stream(messages, session_id, language, work_mode, access_mode):
+            yield event
+
+    async def _stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AsyncGenerator[dict[str, Any], None]:
         user_message = messages[-1]["content"] if messages else ""
         if language == "zh":
             content = (
@@ -1639,10 +1725,11 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
 
 class AgentRuntimeRegistry:
-    def __init__(self, settings: BackendSettings):
+    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None):
         from langgraph.checkpoint.sqlite import SqliteSaver
 
         self.settings = settings
+        self.session_store = session_store
         self.default_workspace = Workspace(settings.workspace_dir, settings.data_dir / TOOL_AUDIT_FILENAME)
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
@@ -1692,34 +1779,34 @@ class AgentRuntimeRegistry:
     def _workspace_or_default(self, workspace: Workspace | None = None) -> Workspace:
         return workspace or self.default_workspace
 
-    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None) -> AgentRuntime:
+    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None) -> AgentRuntime:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions)
         if self.settings.agent_provider == "simulated":
-            return SimulatedSingleAgentRuntime(self.settings, selected_workspace)
+            return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
 
-    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None) -> AgentRuntime:
+    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None) -> AgentRuntime:
         if mode == "single":
-            return self._create_single_agent(provider_id, model, workspace)
+            return self._create_single_agent(provider_id, model, workspace, referenced_sessions)
         raise RuntimeError(f"Unsupported agent mode: {mode}")
 
-    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None) -> AgentStreamRuntime:
+    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None) -> AgentStreamRuntime:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if not provider and self.settings.agent_provider == "openai":
             provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
         if not provider:
             if self.settings.agent_provider == "simulated":
-                return SimulatedStreamRuntime(self.settings, selected_workspace)
+                return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
@@ -1737,7 +1824,8 @@ class AgentRuntimeRegistry:
         if workspace_path:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
-        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace)
+        referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
+        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions)
         async for event in runtime.resume_interrupt(approval, decisions):
             yield event
 
@@ -1749,15 +1837,16 @@ class AgentRuntimeRegistry:
         if workspace_path:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
-        return self.get_stream_runtime("single", provider_id or None, model or None, workspace)
+        referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
+        return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions)
 
     async def rerun_stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
-        provider_id: str | None = None, model: str | None = None,
+        provider_id: str | None = None, model: str | None = None, referenced_sessions: set[str] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Reset the session checkpoint and re-run the agent from full history."""
         self.forget_runtime_checkpoint(session_id)
-        context = {"provider_id": provider_id or "", "model": model or ""}
+        context = {"provider_id": provider_id or "", "model": model or "", "referenced_sessions": list(referenced_sessions or [])}
         runtime = self._stream_runtime_from_context(context)
         async for event in runtime.stream_rerun(messages, session_id, language, work_mode, access_mode):
             yield event

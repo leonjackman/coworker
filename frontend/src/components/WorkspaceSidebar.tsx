@@ -1,4 +1,4 @@
-import { ArrowRight, ChevronDown, ChevronRight, ChevronUp, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -39,6 +39,18 @@ interface SessionRowProps {
 }
 
 function SessionRow({ session, active, onOpen, onDelete }: SessionRowProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyId = async () => {
+    try {
+      await navigator.clipboard.writeText(session.id);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard unavailable */
+    }
+  };
+
   return (
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
@@ -53,6 +65,10 @@ function SessionRow({ session, active, onOpen, onDelete }: SessionRowProps) {
           <DropdownMenuItem onClick={() => onOpen(session.id)}>
             <FolderOpen size={14} />
             {t('sidebar.session_open')}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => void handleCopyId()}>
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+            {copied ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id')}
           </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onClick={() => onDelete(session.id)}>
             <Trash2 size={14} />

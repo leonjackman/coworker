@@ -28,6 +28,7 @@ class SessionMessage:
     model: str = ""
     attachments: list[dict[str, Any]] = field(default_factory=list)
     parts: list[dict[str, Any]] = field(default_factory=list)
+    references: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -184,6 +185,7 @@ class SessionStore:
         model: str = "",
         attachments: list[dict[str, Any]] | None = None,
         parts: list[dict[str, Any]] | None = None,
+        references: list[dict[str, Any]] | None = None,
     ) -> Session:
         session = self.require(session_id)
         session.messages.append(
@@ -197,6 +199,7 @@ class SessionStore:
                 model=model,
                 attachments=attachments or [],
                 parts=parts or [],
+                references=references or [],
             )
         )
         if role == "user" and session.title == "新会话":
