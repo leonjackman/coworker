@@ -63,6 +63,8 @@ export function WorkspaceTitlebar({
 }: WorkspaceTitlebarProps) {
   const statusText = status === 'ready' ? t('common.ready') : status === 'connecting' ? t('common.connecting') : t('common.offline');
   const title = titleForView(activeView, sessionTitle);
+  const displayProject = truncate(projectName, 12);
+  const displayTitle = truncate(title, 15);
 
   return (
     <header className={`workspace-titlebar ${isMacInset ? 'workspace-titlebar--mac-inset' : ''}`}>
@@ -84,9 +86,9 @@ export function WorkspaceTitlebar({
 
       <div className="workspace-titlebar__center">
         <div className="workspace-titlebar__title">
-          <span>{projectName}</span>
-          <span aria-hidden="true">/</span>
-          <strong>{title}</strong>
+          <span title={projectName}>{displayProject}</span>
+          <span className="workspace-titlebar__sep" aria-hidden="true">/</span>
+          <strong title={title}>{displayTitle}</strong>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -175,4 +177,8 @@ function titleForView(activeView: AppView, sessionTitle: string): string {
   if (activeView === 'providers') return t('providers.title');
   if (activeView === 'settings') return t('settings.title');
   return sessionTitle.trim() || t('sidebar.new_chat');
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
