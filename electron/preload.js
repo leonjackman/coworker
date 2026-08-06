@@ -29,6 +29,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     });
   },
   listProviders: () => ipcRenderer.invoke('list-providers'),
+  goalStatus: (sessionId) => ipcRenderer.invoke('goal-status', sessionId),
+  goalPause: (sessionId) => ipcRenderer.invoke('goal-pause', sessionId),
+  goalEdit: (payload) => ipcRenderer.invoke('goal-edit', payload),
+  goalDelete: (sessionId) => ipcRenderer.invoke('goal-delete', sessionId),
+  goalResume: (requestId, sessionId, onEvent) => {
+    const listener = (_event, data) => {
+      if (data.requestId !== requestId) return;
+      onEvent(data.event);
+    };
+    ipcRenderer.on('chat-stream-event', listener);
+    return ipcRenderer.invoke('start-goal-resume', { requestId, sessionId }).finally(() => {
+      ipcRenderer.removeListener('chat-stream-event', listener);
+    });
+  },
   createProvider: (payload) => ipcRenderer.invoke('create-provider', payload),
   updateProvider: (providerId, params) => ipcRenderer.invoke('update-provider', { provider_id: providerId, params }),
   deleteProvider: (providerId) => ipcRenderer.invoke('delete-provider', providerId),

@@ -78,7 +78,7 @@ interface ChatInputProps {
   onCreateWorkspace?: () => void;
 }
 
-const SLASH_COMMANDS = ["/help", "/new", "/clear", "/providers", "/settings"];
+const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/settings"];
 const MAX_ATTACHMENT_CHARS = 120_000;
 
 const SESSION_ID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;

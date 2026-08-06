@@ -30,6 +30,7 @@ import type {
   WorkspaceFileResponse,
   WorkspaceTreeResponse,
   WorkspaceBranchResponse,
+  GoalStatusResponse,
 } from './types';
 
 export type StreamEventCallback = (event: StreamEvent) => void;
@@ -84,6 +85,11 @@ declare global {
         onEvent: StreamEventCallback,
         options?: { work_mode?: string; autonomy?: string },
       ) => Promise<void>;
+      goalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
+      goalPause: (sessionId: string) => Promise<{ status: string }>;
+      goalEdit: (payload: { session_id: string; goal: string }) => Promise<{ status: string }>;
+      goalDelete: (sessionId: string) => Promise<{ status: string }>;
+      goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
     };
   }
 }

@@ -42,6 +42,10 @@ class Session:
     project_id: str = ""
     work_mode: str = "build"
     autonomy: str = "guarded"
+    goal_text: str = ""
+    goal_done: bool = False
+    goal_paused: bool = False
+    goal_todos: list[dict[str, Any]] = field(default_factory=list)
     title_auto: bool = False
     messages: list[SessionMessage] = field(default_factory=list)
 
@@ -60,6 +64,10 @@ class Session:
             project_id=str(payload.get("project_id", "")),
             work_mode=str(payload.get("work_mode", "build")),
             autonomy=str(autonomy),
+            goal_text=str(payload.get("goal_text", "")),
+            goal_done=bool(payload.get("goal_done", False)),
+            goal_paused=bool(payload.get("goal_paused", False)),
+            goal_todos=[dict(item) for item in payload.get("goal_todos", []) if isinstance(item, dict)],
             title_auto=bool(payload.get("title_auto", False)),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
@@ -76,6 +84,10 @@ class Session:
             "project_id": self.project_id,
             "work_mode": self.work_mode,
             "autonomy": self.autonomy,
+            "goal_text": self.goal_text,
+            "goal_done": self.goal_done,
+            "goal_paused": self.goal_paused,
+            "goal_todos": self.goal_todos,
             "message_count": len(self.messages),
         }
 
@@ -88,6 +100,10 @@ class Session:
             "project_id": self.project_id,
             "work_mode": self.work_mode,
             "autonomy": self.autonomy,
+            "goal_text": self.goal_text,
+            "goal_done": self.goal_done,
+            "goal_paused": self.goal_paused,
+            "goal_todos": self.goal_todos,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -149,6 +165,27 @@ class SessionStore:
         session = self.require(session_id)
         session.work_mode = work_mode
         session.autonomy = autonomy
+        self.save(session)
+        return session
+
+    def update_goal(
+        self,
+        session_id: str,
+        *,
+        goal_text: str | None = None,
+        goal_done: bool | None = None,
+        goal_paused: bool | None = None,
+        goal_todos: list[dict[str, Any]] | None = None,
+    ) -> Session:
+        session = self.require(session_id)
+        if goal_text is not None:
+            session.goal_text = goal_text
+        if goal_done is not None:
+            session.goal_done = goal_done
+        if goal_paused is not None:
+            session.goal_paused = goal_paused
+        if goal_todos is not None:
+            session.goal_todos = goal_todos
         self.save(session)
         return session
 

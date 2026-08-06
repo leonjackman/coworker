@@ -178,6 +178,8 @@ export interface ChatRequest {
   work_mode?: WorkMode;
   autonomy?: Autonomy;
   access_mode?: 'default' | 'full';
+  goal_mode?: boolean;
+  goal_text?: string;
   provider_id?: string;
   model?: string;
   project_id?: string;
@@ -502,4 +504,31 @@ export type StreamEvent =
       session_id?: string;
     }
   | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
-  | { type: 'error'; error: string; session_id?: string };
+  | { type: 'error'; error: string; session_id?: string }
+  | { type: 'goal_start'; goal: string; session_id?: string }
+  | { type: 'goal_round'; round: number; goal: string; status?: string }
+  | { type: 'goal_checkpoint'; achieved: boolean; progress?: string; verification?: string }
+  | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number }
+  | { type: 'goal_paused'; goal?: string; round?: number }
+  | { type: 'todos'; todos: GoalTodo[] };
+
+export interface GoalTodo {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+export interface GoalState {
+  goalText: string;
+  done: boolean;
+  paused: boolean;
+  todos: GoalTodo[];
+  running: boolean;
+  round: number;
+  progress: string;
+}
+
+export interface GoalStatusResponse {
+  status: string;
+  session_id: string;
+  goal: GoalState;
+}

@@ -31,6 +31,7 @@ import type {
   WorkspaceFileResponse,
   WorkspaceTreeResponse,
   WorkspaceBranchResponse,
+  GoalStatusResponse,
 } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_COWORKER_BACKEND_URL || 'http://localhost:9527';
@@ -109,6 +110,11 @@ export interface ChatService {
     onEvent: StreamEventCallback,
     options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
   ) => Promise<void>;
+  getGoalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
+  pauseGoal: (sessionId: string) => Promise<{ status: string }>;
+  editGoal: (sessionId: string, goal: string) => Promise<{ status: string }>;
+  deleteGoal: (sessionId: string) => Promise<{ status: string }>;
+  resumeGoal: (sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
 }
 
 class ElectronChatService implements ChatService {
@@ -317,6 +323,31 @@ class ElectronChatService implements ChatService {
     } finally {
       detachAbortListener();
     }
+  }
+
+  async getGoalStatus(sessionId: string): Promise<GoalStatusResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalStatus(sessionId);
+  }
+
+  async pauseGoal(sessionId: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalPause(sessionId);
+  }
+
+  async editGoal(sessionId: string, goal: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalEdit({ session_id: sessionId, goal });
+  }
+
+  async deleteGoal(sessionId: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalDelete(sessionId);
+  }
+
+  async resumeGoal(sessionId: string, onEvent: StreamEventCallback): Promise<void> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent);
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -624,6 +655,38 @@ class HttpChatService implements ChatService {
     if (options?.workMode) payload.work_mode = options.workMode;
     if (options?.autonomy) payload.autonomy = options.autonomy;
     await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, payload, onEvent, options?.signal);
+  }
+
+  async getGoalStatus(sessionId: string): Promise<GoalStatusResponse> {
+    return this.request<GoalStatusResponse>(`/goal/status?session_id=${encodeURIComponent(sessionId)}`);
+  }
+
+  async pauseGoal(sessionId: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>('/goal/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  async editGoal(sessionId: string, goal: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>('/goal/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, goal }),
+    });
+  }
+
+  async deleteGoal(sessionId: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>('/goal/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  async resumeGoal(sessionId: string, onEvent: StreamEventCallback): Promise<void> {
+    await this.streamPost('/goal/resume', { session_id: sessionId }, onEvent);
   }
 
   private async streamPost(path: string, payload: Record<string, unknown>, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {

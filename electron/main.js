@@ -681,6 +681,66 @@ ipcMain.handle('resolve-command-approval', async (event, payload) => {
   });
 });
 
+ipcMain.handle('goal-status', async (event, sessionId) => {
+  return requestBackend(`/goal/status?session_id=${encodeURIComponent(sessionId || '')}`);
+});
+
+ipcMain.handle('goal-pause', async (event, sessionId) => {
+  return requestBackend('/goal/pause', 'POST', { session_id: sessionId });
+});
+
+ipcMain.handle('goal-edit', async (event, payload) => {
+  return requestBackend('/goal/edit', 'POST', { session_id: payload?.session_id || '', goal: payload?.goal || '' });
+});
+
+ipcMain.handle('goal-delete', async (event, sessionId) => {
+  return requestBackend('/goal/delete', 'POST', { session_id: sessionId });
+});
+
+ipcMain.handle('start-goal-resume', async (event, { requestId, sessionId }) => {
+  const data = JSON.stringify({ session_id: sessionId });
+  const options = {
+    hostname: BACKEND_HOST,
+    port: BACKEND_PORT,
+    path: '/goal/resume',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(data),
+    },
+  };
+  const sender = event.sender;
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      res.setEncoding('utf8');
+      let buffer = '';
+      res.on('data', (chunk) => {
+        buffer += chunk;
+        let sepIndex;
+        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sepIndex);
+          buffer = buffer.slice(sepIndex + 2);
+          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
+          if (dataLine === undefined) continue;
+          let payload;
+          try {
+            payload = JSON.parse(dataLine.slice(5).trim());
+          } catch {
+            continue;
+          }
+          sender.send('chat-stream-event', { requestId, event: payload });
+        }
+      });
+      res.on('end', () => resolve({ ok: true }));
+      res.on('error', (err) => reject(err));
+    });
+    req.on('error', (err) => reject(err));
+    req.write(data);
+    req.end();
+  });
+});
+
+
 ipcMain.handle('list-providers', async () => {
   return requestBackend('/providers');
 });

@@ -3,6 +3,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any, AsyncGenerator, Iterable, Literal, TypedDict
 from typing_extensions import NotRequired
 
 from pydantic import BaseModel, Field
-from langchain_core.messages import AIMessageChunk, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, Runtime
 
@@ -60,6 +61,10 @@ class CoworkerAgentState(AgentState[Any]):
     language: NotRequired[str]
     phase: NotRequired[str]
     autonomy: NotRequired[str]
+    goal_mode: NotRequired[bool]
+    goal_text: NotRequired[str]
+    goal_done: NotRequired[bool]
+    todos: NotRequired[list[Any]]
 
 
 @dataclass(frozen=True)
@@ -548,6 +553,15 @@ def command_approval_middleware(
             return False
         return normalize_autonomy(state.get("autonomy")) == "supervised"
 
+    def needs_ask_user(req: Any) -> bool:
+        # In fully-autonomous execution the agent must not interrupt the user.
+        # The tool is still registered so a stray call resolves cleanly, but it
+        # must not raise an HITL interrupt here.
+        state = req.state
+        if normalize_phase(state.get("phase"), state.get("work_mode")) == "execute" and normalize_autonomy(state.get("autonomy")) == "autonomous":
+            return False
+        return True
+
     write_configs: dict[str, Any] = {}
     for tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
         write_configs[tool_name] = {
@@ -567,6 +581,7 @@ def command_approval_middleware(
                 "ask_user": {
                     "allowed_decisions": ["respond", "reject"],
                     "description": "Coworker asks the user a question that needs an answer.",
+                    "when": needs_ask_user,
                 },
             }
         )
@@ -1145,12 +1160,10 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     single prompt source (fixing the previous double-injection).
     """
 
-    def _overrides(self, request: Any) -> dict[str, Any]:
-        state = request.state
+    def _allowed_tools(self, state: CoworkerAgentState) -> set[str]:
         work_mode = normalize_work_mode(state.get("work_mode"))
         phase = normalize_phase(state.get("phase"), work_mode)
         autonomy = normalize_autonomy(state.get("autonomy"))
-
         allowed = set(_READ_ONLY_TOOLS)
         if phase == "discuss":
             allowed |= _PLAN_TOOLS
@@ -1158,9 +1171,17 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             allowed |= _CHANGE_TOOL_NAMES | _EXEC_TOOLS
             if autonomy != "autonomous":
                 allowed |= {"ask_user"}
+        if state.get("goal_mode"):
+            allowed |= {"finalize_goal", "write_todos"}
+        return allowed
 
+    def _overrides(self, request: Any) -> dict[str, Any]:
+        state = request.state
+        allowed = self._allowed_tools(state)
         tools = [tool for tool in request.tools if getattr(tool, "name", "") in allowed]
         language = normalize_language(state.get("language"))
+        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
+        autonomy = normalize_autonomy(state.get("autonomy"))
         return {
             "tools": tools,
             "system_message": SystemMessage(phase_system_prompt(language, phase, autonomy)),
@@ -1182,27 +1203,158 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         from langchain_core.messages import ToolMessage
         tool_name = self._tool_name(request)
         return ToolMessage(
-            content=f"Tool '{tool_name}' is not available in the current planning phase. Call submit_plan to present your implementation plan for approval first.",
+            content=f"Tool '{tool_name}' is not available in the current phase/autonomy. It was skipped.",
             tool_call_id=request.tool_call.get("id", "unknown"),
             status="error",
         )
 
-    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
-        state = request.state
-        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
+    def _outside_scope(self, request: Any) -> bool:
         tool_name = self._tool_name(request)
-        # Defense in depth: a write/exec tool must never run outside execute.
-        if phase != "execute" and tool_name in (_CHANGE_TOOL_NAMES | _EXEC_TOOLS):
+        if not tool_name:
+            return False
+        return tool_name not in self._allowed_tools(request.state)
+
+    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+        # Defense in depth: a tool call that the current phase/autonomy does not
+        # allow must never run. Resolve it with an error ToolMessage so the call
+        # is closed (avoids a dangling tool_call without a ToolMessage in the
+        # checkpoint history, which providers reject on the next turn).
+        if self._outside_scope(request):
             return self._blocked_tool_message(request)
         return handler(request)
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
-        state = request.state
-        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
-        tool_name = self._tool_name(request)
-        if phase != "execute" and tool_name in (_CHANGE_TOOL_NAMES | _EXEC_TOOLS):
+        if self._outside_scope(request):
             return self._blocked_tool_message(request)
         return await handler(request)
+
+
+# ---------------------------------------------------------------------------
+# GoalModeMiddleware – autonomous /goal loop (Codex Goal mode).
+# ---------------------------------------------------------------------------
+
+GOAL_MARKER = "[CW-GOAL]"
+
+
+class FinalizeGoalArgs(BaseModel):
+    achieved: bool = Field(description="True only when the goal is fully achieved and verified.")
+    progress: str = Field(default="", description="1-2 sentence status of the current round.")
+    verification: str = Field(default="", description="Evidence (tests/commands that passed) when achieved=True.")
+
+
+def _goal_tools() -> list[Any]:
+    from langchain_core.tools import tool
+
+    @tool(args_schema=FinalizeGoalArgs)
+    def finalize_goal(achieved: bool, progress: str = "", verification: str = "") -> str:
+        """Declare the current goal round complete.
+
+        Call ``finalize_goal(achieved=True, verification=...)`` ONLY when the goal
+        is fully achieved and verified (tests/checks passed). Call
+        ``finalize_goal(achieved=False, progress=...)`` after finishing a work chunk
+        when more work remains — the system continues the goal automatically.
+        Do NOT give a final answer without calling this tool first.
+        """
+        return json.dumps(
+            {"achieved": bool(achieved), "progress": str(progress)[:500], "verification": str(verification)[:500]},
+            ensure_ascii=False,
+        )
+
+    return [finalize_goal]
+
+
+def goal_system_prompt(language: Language, goal_text: str, autonomy: Autonomy = "autonomous") -> str:
+    lang_line = f"Reply in {language_name(language)}."
+    if autonomy == "autonomous":
+        mode_line = (
+            "You are working toward a persistent goal in fully autonomous mode: do not "
+            "ask the user anything, make reasonable decisions and keep working."
+        )
+    elif autonomy == "supervised":
+        mode_line = (
+            "You are working toward a persistent goal in supervised mode: each write or "
+            "command may require the user's approval before it runs. Ask for approval only "
+            "when needed."
+        )
+    else:
+        mode_line = (
+            "You are working toward a persistent goal in guarded mode: work freely inside "
+            "the workspace. You may call ask_user only when you are genuinely blocked and "
+            "need a decision; otherwise proceed autonomously."
+        )
+    return (
+        f"{lang_line}\n"
+        f"{mode_line}\n"
+        f"GOAL: {goal_text}\n\n"
+        "Work continuously toward the goal.\n"
+        "1. Break the work into concrete todos with `write_todos`, marking each "
+        "in_progress/completed as you go.\n"
+        "2. Research, edit files and run workspace commands. Use `run_command` to run "
+        "tests/checks that prove real progress.\n"
+        "3. After a work chunk, if more remains, call "
+        "`finalize_goal(achieved=false, progress=<1-2 sentence status>)` — the system "
+        "starts the next round automatically.\n"
+        "4. When the goal is FULLY achieved and verified, you MUST call "
+        "`finalize_goal(achieved=true, verification=<evidence: tests/commands that passed>)`.\n"
+        "5. CRITICAL: A plain-text answer does NOT complete the goal. The ONLY way to "
+        "finish is to call `finalize_goal(achieved=true, ...)`. Do NOT stop with a "
+        "text summary before calling it. If you are truly blocked, call "
+        "`finalize_goal(achieved=false, progress=<blocker>)`."
+    )
+
+
+class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Autonomous goal loop (Codex ``/goal``).
+
+    * Injects the goal system prompt and exposes ``finalize_goal``.
+    * Guards against premature conclusions: ``wrap_model_call`` re-invokes the
+      model (up to ``MAX_FORCE`` times) with a continuation nudge whenever it
+      returns plain text without having called ``finalize_goal`` this round, so
+      the loop keeps working instead of stopping early.
+    """
+
+    MAX_FORCE = 3
+
+    def __init__(self, language: Language = "en"):
+        self.language = language
+        self._finalize_tool = _goal_tools()[0]
+
+    def _active(self, state: CoworkerAgentState) -> bool:
+        return bool(state.get("goal_mode"))
+
+    def _finalize_called(self, state: CoworkerAgentState) -> bool:
+        from langchain_core.messages import AIMessage, ToolMessage
+        finalized: set[str] = set()
+        for msg in state.get("messages", []):
+            if isinstance(msg, AIMessage):
+                for tc in getattr(msg, "tool_calls", None) or []:
+                    if tc.get("name") == "finalize_goal" and tc.get("id"):
+                        finalized.add(tc["id"])
+        for msg in state.get("messages", []):
+            if isinstance(msg, ToolMessage) and getattr(msg, "tool_call_id", None) in finalized:
+                return True
+        return False
+
+    def _overrides(self, request: Any) -> dict[str, Any]:
+        tools = list(request.tools)
+        if not any(getattr(t, "name", "") == "finalize_goal" for t in tools):
+            tools.append(self._finalize_tool)
+        goal_text = str(request.state.get("goal_text") or "")
+        autonomy = normalize_autonomy(request.state.get("autonomy"))
+        return {
+            "tools": tools,
+            "system_message": SystemMessage(goal_system_prompt(self.language, goal_text, autonomy)),
+        }
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        if not self._active(request.state):
+            return handler(request)
+        return handler(request.override(**self._overrides(request)))
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        if not self._active(request.state):
+            return await handler(request)
+        return await handler(request.override(**self._overrides(request)))
 
 
 # ---------------------------------------------------------------------------
@@ -1320,6 +1472,7 @@ def build_coworker_agent_graph(
     autonomy: Autonomy = "guarded",
     checkpointer: Any | None = None,
     approval_store: CommandApprovalStore | None = None,
+    goal_mode: bool = False,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -1327,6 +1480,10 @@ def build_coworker_agent_graph(
 
     * ``PhaseToolGateMiddleware`` filters the tool set each model call based on
       the current ``phase``/``autonomy`` (physical enforcement, not prompt).
+    * ``GoalModeMiddleware`` drives the autonomous /goal loop when ``goal_mode``
+      is active (goal prompt + finalize_goal/continue_goal + premature-end guard).
+    * ``TodoListMiddleware`` (goal mode) exposes ``write_todos`` so the agent can
+      break the goal into a visible task list.
     * ``PlanApprovalMiddleware`` gates ``submit_plan`` while ``phase ==
       "discuss"`` and routes the approved execution autonomy.
     * ``HumanInTheLoopMiddleware`` (always mounted) interrupts commands/writes
@@ -1338,9 +1495,17 @@ def build_coworker_agent_graph(
         NormalizeMessagesMiddleware(),
         ToolCallCleanerMiddleware(),
         PhaseToolGateMiddleware(),
-        PlanApprovalMiddleware(language),
-        *command_approval_middleware(approval_store),
+        GoalModeMiddleware(language),
     ]
+    if goal_mode:
+        from langchain.agents.middleware.todo import TodoListMiddleware
+
+        middleware.append(TodoListMiddleware())
+        # Register the goal-completion tool in the graph's tool registry so the
+        # tool node can execute it (the middleware also exposes it to the model).
+        tools = [*tools, _goal_tools()[0]]
+    middleware.append(PlanApprovalMiddleware(language))
+    middleware.extend(command_approval_middleware(approval_store))
 
     system_prompt = (
         f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
@@ -1512,6 +1677,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
     async def _stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool,
+        goal_mode: bool = False, goal_text: str = "", goal_continue: bool = False,
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
@@ -1526,7 +1692,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
         yield {"type": "stage", "name": "executing", "status": "running"}
 
-        prepared_messages = prepare_agent_messages(messages)
+        if goal_continue:
+            # Round 2+ of a goal: continue the thread from the checkpoint without
+            # adding a new user message.
+            prepared_messages = []
+        else:
+            prepared_messages = prepare_agent_messages(messages)
         turn_index = self._next_turn_index(session_id)
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
@@ -1537,6 +1708,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
+                goal_mode=goal_mode,
             )
 
             inputs = {
@@ -1546,6 +1718,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 "phase": normalize_phase(None, work_mode),
                 "autonomy": autonomy,
             }
+            if goal_mode:
+                inputs["goal_mode"] = True
+                inputs["goal_text"] = goal_text
             config = agent_run_config(
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
                 language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
@@ -1582,6 +1757,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                     parts.append({"type": "plan", "content": str(event.get("plan") or "")})
                                 yield event
                             return
+                        # write_todos updates the todo list via a Command state update.
+                        for node_update in chunk.values():
+                            if isinstance(node_update, dict) and "todos" in node_update:
+                                yield {"type": "todos", "todos": node_update.get("todos") or []}
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
                 raise
@@ -1592,6 +1771,88 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts}
+
+    async def goal_stream(
+        self,
+        messages: list[dict[str, Any]],
+        session_id: str,
+        language: Language,
+        work_mode: WorkMode,
+        autonomy: Autonomy,
+        goal_text: str = "",
+        goal_continue_first: bool = False,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Autonomous /goal loop (Codex Goal mode): rounds until the agent calls
+        ``finalize_goal(achieved=True)`` or the goal is paused.
+
+        Each round is one agent turn (model → tools → … → finalize_goal or a
+        status). Pause is honoured at round boundaries: the current round finishes,
+        then the loop stops; ``/goal/resume`` re-enters with ``goal_continue_first``.
+        """
+        if self.session_store is not None:
+            try:
+                session_state = self.session_store.require(session_id)
+                goal_text = str(session_state.goal_text or goal_text)
+                if session_state.goal_done:
+                    # Already achieved — nothing left to run.
+                    yield {"type": "goal_done", "round": 0, "goal": goal_text, "content": "", "already": True}
+                    return
+            except Exception:
+                pass
+        last_checkpoint: dict[str, Any] | None = None
+        last_todos: list[Any] = []
+        round_no = 0
+        yield {"type": "goal_start", "goal": goal_text, "session_id": session_id}
+        while True:
+            round_no += 1
+            is_first = round_no == 1
+            yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running"}
+            round_had_tools = False
+            async for event in self._stream(
+                messages if (is_first and not goal_continue_first) else [],
+                session_id, language, work_mode, autonomy, rerun=False,
+                goal_mode=True, goal_text=goal_text,
+                goal_continue=(not is_first or goal_continue_first),
+            ):
+                etype = event.get("type", "")
+                if etype == "goal_checkpoint":
+                    last_checkpoint = event
+                elif etype == "todos":
+                    last_todos = event.get("todos") or []
+                elif etype == "tool_start":
+                    round_had_tools = True
+                yield event
+            # Round boundary decision.
+            paused = False
+            if self.session_store is not None:
+                try:
+                    paused = bool(self.session_store.require(session_id).goal_paused)
+                except Exception:
+                    paused = False
+            achieved = bool(last_checkpoint and last_checkpoint.get("achieved"))
+            if self.session_store is not None:
+                try:
+                    self.session_store.update_goal(
+                        session_id, goal_done=achieved, goal_todos=list(last_todos or []),
+                    )
+                except Exception:
+                    pass
+            if achieved:
+                yield {
+                    "type": "goal_done", "round": round_no, "goal": goal_text,
+                    "content": str((last_checkpoint or {}).get("progress", "") or ""),
+                    "verification": str((last_checkpoint or {}).get("verification", "") or ""),
+                }
+                return
+            if paused:
+                yield {"type": "goal_paused", "round": round_no, "goal": goal_text}
+                return
+            if last_checkpoint is None and not round_had_tools:
+                # The agent concluded with plain text without calling finalize_goal
+                # and made no tool calls this round — it is stalling, not working.
+                # Stop the loop so it never runs away; the text is the answer.
+                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "stalled": True}
+                return
 
     def _handle_message_chunk(
         self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]], session_id: str = "",
@@ -1622,7 +1883,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 if not tc_id:
                     continue
 
-                if tc_name == "submit_plan":
+                if tc_name in ("submit_plan", "finalize_goal", "write_todos"):
+                    # submit_plan renders as a Plan block; finalize_goal/write_todos
+                    # are goal-loop controls (goal_checkpoint/todos events).
                     continue
 
                 if tc_id not in tool_state:
@@ -1644,11 +1907,28 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     events.append(part)
 
         elif isinstance(msg, ToolMessage):
-            if (getattr(msg, "name", "") or "") == "submit_plan":
+            msg_name = getattr(msg, "name", "") or ""
+            if msg_name == "submit_plan":
                 # submit_plan is rendered as a Plan block, not a tool card.
                 return events
             tc_id = getattr(msg, "tool_call_id", "") or ""
             content = getattr(msg, "content", "") or ""
+            if msg_name == "finalize_goal":
+                # Emit a goal-checkpoint event for the round orchestrator / UI.
+                try:
+                    checkpoint = json.loads(content) if content else {}
+                except (TypeError, ValueError):
+                    checkpoint = {}
+                events.append({
+                    "type": "goal_checkpoint",
+                    "achieved": bool(checkpoint.get("achieved", False)),
+                    "progress": str(checkpoint.get("progress", "") or "")[:500],
+                    "verification": str(checkpoint.get("verification", "") or "")[:500],
+                })
+                return events
+            if msg_name == "write_todos":
+                # Todo progress is streamed via the `todos` event; no tool card.
+                return events
             # The real outcome: HITL rejections/errors carry status "error",
             # only genuine completions are "success".
             tool_status = "success" if (getattr(msg, "status", "") or "success") == "success" else "error"

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput, extractSessionIds } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
+import { GoalCard } from './components/GoalCard';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
@@ -17,7 +18,7 @@ import { RollbackDialog } from './components/RollbackDialog';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -97,6 +98,7 @@ function createMessage(
 function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [goal, setGoal] = useState<GoalState>({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
   const [isThinking, setIsThinking] = useState(false);
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
@@ -244,7 +246,7 @@ function App() {
     }
   };
 
-  const sendMessage = async (override?: { message: string; projectId?: string }) => {
+  const sendMessage = async (override?: { message: string; projectId?: string; goalMode?: boolean; goalText?: string }) => {
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) return;
 
@@ -320,6 +322,7 @@ function App() {
     let localParts: MessagePart[] = [];
     let streamStartAt = Date.now();
     streamStartAtRef.current = streamStartAt;
+    let inGoal = false;
 
     const handleEvent = (event: StreamEvent) => {
       if (requestId !== requestSeqRef.current) return;
@@ -443,6 +446,18 @@ function App() {
           setSessionId(event.session_id);
           sessionIdRef.current = event.session_id;
         }
+        if (inGoal) {
+          // Per-round done: accumulate parts, keep the message running.
+          if (event.parts && event.parts.length > 0) {
+            localParts = mergeMessageParts(localParts, event.parts);
+          }
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+            ),
+          );
+          return;
+        }
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) {
           localParts = event.parts;
@@ -452,6 +467,40 @@ function App() {
           current.map((item) =>
             item.id === assistantMessageId
               ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() }
+              : item,
+          ),
+        );
+      } else if (event.type === 'goal_start') {
+        inGoal = true;
+        setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "" });
+      } else if (event.type === 'goal_round') {
+        setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
+      } else if (event.type === 'goal_checkpoint') {
+        setGoal((current) => ({
+          ...current,
+          progress: event.progress || current.progress,
+          ...(event.achieved ? { done: true } : {}),
+        }));
+      } else if (event.type === 'todos') {
+        setGoal((current) => ({ ...current, todos: event.todos }));
+      } else if (event.type === 'goal_done') {
+        setGoal((current) => ({ ...current, done: true, running: false, progress: event.content || current.progress }));
+        if (event.content) streamedContent = event.content;
+        localParts = settleRunningTools(localParts);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: streamedContent || '✓ 目标已完成', status: 'done', parts: [...localParts], streamEndAt: Date.now() }
+              : item,
+          ),
+        );
+      } else if (event.type === 'goal_paused') {
+        setGoal((current) => ({ ...current, paused: true, running: false }));
+        localParts = settleRunningTools(localParts);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId
+              ? { ...item, content: streamedContent || t('chat.goal_paused_message'), status: 'done', parts: [...localParts], streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -485,6 +534,7 @@ function App() {
           ...(requestReferences.length > 0 ? { referenced_sessions: requestReferences.map((reference) => reference.id) } : {}),
           ...(requestSessionId ? { session_id: requestSessionId } : {}),
           ...(requestProjectId ? { project_id: requestProjectId } : {}),
+          ...(override?.goalMode ? { goal_mode: true, goal_text: override.goalText || message } : {}),
         },
         handleEvent,
         controller.signal,
@@ -1301,6 +1351,26 @@ function App() {
       pendingProjectIdRef.current = undefined;
       setPendingRequests((current) => current.filter((item) => item.session_id !== sessionIdToOpen));
       void restorePendingForSession(sessionIdToOpen);
+      // 恢复持久化的目标状态（goal 卡片）
+      const sessionRecord = response.session as SessionDetailResponse['session'] & {
+        goal_text?: string;
+        goal_done?: boolean;
+        goal_paused?: boolean;
+        goal_todos?: GoalTodo[];
+      };
+      if (sessionRecord.goal_text) {
+        setGoal({
+          goalText: sessionRecord.goal_text,
+          done: Boolean(sessionRecord.goal_done),
+          paused: Boolean(sessionRecord.goal_paused),
+          todos: sessionRecord.goal_todos || [],
+          running: false,
+          round: 0,
+          progress: '',
+        });
+      } else {
+        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
+      }
       // 后台 resume 可能仍在运行：切回时首扫可能早于新审批创建，延迟重扫兜底。
       for (const delay of [5000, 15000]) {
         setTimeout(() => {
@@ -1402,6 +1472,16 @@ function App() {
   const handleSlashCommand = (message: string) => {
     const [command] = message.split(/\s+/);
     setInput('');
+    if (command === '/goal') {
+      const goalText = message.slice('/goal'.length).trim();
+      if (!goalText) {
+        setMessages((current) => [...current, createMessage('assistant', t('chat.goal_help_text'), { status: 'done' })]);
+        return;
+      }
+      setGoal({ goalText, done: false, paused: false, todos: [], running: true, round: 0, progress: "" });
+      void sendMessage({ message: goalText, goalMode: true, goalText });
+      return;
+    }
     if (command === '/clear') {
       setMessages([]);
       setAttachments([]);
@@ -1420,6 +1500,61 @@ function App() {
       return;
     }
     setMessages((current) => [...current, createMessage('assistant', t('chat.command_help_text'), { status: 'done' })]);
+  };
+
+  const pauseGoal = async () => {
+    if (!sessionIdRef.current) return;
+    try {
+      await chatService.pauseGoal(sessionIdRef.current);
+      setGoal((current) => ({ ...current, paused: true, running: false }));
+    } catch (error) {
+      console.error('Failed to pause goal:', error);
+    }
+  };
+
+  const resumeGoal = async () => {
+    const targetSessionId = sessionIdRef.current;
+    if (!targetSessionId) return;
+    try {
+      await chatService.resumeGoal(targetSessionId, handleGoalResumeEvent);
+    } catch (error) {
+      console.error('Failed to resume goal:', error);
+      setGoal((current) => ({ ...current, running: false }));
+    }
+  };
+
+  const saveGoalEdit = async (goalText: string) => {
+    if (!sessionIdRef.current) return;
+    try {
+      await chatService.editGoal(sessionIdRef.current, goalText);
+      setGoal((current) => ({ ...current, goalText }));
+    } catch (error) {
+      console.error('Failed to edit goal:', error);
+    }
+  };
+
+  const deleteGoal = async () => {
+    if (!sessionIdRef.current) return;
+    try {
+      await chatService.deleteGoal(sessionIdRef.current);
+      setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
+    } catch (error) {
+      console.error('Failed to delete goal:', error);
+    }
+  };
+
+  const handleGoalResumeEvent = (event: StreamEvent) => {
+    if (event.type === 'goal_start' || event.type === 'goal_round') {
+      setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
+    } else if (event.type === 'goal_checkpoint') {
+      setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
+    } else if (event.type === 'todos') {
+      setGoal((current) => ({ ...current, todos: event.todos }));
+    } else if (event.type === 'goal_done') {
+      setGoal((current) => ({ ...current, done: true, running: false, progress: event.content || current.progress }));
+    } else if (event.type === 'goal_paused') {
+      setGoal((current) => ({ ...current, paused: true, running: false }));
+    }
   };
 
   const changeSelectedModel = async (providerId: string) => {
@@ -1580,20 +1715,24 @@ function App() {
                     </>
                   )}
                   {!showFirstRunStart && !showProjectSessionList && (
-                    currentSessionPending.length > 0 ? (
-                      <div className="workspace-dock-area">
-                        <PendingDocks
-                          requests={currentSessionPending}
-                          onResolve={async (request, decision) => {
-                            await resolvePendingRequest(request, decision);
-                          }}
-                          onDismiss={(request) => {
-                            void resolvePendingRequest(request, { type: 'reject' });
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <ChatInput
+                    <div className="workspace-composer-slot">
+                      {goal.goalText && (
+                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onSaveEdit={saveGoalEdit} />
+                      )}
+                      {currentSessionPending.length > 0 ? (
+                        <div className="workspace-dock-area">
+                          <PendingDocks
+                            requests={currentSessionPending}
+                            onResolve={async (request, decision) => {
+                              await resolvePendingRequest(request, decision);
+                            }}
+                            onDismiss={(request) => {
+                              void resolvePendingRequest(request, { type: 'reject' });
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <ChatInput
                         value={editingMessage ? editDraft : input}
                         disabled={isThinking || runtimeStatus === 'connecting'}
                         isThinking={isThinking}
@@ -1625,7 +1764,8 @@ function App() {
                         onSelectWorkspace={selectDraftWorkspace}
                         onCreateWorkspace={createProject}
                       />
-                    )
+                      )}
+                    </div>
                   )}
                 </>
               ) : activeView === 'providers' ? (

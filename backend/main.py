@@ -122,6 +122,8 @@ class ChatRequest(BaseModel):
     work_mode: Optional[str] = None
     access_mode: Optional[str] = None
     autonomy: Optional[str] = None
+    goal_mode: Optional[bool] = None
+    goal_text: Optional[str] = None
     provider_id: Optional[str] = None
     model: Optional[str] = None
     project_id: Optional[str] = None
@@ -399,23 +401,58 @@ async def chat_stream(request: ChatStreamRequest):
                 pass
 
         try:
-            async for event in runtime.stream(messages, session_id, request.language, work_mode, autonomy):
+            goal_parts_accum: list[dict[str, Any]] = []
+            in_goal = bool(request.goal_mode)
+            if request.goal_mode:
+                goal_text = str(request.goal_text or request.message or "")
+                try:
+                    session_store.update_goal(session_id, goal_text=goal_text, goal_done=False, goal_paused=False, goal_todos=[])
+                except KeyError:
+                    pass
+                stream_iter = runtime.goal_stream(messages, session_id, request.language, work_mode, autonomy, goal_text=goal_text)
+            else:
+                stream_iter = runtime.stream(messages, session_id, request.language, work_mode, autonomy)
+            async for event in stream_iter:
                 event["session_id"] = session_id
                 etype = event.get("type")
                 if etype == "delta" and event.get("content"):
                     accumulated_content += event.get("content", "")
+                if etype == "todos":
+                    try:
+                        session_store.update_goal(session_id, goal_todos=event.get("todos") or [])
+                    except KeyError:
+                        pass
                 if etype == "done":
+                    if in_goal:
+                        for part in (event.get("parts") or []):
+                            goal_parts_accum.append(part)
+                    else:
+                        _persist_assistant(
+                            event.get("content", ""),
+                            event.get("mode"),
+                            event.get("provider"),
+                            event.get("model"),
+                            event.get("parts"),
+                        )
+                        try:
+                            session_store.update_modes(session_id, work_mode, autonomy)
+                        except KeyError:
+                            pass
+                        terminal_sent = True
+                elif etype == "goal_done":
                     _persist_assistant(
                         event.get("content", ""),
-                        event.get("mode"),
-                        event.get("provider"),
-                        event.get("model"),
-                        event.get("parts"),
+                        request.mode,
+                        "",
+                        request.model or "",
+                        _merge_goal_parts(goal_parts_accum),
                     )
                     try:
                         session_store.update_modes(session_id, work_mode, autonomy)
                     except KeyError:
                         pass
+                    terminal_sent = True
+                elif etype == "goal_paused":
                     terminal_sent = True
                 elif etype == "error":
                     terminal_sent = True
@@ -445,6 +482,115 @@ async def chat_stream(request: ChatStreamRequest):
                 except KeyError:
                     pass
                 yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id, 'content': accumulated_content, 'stream_end': True}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+class GoalPauseRequest(BaseModel):
+    session_id: str
+
+class GoalEditRequest(BaseModel):
+    session_id: str
+    goal: str
+
+@app.get("/goal/status")
+async def goal_status(session_id: str):
+    try:
+        session = session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "status": "ok",
+        "session_id": session_id,
+        "goal": {
+            "goal_text": session.goal_text,
+            "goal_done": session.goal_done,
+            "goal_paused": session.goal_paused,
+            "goal_todos": session.goal_todos,
+        },
+    }
+
+@app.post("/goal/pause")
+async def goal_pause(request: GoalPauseRequest):
+    try:
+        session_store.update_goal(request.session_id, goal_paused=True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "session_id": request.session_id, "goal_paused": True}
+
+@app.post("/goal/edit")
+async def goal_edit(request: GoalEditRequest):
+    try:
+        session_store.update_goal(request.session_id, goal_text=request.goal)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "session_id": request.session_id, "goal_text": request.goal}
+
+@app.post("/goal/delete")
+async def goal_delete(request: GoalPauseRequest):
+    try:
+        session_store.update_goal(request.session_id, goal_text="", goal_done=False, goal_paused=False, goal_todos=[])
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "session_id": request.session_id}
+
+@app.post("/goal/resume")
+async def goal_resume(request: GoalPauseRequest):
+    """Resume a paused goal: clear the pause flag and continue the autonomous
+    goal loop from the checkpoint (round 2+), streaming progress via SSE."""
+    try:
+        session = session_store.require(request.session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session_store.update_goal(request.session_id, goal_paused=False)
+    goal_text = session.goal_text
+    work_mode = normalize_work_mode(session.work_mode)
+    autonomy = normalize_autonomy(session.autonomy)
+    language = request_language_for_session(session)
+    references = []
+    referenced_ids: set[str] = set()
+    try:
+        resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
+        runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids)
+    except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    async def event_stream():
+        terminal_sent = False
+        goal_parts_accum: list[dict[str, Any]] = []
+        try:
+            async for event in runtime.goal_stream([], request.session_id, language, work_mode, autonomy, goal_text=goal_text, goal_continue_first=True):
+                event["session_id"] = request.session_id
+                etype = event.get("type")
+                if etype == "done":
+                    for part in (event.get("parts") or []):
+                        goal_parts_accum.append(part)
+                elif etype == "goal_done":
+                    try:
+                        session_store.update_goal(request.session_id, goal_done=True)
+                        session_store.append_message(
+                            request.session_id,
+                            role="assistant",
+                            content=str(event.get("content") or ""),
+                            mode="single",
+                            work_mode=work_mode,
+                            autonomy=autonomy,
+                            parts=_merge_goal_parts(goal_parts_accum),
+                        )
+                    except KeyError:
+                        pass
+                    terminal_sent = True
+                elif etype == "goal_paused":
+                    terminal_sent = True
+                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            yield f"data: {_json.dumps({'type': 'error', 'session_id': request.session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
+            return
+        if not terminal_sent:
+            yield f"data: {_json.dumps({'type': 'done', 'session_id': request.session_id, 'content': '', 'stream_end': True}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -996,6 +1142,12 @@ async def resolve_command_approval(request: CommandApprovalResolve):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _merge_goal_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge tool/reasoning/plan parts accumulated across goal rounds into one
+    final part list (tools deduped by id, newest wins)."""
+    return _merge_message_parts([], parts)
 
 
 def _merge_message_parts(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:

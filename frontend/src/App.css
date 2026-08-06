@@ -2036,12 +2036,149 @@ body.bottom-panel-resizing {
 }
 
 .composer {
-  grid-row: 4;
   position: relative;
   box-sizing: border-box;
   width: var(--bottom-card-width);
   min-width: 0;
   margin: 0 auto 20px;
+}
+
+.workspace-composer-slot {
+  grid-row: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 0;
+  max-height: 100%;
+  overflow: visible;
+  scrollbar-gutter: stable;
+}
+
+.goal-card {
+  box-sizing: border-box;
+  width: var(--bottom-card-width);
+  min-width: 0;
+  margin: 0 auto 12px;
+  max-height: 40vh;
+  overflow-y: auto;
+  border: 1px solid var(--material-border);
+  border-radius: 16px;
+  background: var(--material-panel-solid);
+  backdrop-filter: var(--material-blur);
+  box-shadow: 0 8px 24px -10px var(--material-shadow);
+}
+
+.goal-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--material-border);
+}
+
+.goal-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ring);
+}
+
+.goal-card[data-state='done'] .goal-card__status {
+  color: var(--success, #2e7d32);
+}
+
+.goal-card[data-state='paused'] .goal-card__status {
+  color: var(--muted-foreground);
+}
+
+.goal-card__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.goal-card__body {
+  padding: 10px 12px 12px;
+}
+
+.goal-card__text {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--foreground);
+  word-break: break-word;
+}
+
+.goal-card__todos-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0 4px;
+}
+
+.goal-card__todos-count {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.goal-card__toggle {
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+}
+
+.goal-card__toggle-open {
+  transform: rotate(180deg);
+}
+
+.goal-card__todos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.goal-card__todo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--foreground);
+  padding: 2px 0;
+}
+
+.goal-card__todo--completed {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+
+.goal-card__todo-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+  flex-shrink: 0;
+}
+
+.goal-card__todo--in_progress .goal-card__todo-dot {
+  background: var(--ring);
+}
+
+.goal-card__progress {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* 底部卡片共用外壳（composer / 提问 / 回答 / 批准共用）：
@@ -2352,7 +2489,7 @@ body.bottom-panel-resizing {
   left: 8px;
   right: 8px;
   bottom: calc(100% - 12px);
-  z-index: 1;
+  z-index: 100;
   display: grid;
   gap: 3px;
   padding: 6px;
@@ -3836,7 +3973,6 @@ body.bottom-panel-resizing {
 }
 
 .workspace-dock-area {
-  grid-row: 4;
   min-height: 0;
   max-height: 60vh;
   box-sizing: border-box;
