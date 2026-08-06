@@ -25,13 +25,14 @@ except ImportError:  # pragma: no cover - non-POSIX platforms (e.g. Windows)
     termios = None  # type: ignore[assignment]
     _PTY_AVAILABLE = False
 
-from coworker.agents import AgentMode, AgentRuntimeRegistry, Language, format_user_message, normalize_access_mode, normalize_work_mode
+from coworker.agents import AgentMode, AgentRuntimeRegistry, Language, format_user_message, normalize_autonomy, normalize_work_mode
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
 from coworker.sessions import SessionStore
-from coworker.workspace import COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, workspace_git_branch, workspace_git_diff
+from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
+from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
 
 app = FastAPI()
@@ -56,6 +57,12 @@ project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
+
+# Run-observation retention: shrink pre-policy stores to the current caps so
+# old approvals and append-only logs don't accumulate forever.
+command_approval_store.prune()
+trim_jsonl_file(tool_audit_path, MAX_TOOL_AUDIT_LINES)
+trim_jsonl_file(settings.data_dir / AGENT_TRACE_FILENAME, MAX_TRACE_LINES)
 
 
 class ApprovalEventBus:
@@ -114,6 +121,7 @@ class ChatRequest(BaseModel):
     language: Language = "zh"
     work_mode: Optional[str] = None
     access_mode: Optional[str] = None
+    autonomy: Optional[str] = None
     provider_id: Optional[str] = None
     model: Optional[str] = None
     project_id: Optional[str] = None
@@ -140,6 +148,19 @@ def _resolve_references(referenced_ids: list[str]) -> list[dict[str, Any]]:
         if session is not None:
             resolved.append({"id": session.id, "title": session.title})
     return resolved
+
+
+def resolve_request_autonomy(request) -> str:
+    """Effective autonomy for a chat request.
+
+    Prefers the explicit ``autonomy`` field and falls back to mapping the
+    legacy ``access_mode`` switch (default->guarded, full->autonomous).
+    """
+    if getattr(request, "autonomy", None):
+        return normalize_autonomy(request.autonomy)
+    from coworker.agents import autonomy_from_access
+
+    return autonomy_from_access(getattr(request, "access_mode", None))
 
 class ChatResponse(BaseModel):
     response: str
@@ -200,6 +221,7 @@ class CommandApprovalAction(BaseModel):
 class ApprovalDecisionPayload(BaseModel):
     type: str
     message: str = ""
+    autonomy: Optional[str] = None
 
 class CommandApprovalResolve(BaseModel):
     approval_id: str
@@ -235,7 +257,7 @@ async def chat(request: ChatRequest):
     created_session = None
     session_id = request.session_id
     work_mode = normalize_work_mode(request.work_mode)
-    access_mode = normalize_access_mode(request.access_mode)
+    autonomy = resolve_request_autonomy(request)
     references = _resolve_references(request.referenced_sessions)
     referenced_ids = {ref["id"] for ref in references}
     try:
@@ -247,7 +269,7 @@ async def chat(request: ChatRequest):
             created_session = session_store.new_session("", project_id=request.project_id or "")
             session_id = created_session.id
         runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
-        reply = runtime.run(format_user_message(request.message, request.attachments, references), session_id, request.language, work_mode, access_mode)
+        reply = runtime.run(format_user_message(request.message, request.attachments, references), session_id, request.language, work_mode, autonomy)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -260,6 +282,8 @@ async def chat(request: ChatRequest):
                 role="user",
                 content=request.message,
                 mode=request.mode,
+                work_mode=work_mode,
+                autonomy=autonomy,
                 attachments=request.attachments,
                 references=references,
             )
@@ -270,13 +294,15 @@ async def chat(request: ChatRequest):
                 mode=reply.mode,
                 provider=reply.provider,
                 model=request.model or "",
+                work_mode=work_mode,
+                autonomy=autonomy,
                 parts=reply.parts or [],
             )
         else:
             session = created_session or session_store.require(session_id)
             if created_session:
                 session_store.save(session)
-            session_store.append_message(session.id, role="user", content=request.message, mode=request.mode, attachments=request.attachments, references=references)
+            session_store.append_message(session.id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references)
             session_store.append_message(
                 session.id,
                 role="assistant",
@@ -284,11 +310,13 @@ async def chat(request: ChatRequest):
                 mode=reply.mode,
                 provider=reply.provider,
                 model=request.model or "",
+                work_mode=work_mode,
+                autonomy=autonomy,
                 parts=reply.parts or [],
             )
             session_id = session.id
         try:
-            session_store.update_modes(session_id, work_mode, access_mode)
+            session_store.update_modes(session_id, work_mode, autonomy)
         except KeyError:
             pass
     except KeyError:
@@ -312,7 +340,7 @@ async def chat_stream(request: ChatStreamRequest):
     if not request.session_id and not request.project_id:
         raise HTTPException(status_code=400, detail="project_id is required to start a new chat")
     work_mode = normalize_work_mode(request.work_mode)
-    access_mode = normalize_access_mode(request.access_mode)
+    autonomy = resolve_request_autonomy(request)
     references = _resolve_references(request.referenced_sessions)
     referenced_ids = {ref["id"] for ref in references}
     try:
@@ -341,7 +369,7 @@ async def chat_stream(request: ChatStreamRequest):
         session_id = session.id
 
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references)}
-    session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, attachments=request.attachments, references=references)
+    session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references)
     if runtime.owns_runtime_messages and agent_registry.has_runtime_checkpoint(session_id):
         messages = [user_message]
     else:
@@ -360,6 +388,8 @@ async def chat_stream(request: ChatStreamRequest):
                     mode=mode or request.mode,
                     provider=provider or "",
                     model=model or request.model or "",
+                    work_mode=work_mode,
+                    autonomy=autonomy,
                     parts=parts or [],
                 )
                 last = session.messages[-1] if session.messages else None
@@ -369,7 +399,7 @@ async def chat_stream(request: ChatStreamRequest):
                 pass
 
         try:
-            async for event in runtime.stream(messages, session_id, request.language, work_mode, access_mode):
+            async for event in runtime.stream(messages, session_id, request.language, work_mode, autonomy):
                 event["session_id"] = session_id
                 etype = event.get("type")
                 if etype == "delta" and event.get("content"):
@@ -383,7 +413,7 @@ async def chat_stream(request: ChatStreamRequest):
                         event.get("parts"),
                     )
                     try:
-                        session_store.update_modes(session_id, work_mode, access_mode)
+                        session_store.update_modes(session_id, work_mode, autonomy)
                     except KeyError:
                         pass
                     terminal_sent = True
@@ -398,7 +428,7 @@ async def chat_stream(request: ChatStreamRequest):
                 accumulated_content, request.mode, "", request.model or "", []
             ) if accumulated_content else None
             try:
-                session_store.update_modes(session_id, work_mode, access_mode)
+                session_store.update_modes(session_id, work_mode, autonomy)
             except KeyError:
                 pass
             terminal_sent = True
@@ -411,7 +441,7 @@ async def chat_stream(request: ChatStreamRequest):
             if not terminal_sent:
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
                 try:
-                    session_store.update_modes(session_id, work_mode, access_mode)
+                    session_store.update_modes(session_id, work_mode, autonomy)
                 except KeyError:
                     pass
                 yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id, 'content': accumulated_content, 'stream_end': True}, ensure_ascii=False)}\n\n"
@@ -518,6 +548,7 @@ class EditMessageRequest(BaseModel):
     content: str
     work_mode: Optional[str] = None
     access_mode: Optional[str] = None
+    autonomy: Optional[str] = None
 
 
 class RollbackRequest(BaseModel):
@@ -656,14 +687,14 @@ async def regenerate_message(session_id: str, message_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     work_mode = normalize_work_mode(session.work_mode)
-    access_mode = normalize_access_mode(session.access_mode)
+    autonomy = normalize_autonomy(session.autonomy)
     language = request_language_for_session(session)
     provider_id = _provider_id_for_model(provider_name, model)
 
     async def event_stream():
         try:
             async for event in agent_registry.rerun_stream(
-                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+                history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
             ):
                 event["session_id"] = session_id
                 if event.get("type") == "done":
@@ -675,6 +706,8 @@ async def regenerate_message(session_id: str, message_id: str):
                             mode="single",
                             provider=event.get("provider") or provider_name,
                             model=event.get("model") or model,
+                            work_mode=work_mode,
+                            autonomy=autonomy,
                             parts=event.get("parts") or [],
                         )
                         last = session.messages[-1] if session.messages else None
@@ -708,10 +741,17 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     work_mode = normalize_work_mode(request.work_mode or session.work_mode)
-    access_mode = normalize_access_mode(request.access_mode or session.access_mode)
-    if request.work_mode or request.access_mode:
+    if request.autonomy:
+        autonomy = normalize_autonomy(request.autonomy)
+    elif request.access_mode:
+        from coworker.agents import autonomy_from_access
+
+        autonomy = autonomy_from_access(request.access_mode)
+    else:
+        autonomy = normalize_autonomy(session.autonomy)
+    if request.work_mode or request.autonomy or request.access_mode:
         try:
-            session_store.update_modes(session_id, work_mode, access_mode)
+            session_store.update_modes(session_id, work_mode, autonomy)
         except KeyError:
             pass
     language = request_language_for_session(session)
@@ -720,7 +760,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     async def event_stream():
         try:
             async for event in agent_registry.rerun_stream(
-                history, session_id, language, work_mode, access_mode, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+                history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
             ):
                 event["session_id"] = session_id
                 if event.get("type") == "done":
@@ -732,6 +772,8 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                             mode="single",
                             provider=event.get("provider") or provider_name,
                             model=event.get("model") or model,
+                            work_mode=work_mode,
+                            autonomy=autonomy,
                             parts=event.get("parts") or [],
                         )
                         last = session.messages[-1] if session.messages else None
@@ -898,13 +940,23 @@ async def resolve_command_approval(request: CommandApprovalResolve):
             decision = {"type": "approve"}
             status = "approved"
         elif decision_type == "approve":
-            decision = {"type": "approve"}
+            # For plan approvals the decision also carries the chosen execution
+            # autonomy (supervised / guarded / autonomous) that routes the
+            # follow-up execution posture.
+            from coworker.agents import normalize_autonomy
+
+            autonomy = normalize_autonomy(request.decision.autonomy) if request.decision.autonomy else None
+            decision = {"type": "approve", **({"autonomy": autonomy} if autonomy else {})}
             status = "approved"
+        elif decision_type == "continue_discuss":
+            decision = {"type": "continue_discuss"}
+            status = "answered"
         elif decision_type == "respond":
             decision = {"type": "respond", "message": request.decision.message}
             status = "answered"
         elif decision_type == "regenerate":
-            decision = {"type": "regenerate"}
+            # Legacy regenerate semantics: keep planning (stay in discuss phase).
+            decision = {"type": "continue_discuss"}
             status = "denied"
         else:
             decision = {

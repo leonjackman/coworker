@@ -35,6 +35,11 @@ MAX_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_OUTPUT_CHARS = 12_000
 TOOL_AUDIT_FILENAME = "tool_audit.jsonl"
 COMMAND_APPROVAL_FILENAME = "command_approvals.json"
+# Retention policy for the run-observation stores: these grow unboundedly if
+# never pruned, so terminal-state approvals and the rolling JSONL logs are
+# capped at the most recent N entries.
+MAX_APPROVAL_HISTORY = 100
+MAX_TOOL_AUDIT_LINES = 100
 ALLOWED_COMMANDS = {
     "cat",
     "git",
@@ -81,7 +86,7 @@ class CommandApprovalStore:
                 return approval
 
         approval = {
-            "id": f"{digest[:12]}-{len(approvals) + 1}",
+            "id": self._unique_id(approvals, digest),
             "digest": digest,
             "status": "pending",
             "command": command,
@@ -94,6 +99,19 @@ class CommandApprovalStore:
         approvals.append(approval)
         self.save(approvals)
         return approval
+
+    @staticmethod
+    def _unique_id(approvals: list[dict[str, Any]], digest: str) -> str:
+        """Derive a stable-but-unique approval id from the digest, bumping the
+        numeric suffix until it no longer collides with an existing record."""
+        base = digest[:12]
+        existing = {str(item.get("id", "")) for item in approvals}
+        suffix = len(approvals) + 1
+        approval_id = f"{base}-{suffix}"
+        while approval_id in existing:
+            suffix += 1
+            approval_id = f"{base}-{suffix}"
+        return approval_id
 
     def request_runtime_interrupt(
         self,
@@ -185,10 +203,33 @@ class CommandApprovalStore:
         approvals = self.load_payload().get("approvals")
         return approvals if isinstance(approvals, list) else []
 
+    @staticmethod
+    def _prune_approvals(approvals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Retention policy: keep active approvals (pending/approved, needed for
+        resume) plus the most recent terminal-state records, capped at
+        ``MAX_APPROVAL_HISTORY`` total. The allowlist is separate and untouched.
+        """
+        active = [a for a in approvals if a.get("status") in ("pending", "approved")]
+        terminal = [a for a in approvals if a.get("status") not in ("pending", "approved")]
+        terminal.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
+        keep_terminal = terminal[: max(0, MAX_APPROVAL_HISTORY - len(active))]
+        return active + keep_terminal
+
     def save(self, approvals: list[dict[str, Any]]) -> None:
         payload = self.load_payload()
-        payload["approvals"] = approvals
+        payload["approvals"] = self._prune_approvals(approvals)
         self.save_payload(payload)
+
+    def prune(self) -> None:
+        """Shrink an existing (pre-policy) store to the retention cap. Safe to
+        call repeatedly: it only rewrites when the terminal history is over cap.
+        """
+        approvals = self.load()
+        pruned = self._prune_approvals(approvals)
+        if len(pruned) != len(approvals):
+            payload = self.load_payload()
+            payload["approvals"] = pruned
+            self.save_payload(payload)
 
     def allowlist(self) -> list[str]:
         allowlist = self.load_payload().get("allowlist")
@@ -461,6 +502,21 @@ class Workspace:
         approval_store: CommandApprovalStore | None = None,
         require_approval: bool = False,
     ) -> dict[str, Any]:
+        """Run an allowlisted command, optionally gated by a synchronous
+        approval check.
+
+        ``require_approval`` is a *synchronous* approval flow used only by the
+        bottom-panel manual terminal (``/workspace/command``): the caller
+        issues the command, and if no approved digest exists it returns an
+        ``approval_required`` payload the UI resolves via the same
+        ``CommandApprovalStore`` as the agent HITL flow.
+
+        The agent path does NOT use this flag — LangChain's
+        ``HumanInTheLoopMiddleware`` interrupts the graph *before* the tool
+        runs, so the command here always executes with
+        ``require_approval=False`` and a digested, already-approved store.
+        The two mechanisms intentionally share the one approval store.
+        """
         details: dict[str, Any] = {
             "command": self.redact_command(command) if isinstance(command, list) else command,
             "cwd": cwd,
@@ -749,6 +805,7 @@ class Workspace:
         except OSError:
             # Audit must not mask the tool's real outcome.
             return
+        trim_jsonl_file(self.audit_path, MAX_TOOL_AUDIT_LINES)
 
     @staticmethod
     def redact_command(command: list[str]) -> list[str]:
@@ -952,6 +1009,25 @@ def list_tool_audit_events(audit_path: Path, limit: int = 100) -> list[dict[str,
         if isinstance(event, dict):
             events.append(event)
     return list(reversed(events[-safe_limit:]))
+
+
+def trim_jsonl_file(path: Path, max_lines: int) -> None:
+    """Rolling retention for append-only JSONL logs: keep only the last
+    ``max_lines`` lines. Reads+rewrites only when over the cap, so steady-state
+    writes stay cheap."""
+    if max_lines <= 0:
+        return
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return
+    if len(lines) <= max_lines:
+        return
+    try:
+        path.write_text("\n".join(lines[-max_lines:]) + "\n", encoding="utf-8")
+    except OSError:
+        # Best-effort: retention must never break the active write path.
+        return
 
 
 GIT_MAX_FILES = 500

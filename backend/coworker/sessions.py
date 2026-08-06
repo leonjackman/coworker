@@ -26,6 +26,8 @@ class SessionMessage:
     mode: str = ""
     provider: str = ""
     model: str = ""
+    work_mode: str = ""
+    autonomy: str = ""
     attachments: list[dict[str, Any]] = field(default_factory=list)
     parts: list[dict[str, Any]] = field(default_factory=list)
     references: list[dict[str, Any]] = field(default_factory=list)
@@ -39,12 +41,17 @@ class Session:
     updated_at: str
     project_id: str = ""
     work_mode: str = "build"
-    access_mode: str = "default"
+    autonomy: str = "guarded"
     title_auto: bool = False
     messages: list[SessionMessage] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Session":
+        autonomy = payload.get("autonomy")
+        if autonomy is None:
+            # Legacy sessions stored access_mode ("default"/"full").
+            legacy = str(payload.get("access_mode", "default") or "default")
+            autonomy = "autonomous" if legacy == "full" else "guarded"
         return cls(
             id=str(payload.get("id", "")),
             title=str(payload.get("title", "新会话")),
@@ -52,7 +59,7 @@ class Session:
             updated_at=str(payload.get("updated_at", _now())),
             project_id=str(payload.get("project_id", "")),
             work_mode=str(payload.get("work_mode", "build")),
-            access_mode=str(payload.get("access_mode", "default")),
+            autonomy=str(autonomy),
             title_auto=bool(payload.get("title_auto", False)),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
@@ -68,7 +75,7 @@ class Session:
             "updated_at": self.updated_at,
             "project_id": self.project_id,
             "work_mode": self.work_mode,
-            "access_mode": self.access_mode,
+            "autonomy": self.autonomy,
             "message_count": len(self.messages),
         }
 
@@ -80,7 +87,7 @@ class Session:
             "updated_at": self.updated_at,
             "project_id": self.project_id,
             "work_mode": self.work_mode,
-            "access_mode": self.access_mode,
+            "autonomy": self.autonomy,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -121,7 +128,7 @@ class SessionStore:
             sessions.append(session.public())
         return sessions
 
-    def new_session(self, title: str = "", project_id: str = "", work_mode: str = "build", access_mode: str = "default") -> Session:
+    def new_session(self, title: str = "", project_id: str = "", work_mode: str = "build", autonomy: str = "guarded") -> Session:
         now = _now()
         return Session(
             id=str(uuid.uuid4()),
@@ -130,18 +137,18 @@ class SessionStore:
             updated_at=now,
             project_id=project_id,
             work_mode=work_mode,
-            access_mode=access_mode,
+            autonomy=autonomy,
         )
 
-    def create(self, title: str = "", project_id: str = "", work_mode: str = "build", access_mode: str = "default") -> Session:
-        session = self.new_session(title, project_id, work_mode, access_mode)
+    def create(self, title: str = "", project_id: str = "", work_mode: str = "build", autonomy: str = "guarded") -> Session:
+        session = self.new_session(title, project_id, work_mode, autonomy)
         self.save(session)
         return session
 
-    def update_modes(self, session_id: str, work_mode: str, access_mode: str) -> Session:
+    def update_modes(self, session_id: str, work_mode: str, autonomy: str) -> Session:
         session = self.require(session_id)
         session.work_mode = work_mode
-        session.access_mode = access_mode
+        session.autonomy = autonomy
         self.save(session)
         return session
 
@@ -186,6 +193,8 @@ class SessionStore:
         mode: str = "",
         provider: str = "",
         model: str = "",
+        work_mode: str = "",
+        autonomy: str = "",
         attachments: list[dict[str, Any]] | None = None,
         parts: list[dict[str, Any]] | None = None,
         references: list[dict[str, Any]] | None = None,
@@ -200,6 +209,8 @@ class SessionStore:
                 mode=mode,
                 provider=provider,
                 model=model,
+                work_mode=work_mode,
+                autonomy=autonomy,
                 attachments=attachments or [],
                 parts=parts or [],
                 references=references or [],

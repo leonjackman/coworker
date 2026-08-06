@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, AsyncGenerator, Iterable, Literal, TypedDict
+from typing_extensions import NotRequired
 
 from pydantic import BaseModel, Field
 from langchain_core.messages import AIMessageChunk, SystemMessage
@@ -23,6 +24,10 @@ from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_F
 AgentMode = Literal["single"]
 Language = Literal["zh", "en"]
 WorkMode = Literal["plan", "build"]
+Phase = Literal["discuss", "execute"]
+Autonomy = Literal["supervised", "guarded", "autonomous"]
+# Backward-compatible alias: legacy "default"/"full" access maps to
+# guarded/autonomous autonomy (see autonomy_from_access).
 AccessMode = Literal["default", "full"]
 
 SYSTEM_PROMPT = (
@@ -51,9 +56,10 @@ PLAN_MARKER = "[CW-PLAN]"
 
 
 class CoworkerAgentState(AgentState[Any]):
-    work_mode: str
-    language: str
-    plan_approved: bool
+    work_mode: NotRequired[str]
+    language: NotRequired[str]
+    phase: NotRequired[str]
+    autonomy: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -137,7 +143,7 @@ class AgentRuntime(ABC):
             return 1
 
     @abstractmethod
-    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
+    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AgentReply:
         raise NotImplementedError
 
 
@@ -160,7 +166,7 @@ class AgentStreamRuntime(ABC):
         session_id: str,
         language: Language,
         work_mode: WorkMode,
-        access_mode: AccessMode,
+        autonomy: Autonomy,
     ) -> AsyncGenerator[dict[str, Any], None]:
         raise NotImplementedError
 
@@ -177,16 +183,61 @@ def normalize_access_mode(access_mode: str | None) -> AccessMode:
     return "full" if access_mode == "full" else "default"
 
 
+def normalize_autonomy(autonomy: str | None) -> Autonomy:
+    if autonomy in ("supervised", "guarded", "autonomous"):
+        return autonomy
+    return "guarded"
+
+
+def autonomy_from_access(access_mode: str | None) -> Autonomy:
+    """Map the legacy access_mode switch onto the autonomy axis.
+
+    ``default`` -> ``guarded`` (Codex ``on-request``) and ``full`` ->
+    ``autonomous`` (Codex ``never``). Kept so older API payloads keep working.
+    """
+    return "autonomous" if normalize_access_mode(access_mode) == "full" else "guarded"
+
+
+def normalize_phase(phase: str | None, work_mode: str | None = None) -> Phase:
+    if phase in ("discuss", "execute"):
+        return phase
+    # A fresh task in plan mode starts by discussing; build mode executes.
+    return "discuss" if normalize_work_mode(work_mode) == "plan" else "execute"
+
+
 def normalize_language(language: Any) -> Language:
     return "en" if language == "en" else "zh"
 
 
-def runtime_instruction(work_mode: WorkMode, access_mode: AccessMode) -> str:
-    if work_mode == "plan":
-        return "Current mode: plan. Do not modify files. Inspect context if needed, then return a concise implementation plan."
-    if access_mode == "full":
-        return "Current mode: build with full access. You may read and write workspace files when needed."
-    return "Current mode: build with default access. Read workspace files when needed, but do not modify files."
+def phase_system_prompt(language: Language, phase: Phase, autonomy: Autonomy) -> str:
+    """Phase/autonomy-aware system instruction.
+
+    The active phase decides which tools the model sees (via
+    ``PhaseToolGateMiddleware``); this prompt only sets the behavioural
+    contract for that phase.
+    """
+    lang_line = f"Reply in {language_name(language)}."
+    if phase == "discuss":
+        return (
+            f"{lang_line}\n"
+            "You are planning. Use the read-only tools to research the workspace, call ask_user "
+            "when you need to clarify the user's intent, and finish by calling submit_plan with a "
+            "concise implementation plan. Do NOT modify files or run commands until the user "
+            "approves the plan."
+        )
+    if autonomy == "autonomous":
+        return (
+            f"{lang_line}\n"
+            "You are executing with full autonomy. You may read, edit files and run workspace "
+            "commands. Do not ask the user anything — make reasonable decisions and complete the "
+            "task to the best of your ability."
+        )
+    return (
+        f"{lang_line}\n"
+        "You are executing. You may read, edit files and run workspace commands. Only call "
+        "ask_user when you are genuinely blocked and need a decision to continue; otherwise make "
+        "reasonable assumptions and proceed autonomously."
+    )
 
 
 def agent_run_config(
@@ -196,7 +247,7 @@ def agent_run_config(
     model: str,
     language: Language,
     work_mode: WorkMode,
-    access_mode: AccessMode,
+    autonomy: Autonomy,
     streaming: bool,
 ) -> dict[str, Any]:
     return {
@@ -205,7 +256,7 @@ def agent_run_config(
             "coworker",
             "agent",
             f"work:{work_mode}",
-            f"access:{access_mode}",
+            f"autonomy:{autonomy}",
             "streaming" if streaming else "non-streaming",
         ],
         "metadata": {
@@ -214,7 +265,7 @@ def agent_run_config(
             "coworker.model": model,
             "coworker.language": language,
             "coworker.work_mode": work_mode,
-            "coworker.access_mode": access_mode,
+            "coworker.autonomy": autonomy,
             "coworker.streaming": streaming,
         },
         "configurable": {
@@ -255,7 +306,6 @@ def _open_checkpointer(checkpoint_path: Any):
 
 def build_workspace_tools(
     workspace: Workspace,
-    writable: bool,
     audit_context: dict[str, Any] | None = None,
     approval_store: CommandApprovalStore | None = None,
     change_store: ChangeStore | None = None,
@@ -347,7 +397,7 @@ def build_workspace_tools(
     @tool(args_schema=SubmitPlanArgs)
     def submit_plan(plan_text: str) -> str:
         """Present your implementation plan for approval before making any changes. Call this AFTER researching the workspace and BEFORE writing or editing files or running commands."""
-        return f"Plan submitted for approval:\n{plan_text}"
+        return f"Plan:\n{plan_text}"
 
     allowed_references = referenced_sessions or set()
 
@@ -394,16 +444,18 @@ def build_workspace_tools(
             ensure_ascii=False,
         )
 
-    tools = [search_files, read_file, ask_user, submit_plan]
+    tools = [search_files, read_file, ask_user, submit_plan, replace_in_file, apply_text_edits, write_file, run_command]
     if session_store is not None:
         tools.append(read_session)
-    if writable:
-        tools.extend([replace_in_file, apply_text_edits, write_file, run_command])
     return tools
 
 
-_WRITE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits", "run_command"}
 _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
+
+# Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session"}
+_PLAN_TOOLS = {"ask_user", "submit_plan"}
+_EXEC_TOOLS = {"run_command"}
 
 
 def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
@@ -458,28 +510,50 @@ def _command_is_allowed(tool_call: Any) -> bool:
 
 
 def command_approval_middleware(
-    access_mode: AccessMode,
     approval_store: CommandApprovalStore | None = None,
 ) -> list[Any]:
+    """Always-mounted HITL middleware; approval decisions live in ``when``
+    predicates that read phase/autonomy from agent state.
+
+    * ``run_command`` / write tools: interrupt only in ``execute`` phase with
+      ``supervised`` autonomy. ``guarded`` runs allowlisted commands inside the
+      workspace automatically (Codex ``on-request``); ``autonomous`` never asks.
+    * ``ask_user``: always interrupts — the tool is only reachable when the
+      phase gate exposes it, so this is decoupled from the permission switch
+      (fixes D3: full access no longer kills the question capability).
+    """
     from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
 
-    if access_mode == "full":
-        return []
-
-    def _needs_approval(req: Any) -> bool:
-        tool_call = getattr(req, "tool_call", None)
-        # A command outside the executable allowlist is refused by the tool layer
-        # even after the user approves it. Skip the approval prompt entirely so the
-        # user is never asked to authorise something that cannot run; the tool layer
-        # then returns an explicit "not allowed" error the agent can recover from.
-        if not _command_is_allowed(tool_call):
+    def needs_command_approval(req: Any) -> bool:
+        state = req.state
+        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
             return False
-        if approval_store is None:
-            return True
-        digest = _command_digest_from_tool_call(tool_call)
-        if digest and approval_store.is_always_allowed(digest):
+        autonomy = normalize_autonomy(state.get("autonomy"))
+        if autonomy != "supervised":
+            # guarded runs allowlisted commands freely; autonomous never asks.
             return False
+        # Only ask for commands that can actually run (allowlist members);
+        # out-of-allowlist commands are refused by the tool layer regardless.
+        if not _command_is_allowed(req.tool_call):
+            return False
+        if approval_store is not None:
+            digest = _command_digest_from_tool_call(req.tool_call)
+            if digest and approval_store.is_always_allowed(digest):
+                return False
         return True
+
+    def needs_write_approval(req: Any) -> bool:
+        state = req.state
+        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+            return False
+        return normalize_autonomy(state.get("autonomy")) == "supervised"
+
+    write_configs: dict[str, Any] = {}
+    for tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
+        write_configs[tool_name] = {
+            "allowed_decisions": ["approve", "reject"],
+            "when": needs_write_approval,
+        }
 
     return [
         HumanInTheLoopMiddleware(
@@ -487,8 +561,9 @@ def command_approval_middleware(
                 "run_command": {
                     "allowed_decisions": ["approve", "reject"],
                     "description": "Coworker needs approval before running this workspace command.",
-                    "when": _needs_approval,
+                    "when": needs_command_approval,
                 },
+                **write_configs,
                 "ask_user": {
                     "allowed_decisions": ["respond", "reject"],
                     "description": "Coworker asks the user a question that needs an answer.",
@@ -618,11 +693,11 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
 
 def trace_context(
     *, session_id: str, provider: str, provider_id: str, model: str,
-    language: Language, work_mode: WorkMode, access_mode: AccessMode, streaming: bool,
+    language: Language, work_mode: WorkMode, autonomy: Autonomy, streaming: bool,
 ) -> dict[str, Any]:
     return {
         "session_id": session_id, "provider": provider, "provider_id": provider_id, "model": model,
-        "language": language, "work_mode": work_mode, "access_mode": access_mode, "streaming": streaming,
+        "language": language, "work_mode": work_mode, "autonomy": autonomy, "streaming": streaming,
     }
 
 
@@ -752,6 +827,26 @@ def _estimate_file_changes(tool_name: str, input_raw: str) -> list[dict[str, Any
     return []
 
 
+def _terminate_stray_tools(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Defensive: guarantee every ``tool_start`` has a terminal ``tool_end``
+    before the turn's parts are merged/persisted. A tool that never produced a
+    ToolMessage (interrupted before execution) would otherwise be persisted as
+    ``status: running`` and render an endless spinner in the UI."""
+    unresolved: set[str] = set()
+    for part in parts:
+        ptype = part.get("type")
+        if ptype == "tool_start":
+            unresolved.add(str(part.get("id", "")))
+        elif ptype == "tool_end":
+            unresolved.discard(str(part.get("id", "")))
+    if not unresolved:
+        return parts
+    terminated = list(parts)
+    for tc_id in unresolved:
+        terminated.append({"type": "tool_end", "id": tc_id, "output": "", "status": "error"})
+    return terminated
+
+
 def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     for part in parts:
@@ -850,12 +945,7 @@ def _default_title_from_message(user_message: str) -> str:
     return text[:20].rstrip()[:20]
 
 
-def prepare_agent_messages(
-    messages: list[dict[str, Any]],
-    language: Language,
-    work_mode: WorkMode,
-    access_mode: AccessMode,
-) -> list[dict[str, str]]:
+def prepare_agent_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     prepared: list[dict[str, str]] = []
     for message in messages:
         role = str(message.get("role", ""))
@@ -863,12 +953,9 @@ def prepare_agent_messages(
         if role not in {"user", "assistant", "system"} or content is None:
             continue
         prepared.append({"role": role, "content": str(content)})
-    instruction = f"Reply in {language_name(language)}.\n{runtime_instruction(work_mode, access_mode)}"
-    for index in range(len(prepared) - 1, -1, -1):
-        if prepared[index]["role"] == "user":
-            prepared[index] = {**prepared[index], "content": f"{instruction}\n\n{prepared[index]['content']}"}
-            return prepared
-    return [{"role": "user", "content": instruction}]
+    if not prepared:
+        prepared.append({"role": "user", "content": ""})
+    return prepared
 
 
 def format_user_message(message: str, attachments: list[dict[str, Any]] | None = None, references: list[dict[str, Any]] | None = None) -> str:
@@ -1039,21 +1126,107 @@ class ToolCallCleanerMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
 
 # ---------------------------------------------------------------------------
+# PhaseToolGateMiddleware – phase-driven tool gating (Codex-style autonomy).
+# ---------------------------------------------------------------------------
+
+class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Dynamic tool selection based on the agent's phase and autonomy.
+
+    Uses the official ``wrap_model_call`` + ``request.override`` pattern so the
+    model only ever sees the tools the current phase allows:
+
+    * ``discuss`` (plan mode before approval): read-only + ``ask_user`` +
+      ``submit_plan`` — the agent cannot touch the filesystem.
+    * ``execute``: read + write + ``run_command``; ``ask_user`` stays available
+      unless autonomy is ``autonomous`` (physical removal — the model cannot
+      interrupt the user at all in full-autonomy mode).
+
+    The phase/autonomy-aware system prompt is also injected here so there is a
+    single prompt source (fixing the previous double-injection).
+    """
+
+    def _overrides(self, request: Any) -> dict[str, Any]:
+        state = request.state
+        work_mode = normalize_work_mode(state.get("work_mode"))
+        phase = normalize_phase(state.get("phase"), work_mode)
+        autonomy = normalize_autonomy(state.get("autonomy"))
+
+        allowed = set(_READ_ONLY_TOOLS)
+        if phase == "discuss":
+            allowed |= _PLAN_TOOLS
+        else:
+            allowed |= _CHANGE_TOOL_NAMES | _EXEC_TOOLS
+            if autonomy != "autonomous":
+                allowed |= {"ask_user"}
+
+        tools = [tool for tool in request.tools if getattr(tool, "name", "") in allowed]
+        language = normalize_language(state.get("language"))
+        return {
+            "tools": tools,
+            "system_message": SystemMessage(phase_system_prompt(language, phase, autonomy)),
+        }
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        return handler(request.override(**self._overrides(request)))
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        return await handler(request.override(**self._overrides(request)))
+
+    def _tool_name(self, request: Any) -> str:
+        tool_call = getattr(request, "tool_call", None)
+        if isinstance(tool_call, dict):
+            return str(tool_call.get("name") or "")
+        return str(getattr(tool_call, "name", "") or "")
+
+    def _blocked_tool_message(self, request: Any) -> Any:
+        from langchain_core.messages import ToolMessage
+        tool_name = self._tool_name(request)
+        return ToolMessage(
+            content=f"Tool '{tool_name}' is not available in the current planning phase. Call submit_plan to present your implementation plan for approval first.",
+            tool_call_id=request.tool_call.get("id", "unknown"),
+            status="error",
+        )
+
+    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+        state = request.state
+        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
+        tool_name = self._tool_name(request)
+        # Defense in depth: a write/exec tool must never run outside execute.
+        if phase != "execute" and tool_name in (_CHANGE_TOOL_NAMES | _EXEC_TOOLS):
+            return self._blocked_tool_message(request)
+        return handler(request)
+
+    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+        state = request.state
+        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
+        tool_name = self._tool_name(request)
+        if phase != "execute" and tool_name in (_CHANGE_TOOL_NAMES | _EXEC_TOOLS):
+            return self._blocked_tool_message(request)
+        return await handler(request)
+
+
+# ---------------------------------------------------------------------------
 # PlanApprovalMiddleware – plan-first approval gate (Claude Code style).
 # ---------------------------------------------------------------------------
 
 class PlanApprovalMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
-    """Plan-first approval gate.
+    """Plan-first approval gate, scoped to the ``discuss`` phase.
 
-    The agent must call ``submit_plan`` to present its implementation plan and
-    receive user approval before any write/execute tool is allowed to run.
-    Mirrors Claude Code's plan mode: research first, present a plan, approve,
-    then execute. Pure Q&A turns never call ``submit_plan`` and are unaffected.
+    The agent calls ``submit_plan`` to present its implementation plan and
+    receive user approval before any write/execute tool is allowed to run. The
+    gate only fires while ``phase == "discuss"`` (plan mode before approval);
+    in ``execute`` phase it is inert, so build-mode sessions run without a plan
+    gate (Codex-style boundary autonomy).
 
-    * ``after_model`` intercepts ``submit_plan`` calls and raises an HITL-style
-      interrupt so the frontend can render approve / reject / regenerate.
-    * ``wrap_tool_call`` blocks write/execute tools until ``plan_approved`` is
-      set in agent state (after an approve decision).
+    On approval the decision also carries the user-chosen execution autonomy
+    (``supervised`` / ``guarded`` / ``autonomous``), which is written to state
+    together with ``phase = "execute"`` — the approval action *routes* the
+    follow-up execution posture (Claude Code ExitPlanMode semantics).
+
+    Exits:
+    * ``approve`` + ``autonomy`` -> execute with that autonomy.
+    * ``continue_discuss`` -> stay in discuss, refine the plan.
+    * ``reject`` -> stay in discuss, explain/revise.
     """
 
     def __init__(self, language: Language = "en"):
@@ -1062,38 +1235,23 @@ class PlanApprovalMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     def _last_ai_with_tool_calls(self, state: CoworkerAgentState):
         from langchain_core.messages import AIMessage
         messages = state.get("messages", [])
-        for msg in reversed(messages):
-            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-                return msg
+        # Only the most recent model output is eligible for gating. Scanning
+        # further back would re-interrupt on a stale submit_plan after a
+        # "continue discussing" decision.
+        if messages and isinstance(messages[-1], AIMessage) and getattr(messages[-1], "tool_calls", None):
+            return messages[-1]
         return None
 
-    def _is_plan_approved(self, state: CoworkerAgentState) -> bool:
-        if bool(state.get("plan_approved")):
-            return True
-        # A submitted plan is considered approved once the corresponding
-        # submit_plan tool call produced a successful ToolMessage.
-        from langchain_core.messages import AIMessage, ToolMessage
-        submit_ids: set[str] = set()
-        for msg in state.get("messages", []):
-            if isinstance(msg, AIMessage):
-                for tc in getattr(msg, "tool_calls", None) or []:
-                    if tc.get("name") == "submit_plan" and tc.get("id"):
-                        submit_ids.add(tc["id"])
-        for msg in state.get("messages", []):
-            if isinstance(msg, ToolMessage) and getattr(msg, "status", "") == "success":
-                if getattr(msg, "tool_call_id", None) in submit_ids:
-                    return True
-        return False
+    def _active(self, state: CoworkerAgentState) -> bool:
+        return normalize_phase(state.get("phase"), state.get("work_mode")) == "discuss"
 
     def after_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        if self._is_plan_approved(state):
+        if not self._active(state):
             return None
         return self._handle_submit_plan(state)
 
     async def aafter_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        if self._is_plan_approved(state):
-            return None
-        return self._handle_submit_plan(state)
+        return self.after_model(state, runtime)
 
     def _handle_submit_plan(self, state: CoworkerAgentState) -> dict[str, Any] | None:
         from langchain_core.messages import AIMessage, ToolMessage
@@ -1110,67 +1268,44 @@ class PlanApprovalMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
         hitl_request = {
             "action_requests": [{"name": "submit_plan", "args": {"plan_text": plan_text}}],
-            "review_configs": [{"action_name": "submit_plan", "allowed_decisions": ["approve", "reject", "regenerate"]}],
+            "review_configs": [{"action_name": "submit_plan", "allowed_decisions": ["approve", "reject"]}],
         }
         decisions = interrupt(hitl_request)["decisions"]
         decision = decisions[0] if decisions else {"type": "reject"}
         dtype = str(decision.get("type", "reject"))
 
-        # Remove submit_plan from tool_calls; keep any other calls (research tools).
-        remaining_calls = [tc for tc in last_ai.tool_calls if tc.get("name") != "submit_plan"]
-        revised_ai = last_ai.model_copy(update={"tool_calls": remaining_calls})
-
+        # Keep submit_plan in the tool calls: the synthetic ToolMessage below
+        # (same tool_call_id) satisfies the tool executor so submit_plan is not
+        # re-run, while the agent loop continues to the next model call in the
+        # resolved phase (official HITL "respond" semantics).
+        autonomy = normalize_autonomy(state.get("autonomy"))
         if dtype == "approve":
-            plan_approved = True
+            autonomy = normalize_autonomy(decision.get("autonomy") or state.get("autonomy"))
+            phase = "execute"
             tool_msg = ToolMessage(
                 content="The user approved your plan. Proceed to implement it using the write/execute tools.",
+                name="submit_plan",
                 tool_call_id=plan_call.get("id", "unknown"),
                 status="success",
             )
-        elif dtype == "regenerate":
-            plan_approved = False
+        elif dtype == "continue_discuss":
+            phase = "discuss"
             tool_msg = ToolMessage(
-                content="The user rejected your plan and asked for a revised one. Research the codebase further and call submit_plan again with a revised plan.",
+                content="The user wants to keep discussing before you execute. Refine your plan, research more, or ask clarifying questions. Do not modify files or run commands yet.",
+                name="submit_plan",
                 tool_call_id=plan_call.get("id", "unknown"),
                 status="error",
             )
         else:
-            plan_approved = False
+            phase = "discuss"
             tool_msg = ToolMessage(
                 content="The user rejected your plan. Do not modify any files or run commands. Explain your approach to the user instead.",
+                name="submit_plan",
                 tool_call_id=plan_call.get("id", "unknown"),
                 status="error",
             )
 
-        return {"messages": [revised_ai, tool_msg], "plan_approved": plan_approved}
-
-    def _tool_name(self, request: Any) -> str:
-        tool_call = getattr(request, "tool_call", None)
-        if isinstance(tool_call, dict):
-            return str(tool_call.get("name") or "")
-        return str(getattr(tool_call, "name", "") or "")
-
-    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
-        from langchain_core.messages import ToolMessage
-        tool_name = self._tool_name(request)
-        if tool_name in _CHANGE_TOOL_NAMES and not self._is_plan_approved(getattr(request, "state", {})):
-            return ToolMessage(
-                content=f"Tool '{tool_name}' is blocked until the user approves your plan. Call submit_plan to present your implementation plan for approval first.",
-                tool_call_id=request.tool_call.get("id", "unknown"),
-                status="error",
-            )
-        return handler(request)
-
-    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
-        from langchain_core.messages import ToolMessage
-        tool_name = self._tool_name(request)
-        if tool_name in _CHANGE_TOOL_NAMES and not self._is_plan_approved(getattr(request, "state", {})):
-            return ToolMessage(
-                content=f"Tool '{tool_name}' is blocked until the user approves your plan. Call submit_plan to present your implementation plan for approval first.",
-                tool_call_id=request.tool_call.get("id", "unknown"),
-                status="error",
-            )
-        return await handler(request)
+        return {"messages": [last_ai, tool_msg], "phase": phase, "autonomy": autonomy}
 
 
 # ---------------------------------------------------------------------------
@@ -1182,35 +1317,34 @@ def build_coworker_agent_graph(
     tools: list[Any],
     work_mode: WorkMode,
     language: Language,
-    access_mode: AccessMode = "default",
+    autonomy: Autonomy = "guarded",
     checkpointer: Any | None = None,
     approval_store: CommandApprovalStore | None = None,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
-    The graph always includes ``HumanInTheLoopMiddleware`` (when
-    access_mode != full). In *plan* mode it also includes a
-    ``PlanGateMiddleware`` that runs a deterministic planning step.
+    The middleware chain implements the Codex-style two-axis model:
+
+    * ``PhaseToolGateMiddleware`` filters the tool set each model call based on
+      the current ``phase``/``autonomy`` (physical enforcement, not prompt).
+    * ``PlanApprovalMiddleware`` gates ``submit_plan`` while ``phase ==
+      "discuss"`` and routes the approved execution autonomy.
+    * ``HumanInTheLoopMiddleware`` (always mounted) interrupts commands/writes
+      only in ``execute`` + ``supervised``, and ``ask_user`` regardless.
     """
     from langchain.agents import create_agent
 
-    middleware: list[Any] = []
-
-    middleware.append(NormalizeMessagesMiddleware())
-    middleware.append(ToolCallCleanerMiddleware())
-
-    middleware.append(PlanApprovalMiddleware(language))
-    middleware.extend(command_approval_middleware(access_mode, approval_store))
+    middleware: list[Any] = [
+        NormalizeMessagesMiddleware(),
+        ToolCallCleanerMiddleware(),
+        PhaseToolGateMiddleware(),
+        PlanApprovalMiddleware(language),
+        *command_approval_middleware(approval_store),
+    ]
 
     system_prompt = (
-        f"Reply in {language_name(language)}.\n"
-        f"{runtime_instruction(work_mode, access_mode)}\n"
-        "You are a coding agent that works plan-first. Before modifying any files or "
-        "running commands, research the workspace with read-only tools (read_file, "
-        "search_files, ask_user), then call submit_plan to present your implementation "
-        "plan for the user to approve. Do NOT use write/execute tools until your plan "
-        "is approved. If the user is simply asking a question or wants a direct answer "
-        "with no file changes, answer directly without calling submit_plan."
+        f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
+        "Use workspace tools only when they are needed and keep answers concise."
     )
 
     kwargs: dict[str, Any] = {
@@ -1237,18 +1371,18 @@ class SimulatedSingleAgentRuntime(AgentRuntime):
         self.settings = settings
         self.workspace = workspace
 
-    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
+    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AgentReply:
         if language == "zh":
             content = (
                 "Coworker 正在以模拟提供商模式运行。\n\n"
                 f"工作区：{self.workspace.root}\n会话：{session_id}\n\n"
-                f"模式：{work_mode} / {access_mode}\n\n你说：{message}"
+                f"模式：{work_mode} / {autonomy}\n\n你说：{message}"
             )
         else:
             content = (
                 "Coworker is running in simulated provider mode.\n\n"
                 f"Workspace: {self.workspace.root}\nSession: {session_id}\n\n"
-                f"Mode: {work_mode} / {access_mode}\n\nYou said: {message}"
+                f"Mode: {work_mode} / {autonomy}\n\nYou said: {message}"
             )
         return AgentReply(content=content, mode=self.mode, provider="simulated")
 
@@ -1278,36 +1412,41 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             return f"{base_url}/v1"
         return base_url
 
-    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AgentReply:
+    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AgentReply:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
             "model": self.model_name, "workspace_path": str(self.workspace.root),
         }
         current_trace_context = trace_context(
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
-            model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=False,
+            model=self.model_name, language=language, work_mode=work_mode, autonomy=autonomy, streaming=False,
         )
         self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "run"})
-        effective_access = access_mode if work_mode == "build" else "default"
         turn_index = self._next_turn_index(session_id)
         graph = build_coworker_agent_graph(
             self.llm,
             build_workspace_tools(
-                self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index,
+                self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
                 session_store=self.session_store, referenced_sessions=self.referenced_sessions,
             ),
             work_mode=work_mode,
             language=language,
-            access_mode=effective_access,
+            autonomy=autonomy,
             checkpointer=self.checkpointer,
             approval_store=self.approval_store,
         )
         try:
             result = graph.invoke(
-                {"messages": prepare_agent_messages([{"role": "user", "content": message}], language, work_mode, access_mode), "work_mode": work_mode, "language": language, "plan_approved": False},
+                {
+                    "messages": prepare_agent_messages([{"role": "user", "content": message}]),
+                    "work_mode": work_mode,
+                    "language": language,
+                    "phase": normalize_phase(None, work_mode),
+                    "autonomy": autonomy,
+                },
                 config=agent_run_config(
                     session_id=session_id, provider=self.provider_name, model=self.model_name,
-                    language=language, work_mode=work_mode, access_mode=access_mode, streaming=False,
+                    language=language, work_mode=work_mode, autonomy=autonomy, streaming=False,
                 ),
             )
         except Exception as exc:
@@ -1316,7 +1455,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         if "__interrupt__" in result:
             approvals = record_runtime_interrupts(
                 result["__interrupt__"], self.approval_store,
-                {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode, "referenced_sessions": list(self.referenced_sessions)},
+                {**audit_context, "language": language, "work_mode": work_mode, "autonomy": autonomy, "referenced_sessions": list(self.referenced_sessions)},
             )
             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
             approval_ids = ", ".join(str(a.get("id", "")) for a in approvals)
@@ -1354,13 +1493,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         return base_url
 
     async def stream(
-        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        async for event in self._stream(messages, session_id, language, work_mode, access_mode, rerun=False):
+        async for event in self._stream(messages, session_id, language, work_mode, autonomy, rerun=False):
             yield event
 
     async def stream_rerun(
-        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Re-run the agent from a full message history (rollback/regenerate/edit).
 
@@ -1368,11 +1507,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         state (no checkpoint append). The session checkpoint must already have
         been reset by the caller so the history is rebuilt from scratch.
         """
-        async for event in self._stream(messages, session_id, language, work_mode, access_mode, rerun=True):
+        async for event in self._stream(messages, session_id, language, work_mode, autonomy, rerun=True):
             yield event
 
     async def _stream(
-        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode, *, rerun: bool,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool,
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
@@ -1380,31 +1519,36 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         }
         current_trace_context = trace_context(
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
-            model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
+            model=self.model_name, language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
         )
-        interrupt_context = {**audit_context, "language": language, "work_mode": work_mode, "access_mode": access_mode, "referenced_sessions": list(self.referenced_sessions)}
+        interrupt_context = {**audit_context, "language": language, "work_mode": work_mode, "autonomy": autonomy, "referenced_sessions": list(self.referenced_sessions)}
         self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "rerun" if rerun else "stream"})
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
         yield {"type": "stage", "name": "executing", "status": "running"}
 
-        prepared_messages = prepare_agent_messages(messages, language, work_mode, access_mode)
-        effective_access = access_mode if work_mode == "build" else "default"
+        prepared_messages = prepare_agent_messages(messages)
         turn_index = self._next_turn_index(session_id)
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
                 self.llm, build_workspace_tools(
-                    self.workspace, True, audit_context, change_store=self.change_store, turn_index=turn_index,
+                    self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
                     session_store=self.session_store, referenced_sessions=self.referenced_sessions,
                 ),
-                work_mode=work_mode, language=language, access_mode=effective_access,
+                work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
 
-            inputs = {"messages": prepared_messages, "work_mode": work_mode, "language": language, "plan_approved": False}
+            inputs = {
+                "messages": prepared_messages,
+                "work_mode": work_mode,
+                "language": language,
+                "phase": normalize_phase(None, work_mode),
+                "autonomy": autonomy,
+            }
             config = agent_run_config(
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
-                language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
+                language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
             )
 
             content_parts: list[str] = []
@@ -1445,7 +1589,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         final_content = "".join(content_parts)
         final_content = _strip_plan_leak(final_content, parts)
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content)})
-        merged_parts = _merge_event_parts(parts)
+        merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts}
 
@@ -1500,15 +1644,21 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     events.append(part)
 
         elif isinstance(msg, ToolMessage):
+            if (getattr(msg, "name", "") or "") == "submit_plan":
+                # submit_plan is rendered as a Plan block, not a tool card.
+                return events
             tc_id = getattr(msg, "tool_call_id", "") or ""
             content = getattr(msg, "content", "") or ""
+            # The real outcome: HITL rejections/errors carry status "error",
+            # only genuine completions are "success".
+            tool_status = "success" if (getattr(msg, "status", "") or "success") == "success" else "error"
             if tc_id in tool_state:
-                tool_state[tc_id]["status"] = "success"
+                tool_state[tc_id]["status"] = tool_status
                 tool_state[tc_id]["output"] = str(content)[:2000]
                 started_at = tool_state[tc_id].get("started_at")
                 duration_ms = round((time.time() - started_at) * 1000) if started_at else None
                 files = self._real_file_changes(tc_id, tool_state, session_id)
-                part: dict[str, Any] = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": "success"}
+                part: dict[str, Any] = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": tool_status}
                 if duration_ms is not None:
                     part["duration_ms"] = duration_ms
                 if files:
@@ -1516,7 +1666,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 parts.append(part)
                 events.append(part)
             elif tc_id:
-                part = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": "success"}
+                part = {
+                    "type": "tool_end",
+                    "id": tc_id,
+                    "name": getattr(msg, "name", "") or "",
+                    "output": str(content)[:2000],
+                    "status": tool_status,
+                }
                 parts.append(part)
                 events.append(part)
 
@@ -1538,9 +1694,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
         """Resume an interrupted turn, yielding progress events in real time.
 
-        Yields events as they are produced (deltas, tool activity, newly hit
-        interrupts) so the event bus can stream them to the frontend immediately,
-        instead of buffering everything until the resume fully finishes.
+        Every decision (approve / reject / continue_discuss / respond) resumes
+        the SAME graph execution via ``Command(resume=...)`` — the official
+        LangGraph HITL contract. The middleware synthesizes the corresponding
+        ToolMessage (reject -> error feedback, respond -> human answer, plan
+        approve -> execute transition), so the model always gets to continue
+        instead of the turn being hard-terminated (fixes D4/D5).
         """
         from langgraph.types import Command
 
@@ -1548,109 +1707,32 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         session_id = str(context.get("session_id") or "")
         language = normalize_language(context.get("language"))
         work_mode = normalize_work_mode(str(context.get("work_mode") or "build"))
-        access_mode = normalize_access_mode(str(context.get("access_mode") or "default"))
+        autonomy = normalize_autonomy(context.get("autonomy"))
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
             "model": self.model_name, "workspace_path": str(self.workspace.root),
         }
         current_trace_context = trace_context(
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
-            model=self.model_name, language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
+            model=self.model_name, language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
         )
         content_parts: list[str] = []
         parts: list[dict[str, Any]] = []
         decision_types = ", ".join(str(item.get("type")) for item in decisions)
         self.trace_store.record("agent_activity", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
-        effective_access = access_mode if work_mode == "build" else "default"
 
-        kind = str(context.get("kind") or "")
-        is_plan = kind == "plan"
         config = agent_run_config(
             session_id=session_id, provider=self.provider_name, model=self.model_name,
-            language=language, work_mode=work_mode, access_mode=access_mode, streaming=True,
+            language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
         )
-        decision_list = decisions if isinstance(decisions, list) else [decisions]
-        decision_types = [str(item.get("type", "")) for item in decision_list if isinstance(item, dict)]
-        # Terminal decisions (reject / regenerate) finish the turn cleanly instead of
-        # resuming the graph. This applies to every interrupt kind so that "Reject"
-        # consistently stops the current turn: previously only plan interrupts stopped,
-        # while question/command rejections resumed the agent, which allowed the model
-        # to immediately ask again and left the user without a hard stop.
-        if decision_types and all(dt in ("reject", "regenerate") for dt in decision_types):
-            if is_plan:
-                stop_msg = (
-                    "The user requested a revised plan. No changes were made."
-                    if "regenerate" in decision_types
-                    else "The user rejected the proposed plan. No changes were made."
-                )
-            elif kind == "question":
-                stop_msg = "The user declined to answer the question. The task has been stopped."
-            else:
-                stop_msg = "The user rejected the command. The task has been stopped."
-            self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(stop_msg), "resumed": True})
-            yield {"type": "stage", "name": "finalizing", "status": "done"}
-            yield {"type": "done", "content": stop_msg, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": []}
-            return
-
-        if is_plan and decisions:
-            # Approve: resume the SAME graph execution (official LangGraph
-            # interrupt/resume). Persist plan_approved=True AND inject an
-            # explicit "plan approved" ToolMessage into the thread state.
-            # Setting plan_approved alone short-circuits
-            # PlanApprovalMiddleware.after_model, which then never emits the
-            # approval message and the resumed model keeps saying it is still
-            # waiting for approval instead of executing.
-            try:
-                from langchain_core.messages import AIMessage, ToolMessage
-
-                async with _open_checkpointer(self.checkpoint_path) as _cp:
-                    _g = build_coworker_agent_graph(
-                        self.llm, build_workspace_tools(
-                        self.workspace, True, audit_context, change_store=self.change_store,
-                        session_store=self.session_store, referenced_sessions=self.referenced_sessions,
-                    ),
-                        work_mode=work_mode, language=language, access_mode=effective_access,
-                        checkpointer=_cp, approval_store=self.approval_store,
-                    )
-                    submit_id = ""
-                    try:
-                        _state = await _g.aget_state(config)
-                        for _msg in reversed(list(_state.values.get("messages", []))):
-                            if isinstance(_msg, AIMessage):
-                                for _tc in getattr(_msg, "tool_calls", None) or []:
-                                    if str(_tc.get("name", "")) == "submit_plan" and _tc.get("id"):
-                                        submit_id = _tc["id"]
-                                        break
-                            if submit_id:
-                                break
-                    except Exception:
-                        submit_id = ""
-                    if submit_id:
-                        await _g.aupdate_state(
-                            config,
-                            {
-                                "plan_approved": True,
-                                "messages": [
-                                    ToolMessage(
-                                        content="The user approved your plan. Proceed to implement it using the write/execute tools.",
-                                        tool_call_id=submit_id,
-                                        status="success",
-                                    )
-                                ],
-                            },
-                        )
-                    else:
-                        await _g.aupdate_state(config, {"plan_approved": True})
-            except Exception as exc:
-                self.trace_store.record("agent_activity", "error", current_trace_context, {"error": f"update_state: {str(exc)[:300]}", "resumed": True})
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
                 self.llm, build_workspace_tools(
-                        self.workspace, True, audit_context, change_store=self.change_store,
+                        self.workspace, audit_context, change_store=self.change_store,
                         session_store=self.session_store, referenced_sessions=self.referenced_sessions,
                     ),
-                work_mode=work_mode, language=language, access_mode=effective_access,
+                work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
@@ -1691,7 +1773,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         final_content = _strip_plan_leak(final_content, parts)
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
         yield {"type": "stage", "name": "finalizing", "status": "done"}
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(parts)}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts))}
         return
 
 
@@ -1702,27 +1784,27 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
         self.settings = settings
         self.workspace = workspace
 
-    async def stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AsyncGenerator[dict[str, Any], None]:
-        async for event in self._stream(messages, session_id, language, work_mode, access_mode):
+    async def stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AsyncGenerator[dict[str, Any], None]:
+        async for event in self._stream(messages, session_id, language, work_mode, autonomy):
             yield event
 
-    async def stream_rerun(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AsyncGenerator[dict[str, Any], None]:
-        async for event in self._stream(messages, session_id, language, work_mode, access_mode):
+    async def stream_rerun(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AsyncGenerator[dict[str, Any], None]:
+        async for event in self._stream(messages, session_id, language, work_mode, autonomy):
             yield event
 
-    async def _stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode) -> AsyncGenerator[dict[str, Any], None]:
+    async def _stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AsyncGenerator[dict[str, Any], None]:
         user_message = messages[-1]["content"] if messages else ""
         if language == "zh":
             content = (
                 "Coworker 正在以模拟提供商模式运行。\n\n"
                 f"工作区：{self.workspace.root}\n会话：{session_id}\n\n"
-                f"模式：{work_mode} / {access_mode}\n\n你说：{user_message}"
+                f"模式：{work_mode} / {autonomy}\n\n你说：{user_message}"
             )
         else:
             content = (
                 "Coworker is running in simulated provider mode.\n\n"
                 f"Workspace: {self.workspace.root}\nSession: {session_id}\n\n"
-                f"Mode: {work_mode} / {access_mode}\n\nYou said: {user_message}"
+                f"Mode: {work_mode} / {autonomy}\n\nYou said: {user_message}"
             )
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": "simulated", "model": ""}
         for chunk in content:
@@ -1802,6 +1884,9 @@ class AgentRuntimeRegistry:
             return self._create_single_agent(provider_id, model, workspace, referenced_sessions)
         raise RuntimeError(f"Unsupported agent mode: {mode}")
 
+    def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
+        return self.trace_store.list(limit)
+
     def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None) -> AgentStreamRuntime:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
@@ -1847,12 +1932,12 @@ class AgentRuntimeRegistry:
         return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions)
 
     async def rerun_stream(
-        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, access_mode: AccessMode,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
         provider_id: str | None = None, model: str | None = None, referenced_sessions: set[str] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Reset the session checkpoint and re-run the agent from full history."""
         self.forget_runtime_checkpoint(session_id)
         context = {"provider_id": provider_id or "", "model": model or "", "referenced_sessions": list(referenced_sessions or [])}
         runtime = self._stream_runtime_from_context(context)
-        async for event in runtime.stream_rerun(messages, session_id, language, work_mode, access_mode):
+        async for event in runtime.stream_rerun(messages, session_id, language, work_mode, autonomy):
             yield event

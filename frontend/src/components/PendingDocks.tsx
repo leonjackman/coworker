@@ -351,26 +351,34 @@ function PlanDock({ request, onResolve }: { request: PendingRequest & { kind: 'p
         <button
           type="button"
           className="button-ghost"
-          onClick={() => dispatch({ type: 'reject' })}
+          onClick={() => dispatch({ type: 'continue_discuss' })}
           disabled={resolving}
         >
-          {t('chat.plan_reject')}
+          {t('chat.plan_continue')}
         </button>
         <button
           type="button"
           className="button-secondary"
-          onClick={() => dispatch({ type: 'regenerate' })}
+          onClick={() => dispatch({ type: 'approve', autonomy: 'supervised' })}
           disabled={resolving}
         >
-          {t('chat.plan_regenerate')}
+          {t('chat.plan_approve_supervised')}
+        </button>
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={() => dispatch({ type: 'approve', autonomy: 'guarded' })}
+          disabled={resolving}
+        >
+          {t('chat.plan_approve_guarded')}
         </button>
         <button
           type="button"
           className="button-primary"
-          onClick={() => dispatch({ type: 'approve' })}
+          onClick={() => dispatch({ type: 'approve', autonomy: 'autonomous' })}
           disabled={resolving}
         >
-          {t('chat.plan_approve')}
+          {t('chat.plan_approve_autonomous')}
         </button>
       </div>
     </div>

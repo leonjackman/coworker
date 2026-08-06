@@ -582,10 +582,10 @@ ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id,
   return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/regenerate`, {}, event.sender);
 });
 
-ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, access_mode }) => {
+ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy }) => {
   const payload = { content };
   if (work_mode) payload.work_mode = work_mode;
-  if (access_mode) payload.access_mode = access_mode;
+  if (autonomy) payload.autonomy = autonomy;
   return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/edit`, payload, event.sender);
 });
 

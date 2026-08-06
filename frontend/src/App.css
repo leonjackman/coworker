@@ -703,7 +703,7 @@ body.sidebar-resizing {
 }
 
 .workspace-frame--right-open .workspace-upper {
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: minmax(0, 1fr) var(--inspector-width, 300px);
 }
 
 .runtime-notice {
@@ -877,6 +877,7 @@ body.sidebar-resizing {
 }
 
 .inspector-panel {
+  position: relative;
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--material-border);
@@ -884,15 +885,44 @@ body.sidebar-resizing {
   backdrop-filter: var(--material-blur);
 }
 
+.inspector-panel__resizer {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 30;
+}
+
+.inspector-panel__resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  transition: background 150ms ease;
+}
+
+.inspector-panel__resizer:hover::after,
+body.inspector-resizing .inspector-panel__resizer::after {
+  background: color-mix(in srgb, var(--ring) 45%, transparent);
+}
+
+body.inspector-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .workspace-upper--changes-open {
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) var(--changes-width, 380px);
 }
 
 .workspace-frame--right-open .workspace-upper--changes-open {
-  grid-template-columns: minmax(0, 1fr) 300px 380px;
+  grid-template-columns: minmax(0, 1fr) var(--inspector-width, 300px) var(--changes-width, 380px);
 }
 
 .changes-panel {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: grid;
@@ -900,6 +930,34 @@ body.sidebar-resizing {
   border-left: 1px solid var(--material-border);
   background: var(--material-panel-solid);
   backdrop-filter: var(--material-blur);
+}
+
+.changes-panel__resizer {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 30;
+}
+
+.changes-panel__resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  transition: background 150ms ease;
+}
+
+.changes-panel__resizer:hover::after,
+body.changes-panel-resizing .changes-panel__resizer::after {
+  background: color-mix(in srgb, var(--ring) 45%, transparent);
+}
+
+body.changes-panel-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .changes-panel__header {
@@ -2966,6 +3024,12 @@ body.bottom-panel-resizing {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
+}
+
+.settings-audit__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
 }
 
 .settings-audit__card {

@@ -47,7 +47,7 @@ function summarizeTrace(event: AgentTraceEvent): string {
   return parts.join(' · ');
 }
 
-export function ToolAuditPanel() {
+export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
   const [events, setEvents] = useState<ToolAuditEvent[]>([]);
   const [traces, setTraces] = useState<AgentTraceEvent[]>([]);
   const [approvals, setApprovals] = useState<CommandApproval[]>([]);
@@ -107,17 +107,28 @@ export function ToolAuditPanel() {
   }, []);
 
   return (
-    <section className="settings-group settings-audit" aria-labelledby="settings-group-audit">
-      <div className="settings-group__heading settings-audit__heading">
-        <div>
-          <h2 id="settings-group-audit">{t('settings.audit_group')}</h2>
-          <p>{t('settings.audit_group_desc')}</p>
+    <section className="settings-group settings-audit" aria-labelledby={embedded ? undefined : 'settings-group-audit'}>
+      {!embedded && (
+        <div className="settings-group__heading settings-audit__heading">
+          <div>
+            <h2 id="settings-group-audit">{t('settings.audit_group')}</h2>
+            <p>{t('settings.audit_group_desc')}</p>
+          </div>
+          <Button variant="secondary" onClick={refreshAudit} disabled={loading}>
+            <RefreshCw size={14} className={loading ? 'settings-audit__spin' : ''} />
+            {t('settings.audit_refresh')}
+          </Button>
         </div>
-        <Button variant="secondary" onClick={refreshAudit} disabled={loading}>
-          <RefreshCw size={14} className={loading ? 'settings-audit__spin' : ''} />
-          {t('settings.audit_refresh')}
-        </Button>
-      </div>
+      )}
+
+      {embedded && (
+        <div className="settings-audit__toolbar">
+          <Button variant="secondary" onClick={refreshAudit} disabled={loading}>
+            <RefreshCw size={14} className={loading ? 'settings-audit__spin' : ''} />
+            {t('settings.audit_refresh')}
+          </Button>
+        </div>
+      )}
 
       <div className="settings-card settings-audit__card">
         {error && <div className="settings-audit__empty">{error}</div>}

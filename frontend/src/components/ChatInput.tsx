@@ -4,17 +4,17 @@ import {
   Folder,
   FolderPlus,
   GitBranch,
+  ListChecks,
   Paperclip,
   Pencil,
   Send,
-  Shield,
   ShieldCheck,
   Square,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { t } from "../lib/i18n";
-import type { AccessMode, ComposerAttachment, SessionReference } from "../types";
+import type { Autonomy, ComposerAttachment, SessionReference, WorkMode } from "../types";
 import { Button } from "./ui/button";
 import { CardSlot } from "./ui/card-slot";
 import {
@@ -51,7 +51,8 @@ interface ChatInputProps {
   value: string;
   disabled: boolean;
   isThinking: boolean;
-  accessMode: AccessMode;
+  workMode: WorkMode;
+  autonomy: Autonomy;
   selectedModel: string;
   attachments: ComposerAttachment[];
   references: SessionReference[];
@@ -59,7 +60,8 @@ interface ChatInputProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onAccessModeChange: (value: AccessMode) => void;
+  onWorkModeChange: (value: WorkMode) => void;
+  onAutonomyChange: (value: Autonomy) => void;
   onModelChange: (value: string) => void;
   onAttachmentsChange: (attachments: ComposerAttachment[]) => void;
   onReferencesChange: (references: SessionReference[]) => void;
@@ -125,7 +127,8 @@ export function ChatInput({
   value,
   disabled,
   isThinking,
-  accessMode,
+  workMode,
+  autonomy,
   selectedModel,
   attachments,
   references,
@@ -133,7 +136,8 @@ export function ChatInput({
   onChange,
   onSend,
   onStop,
-  onAccessModeChange,
+  onWorkModeChange,
+  onAutonomyChange,
   onModelChange,
   onAttachmentsChange,
   onReferencesChange,
@@ -213,7 +217,7 @@ export function ChatInput({
     setShowCommands(false);
   }
 
-  const nextAccessMode = accessMode === "default" ? "full" : "default";
+  const nextAutonomy: Autonomy = autonomy === "supervised" ? "guarded" : autonomy === "guarded" ? "autonomous" : "supervised";
 
   return (
     <footer className="composer">
@@ -364,10 +368,17 @@ export function ChatInput({
                     </Select>
                   </div>
 
-                  <Tooltip content={t(accessMode === "default"? "chat.access_default_tip": "chat.access_full_tip")}>
-                    <button type="button"className="composer-toggle-button"onClick={() => onAccessModeChange(nextAccessMode)}aria-label={t("chat.toggle_access_mode")}>
-                      {accessMode === "default" ? (<Shield size={14} />) : (<ShieldCheck size={14} />)}
-                      <span>{t(accessMode === "default"? "chat.access_default": "chat.access_full")}</span>
+                  <Tooltip content={t(workMode === "plan" ? "chat.work_plan_tip" : "chat.work_build_tip")}>
+                    <button type="button" className="composer-toggle-button" onClick={() => onWorkModeChange(workMode === "plan" ? "build" : "plan")} aria-label={t("chat.toggle_work_mode")}>
+                      <ListChecks size={14} />
+                      <span>{t(workMode === "plan" ? "chat.work_plan" : "chat.work_build")}</span>
+                    </button>
+                  </Tooltip>
+
+                  <Tooltip content={t(`chat.autonomy_${autonomy}_tip`)}>
+                    <button type="button" className="composer-toggle-button" onClick={() => onAutonomyChange(nextAutonomy)} aria-label={t("chat.toggle_autonomy")}>
+                      <ShieldCheck size={14} />
+                      <span>{t(`chat.autonomy_${autonomy}`)}</span>
                     </button>
                   </Tooltip>
                   {branchStatus && (

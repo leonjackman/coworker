@@ -1,14 +1,18 @@
-import type { AccessMode } from '../types';
 import { t } from '../lib/i18n';
+import { usePanelResize } from '../lib/usePanelResize';
+import type { Autonomy } from '../types';
 
 interface WorkspaceInspectorProps {
   sessionTitle: string;
   projectName: string;
   modelName: string;
   providerName: string;
-  accessMode: AccessMode;
+  autonomy: Autonomy;
   attachmentCount: number;
   messageCount: number;
+  onResizeStart: () => void;
+  onResizeEnd: () => void;
+  onResizeWidth: (width: number) => void;
 }
 
 export function WorkspaceInspector({
@@ -16,12 +20,32 @@ export function WorkspaceInspector({
   projectName,
   modelName,
   providerName,
-  accessMode,
+  autonomy,
   attachmentCount,
   messageCount,
+  onResizeStart,
+  onResizeEnd,
+  onResizeWidth,
 }: WorkspaceInspectorProps) {
+  const handleResizePointerDown = usePanelResize({
+    bodyClassName: 'inspector-resizing',
+    min: 220,
+    max: 480,
+    direction: -1,
+    onResizeStart,
+    onResizeEnd,
+    onResizeWidth,
+  });
+
   return (
     <aside className="inspector-panel">
+      <div
+        className="inspector-panel__resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t('inspector.resize')}
+        onPointerDown={handleResizePointerDown}
+      />
       <div className="inspector-panel__header">
         <span>{t('inspector.title')}</span>
       </div>
@@ -30,7 +54,7 @@ export function WorkspaceInspector({
         <InfoRow label={t('inspector.project')} value={projectName} />
         <InfoRow label={t('inspector.model')} value={modelName} />
         <InfoRow label={t('inspector.provider')} value={providerName} />
-        <InfoRow label={t('inspector.access_mode')} value={accessMode === 'full' ? t('chat.access_full') : t('chat.access_default')} />
+        <InfoRow label={t('inspector.autonomy')} value={t(`chat.autonomy_${autonomy}`)} />
         <InfoRow label={t('inspector.attachments')} value={String(attachmentCount)} />
         <InfoRow label={t('inspector.messages')} value={String(messageCount)} />
       </div>

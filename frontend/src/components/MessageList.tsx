@@ -66,7 +66,26 @@ function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): T
   return groups;
 }
 
-function ToolChain({ toolParts }: { toolParts: Extract<MessagePart, { type: 'tool' }>[] }) {
+function ToolChain({ toolParts, running }: { toolParts: Extract<MessagePart, { type: 'tool' }>[]; running?: boolean }) {
+  // After the turn completes, fold EVERY tool into a single collapsible group
+  // ("big fold containing small folds"): each tool keeps its own inner card.
+  // While streaming, render individual live cards so the user can follow which
+  // tool is executing right now.
+  if (!running) {
+    const active = toolParts.some((part) => part.status === 'running');
+    return (
+      <div className="tool-chain">
+        <ToolGroup.Root variant="ghost">
+          <ToolGroupTrigger count={toolParts.length} active={active} />
+          <ToolGroupContent>
+            {toolParts.map((part) => (
+              <ToolCallCard key={part.id} tool={part} />
+            ))}
+          </ToolGroupContent>
+        </ToolGroup.Root>
+      </div>
+    );
+  }
   const groups = buildToolGroups(toolParts);
   return (
     <div className="tool-chain">
@@ -175,13 +194,13 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
   const summaryData = getTurnSummaryData(toolParts, fileChanges);
   const hasToolsOrFiles = summaryData !== null;
 
-  // Build the meta text (Plan/Build · Full access · model · duration)
+  // Build the meta text (Plan/Build · autonomy · model · duration)
   const metaParts: string[] = [];
   if (message.work_mode) {
     metaParts.push(message.work_mode === 'plan' ? 'Plan' : 'Build');
   }
-  if (message.access_mode === 'full') {
-    metaParts.push('Full access');
+  if (message.autonomy) {
+    metaParts.push(t(`chat.autonomy_${message.autonomy}`));
   }
   if (message.model) {
     metaParts.push(message.provider ? `${message.provider} · ${message.model}` : message.model);
@@ -220,7 +239,7 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
 
         {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
         {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
-        {toolParts.length > 0 && <ToolChain toolParts={toolParts} />}
+        {toolParts.length > 0 && <ToolChain toolParts={toolParts} running={isRunning} />}
         {!isRunning && fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
 
         {isRunning && hasRunningTools && <AgentActivity working={isRunning} />}

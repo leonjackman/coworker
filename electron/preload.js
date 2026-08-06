@@ -66,7 +66,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onEvent(data.event);
     };
     ipcRenderer.on('chat-stream-event', listener);
-    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content, work_mode: options?.work_mode, access_mode: options?.access_mode }).finally(() => {
+    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content, work_mode: options?.work_mode, autonomy: options?.autonomy }).finally(() => {
       ipcRenderer.removeListener('chat-stream-event', listener);
     });
   },

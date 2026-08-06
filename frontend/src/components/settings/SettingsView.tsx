@@ -1,33 +1,33 @@
-import { X } from 'lucide-react';
+import { ArrowLeft, X } from 'lucide-react';
 import { useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
-import type { AccessMode } from '../../types';
+import type { Autonomy } from '../../types';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
-import { accessModeOptions, languageOptions, themeOptions } from './preference-options';
+import { autonomyOptions, languageOptions, themeOptions } from './preference-options';
 
 interface SettingsViewProps {
   themeSettings: ThemeSettings;
-  accessMode: AccessMode;
+  autonomy: Autonomy;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
-  onAccessModeChange: (mode: AccessMode) => void;
+  onAutonomyChange: (mode: Autonomy) => void;
   onLanguageChange?: () => void;
   onClose: () => void;
 }
 
 export function SettingsView({
   themeSettings,
-  accessMode,
+  autonomy,
   onThemeSettingsChange,
-  onAccessModeChange,
+  onAutonomyChange,
   onLanguageChange,
   onClose,
 }: SettingsViewProps) {
-  const [settingsPage, setSettingsPage] = useState<'main' | 'theme'>('main');
+  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit'>('main');
 
   async function selectLanguage(language: string) {
     if (language !== 'zh' && language !== 'en') return;
@@ -40,6 +40,24 @@ export function SettingsView({
 
   if (settingsPage === 'theme') {
     return <ThemeCustomizer settings={themeSettings} onChange={onThemeSettingsChange} onBack={() => setSettingsPage('main')} />;
+  }
+
+  if (settingsPage === 'audit') {
+    return (
+      <WorkspacePage
+        eyebrow={t('settings.title')}
+        title={t('settings.audit_group')}
+        description={t('settings.audit_group_desc')}
+        action={(
+          <Button variant="ghost" onClick={() => setSettingsPage('main')}>
+            <ArrowLeft size={15} />
+            {t('settings.back')}
+          </Button>
+        )}
+      >
+        <ToolAuditPanel embedded />
+      </WorkspacePage>
+    );
   }
 
   return (
@@ -96,19 +114,33 @@ export function SettingsView({
             description: t('settings.composer_group_desc'),
             items: [
               {
-                id: 'access-mode',
+                id: 'autonomy',
                 type: 'toggle',
-                label: t('settings.access_mode'),
-                description: t('settings.access_mode_desc'),
-                value: accessMode,
-                options: accessModeOptions(),
-                onChange: (value) => onAccessModeChange(value as AccessMode),
+                label: t('settings.autonomy'),
+                description: t('settings.autonomy_desc'),
+                value: autonomy,
+                options: autonomyOptions(),
+                onChange: (value) => onAutonomyChange(value as Autonomy),
+              },
+            ],
+          },
+          {
+            id: 'observation',
+            title: t('settings.audit_group'),
+            description: t('settings.audit_group_desc'),
+            items: [
+              {
+                id: 'audit',
+                type: 'action',
+                label: t('settings.audit_entry'),
+                description: t('settings.audit_entry_desc'),
+                actionLabel: t('settings.audit_open'),
+                onAction: () => setSettingsPage('audit'),
               },
             ],
           },
         ]}
       />
-      <ToolAuditPanel />
     </WorkspacePage>
   );
 }

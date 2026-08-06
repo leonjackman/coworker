@@ -17,7 +17,7 @@ import { RollbackDialog } from './components/RollbackDialog';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AccessMode, AppView, ApprovalDecisionPayload, ApprovalOption, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -55,6 +55,29 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
     }
   }
   return merged;
+}
+
+function settleRunningTools(parts: MessagePart[]): MessagePart[] {
+  // A tool that is still 'running' when the turn reaches a terminal state was
+  // interrupted (awaiting approval) or aborted — never finish with a live
+  // spinner. Demote it to 'pending' (static, non-spinning).
+  return parts.map((part) =>
+    part.type === 'tool' && part.status === 'running' ? { ...part, status: 'pending' as const } : part,
+  );
+}
+
+function upsertToolPart(parts: MessagePart[], id: string, name: string, input: string): MessagePart[] {
+  // Dedupe by tool call id: a resumed graph re-emits the same tool, so update
+  // the existing part instead of stacking a duplicate card.
+  const next = [...parts];
+  const index = next.findIndex((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === id);
+  const part: MessagePart = { type: 'tool', id, name, status: 'running' as const, input };
+  if (index >= 0) {
+    next[index] = part;
+  } else {
+    next.push(part);
+  }
+  return next;
 }
 
 function createMessage(
@@ -96,7 +119,12 @@ function App() {
   const [bottomPanelResizing, setBottomPanelResizing] = useState(false);
   const [changesPanelOpen, setChangesPanelOpen] = useState(false);
   const [changesRefreshKey, setChangesRefreshKey] = useState(0);
-  const [accessMode, setAccessMode] = useState<AccessMode>('default');
+  const [inspectorWidth, setInspectorWidth] = useState(300);
+  const [inspectorResizing, setInspectorResizing] = useState(false);
+  const [changesPanelWidth, setChangesPanelWidth] = useState(380);
+  const [changesPanelResizing, setChangesPanelResizing] = useState(false);
+  const [autonomy, setAutonomy] = useState<Autonomy>('guarded');
+  const [workMode, setWorkMode] = useState<WorkMode>('build');
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [references, setReferences] = useState<SessionReference[]>([]);
@@ -262,7 +290,7 @@ function App() {
       ...current,
       createMessage('user', message, {
         status: 'done',
-        access_mode: accessMode,
+        autonomy,
         provider: requestProvider,
         model: requestModel,
         attachments: requestAttachments,
@@ -279,7 +307,7 @@ function App() {
         streamStartAt: Date.now(),
         id: assistantMessageId,
         status: 'running',
-        access_mode: accessMode,
+        autonomy,
         provider: requestProvider,
         model: requestModel,
       }),
@@ -321,7 +349,7 @@ function App() {
           ),
         );
       } else if (event.type === 'tool_start') {
-        localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        localParts = upsertToolPart(localParts, event.id, event.name, event.input || '');
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -402,6 +430,7 @@ function App() {
         if (event.type === 'plan_required') {
           localParts.push({ type: 'plan', content: event.plan });
         }
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -418,6 +447,7 @@ function App() {
         if (event.parts && event.parts.length > 0) {
           localParts = event.parts;
         }
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -426,6 +456,7 @@ function App() {
           ),
         );
       } else if (event.type === 'error') {
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -442,7 +473,8 @@ function App() {
           message,
           mode: runtimeConfig?.default_mode ?? 'single',
           language: getLanguage(),
-            access_mode: accessMode,
+          work_mode: workMode,
+          autonomy,
           ...(selectedProvider
             ? {
                 provider_id: selectedProvider.id,
@@ -550,7 +582,7 @@ function App() {
         streamStartAt: Date.now(),
           id: assistantMessageId,
           status: 'running',
-            access_mode: accessMode,
+            autonomy,
         }),
       ];
     });
@@ -585,7 +617,7 @@ function App() {
         );
       } else if (event.type === 'tool_start') {
         // 编辑/重生成路径支持 tool_delta（P1 修复）
-        localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        localParts = upsertToolPart(localParts, event.id, event.name, event.input || '');
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -645,6 +677,7 @@ function App() {
         if (event.type === 'plan_required') {
           localParts.push({ type: 'plan', content: event.plan });
         }
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
@@ -653,6 +686,7 @@ function App() {
       } else if (event.type === 'done') {
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
@@ -668,6 +702,7 @@ function App() {
           ),
         );
       } else if (event.type === 'error') {
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -680,7 +715,8 @@ function App() {
     try {
       await chatService.streamEditMessage(currentSessionId, messageId, trimmed, handleEvent, {
         signal: controller.signal,
-        accessMode,
+        workMode,
+        autonomy,
       });
       await refreshSessions();
       await refreshProjects();
@@ -727,7 +763,7 @@ function App() {
         streamStartAt: Date.now(),
           id: assistantMessageId,
           status: 'running',
-            access_mode: accessMode,
+            autonomy,
         }),
       ];
     });
@@ -762,7 +798,7 @@ function App() {
         );
       } else if (event.type === 'tool_start') {
         // 编辑/重生成路径支持 tool_delta（P1 修复）
-        localParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+        localParts = upsertToolPart(localParts, event.id, event.name, event.input || '');
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -822,6 +858,7 @@ function App() {
         if (event.type === 'plan_required') {
           localParts.push({ type: 'plan', content: event.plan });
         }
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
@@ -830,6 +867,7 @@ function App() {
       } else if (event.type === 'done') {
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
@@ -845,6 +883,7 @@ function App() {
           ),
         );
       } else if (event.type === 'error') {
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -1009,6 +1048,7 @@ function App() {
             if (event.parts && event.parts.length > 0) {
               resumeParts = event.parts;
             }
+            resumeParts = settleRunningTools(resumeParts);
             applyResume('done');
           } else if (event.type === 'delta') {
             resumeContent += event.content;
@@ -1022,7 +1062,7 @@ function App() {
             }
             applyResume('running');
           } else if (event.type === 'tool_start') {
-            resumeParts.push({ type: 'tool', id: event.id, name: event.name, status: 'running', input: event.input || '' });
+            resumeParts = upsertToolPart(resumeParts, event.id, event.name, event.input || '');
             applyResume('running');
           } else if (event.type === 'tool_delta') {
             const tp = resumeParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
@@ -1059,11 +1099,20 @@ function App() {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
               return [...current, pendingFromEvent(event, resumeSessionId, targetMessageId)];
             });
-          } else if (event.type === 'error') {
+            resumeParts = settleRunningTools(resumeParts);
             setMessages((current) =>
               current.map((item) =>
                 item.id === targetMessageId
-                  ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() }
+                  ? { ...item, content: t('chat.waiting_resolution'), status: 'done' as const, parts: mergeMessageParts(item.parts || [], resumeParts) }
+                  : item,
+              ),
+            );
+          } else if (event.type === 'error') {
+            resumeParts = settleRunningTools(resumeParts);
+            setMessages((current) =>
+              current.map((item) =>
+                item.id === targetMessageId
+                  ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
                   : item,
               ),
             );
@@ -1173,7 +1222,7 @@ function App() {
         if (approval.status !== 'pending') continue;
         const context = approval.context;
         if (!context || context.session_id !== targetSessionId) continue;
-        const kind = context.kind === 'question' ? 'question' : 'command';
+        const kind = context.kind === 'question' ? 'question' : context.kind === 'plan' ? 'plan' : 'command';
         const base: PendingRequest = {
           approval_id: approval.id,
           kind,
@@ -1189,6 +1238,12 @@ function App() {
             ...(typeof args.header === 'string' ? { header: args.header } : {}),
             ...(Array.isArray(args.options) ? { options: args.options as ApprovalOption[] } : {}),
             ...(typeof args.multiple === 'boolean' ? { multiple: args.multiple } : {}),
+          });
+        } else if (kind === 'plan') {
+          const args = typeof context.action_args === 'object' && context.action_args ? (context.action_args as Record<string, unknown>) : {};
+          restored.push({
+            ...base,
+            ...(typeof args.plan_text === 'string' ? { plan: args.plan_text } : {}),
           });
         } else {
           restored.push({
@@ -1231,7 +1286,8 @@ function App() {
         createMessage(record.role as ChatMessage['role'], record.content, {
           id: record.id || `${record.role}-${index}-${record.id}`,
           status: 'done',
-          ...(record.mode ? { work_mode: record.mode as WorkMode } : {}),
+          ...(record.work_mode ? { work_mode: record.work_mode as WorkMode } : {}),
+          ...(record.autonomy ? { autonomy: record.autonomy as Autonomy } : {}),
           ...(record.provider ? { provider: record.provider } : {}),
           ...(record.model ? { model: record.model } : {}),
           ...(record.attachments?.length ? { attachments: record.attachments } : {}),
@@ -1441,8 +1497,8 @@ function App() {
 
     return (
     <main
-      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${sidebarResizing || bottomPanelResizing ? 'app-shell--resizing' : ''}`}
-      style={{ '--sidebar-width': `${sidebarWidth}px`, '--bottom-panel-height': `${bottomPanelHeight}px` } as CSSProperties}
+      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
+      style={{ '--sidebar-width': `${sidebarWidth}px`, '--bottom-panel-height': `${bottomPanelHeight}px`, '--inspector-width': `${inspectorWidth}px`, '--changes-width': `${changesPanelWidth}px` } as CSSProperties}
     >
       <WorkspaceTitlebar
         status={runtimeStatus}
@@ -1541,7 +1597,8 @@ function App() {
                         value={editingMessage ? editDraft : input}
                         disabled={isThinking || runtimeStatus === 'connecting'}
                         isThinking={isThinking}
-                        accessMode={accessMode}
+                        workMode={workMode}
+                        autonomy={autonomy}
                         selectedModel={selectedModel}
                         attachments={attachments}
                         references={references}
@@ -1550,7 +1607,8 @@ function App() {
                         onChange={editingMessage ? setEditDraft : setInput}
                         onSend={editingMessage ? () => void commitEditMessage(editingMessage.id, editDraft) : sendMessage}
                         onStop={stopMessage}
-                        onAccessModeChange={setAccessMode}
+                        onWorkModeChange={setWorkMode}
+                        onAutonomyChange={setAutonomy}
                         onModelChange={(providerId) => void changeSelectedModel(providerId)}
                         onAttachmentsChange={setAttachments}
                         onReferencesChange={setReferences}
@@ -1575,9 +1633,9 @@ function App() {
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}
-                  accessMode={accessMode}
+                  autonomy={autonomy}
                   onThemeSettingsChange={changeThemeSettings}
-                  onAccessModeChange={setAccessMode}
+                  onAutonomyChange={setAutonomy}
                   onClose={() => setActiveView('chat')}
                 />
               )}
@@ -1588,9 +1646,12 @@ function App() {
                 projectName={activeProject?.name ?? t('sidebar.default_project')}
                 modelName={currentProvider?.model ?? runtimeConfig?.selected_model ?? t('chat.model_unselected')}
                 providerName={currentProvider?.name ?? runtimeConfig?.agent_provider ?? t('chat.model_unselected')}
-                accessMode={accessMode}
+                autonomy={autonomy}
                 attachmentCount={attachments.length}
                 messageCount={messages.length}
+                onResizeStart={() => setInspectorResizing(true)}
+                onResizeEnd={() => setInspectorResizing(false)}
+                onResizeWidth={(width) => setInspectorWidth(width)}
               />
             )}
             {changesPanelOpen && (
@@ -1598,6 +1659,9 @@ function App() {
                 open={changesPanelOpen}
                 onClose={() => setChangesPanelOpen(false)}
                 onRefreshKey={changesRefreshKey}
+                onResizeStart={() => setChangesPanelResizing(true)}
+                onResizeEnd={() => setChangesPanelResizing(false)}
+                onResizeWidth={(width) => setChangesPanelWidth(width)}
                 {...(sessionId ? { sessionId } : {})}
                 {...(currentProjectId ? { projectId: currentProjectId } : {})}
               />

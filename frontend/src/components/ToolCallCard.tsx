@@ -6,6 +6,7 @@ import { toolLabel, toolPreview } from './toolMeta';
 
 function mapStatus(tool: PartTool): ToolCallMessagePartStatus {
   if (tool.status === 'running') return { type: 'running' };
+  if (tool.status === 'pending') return { type: 'requires-action', reason: 'interrupt' };
   if (tool.status === 'error') return { type: 'incomplete', reason: 'error', error: tool.output };
   return { type: 'complete' };
 }

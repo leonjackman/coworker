@@ -1,6 +1,7 @@
 import { FileDiff, GitBranch, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { t } from '../lib/i18n';
+import { usePanelResize } from '../lib/usePanelResize';
 import { chatService } from '../services/chatService';
 import type { CurrentDiffResponse, DiffHunk, SessionChangesResponse } from '../types';
 import { Button } from './ui/button';
@@ -12,6 +13,9 @@ interface ChangesPanelProps {
   open: boolean;
   onClose: () => void;
   onRefreshKey: number;
+  onResizeStart: () => void;
+  onResizeEnd: () => void;
+  onResizeWidth: (width: number) => void;
 }
 
 type TabSource = { kind: 'current' } | { kind: 'turn'; turn: number };
@@ -30,13 +34,23 @@ interface SelectedDiff {
   kind: 'write' | 'edit' | 'binary';
 }
 
-export function ChangesPanel({ sessionId, projectId, open, onClose, onRefreshKey }: ChangesPanelProps) {
+export function ChangesPanel({ sessionId, projectId, open, onClose, onRefreshKey, onResizeStart, onResizeEnd, onResizeWidth }: ChangesPanelProps) {
   const [sessionChanges, setSessionChanges] = useState<SessionChangesResponse | null>(null);
   const [currentDiff, setCurrentDiff] = useState<CurrentDiffResponse | null>(null);
   const [activeTab, setActiveTab] = useState<TabSource>({ kind: 'current' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+
+  const handleResizePointerDown = usePanelResize({
+    bodyClassName: 'changes-panel-resizing',
+    min: 280,
+    max: 640,
+    direction: -1,
+    onResizeStart,
+    onResizeEnd,
+    onResizeWidth,
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,6 +138,13 @@ export function ChangesPanel({ sessionId, projectId, open, onClose, onRefreshKey
 
   return (
     <aside className="changes-panel" aria-hidden={!open}>
+      <div
+        className="changes-panel__resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t('changes.resize')}
+        onPointerDown={handleResizePointerDown}
+      />
       <div className="changes-panel__header">
         <span className="changes-panel__title">
           <FileDiff size={15} />

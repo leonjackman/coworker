@@ -107,7 +107,7 @@ export interface ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; accessMode?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
   ) => Promise<void>;
 }
 
@@ -299,7 +299,7 @@ class ElectronChatService implements ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; accessMode?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
   ): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const signal = options?.signal;
@@ -312,7 +312,7 @@ class ElectronChatService implements ChatService {
     try {
       await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, onEvent, {
         ...(options?.workMode ? { work_mode: options.workMode } : {}),
-        ...(options?.accessMode ? { access_mode: options.accessMode } : {}),
+        ...(options?.autonomy ? { autonomy: options.autonomy } : {}),
       });
     } finally {
       detachAbortListener();
@@ -618,11 +618,11 @@ class HttpChatService implements ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; accessMode?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
   ): Promise<void> {
     const payload: Record<string, unknown> = { content };
     if (options?.workMode) payload.work_mode = options.workMode;
-    if (options?.accessMode) payload.access_mode = options.accessMode;
+    if (options?.autonomy) payload.autonomy = options.autonomy;
     await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, payload, onEvent, options?.signal);
   }
 

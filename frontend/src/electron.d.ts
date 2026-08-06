@@ -82,7 +82,7 @@ declare global {
         messageId: string,
         content: string,
         onEvent: StreamEventCallback,
-        options?: { work_mode?: string; access_mode?: string },
+        options?: { work_mode?: string; autonomy?: string },
       ) => Promise<void>;
     };
   }

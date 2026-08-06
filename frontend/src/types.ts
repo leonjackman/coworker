@@ -1,7 +1,7 @@
 export type AgentMode = 'single';
 export type Language = 'zh' | 'en';
 export type WorkMode = 'plan' | 'build';
-export type AccessMode = 'default' | 'full';
+export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
 export type AppView = 'chat' | 'providers' | 'settings';
 
 export interface ComposerAttachment {
@@ -115,7 +115,9 @@ export interface PartTool {
   type: 'tool';
   id: string;
   name: string;
-  status: 'running' | 'success' | 'error';
+  /** 'running' = actively executing (spinner); 'pending' = interrupted/awaiting
+   *  approval or aborted before completion (static, non-spinning). */
+  status: 'running' | 'success' | 'error' | 'pending';
   input: string;
   output?: string;
   duration_ms?: number;
@@ -145,7 +147,7 @@ export interface ChatMessage {
   streamStartAt?: number;
   streamEndAt?: number;
   work_mode?: WorkMode;
-  access_mode?: AccessMode;
+  autonomy?: Autonomy;
   provider?: string;
   model?: string;
   attachments?: ComposerAttachment[];
@@ -174,7 +176,8 @@ export interface ChatRequest {
   mode: AgentMode;
   language: Language;
   work_mode?: WorkMode;
-  access_mode?: AccessMode;
+  autonomy?: Autonomy;
+  access_mode?: 'default' | 'full';
   provider_id?: string;
   model?: string;
   project_id?: string;
@@ -238,7 +241,7 @@ export interface SessionSummary {
   updated_at: string;
   project_id: string;
   work_mode?: string;
-  access_mode?: string;
+  autonomy?: string;
   message_count: number;
 }
 
@@ -270,6 +273,8 @@ export interface SessionMessageRecord {
   mode?: string;
   provider?: string;
   model?: string;
+  work_mode?: string;
+  autonomy?: string;
   attachments?: ComposerAttachment[];
   parts?: MessagePart[];
   references?: SessionReference[];
@@ -282,7 +287,7 @@ export interface SessionDetail {
   updated_at: string;
   project_id: string;
   work_mode: string;
-  access_mode: string;
+  autonomy: string;
   messages: SessionMessageRecord[];
 }
 
@@ -427,11 +432,12 @@ export interface CommandApprovalResponse {
   resume_id?: string;
 }
 
-export type ApprovalDecisionType = 'approve' | 'reject' | 'respond' | 'always' | 'regenerate';
+export type ApprovalDecisionType = 'approve' | 'reject' | 'respond' | 'always' | 'regenerate' | 'continue_discuss';
 
 export interface ApprovalDecisionPayload {
   type: ApprovalDecisionType;
   message?: string;
+  autonomy?: Autonomy;
 }
 
 export interface ApprovalOption {
