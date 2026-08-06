@@ -187,6 +187,15 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
   useEffect(() => { pickedRef.current = picked; }, [picked]);
   useEffect(() => { customAnswerRef.current = customAnswer; }, [customAnswer]);
 
+  // Auto-grow answer textarea to fit content (composer style)
+  const answerInputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = answerInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [customAnswer]);
+
   const hasAnswer = request.options
     ? (request.multiple
         ? picked.length > 0
@@ -284,13 +293,20 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
           })}
         </fieldset>
       ) : null}
-      <div className="pending-dock__option-input">
-        <input
-          placeholder={t('chat.question_custom_input') || t('chat.question_input_placeholder')}
-          value={customAnswer}
-          onChange={(e) => setCustomAnswer(e.target.value)}
-        />
-      </div>
+      <textarea
+        ref={answerInputRef}
+        className="pending-dock__option-input"
+        rows={2}
+        placeholder={t('chat.question_custom_input') || t('chat.question_input_placeholder')}
+        value={customAnswer}
+        onChange={(e) => setCustomAnswer(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit();
+          }
+        }}
+      />
       <div className="pending-dock__footer">
         <button
           type="button"

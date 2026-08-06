@@ -4005,22 +4005,33 @@ body.bottom-panel-resizing {
   line-height: 1.4;
 }
 
+/* 回答输入框：composer 同款「无感」设计 —— 无边框/无底色，融入卡片表面；
+   聚焦反馈由 .card-slot:focus-within 提供；随内容自动增高 */
 .pending-dock__option-input {
   box-sizing: border-box;
   width: 100%;
-  height: 32px;
+  min-height: 54px;
+  max-height: 200px;
   margin-top: 8px;
-  padding: 0 11px;
-  border: 1px solid var(--material-border);
-  border-radius: 9px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 0;
   color: var(--foreground);
-  font-size: 12.5px;
-  background: var(--material-control);
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+  line-height: 1.5;
+  resize: none;
+  overflow-y: auto;
   outline: none;
 }
 
+.pending-dock__option-input::placeholder {
+  color: var(--muted-foreground);
+}
+
 .pending-dock__option-input:focus {
-  border-color: var(--accent);
+  outline: none;
 }
 
 /* ========== 覆盖 shadcn button 样式，使其与设计稿一致 ========== */
