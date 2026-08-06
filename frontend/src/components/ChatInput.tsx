@@ -153,7 +153,12 @@ export function ChatInput({
   onCreateWorkspace,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
   const [showCommands, setShowCommands] = useState(false);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [highlights, setHighlights] = useState<{ left: number; top: number; width: number; height: number }[]>([]);
   const activeWorkspace = workspaceOptions.find(
     (option) => option.id === activeWorkspaceId,
   );
@@ -162,7 +167,85 @@ export function ChatInput({
     Boolean(value.trim() || attachments.length > 0) && !workspaceMissing;
 
   useEffect(() => {
-    setShowCommands(value.trim().startsWith("/"));
+    const nonWs = value.search(/\S/);
+    const startsSlash = nonWs === 0 && value.charAt(0) === "/";
+    const firstToken = startsSlash ? value.slice(1).split(/\s/)[0] ?? "" : "";
+    const commandCommitted = startsSlash && value.length > firstToken.length + 1;
+    // Pop only while a NEW leading command is being typed (starts with "/" and
+    // no whitespace after it yet). A committed command (followed by whitespace)
+    // closes the menu; mid-string "/" never pops (industry: commands at start).
+    if (commandCommitted || !startsSlash) {
+      setShowCommands(false);
+    } else {
+      setShowCommands(true);
+      setCommandIndex(0);
+    }
+  }, [value]);
+
+  // Leading slash token (text after the leading "/", up to whitespace) for
+  // filtering — only the leading command is a real command. When the partial
+  // matches nothing (e.g. "/" inserted at the head of existing text), fall back
+  // to showing ALL commands so the card still pops.
+  const nonWs = value.search(/\S/);
+  const commandQuery = nonWs === 0 && value.charAt(0) === "/" ? value.slice(1).split(/\s/)[0] ?? "" : "";
+  const filteredCommands = SLASH_COMMANDS.filter((command) => command.slice(1).startsWith(commandQuery));
+  const displayedCommands = filteredCommands.length > 0 ? filteredCommands : SLASH_COMMANDS;
+  const activeCommandIndex = Math.min(commandIndex, Math.max(0, displayedCommands.length - 1));
+
+  useEffect(() => {
+    if (!showCommands) return;
+    const active = menuRef.current?.querySelector(".slash-menu__item--active");
+    active?.scrollIntoView({ block: "nearest" });
+  }, [activeCommandIndex, showCommands]);
+
+  /** The LEADING command token only (a known command or a prefix being typed).
+   * Only the leading token executes (industry: commands run at message start),
+   * so only it gets the highlight box — mid-string "/goal" is plain text. */
+  function commandTokenRanges(text: string): { start: number; end: number }[] {
+    const startIndex = text.search(/\S/); // first non-whitespace char
+    if (startIndex === -1) return [];
+    const match = /\/[\w-]+/.exec(text.slice(startIndex));
+    if (!match || match.index !== 0) return []; // slash token must be the FIRST token
+    const token = match[0];
+    const name = token.slice(1);
+    if (!SLASH_COMMANDS.some((command) => command.slice(1).startsWith(name))) return [];
+    return [{ start: startIndex + match.index, end: startIndex + match.index + token.length }];
+  }
+
+  /** Measure command tokens and position rounded-highlight boxes over them.
+   * The mirror renders plain text (identical metrics to the textarea) so the
+   * caret stays aligned; the pill is a non-layout overlay. */
+  function updateHighlights() {
+    const mirror = mirrorRef.current;
+    const node = mirror?.firstChild;
+    if (!mirror || !node || !value) {
+      setHighlights([]);
+      return;
+    }
+    const mirrorRect = mirror.getBoundingClientRect();
+    const boxes = commandTokenRanges(value)
+      .map((range) => {
+        try {
+          const domRange = document.createRange();
+          domRange.setStart(node, range.start);
+          domRange.setEnd(node, range.end);
+          const rect = domRange.getBoundingClientRect();
+          return {
+            left: rect.left - mirrorRect.left - 3,
+            top: rect.top - mirrorRect.top - 1,
+            width: rect.width + 6,
+            height: rect.height + 2,
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((box): box is { left: number; top: number; width: number; height: number } => box !== null);
+    setHighlights(boxes);
+  }
+
+  useEffect(() => {
+    updateHighlights();
   }, [value]);
 
   async function addFiles(files: FileList | null) {
@@ -213,8 +296,67 @@ export function ChatInput({
   }
 
   function insertCommand(command: string) {
-    onChange(`${command} `);
+    const current = value;
+    const selStart = textareaRef.current?.selectionStart ?? current.length;
+    // Replace the slash token the cursor is currently inside (scan back from the
+    // cursor to the preceding "/", stopping at whitespace), so "hello /" + select
+    // /help produces "hello /help " instead of "hello //help ".
+    let tokenStart = -1;
+    for (let i = selStart - 1; i >= 0; i -= 1) {
+      if (current.charAt(i) === "/") {
+        tokenStart = i;
+        break;
+      }
+      if (/\s/.test(current.charAt(i))) break;
+    }
+    const next =
+      tokenStart >= 0
+        ? current.slice(0, tokenStart) + `${command} ` + current.slice(selStart)
+        : current.slice(0, selStart) + `${command} ` + current.slice(selStart);
+    onChange(next);
     setShowCommands(false);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      const pos = tokenStart >= 0 ? tokenStart + command.length + 1 : selStart + command.length + 1;
+      try {
+        textareaRef.current?.setSelectionRange(pos, pos);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  /** True when the caret sits on/right after the LEADING command token.
+   * Only the leading command is a real command (industry), so only it gets
+   * whole-token backspace deletion. */
+  function commandTokenAt(cursor: number): { start: number; end: number } | null {
+    const current = value;
+    const nonWs = current.search(/\S/);
+    if (nonWs !== 0 || current.charAt(0) !== "/") return null;
+    // The FULL leading token (from "/" to the next whitespace/end).
+    let end = 1;
+    while (end < current.length && !/\s/.test(current.charAt(end))) end += 1;
+    const name = current.slice(1, end);
+    if (!SLASH_COMMANDS.some((command) => command.slice(1).startsWith(name))) return null;
+    if (current.charAt(end) === " ") end += 1;
+    // Only whole-delete when the caret is on/at the token (not past it).
+    if (cursor > end) return null;
+    return { start: 0, end };
+  }
+
+  function deleteCommandToken(cursor: number): void {
+    const token = commandTokenAt(cursor);
+    if (!token) return;
+    const next = value.slice(0, token.start) + value.slice(token.end);
+    onChange(next);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      try {
+        textareaRef.current?.setSelectionRange(token.start, token.start);
+      } catch {
+        // ignore
+      }
+    });
   }
 
   const nextAutonomy: Autonomy = autonomy === "supervised" ? "guarded" : autonomy === "guarded" ? "autonomous" : "supervised";
@@ -292,12 +434,60 @@ export function ChatInput({
 
         <div className="composer__input-box">
           <div className="composer__editor">
+            <div className="composer__input-mirror" ref={mirrorRef} aria-hidden="true">
+              {value}
+              {highlights.map((box, index) => (
+                <span
+                  key={index}
+                  className="composer__cmd-highlight"
+                  style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+                />
+              ))}
+            </div>
             <Textarea
+              ref={textareaRef}
               className="composer__input"
               value={value}
               onChange={(event) => onChange(event.target.value)}
               onPaste={(event) => void handlePaste(event)}
+              onScroll={(event) => {
+                const mirror = mirrorRef.current;
+                if (mirror) mirror.scrollTop = event.currentTarget.scrollTop;
+                updateHighlights();
+              }}
               onKeyDown={(event) => {
+                if (showCommands && displayedCommands.length > 0) {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setCommandIndex((index) => (index + 1) % displayedCommands.length);
+                    return;
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setCommandIndex((index) => (index - 1 + displayedCommands.length) % displayedCommands.length);
+                    return;
+                  }
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    insertCommand(displayedCommands[activeCommandIndex] ?? displayedCommands[0] ?? "");
+                    return;
+                  }
+                }
+                if (event.key === "Backspace") {
+                  const el = textareaRef.current;
+                  // A real selection (e.g. Cmd+A) must be deleted as a whole by the
+                  // default behavior — only whole-delete the leading command when
+                  // the caret sits on it (no selection).
+                  if (el && el.selectionStart === el.selectionEnd) {
+                    const cursor = el.selectionStart ?? value.length;
+                    const token = commandTokenAt(cursor);
+                    if (token && cursor <= token.end) {
+                      event.preventDefault();
+                      deleteCommandToken(cursor);
+                      return;
+                    }
+                  }
+                }
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
                   onSend();
@@ -407,12 +597,14 @@ export function ChatInput({
         </div>
       </CardSlot>
 
-      {showCommands && (
-        <div className="slash-menu">
-          {SLASH_COMMANDS.map((command) => (
+      {showCommands && displayedCommands.length > 0 && (
+        <div className="slash-menu" ref={menuRef}>
+          {displayedCommands.map((command, index) => (
             <button
               type="button"
               key={command}
+              className={index === activeCommandIndex ? "slash-menu__item slash-menu__item--active" : "slash-menu__item"}
+              onMouseEnter={() => setCommandIndex(index)}
               onClick={() => insertCommand(command)}
             >
               <span>{command}</span>

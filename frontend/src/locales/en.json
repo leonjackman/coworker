@@ -93,6 +93,7 @@
   "chat.command_help": "Show available commands",
   "chat.command_new": "Start a new chat",
   "chat.command_clear": "Clear this chat",
+  "chat.command_goal": "Set an autonomous goal and keep working until achieved",
   "chat.command_providers": "Open provider settings",
   "chat.command_settings": "Open settings",
   "chat.command_plan": "Switch to planning mode",

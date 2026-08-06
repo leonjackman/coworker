@@ -93,6 +93,7 @@
   "chat.command_help": "查看可用命令",
   "chat.command_new": "开始新对话",
   "chat.command_clear": "清空当前对话",
+  "chat.command_goal": "设定自主目标，持续开发直到达成",
   "chat.command_providers": "打开提供商管理",
   "chat.command_settings": "打开设置",
   "chat.command_plan": "切换到规划模式",
