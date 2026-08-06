@@ -166,7 +166,7 @@ function ApprovalDock({ request, onResolve }: { request: PendingRequest & { kind
   );
 }
 
-function QuestionDock({ request, index, total, onResolve }: { request: PendingRequest & { kind: 'question' }; index?: number; total?: number; onResolve: (req: PendingRequest & { kind: 'question' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
+function QuestionDock({ request, total, onResolve }: { request: PendingRequest & { kind: 'question' }; total?: number; onResolve: (req: PendingRequest & { kind: 'question' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
   const [resolving, setResolving] = useState(false);
   // Use refs to preserve form state across view switches (component unmount/remount)
   const pickedRef = useRef<number[]>([]);
@@ -229,7 +229,7 @@ function QuestionDock({ request, index, total, onResolve }: { request: PendingRe
     <div className="pending-dock__body">
       {showProgress ? (
         <p className="pending-dock__question-hint">
-          {t('chat.question_progress', { total, index: index ?? 1 })}
+          {t('chat.question_progress', { total })}
         </p>
       ) : null}
       <div className="pending-dock__question" data-slot="question-content">
@@ -362,81 +362,57 @@ function PlanDock({ request, onResolve }: { request: PendingRequest & { kind: 'p
 }
 
 export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksProps) {
-  // 计算问题类请求在全部 pending 中的序号，用于展示 (i/N) 进度
-  const questionOrder = new Map<string, number>();
-  let questionSeq = 0;
-  for (const r of requests) {
-    if (r.kind === 'question') {
-      questionSeq += 1;
-      questionOrder.set(r.approval_id, questionSeq);
-    }
-  }
-  const questionTotal = questionSeq;
+  const front = requests[0];
+  if (!front) return null;
+
+  const isResolving = front.resolving;
+  const kindLabel = front.kind === 'command'
+    ? t('chat.kind_command')
+    : front.kind === 'question'
+      ? t('chat.kind_question')
+      : t('chat.kind_plan');
+  const questionTotal = requests.filter((r) => r.kind === 'question').length;
 
   return (
     <div className="pending-docks" data-slot="pending-docks">
-      {requests.map((request) => {
-        const isResolving = request.resolving;
-        const kindLabel = request.kind === 'command'
-          ? t('chat.kind_command')
-          : request.kind === 'question'
-            ? t('chat.kind_question')
-            : t('chat.kind_plan');
-        const isQuestion = request.kind === 'question';
-        const qIndex = isQuestion ? questionOrder.get(request.approval_id) : undefined;
-        const qTotal = isQuestion ? questionTotal : undefined;
-        const showProgress = isQuestion && (qTotal ?? 0) > 1;
-        const progressPct = showProgress && qTotal ? Math.round(((qIndex ?? 1) / qTotal) * 100) : 0;
-
-        return (
-          <CardSlot
-            key={request.approval_id}
-            className={`pending-dock ${isResolving ? 'pending-dock--resolving' : ''}`}
-            data-slot="pending-dock"
-            data-approval-id={request.approval_id}
-          >
-            <div className="pending-dock__header">
-              <div className="pending-dock__title">
-                <span className="pending-dock__icon">
-                  {request.kind === 'command' ? <Command size={14} /> : request.kind === 'question' ? <HelpCircle size={14} /> : <ListChecks size={14} />}
-                </span>
-                <span className="pending-dock__title-text">
-                  {request.kind === 'command' ? t('chat.command_pending') : request.kind === 'question' ? t('chat.question_pending') : t('chat.plan_pending')}
-                </span>
-                <span className="pending-dock__kind">{kindLabel}</span>
-              </div>
-              <div className="pending-dock__header-actions">
-                {showProgress ? (
-                  <span className="pending-dock__counter">{qIndex} / {qTotal}</span>
-                ) : null}
-                <Tooltip content={t('chat.approval_reject_close')}>
-                  <button
-                    type="button"
-                    className="pending-action-button button-ghost"
-                    onClick={() => onDismiss?.(request)}
-                    disabled={isResolving}
-                    aria-label={t('chat.approval_reject_close')}
-                  >
-                    ✕
-                  </button>
-                </Tooltip>
-              </div>
-            </div>
-            {showProgress ? (
-              <div className="pending-dock__progress">
-                <i style={{ width: `${progressPct}%` }} />
-              </div>
-            ) : null}
-            {request.kind === 'command' ? (
-              <ApprovalDock request={request as PendingRequest & { kind: 'command' }} onResolve={onResolve} />
-            ) : request.kind === 'question' ? (
-              <QuestionDock request={request as PendingRequest & { kind: 'question' }} index={qIndex ?? 1} total={qTotal ?? 1} onResolve={onResolve} />
-            ) : (
-              <PlanDock request={request as PendingRequest & { kind: 'plan' }} onResolve={onResolve} />
-            )}
-          </CardSlot>
-        );
-      })}
+      <CardSlot
+        key={front.approval_id}
+        className={`pending-dock ${isResolving ? 'pending-dock--resolving' : ''}`}
+        data-slot="pending-dock"
+        data-approval-id={front.approval_id}
+      >
+        <div className="pending-dock__header">
+          <div className="pending-dock__title">
+            <span className="pending-dock__icon">
+              {front.kind === 'command' ? <Command size={14} /> : front.kind === 'question' ? <HelpCircle size={14} /> : <ListChecks size={14} />}
+            </span>
+            <span className="pending-dock__title-text">
+              {front.kind === 'command' ? t('chat.command_pending') : front.kind === 'question' ? t('chat.question_pending') : t('chat.plan_pending')}
+            </span>
+            <span className="pending-dock__kind">{kindLabel}</span>
+          </div>
+          <div className="pending-dock__header-actions">
+            <Tooltip content={t('chat.approval_reject_close')}>
+              <button
+                type="button"
+                className="pending-action-button button-ghost"
+                onClick={() => onDismiss?.(front)}
+                disabled={isResolving}
+                aria-label={t('chat.approval_reject_close')}
+              >
+                ✕
+              </button>
+            </Tooltip>
+          </div>
+        </div>
+        {front.kind === 'command' ? (
+          <ApprovalDock request={front as PendingRequest & { kind: 'command' }} onResolve={onResolve} />
+        ) : front.kind === 'question' ? (
+          <QuestionDock request={front as PendingRequest & { kind: 'question' }} total={questionTotal} onResolve={onResolve} />
+        ) : (
+          <PlanDock request={front as PendingRequest & { kind: 'plan' }} onResolve={onResolve} />
+        )}
+      </CardSlot>
     </div>
   );
 }

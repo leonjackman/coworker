@@ -111,7 +111,7 @@
   "chat.kind_command": "命令",
   "chat.kind_question": "问题",
   "chat.kind_plan": "计划",
-  "chat.question_progress": "共 {total} 个问题待处理 · 这是第 {index} 个",
+  "chat.question_progress": "共 {total} 个问题待处理",
   "chat.plan_approve": "批准",
   "chat.plan_reject": "拒绝",
   "chat.plan_regenerate": "重新规划",

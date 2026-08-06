@@ -111,7 +111,7 @@
   "chat.kind_command": "Command",
   "chat.kind_question": "Question",
   "chat.kind_plan": "Plan",
-  "chat.question_progress": "{total} questions pending · this is #{index}",
+  "chat.question_progress": "{total} questions pending",
   "chat.plan_approve": "Approve",
   "chat.plan_reject": "Reject",
   "chat.plan_regenerate": "Regenerate",
