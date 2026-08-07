@@ -188,7 +188,7 @@ function ToolFallbackTrigger({
         <span
           data-slot="tool-fallback-trigger-preview"
           className={cn(
-            "aui-tool-fallback-trigger-preview text-muted-foreground/70 min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs",
+            "aui-tool-fallback-trigger-preview text-muted-foreground/70 min-w-0 flex-[0_0_80%]  overflow-hidden text-ellipsis font-mono text-xs",
             isCancelled && "opacity-60 line-through",
           )}
         >
