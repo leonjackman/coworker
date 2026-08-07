@@ -68,6 +68,7 @@ export interface ChatService {
   getRuntimeConfig: () => Promise<RuntimeConfig>;
   updateRuntimeConfig: (request: RuntimeConfigUpdate) => Promise<RuntimeConfig>;
   sendMessage: (request: ChatRequest) => Promise<ChatResponse>;
+  startGoal: (request: { session_id: string; goal: string; language: string }) => Promise<void>;
   sendMessageStream: (request: ChatRequest, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   listProviders: () => Promise<ProvidersListResponse>;
   createProvider: (request: ProviderPayload) => Promise<void>;
@@ -140,6 +141,13 @@ class ElectronChatService implements ChatService {
       throw new Error('Electron API is unavailable');
     }
     return window.electronAPI.sendChatMessage(request);
+  }
+
+  async startGoal(request: { session_id: string; goal: string; language: string }): Promise<void> {
+    if (!window.electronAPI) {
+      throw new Error('Electron API is unavailable');
+    }
+    await window.electronAPI.goalStart(request);
   }
 
   async sendMessageStream(request: ChatRequest, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
@@ -427,6 +435,14 @@ class HttpChatService implements ChatService {
 
   async sendMessage(request: ChatRequest): Promise<ChatResponse> {
     return this.request<ChatResponse>('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async startGoal(request: { session_id: string; goal: string; language: string }): Promise<void> {
+    return this.request('/goal/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),

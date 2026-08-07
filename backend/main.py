@@ -5,6 +5,7 @@ import shlex
 import signal
 import struct
 import subprocess
+import uuid
 from collections import defaultdict
 from typing import Any, Optional
 
@@ -114,8 +115,15 @@ class ApprovalEventBus:
 
 approval_event_bus = ApprovalEventBus()
 
+
 # Per-session locks to prevent concurrent goal_resume calls for the same session.
 _goal_locks: dict[str, asyncio.Lock] = {}
+# Per-session cancel events for goal streaming termination.
+_goal_cancel_events: dict[str, asyncio.Event] = {}
+# Track active goal stream coroutines by stream_id.
+_goal_active_streams: dict[str, str] = {}  # stream_id -> session_id
+
+SSE_TIMEOUT = int(os.environ.get("COWORKER_SSE_TIMEOUT", str(30 * 60)))
 
 class ChatRequest(BaseModel):
     message: str
@@ -383,6 +391,10 @@ async def chat_stream(request: ChatStreamRequest):
     async def event_stream():
         terminal_sent = False
         accumulated_content = ""
+        goal_parts_accum: list[dict[str, Any]] = []
+        stream_iter: Any
+        in_goal_flag = bool(request.goal_mode)
+        cancel_event: asyncio.Event | None = None
 
         def _persist_assistant(content, mode, provider, model, parts):
             try:
@@ -403,70 +415,102 @@ async def chat_stream(request: ChatStreamRequest):
             except KeyError:
                 pass
 
-        try:
-            goal_parts_accum: list[dict[str, Any]] = []
-            in_goal = bool(request.goal_mode)
-            if request.goal_mode:
-                goal_text = str(request.goal_text or request.message or "")
+        def _handle_event(event):
+            nonlocal terminal_sent, accumulated_content
+            etype = event.get("type", "")
+            if etype == "delta" and event.get("content"):
+                accumulated_content += event.get("content", "")
+            if etype == "todos":
                 try:
-                    session_store.update_goal(session_id, goal_text=goal_text, goal_done=False, goal_paused=False, goal_todos=[])
+                    session_store.update_goal(session_id, goal_todos=event.get("todos") or [])
                 except KeyError:
                     pass
-                stream_iter = runtime.goal_stream(messages, session_id, request.language, work_mode, autonomy, goal_text=goal_text)
-            else:
-                stream_iter = runtime.stream(messages, session_id, request.language, work_mode, autonomy)
-            async for event in stream_iter:
-                event["session_id"] = session_id
-                etype = event.get("type")
-                if etype == "delta" and event.get("content"):
-                    accumulated_content += event.get("content", "")
-                if etype == "todos":
-                    try:
-                        session_store.update_goal(session_id, goal_todos=event.get("todos") or [])
-                    except KeyError:
-                        pass
-                if etype == "done":
-                    if in_goal:
-                        for part in (event.get("parts") or []):
-                            goal_parts_accum.append(part)
-                    else:
-                        _persist_assistant(
-                            event.get("content", ""),
-                            event.get("mode"),
-                            event.get("provider"),
-                            event.get("model"),
-                            event.get("parts"),
-                        )
-                        try:
-                            session_store.update_modes(session_id, work_mode, autonomy)
-                        except KeyError:
-                            pass
-                        terminal_sent = True
-                elif etype == "goal_done":
+            if etype == "done":
+                if in_goal_flag:
+                    for part in (event.get("parts") or []):
+                        goal_parts_accum.append(part)
+                else:
                     _persist_assistant(
                         event.get("content", ""),
-                        request.mode,
-                        "",
-                        request.model or "",
-                        _merge_goal_parts(goal_parts_accum),
+                        event.get("mode"),
+                        event.get("provider"),
+                        event.get("model"),
+                        event.get("parts"),
                     )
                     try:
                         session_store.update_modes(session_id, work_mode, autonomy)
                     except KeyError:
                         pass
                     terminal_sent = True
-                elif etype == "goal_paused":
-                    terminal_sent = True
-                elif etype == "error":
-                    terminal_sent = True
+            elif etype == "goal_done":
+                _persist_assistant(
+                    event.get("content", ""),
+                    request.mode,
+                    "",
+                    request.model or "",
+                    _merge_goal_parts(goal_parts_accum),
+                )
+                try:
+                    session_store.update_modes(session_id, work_mode, autonomy)
+                except KeyError:
+                    pass
+                terminal_sent = True
+            elif etype == "goal_paused":
+                terminal_sent = True
+            elif etype == "error":
+                terminal_sent = True
+
+        if in_goal_flag:
+            goal_text = str(request.goal_text or request.message or "")
+            try:
+                existing = session_store.require(session_id)
+                new_stream_id = existing.goal_stream_id or str(uuid.uuid4())
+                session_store.update_goal(
+                    session_id, goal_text=goal_text, goal_done=False, goal_paused=False,
+                    goal_todos=[], goal_stopped=False, goal_interrupted=False,
+                    goal_force_count=0, goal_just_edited=False, goal_stream_id=new_stream_id,
+                )
+            except KeyError:
+                pass
+            cancel_event = asyncio.Event()
+            _goal_cancel_events[session_id] = cancel_event
+            runtime = agent_registry.get_stream_runtime(
+                request.mode, request.provider_id, request.model,
+                resolved_workspace, referenced_sessions=referenced_ids,
+            )
+            try:
+                stream_id = session_store.require(session_id).goal_stream_id or ""
+            except KeyError:
+                stream_id = ""
+            stream_iter = runtime.goal_stream(
+                messages, session_id, request.language, work_mode, autonomy,
+                goal_text=goal_text, goal_continue_first=False,
+                _cancel_event=cancel_event, goal_stream_id=stream_id,
+            )
+        else:
+            runtime = agent_registry.get_stream_runtime(
+                request.mode, request.provider_id, request.model,
+                resolved_workspace, referenced_sessions=referenced_ids,
+            )
+            stream_iter = runtime.stream(
+                messages, session_id, request.language, work_mode, autonomy,
+            )
+
+        try:
+            async for event in stream_iter:
+                event["session_id"] = session_id
+                _handle_event(event)
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
         except BaseException as exc:
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
-            # Persist the accumulated content so the partial reply survives a
-            # stale stream (client-side abort / tab switch / network blip).
-            _persist_assistant(
-                accumulated_content, request.mode, "", request.model or "", []
-            ) if accumulated_content else None
+            if accumulated_content:
+                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+            if cancel_event is not None:
+                _goal_cancel_events.pop(session_id, None)
+                try:
+                    session_store.update_goal(session_id, goal_interrupted=True)
+                except KeyError:
+                    pass
             try:
                 session_store.update_modes(session_id, work_mode, autonomy)
             except KeyError:
@@ -474,10 +518,6 @@ async def chat_stream(request: ChatStreamRequest):
             terminal_sent = True
             yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
         else:
-            # The stream completed without raising, but no terminal frame
-            # (done/error) was emitted. This happens when the agent runtime
-            # exits without yielding `done`. Guarantee a terminal frame so the
-            # client never gets stuck showing the "running" (blue bar) state.
             if not terminal_sent:
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
                 try:
@@ -541,9 +581,12 @@ async def set_settings(request: SettingsUpdate):
 
 @app.post("/goal/stop")
 async def goal_stop(request: GoalStopRequest):
-    """Stop an active goal loop: set the stopped flag so the loop terminates."""
+    """Stop an active goal loop: set flags and trigger cancel event for immediate exit."""
     try:
-        session_store.update_goal(request.session_id, goal_stopped=True)
+        session_store.update_goal(request.session_id, goal_stopped=True, goal_interrupted=True)
+        cancel = _goal_cancel_events.pop(request.session_id, None)
+        if cancel:
+            cancel.set()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "stopped", "session_id": request.session_id}
@@ -551,6 +594,13 @@ async def goal_stop(request: GoalStopRequest):
 class GoalEditRequest(BaseModel):
     session_id: str
     goal: str
+
+
+class GoalStartRequest(BaseModel):
+    session_id: str
+    goal: str
+    language: Language = "zh"
+
 
 @app.get("/goal/status")
 async def goal_status(session_id: str):
@@ -576,6 +626,7 @@ async def goal_status(session_id: str):
 async def goal_pause(request: GoalPauseRequest):
     try:
         session_store.update_goal(request.session_id, goal_paused=True)
+        _goal_cancel_events.pop(request.session_id, None)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "ok", "session_id": request.session_id, "goal_paused": True}
@@ -583,23 +634,15 @@ async def goal_pause(request: GoalPauseRequest):
 @app.post("/goal/edit")
 async def goal_edit(request: GoalEditRequest):
     try:
-        session_store.update_goal(request.session_id, goal_text=request.goal)
+        session_store.update_goal(request.session_id, goal_text=request.goal, goal_just_edited=True)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "ok", "session_id": request.session_id, "goal_text": request.goal}
 
-@app.post("/goal/delete")
-async def goal_delete(request: GoalPauseRequest):
-    try:
-        session_store.update_goal(request.session_id, goal_text="", goal_done=False, goal_paused=False, goal_todos=[], goal_stopped=False)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"status": "ok", "session_id": request.session_id}
 
-@app.post("/goal/resume")
-async def goal_resume(request: GoalResumeRequest):
-    """Resume a paused goal: clear the pause flag and continue the autonomous
-    goal loop from the checkpoint (round 2+), streaming progress via SSE."""
+@app.post("/goal/start")
+async def goal_start(request: GoalStartRequest):
+    """Start a goal loop: set goal_text and begin autonomous run."""
     lock = _goal_locks.get(request.session_id)
     if lock is None:
         lock = asyncio.Lock()
@@ -610,7 +653,58 @@ async def goal_resume(request: GoalResumeRequest):
             session = session_store.require(request.session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        session_store.update_goal(request.session_id, goal_paused=False, goal_stopped=False)
+
+        goal_text = request.goal or str(session.goal_text or "")
+        work_mode = normalize_work_mode(session.work_mode)
+        autonomy = normalize_autonomy(session.autonomy)
+        language = request.language
+
+        # Reset goal state
+        session_store.update_goal(
+            request.session_id,
+            goal_text=goal_text,
+            goal_done=False,
+            goal_paused=False,
+            goal_todos=[],
+            goal_stopped=False,
+            goal_interrupted=False,
+            goal_force_count=0,
+            goal_just_edited=False,
+            goal_stream_id=str(uuid.uuid4()),
+        )
+
+        return { "status": "ok", "goal_text": goal_text }
+
+@app.post("/goal/delete")
+async def goal_delete(request: GoalPauseRequest):
+    try:
+        session_store.update_goal(request.session_id, goal_text="", goal_done=False, goal_paused=False, goal_todos=[], goal_stopped=False, goal_interrupted=False, goal_force_count=0, goal_stream_id="")
+        _goal_cancel_events.pop(request.session_id, None)
+        for sid, vlist in list(_goal_active_streams.items()):
+            if vlist == request.session_id:
+                _goal_active_streams.pop(sid, None)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "session_id": request.session_id}
+
+@app.post("/goal/resume")
+async def goal_resume(request: GoalResumeRequest):
+    """Resume a paused goal: clear the pause flag and continue the autonomous
+    goal loop from the checkpoint (round 2+), streaming progress via SSE."""
+    stream_id = str(uuid.uuid4())
+    _goal_active_streams[stream_id] = request.session_id
+    lock = _goal_locks.get(request.session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _goal_locks[request.session_id] = lock
+
+    async with lock:
+        try:
+            session = session_store.require(request.session_id)
+        except KeyError as exc:
+            _goal_active_streams.pop(stream_id, None)
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        session_store.update_goal(request.session_id, goal_paused=False, goal_stopped=False, goal_interrupted=False, goal_stream_id=stream_id)
         goal_text = session.goal_text
         work_mode = normalize_work_mode(session.work_mode)
         autonomy = normalize_autonomy(session.autonomy)
@@ -621,41 +715,65 @@ async def goal_resume(request: GoalResumeRequest):
             resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
             runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids)
         except (KeyError, ValueError, RuntimeError) as exc:
+            _goal_active_streams.pop(stream_id, None)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        cancel_event = asyncio.Event()
+        _goal_cancel_events[request.session_id] = cancel_event
 
         async def event_stream():
             terminal_sent = False
             goal_parts_accum: list[dict[str, Any]] = []
             try:
-                async for event in runtime.goal_stream([], request.session_id, language, work_mode, autonomy, goal_text=goal_text, goal_continue_first=True):
-                    event["session_id"] = request.session_id
-                    etype = event.get("type")
-                    if etype == "done":
-                        for part in (event.get("parts") or []):
-                            goal_parts_accum.append(part)
-                    elif etype == "goal_done":
-                        try:
-                            session_store.update_goal(request.session_id, goal_done=True)
-                            session_store.append_message(
-                                request.session_id,
-                                role="assistant",
-                                content=str(event.get("content") or ""),
-                                mode="single",
-                                work_mode=work_mode,
-                                autonomy=autonomy,
-                                parts=_merge_goal_parts(goal_parts_accum),
-                            )
-                        except KeyError:
-                            pass
-                        terminal_sent = True
-                    elif etype == "goal_paused":
-                        terminal_sent = True
-                    yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-            except Exception as exc:
+                async with asyncio.timeout(SSE_TIMEOUT):
+                    async for event in runtime.goal_stream(
+                        [], request.session_id, language, work_mode, autonomy,
+                        goal_text=goal_text, goal_continue_first=True,
+                        _cancel_event=cancel_event, goal_stream_id=stream_id,
+                    ):
+                        event["session_id"] = request.session_id
+                        etype = event.get("type")
+                        if etype == "done":
+                            for part in (event.get("parts") or []):
+                                goal_parts_accum.append(part)
+                        elif etype == "goal_done":
+                            try:
+                                session_store.update_goal(request.session_id, goal_done=True)
+                                session_store.append_message(
+                                    request.session_id,
+                                    role="assistant",
+                                    content=str(event.get("content") or ""),
+                                    mode="single",
+                                    work_mode=work_mode,
+                                    autonomy=autonomy,
+                                    parts=_merge_goal_parts(goal_parts_accum),
+                                )
+                            except KeyError:
+                                pass
+                            terminal_sent = True
+                        elif etype == "goal_paused":
+                            terminal_sent = True
+                        yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+            except asyncio.TimeoutError:
+                try:
+                    session_store.update_goal(request.session_id, goal_interrupted=True)
+                except KeyError:
+                    pass
+                yield f"data: {_json.dumps({'type': 'goal_done', 'session_id': request.session_id, 'content': '', 'reason': 'timeout'}, ensure_ascii=False)}\n\n"
+                return
+            except BaseException as exc:
+                _goal_cancel_events.pop(request.session_id, None)
+                if isinstance(exc, (asyncio.CancelledError, GeneratorExit, asyncio.TimeoutError)):
+                    try:
+                        session_store.update_goal(request.session_id, goal_interrupted=True)
+                    except KeyError:
+                        pass
+                _goal_cancel_events.pop(request.session_id, None)
                 yield f"data: {_json.dumps({'type': 'error', 'session_id': request.session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
                 return
-            if not terminal_sent:
-                yield f"data: {_json.dumps({'type': 'done', 'session_id': request.session_id, 'content': '', 'stream_end': True}, ensure_ascii=False)}\n\n"
+            finally:
+                _goal_cancel_events.pop(request.session_id, None)
+                _goal_active_streams.pop(stream_id, None)
 
         return StreamingResponse(
             event_stream(),

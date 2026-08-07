@@ -49,6 +49,9 @@ class Session:
     goal_max_rounds: int = 50
     goal_force_count: int = 0
     goal_stopped: bool = False
+    goal_just_edited: bool = False
+    goal_stream_id: str = ""
+    goal_interrupted: bool = False
     title_auto: bool = False
     messages: list[SessionMessage] = field(default_factory=list)
 
@@ -74,6 +77,9 @@ class Session:
             goal_max_rounds=int(payload.get("goal_max_rounds", 50)),
             goal_force_count=int(payload.get("goal_force_count", 0)),
             goal_stopped=bool(payload.get("goal_stopped", False)),
+            goal_just_edited=bool(payload.get("goal_just_edited", False)),
+            goal_stream_id=str(payload.get("goal_stream_id", "")),
+            goal_interrupted=bool(payload.get("goal_interrupted", False)),
             title_auto=bool(payload.get("title_auto", False)),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
@@ -95,7 +101,11 @@ class Session:
             "goal_paused": self.goal_paused,
             "goal_todos": self.goal_todos,
             "goal_max_rounds": self.goal_max_rounds,
+            "goal_force_count": self.goal_force_count,
             "goal_stopped": self.goal_stopped,
+            "goal_just_edited": self.goal_just_edited,
+            "goal_stream_id": self.goal_stream_id,
+            "goal_interrupted": self.goal_interrupted,
             "message_count": len(self.messages),
         }
 
@@ -115,6 +125,9 @@ class Session:
             "goal_max_rounds": self.goal_max_rounds,
             "goal_force_count": self.goal_force_count,
             "goal_stopped": self.goal_stopped,
+            "goal_just_edited": self.goal_just_edited,
+            "goal_stream_id": self.goal_stream_id,
+            "goal_interrupted": self.goal_interrupted,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -190,6 +203,9 @@ class SessionStore:
         goal_max_rounds: int | None = None,
         goal_force_count: int | None = None,
         goal_stopped: bool | None = None,
+        goal_just_edited: bool | None = None,
+        goal_stream_id: str | None = None,
+        goal_interrupted: bool | None = None,
     ) -> Session:
         session = self.require(session_id)
         if goal_text is not None:
@@ -206,6 +222,12 @@ class SessionStore:
             session.goal_force_count = goal_force_count
         if goal_stopped is not None:
             session.goal_stopped = goal_stopped
+        if goal_just_edited is not None:
+            session.goal_just_edited = goal_just_edited
+        if goal_stream_id is not None:
+            session.goal_stream_id = goal_stream_id
+        if goal_interrupted is not None:
+            session.goal_interrupted = goal_interrupted
         self.save(session)
         return session
 

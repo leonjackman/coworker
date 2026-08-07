@@ -1998,6 +1998,12 @@ body.bottom-panel-resizing {
   flex: 1;
 }
 
+.sidebar-session__goal-icon {
+  flex: 0 0 auto;
+  color: var(--ring);
+  display: inline-flex;
+}
+
 .sidebar-session__time {
   flex: 0 0 auto;
   font-size: 11.5px;
@@ -2228,6 +2234,47 @@ body.bottom-panel-resizing {
   font-size: 12px;
   color: var(--destructive, #f44336);
   line-height: 1.5;
+}
+
+.goal-card__tools {
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: var(--muted);
+  border-radius: 4px;
+}
+
+.goal-card__tools-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+
+.goal-card__tools-list {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.goal-card__tool-item {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+.goal-card__tool-name {
+  color: var(--accent-foreground);
+}
+
+.goal-card__reason {
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+  margin-top: 4px;
+  font-style: italic;
 }
 
 .goal-card__todo {

@@ -90,8 +90,9 @@ declare global {
       goalStop: (sessionId: string) => Promise<{ status: string }>;
       goalEdit: (payload: { session_id: string; goal: string }) => Promise<{ status: string }>;
       goalDelete: (sessionId: string) => Promise<{ status: string }>;
-      goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
-      fetchSettings?: () => Promise<{ goal_max_rounds: number }>;
+  goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
+  goalStart: (request: { session_id: string; goal: string; language: string }) => Promise<{ status: string }>;
+  fetchSettings?: () => Promise<{ goal_max_rounds: number }>;
       saveSettings?: (settings: { goal_max_rounds?: number }) => Promise<{ status: string; goal_max_rounds: number }>;
     };
   }

@@ -245,6 +245,9 @@ export interface SessionSummary {
   work_mode?: string;
   autonomy?: string;
   message_count: number;
+  goal_done?: boolean;
+  goal_paused?: boolean;
+  goal_text?: string;
 }
 
 export interface ProjectEntry {
@@ -508,10 +511,13 @@ export interface PendingRequest {
     | { type: 'goal_start'; goal: string; session_id?: string }
     | { type: 'goal_round'; round: number; goal: string; status?: string; session_id?: string }
     | { type: 'goal_checkpoint'; achieved: boolean; progress?: string; verification?: string; session_id?: string }
-    | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number; session_id?: string; stalled?: boolean; reason?: string }
+    | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number; session_id?: string; stalled?: boolean; reason?: string; already?: boolean }
     | { type: 'goal_paused'; goal?: string; round?: number; session_id?: string }
     | { type: 'goal_force'; round: number; reason: string; count: number; session_id?: string }
-    | { type: 'todos'; todos: GoalTodo[]; session_id?: string };
+    | { type: 'todos'; todos: GoalTodo[]; session_id?: string }
+    | { type: 'goal_stream_id'; stream_id: string; session_id: string }
+    | { type: 'goal_system'; content: string; session_id?: string }
+    | { type: 'goal_attached'; stream_id: string; session_id: string };
 
 export interface GoalTodo {
   content: string;
@@ -530,10 +536,13 @@ export interface GoalState {
   reason?: string;
   verification?: string;
   editingDraft?: boolean;
+  recentToolNames?: string[];
 }
 
 export interface GoalStatusResponse {
   status: string;
   session_id: string;
   goal: GoalState;
+  goal_stream_id?: string;
+  goal_interrupted?: boolean;
 }

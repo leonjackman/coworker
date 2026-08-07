@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -64,6 +65,7 @@ class CoworkerAgentState(AgentState[Any]):
     goal_mode: NotRequired[bool]
     goal_text: NotRequired[str]
     goal_done: NotRequired[bool]
+    goal_nudge: NotRequired[str]
     todos: NotRequired[list[Any]]
 
 
@@ -1341,9 +1343,13 @@ class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             tools.append(self._finalize_tool)
         goal_text = str(request.state.get("goal_text") or "")
         autonomy = normalize_autonomy(request.state.get("autonomy"))
+        nudge = request.state.get("goal_nudge")
+        prompt = goal_system_prompt(self.language, goal_text, autonomy)
+        if nudge:
+            prompt = f"{prompt}\n\n[Coworker] {str(nudge)[:1000]}"
         return {
             "tools": tools,
-            "system_message": SystemMessage(goal_system_prompt(self.language, goal_text, autonomy)),
+            "system_message": SystemMessage(prompt),
         }
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
@@ -1677,7 +1683,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
     async def _stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool,
-        goal_mode: bool = False, goal_text: str = "", goal_continue: bool = False, _nudge: str = "",
+        goal_mode: bool = False, goal_text: str = "", goal_continue: bool = False, _nudge: str = "", _cancel_event: Any = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
@@ -1698,9 +1704,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             prepared_messages = []
         else:
             prepared_messages = prepare_agent_messages(messages)
-        # Inject force-loop nudge as a synthetic user message.
-        if _nudge:
-            prepared_messages.append({"role": "user", "content": _nudge})
         turn_index = self._next_turn_index(session_id)
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
@@ -1724,6 +1727,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             if goal_mode:
                 inputs["goal_mode"] = True
                 inputs["goal_text"] = goal_text
+            if _nudge:
+                inputs["goal_nudge"] = _nudge
             config = agent_run_config(
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
                 language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
@@ -1764,6 +1769,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         for node_update in chunk.values():
                             if isinstance(node_update, dict) and "todos" in node_update:
                                 yield {"type": "todos", "todos": node_update.get("todos") or []}
+                        if _cancel_event and _cancel_event.is_set():
+                            raise asyncio.CancelledError("Goal cancelled mid-stream")
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
                 raise
@@ -1784,6 +1791,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         autonomy: Autonomy,
         goal_text: str = "",
         goal_continue_first: bool = False,
+        _cancel_event: Any = None,
+        goal_stream_id: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Autonomous /goal loop (Codex Goal mode): rounds until the agent calls
         ``finalize_goal(achieved=True)`` or the goal is paused.
@@ -1797,6 +1806,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 session_state = self.session_store.require(session_id)
                 goal_text = str(session_state.goal_text or goal_text)
                 goal_max_rounds = int(session_state.goal_max_rounds or 50)
+                if session_state.goal_interrupted:
+                    yield {"type": "goal_done", "round": 0, "goal": goal_text, "content": "", "reason": "interrupted"}
+                    return
                 if session_state.goal_done:
                     # Already achieved — nothing left to run.
                     yield {"type": "goal_done", "round": 0, "goal": goal_text, "content": "", "already": True}
@@ -1809,23 +1821,30 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         yield {"type": "goal_start", "goal": goal_text, "session_id": session_id}
         while True:
             round_no += 1
-            # Re-read goal_text from store so inline edits are visible each round.
+            # Read session state: goal_just_edited flag, goal_text, stop request, max_rounds.
+            session_state: Any = None
             if self.session_store is not None:
                 try:
                     session_state = self.session_store.require(session_id)
                     goal_text = str(session_state.goal_text or goal_text)
-                    # Check for explicit stop request.
+                    if session_state.goal_just_edited:
+                        session_state.goal_just_edited = False
+                        self.session_store.save(session_state)
+                        yield {"type": "goal_edited", "round": round_no, "goal": goal_text, "stream_id": goal_stream_id}
                     if session_state.goal_stopped:
                         yield {
                             "type": "goal_done", "round": round_no, "goal": goal_text,
                             "content": "", "reason": "stopped",
                         }
                         return
+                    goal_max_rounds = int(session_state.goal_max_rounds or 50)
                 except Exception:
-                    pass
+                    goal_max_rounds = 0
+            else:
+                goal_max_rounds = 0
             is_first = round_no == 1
             # Max rounds guard: stop when we exceed goal_max_rounds (0 = no limit).
-            if self.session_store is not None and goal_max_rounds > 0 and round_no > goal_max_rounds:
+            if goal_max_rounds > 0 and round_no > goal_max_rounds:
                 yield {
                     "type": "goal_done", "round": round_no, "goal": goal_text,
                     "content": "", "reason": "max_rounds_exceeded",
@@ -1833,20 +1852,29 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 return
             yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running"}
             round_had_tools = False
-            async for event in self._stream(
-                messages if (is_first and not goal_continue_first) else [],
-                session_id, language, work_mode, autonomy, rerun=False,
-                goal_mode=True, goal_text=goal_text,
-                goal_continue=(not is_first or goal_continue_first),
-            ):
-                etype = event.get("type", "")
-                if etype == "goal_checkpoint":
-                    last_checkpoint = event
-                elif etype == "todos":
-                    last_todos = event.get("todos") or []
-                elif etype == "tool_start":
-                    round_had_tools = True
-                yield event
+            try:
+                async with asyncio.timeout(600):  # 5 min per turn
+                    async for event in self._stream(
+                        messages if (is_first and not goal_continue_first) else [],
+                        session_id, language, work_mode, autonomy, rerun=False,
+                        goal_mode=True, goal_text=goal_text,
+                        goal_continue=(not is_first or goal_continue_first),
+                        _cancel_event=_cancel_event,
+                    ):
+                        etype = event.get("type", "")
+                        if etype == "goal_checkpoint":
+                            last_checkpoint = event
+                        elif etype == "todos":
+                            last_todos = event.get("todos") or []
+                        elif etype == "tool_start":
+                            round_had_tools = True
+                        yield event
+            except asyncio.TimeoutError:
+                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
+                return
+            except asyncio.CancelledError:
+                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
+                return
             # Round boundary decision.
             paused = False
             if self.session_store is not None:
@@ -1899,28 +1927,37 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     last_checkpoint = None
                     last_todos = []
                     round_had_tools = False
-                    # Re-invoke _stream with a nudge appended as a synthetic user message.
+                    # Re-invoke _stream with a nudge appended via state.
                     nudge = (
                         "\n\n[Coworker] You gave a plain-text answer without calling "
                         "`finalize_goal` or using any tools. Keep working toward the goal "
                         "using your tools (read_file, search_files, write_file, run_command, etc.) "
                         "and call finalize_goal when done."
                     )
-                    async for event in self._stream(
-                        messages if (is_first and not goal_continue_first) else [],
-                        session_id, language, work_mode, autonomy, rerun=False,
-                        goal_mode=True, goal_text=goal_text,
-                        goal_continue=(not is_first or goal_continue_first),
-                        _nudge=nudge,
-                    ):
-                        etype = event.get("type", "")
-                        if etype == "goal_checkpoint":
-                            last_checkpoint = event
-                        elif etype == "todos":
-                            last_todos = event.get("todos") or []
-                        elif etype == "tool_start":
-                            round_had_tools = True
-                        yield event
+                    try:
+                        async with asyncio.timeout(5 * 60):  # 5 min per turn
+                            async for event in self._stream(
+                                messages if (is_first and not goal_continue_first) else [],
+                                session_id, language, work_mode, autonomy, rerun=False,
+                                goal_mode=True, goal_text=goal_text,
+                                goal_continue=(not is_first or goal_continue_first),
+                                _nudge=nudge,
+                                _cancel_event=_cancel_event,
+                            ):
+                                etype = event.get("type", "")
+                                if etype == "goal_checkpoint":
+                                    last_checkpoint = event
+                                elif etype == "todos":
+                                    last_todos = event.get("todos") or []
+                                elif etype == "tool_start":
+                                    round_had_tools = True
+                                yield event
+                    except asyncio.TimeoutError:
+                        yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
+                        return
+                    except asyncio.CancelledError:
+                        yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
+                        return
                     # Check again after the forced continuation.
                     if last_checkpoint is not None:
                         continue
@@ -1942,21 +1979,30 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                 self.session_store.update_goal(session_id, goal_force_count=goal_force)
                             except Exception:
                                 pass
-                        async for event in self._stream(
-                            messages if (is_first and not goal_continue_first) else [],
-                            session_id, language, work_mode, autonomy, rerun=False,
-                            goal_mode=True, goal_text=goal_text,
-                            goal_continue=(not is_first or goal_continue_first),
-                            _nudge=nudge,
-                        ):
-                            etype = event.get("type", "")
-                            if etype == "goal_checkpoint":
-                                last_checkpoint = event
-                            elif etype == "todos":
-                                last_todos = event.get("todos") or []
-                            elif etype == "tool_start":
-                                round_had_tools = True
-                            yield event
+                        try:
+                            async with asyncio.timeout(600):  # 5 min per turn
+                                async for event in self._stream(
+                                    messages if (is_first and not goal_continue_first) else [],
+                                    session_id, language, work_mode, autonomy, rerun=False,
+                                    goal_mode=True, goal_text=goal_text,
+                                    goal_continue=(not is_first or goal_continue_first),
+                                    _nudge=nudge,
+                                    _cancel_event=_cancel_event,
+                                ):
+                                    etype = event.get("type", "")
+                                    if etype == "goal_checkpoint":
+                                        last_checkpoint = event
+                                    elif etype == "todos":
+                                        last_todos = event.get("todos") or []
+                                    elif etype == "tool_start":
+                                        round_had_tools = True
+                                    yield event
+                        except asyncio.CancelledError:
+                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
+                            return
+                        except asyncio.TimeoutError:
+                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
+                            return
                     if last_checkpoint is not None:
                         continue
                 # Force exhausted or goal_force >= MAX_FORCE — stop with stall signal.

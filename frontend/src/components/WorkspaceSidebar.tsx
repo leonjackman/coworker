@@ -1,4 +1,4 @@
-import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -36,9 +36,10 @@ interface SessionRowProps {
   active: boolean;
   onOpen: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
+  goalIndicatorSessionId?: string;
 }
 
-function SessionRow({ session, active, onOpen, onDelete }: SessionRowProps) {
+function SessionRow({ session, active, onOpen, onDelete, goalIndicatorSessionId }: SessionRowProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyId = async () => {
@@ -54,6 +55,7 @@ function SessionRow({ session, active, onOpen, onDelete }: SessionRowProps) {
   return (
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
+        {goalIndicatorSessionId === session.id && <Target size={13} className="sidebar-session__goal-icon" />}
         <span className="sidebar-session__title">{session.title}</span>
         <span className="sidebar-session__time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
       </button>

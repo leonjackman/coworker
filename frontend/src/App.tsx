@@ -141,6 +141,7 @@ function App() {
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
   const activeAssistantMessageIdRef = useRef<string | undefined>(undefined);
   const streamStartAtRef = useRef<number | null>(null);
+  const goalStreamIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -204,6 +205,7 @@ function App() {
         }
         await refreshSessions();
         await refreshProjects();
+        try { await chatService.fetchSettings(); } catch { /* ignore */ }
       } catch (error) {
         console.error('Failed to load runtime config:', error);
         if (!mounted) return;
@@ -278,13 +280,16 @@ function App() {
         await chatService.editGoal(sid, newGoal);
         await new Promise((r) => setTimeout(r, 300));
         setEditingGoalDraft(false);
+        // Only auto-resume if the goal was paused
+        const wasPaused = goal.paused;
         setGoal({ goalText: newGoal, done: false, paused: false, todos: [], running: true, round: 0, progress: '', editingDraft: false });
         setMessages((current) => [
           ...current,
           createMessage('assistant', `目标已更新为：${newGoal}`, { status: 'done' }),
         ]);
-        // 目标编辑后始终恢复执行
-        void resumeGoal();
+        if (wasPaused) {
+          void resumeGoal();
+        }
       } catch (error) {
         console.error('Failed to edit goal:', error);
       }
@@ -507,6 +512,14 @@ function App() {
           if (event.parts && event.parts.length > 0) {
             localParts = mergeMessageParts(localParts, event.parts);
           }
+          // Track recent tool names for goal card display
+          const toolNames = event.parts
+            ?.filter((p) => p.type === 'tool')
+            .map((p) => (p as Extract<MessagePart, { type: 'tool' }>).name)
+            .filter(Boolean);
+          if (toolNames && toolNames.length > 0) {
+            setGoal((current) => ({ ...current, recentToolNames: toolNames }));
+          }
           setMessages((current) =>
             current.map((item) =>
               item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -579,6 +592,15 @@ function App() {
               : item,
           ),
         );
+      } else if (event.type === 'goal_stream_id') {
+        goalStreamIdRef.current = event.stream_id;
+      } else if (event.type === 'goal_system') {
+        setMessages((current) => [
+          ...current,
+          createMessage('assistant', event.content, { status: 'done' }),
+        ]);
+      } else if (event.type === 'goal_attached') {
+        goalStreamIdRef.current = event.stream_id;
       }
     };
 
@@ -612,11 +634,48 @@ function App() {
       await refreshSessions();
       await refreshProjects();
       setChangesRefreshKey((value) => value + 1);
+      // For goal mode: check if the goal stream ended naturally and query final status
+      if (inGoal && override?.goalMode) {
+        void (async () => {
+          try {
+            const status = await chatService.getGoalStatus(sessionIdRef.current || '');
+            if (status.status === 'done') {
+              setGoal((current) => {
+                const next: GoalState = { ...current, done: true, running: false, stalled: status.goal?.stalled || false, progress: status.goal?.progress || current.progress };
+                if (status.goal?.reason) next.reason = status.goal.reason;
+                return next;
+              });
+            } else if (status.status === 'paused') {
+              setGoal((current) => ({ ...current, paused: true, running: false }));
+            }
+          } catch { /* ignore */ }
+        })();
+      }
       _generateSessionTitleIfNeeded(message, streamedContent, sessionIdRef.current);
     } catch (error) {
       if (requestId !== requestSeqRef.current) return;
       console.error('Failed to stream message:', error);
       if ((error as Error).name === 'AbortError') {
+        // For goal mode, stopGoal calls abortRef.abort() — check session status to let backend finalize
+        if (inGoal) {
+          void (async () => {
+            try {
+              if (!sessionIdRef.current) throw new Error('no session');
+              const status = await chatService.getGoalStatus(sessionIdRef.current);
+              if (status.status === 'done') {
+                setGoal((current) => {
+                  const next: GoalState = { ...current, done: true, running: false, stalled: status.goal?.stalled || false, progress: status.goal?.progress || current.progress };
+                  if (status.goal?.reason) next.reason = status.goal.reason;
+                  return next;
+                });
+              } else if (status.status === 'paused') {
+                setGoal((current) => ({ ...current, paused: true, running: false }));
+              } else {
+                setGoal((current) => ({ ...current, running: false }));
+              }
+            } catch { /* ignore */ }
+          })();
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -1594,7 +1653,7 @@ function App() {
     const targetSessionId = sessionIdRef.current;
     if (!targetSessionId) return;
     try {
-      await chatService.resumeGoal(targetSessionId, handleGoalResumeEvent);
+      await chatService.resumeGoal(targetSessionId, handleGoalResumeEventWithChat);
     } catch (error) {
       console.error('Failed to resume goal:', error);
       setGoal((current) => ({ ...current, running: false }));
@@ -1605,23 +1664,20 @@ function App() {
     if (!sessionIdRef.current) return;
     try {
       await chatService.stopGoal(sessionIdRef.current);
-      setGoal((current) => ({ ...current, running: false, done: true }));
+      setGoal((current) => ({ ...current, running: false }));
     } catch (error) {
       console.error('Failed to stop goal:', error);
     }
   };
 
-  const toggleTodo = async (index: number) => {
+  const toggleTodo = (index: number) => {
     const todo = goal.todos[index];
     if (!todo) return;
     const newStatus = todo.status === 'completed' ? 'pending' : 'completed';
-    const newTodos = goal.todos.map((t, i) => (i === index ? { ...t, status: newStatus } : t));
-    setGoal((current) => ({ ...current, todos: newTodos }));
-    try {
-      await chatService.editGoal(sessionIdRef.current, goal.goalText);
-    } catch (error) {
-      console.error('Failed to sync todo:', error);
-    }
+    setGoal((current) => {
+      const newTodos = current.todos.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t));
+      return { ...current, todos: newTodos };
+    });
   };
 
   const draftEditGoal = () => {
@@ -1638,7 +1694,12 @@ function App() {
     if (!sessionIdRef.current) return;
     try {
       await chatService.editGoal(sessionIdRef.current, goalText);
+      // Only auto-resume if the goal was paused
+      const wasPaused = goal.paused;
       setGoal((current) => ({ ...current, goalText, editingDraft: false }));
+      if (wasPaused) {
+        void resumeGoal();
+      }
     } catch (error) {
       console.error('Failed to edit goal:', error);
     }
@@ -1677,6 +1738,53 @@ function App() {
       setGoal((current) => ({ ...current, paused: true, running: false }));
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
+    }
+  };
+
+  const handleGoalResumeEventWithChat = (event: StreamEvent) => {
+    if (event.session_id && event.session_id !== sessionIdRef.current) return;
+    if (event.type === 'goal_start' || event.type === 'goal_round') {
+      setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
+    } else if (event.type === 'goal_checkpoint') {
+      setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
+    } else if (event.type === 'todos') {
+      setGoal((current) => ({ ...current, todos: event.todos }));
+    } else if (event.type === 'goal_system') {
+      // Display system messages in chat
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', event.content, { status: 'done' }),
+      ]);
+    } else if (event.type === 'goal_stream_id') {
+      goalStreamIdRef.current = event.stream_id;
+    } else if (event.type === 'goal_attached') {
+      goalStreamIdRef.current = event.stream_id;
+    } else if (event.type === 'goal_done') {
+      setGoal((current) => {
+        const next: GoalState = { ...current, done: true, running: false, stalled: event.stalled || false, progress: event.content || current.progress };
+        if (event.reason) next.reason = event.reason;
+        return next;
+      });
+      const content = event.content;
+      if (content) {
+        setMessages((current) => [
+          ...current,
+          createMessage('assistant', content, { status: event.stalled ? 'error' : 'done' }),
+        ]);
+      }
+    } else if (event.type === 'goal_paused') {
+      setGoal((current) => ({ ...current, paused: true, running: false }));
+    } else if (event.type === 'goal_force') {
+      setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
+    } else if (event.type === 'delta') {
+      // Append streaming deltas to the last assistant message in goal context
+      setMessages((current) => {
+        const last = [...current].reverse().find((m) => m.role === 'assistant' && !m.content.includes('目标已更新'));
+        if (last) {
+          return current.map((m) => m.id === last.id ? { ...m, content: m.content + event.content } : m);
+        }
+        return current;
+      });
     }
   };
 
@@ -1798,6 +1906,7 @@ function App() {
           onCreateProject={createProject}
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
+          {...(goal.goalText && !goal.done ? { goalIndicatorSessionId: sessionId } : {})}
         />
         <section className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
@@ -1840,7 +1949,7 @@ function App() {
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
                       {goal.goalText && !editingGoalDraft && (
-                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} onToggleTodo={toggleTodo} onGoalStop={stopGoal} />
+                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} onToggleTodo={toggleTodo} onGoalStop={stopGoal} recentToolNames={goal.recentToolNames ?? undefined} />
                       )}
                       {editingGoalDraft && (
                         <div className="goal-edit-banner">

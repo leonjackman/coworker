@@ -12,9 +12,10 @@ interface GoalCardProps {
   onDraftEdit: () => void;
   onToggleTodo?: (index: number) => void;
   onGoalStop?: () => void;
+  recentToolNames?: string[] | undefined;
 }
 
-export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onToggleTodo, onGoalStop }: GoalCardProps) {
+export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onToggleTodo, onGoalStop, recentToolNames }: GoalCardProps) {
   const [expanded, setExpanded] = useState(true);
   const hasTodos = goal.todos.length > 0;
   const doneCount = goal.todos.filter((todo) => todo.status === 'completed').length;
@@ -64,6 +65,19 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onTog
           <p className="goal-card__stalled">
             Agent stalled after multiple attempts. Consider pausing or editing the goal.
           </p>
+        )}
+        {goal.done && goal.reason && (
+          <p className="goal-card__reason">{goal.reason}</p>
+        )}
+        {recentToolNames && recentToolNames.length > 0 && (
+          <div className="goal-card__tools">
+            <span className="goal-card__tools-label">Tools:</span>
+            <ul className="goal-card__tools-list">
+              {recentToolNames.map((name, i) => (
+                <li key={i} className="goal-card__tool-item"><span className="goal-card__tool-name">{name}</span></li>
+              ))}
+            </ul>
+          </div>
         )}
         {hasTodos && (
           <>
