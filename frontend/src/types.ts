@@ -466,51 +466,51 @@ export interface PendingRequest {
   _savedAnswer?: string;
 }
 
-export type StreamEvent =
-  | { type: 'start'; session_id: string; mode: AgentMode; provider: string; model: string }
-  | { type: 'stage'; name: string; status: string }
-  | { type: 'delta'; content: string }
-  | { type: 'reasoning_delta'; content: string }
-  | { type: 'tool_start'; id: string; name: string; input: string }
-  | { type: 'tool_delta'; id: string; input: string }
-  | { type: 'tool_end'; id: string; output: string; status: string; duration_ms?: number; files?: PartFileChange[] }
-  | { type: 'plan_start' }
-  | { type: 'plan_delta'; content: string }
-  | { type: 'plan_end'; content: string }
-  | { type: 'agent_activity'; name: string; status: string }
-  | {
-      type: 'approval_required';
-      approval_id: string;
-      command: string[];
-      cwd: string;
-      approval_status: string;
-      session_id?: string;
-    }
-  | {
-      type: 'question_required';
-      approval_id: string;
-      question: string;
-      header?: string;
-      options?: ApprovalOption[];
-      multiple?: boolean;
-      approval_status: string;
-      session_id?: string;
-    }
-  | {
-      type: 'plan_required';
-      approval_id: string;
-      plan: string;
-      approval_status: string;
-      session_id?: string;
-    }
-  | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
-  | { type: 'error'; error: string; session_id?: string }
-  | { type: 'goal_start'; goal: string; session_id?: string }
-  | { type: 'goal_round'; round: number; goal: string; status?: string }
-  | { type: 'goal_checkpoint'; achieved: boolean; progress?: string; verification?: string }
-  | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number }
-  | { type: 'goal_paused'; goal?: string; round?: number }
-  | { type: 'todos'; todos: GoalTodo[] };
+ export type StreamEvent =
+   | { type: 'start'; session_id: string; mode: AgentMode; provider: string; model: string }
+   | { type: 'stage'; name: string; status: string; session_id?: string }
+   | { type: 'delta'; content: string; session_id?: string }
+   | { type: 'reasoning_delta'; content: string; session_id?: string }
+   | { type: 'tool_start'; id: string; name: string; input: string; session_id?: string }
+   | { type: 'tool_delta'; id: string; input: string; session_id?: string }
+   | { type: 'tool_end'; id: string; output: string; status: string; duration_ms?: number; files?: PartFileChange[]; session_id?: string }
+   | { type: 'plan_start'; session_id?: string }
+   | { type: 'plan_delta'; content: string; session_id?: string }
+   | { type: 'plan_end'; content: string; session_id?: string }
+   | { type: 'agent_activity'; name: string; status: string; session_id?: string }
+   | {
+       type: 'approval_required';
+       approval_id: string;
+       command: string[];
+       cwd: string;
+       approval_status: string;
+       session_id?: string;
+     }
+   | {
+       type: 'question_required';
+       approval_id: string;
+       question: string;
+       header?: string;
+       options?: ApprovalOption[];
+       multiple?: boolean;
+       approval_status: string;
+       session_id?: string;
+     }
+   | {
+       type: 'plan_required';
+       approval_id: string;
+       plan: string;
+       approval_status: string;
+       session_id?: string;
+     }
+   | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
+   | { type: 'error'; error: string; session_id?: string }
+   | { type: 'goal_start'; goal: string; session_id?: string }
+   | { type: 'goal_round'; round: number; goal: string; status?: string; session_id?: string }
+   | { type: 'goal_checkpoint'; achieved: boolean; progress?: string; verification?: string; session_id?: string }
+   | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number; session_id?: string }
+   | { type: 'goal_paused'; goal?: string; round?: number; session_id?: string }
+   | { type: 'todos'; todos: GoalTodo[]; session_id?: string };
 
 export interface GoalTodo {
   content: string;
@@ -525,6 +525,7 @@ export interface GoalState {
   running: boolean;
   round: number;
   progress: string;
+  editingDraft?: boolean;
 }
 
 export interface GoalStatusResponse {

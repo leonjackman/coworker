@@ -100,6 +100,8 @@ function App() {
   const [input, setInput] = useState('');
   const [goal, setGoal] = useState<GoalState>({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
   const [isThinking, setIsThinking] = useState(false);
+  const [editingGoalDraft, setEditingGoalDraft] = useState(false);
+  const goalDraftRef = useRef('');
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [sessionId, setSessionId] = useState<string | undefined>();
@@ -247,12 +249,62 @@ function App() {
   };
 
   const sendMessage = async (override?: { message: string; projectId?: string; goalMode?: boolean; goalText?: string }) => {
+    // 目标编辑模式：从 DOM 读取 textarea 值，更新目标卡
+    if (editingGoalDraft) {
+      const textarea = document.querySelector('textarea');
+      let newGoal: string;
+      if (override?.message) {
+        newGoal = override.message;
+      } else if (textarea && textarea.value.trim()) {
+        newGoal = textarea.value.trim();
+        setInput(newGoal);
+        goalDraftRef.current = newGoal;
+      } else {
+        newGoal = input.trim();
+      }
+      if (!newGoal) {
+        setInput('');
+        setEditingGoalDraft(false);
+        setGoal((prev) => ({ ...prev, editingDraft: false }));
+        return;
+      }
+      const sid = sessionIdRef.current;
+      if (!sid) {
+        setInput(newGoal);
+        return;
+      }
+      setInput('');
+      try {
+        await chatService.editGoal(sid, newGoal);
+        await new Promise((r) => setTimeout(r, 300));
+        setEditingGoalDraft(false);
+        setGoal({ goalText: newGoal, done: false, paused: false, todos: [], running: true, round: 0, progress: '', editingDraft: false });
+        setMessages((current) => [
+          ...current,
+          createMessage('assistant', `目标已更新为：${newGoal}`, { status: 'done' }),
+        ]);
+        // 目标编辑后始终恢复执行
+        void resumeGoal();
+      } catch (error) {
+        console.error('Failed to edit goal:', error);
+      }
+      return;
+    }
+
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) return;
 
     if (!typedMessage && attachments.length === 0) return;
 
     if (typedMessage.startsWith('/')) {
+      // 消息墙也要显示命令令牌
+      const provider = providers.find((p) => p.id === selectedModel);
+      const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
+      const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
+      setMessages((current) => [
+        ...current,
+        createMessage('user', typedMessage, { status: 'done', autonomy, provider: providerName, model }),
+      ]);
       handleSlashCommand(typedMessage);
       return;
     }
@@ -288,6 +340,7 @@ function App() {
       }
     }
 
+    // 在消息墙展示用户输入（含 /goal 等命令令牌）
     setMessages((current) => [
       ...current,
       createMessage('user', message, {
@@ -326,6 +379,9 @@ function App() {
 
     const handleEvent = (event: StreamEvent) => {
       if (requestId !== requestSeqRef.current) return;
+      if (event.session_id && sessionIdRef.current && event.session_id !== sessionIdRef.current) {
+        if (event.type !== 'start') return;
+      }
       if (event.type === 'start') {
         streamStartAt = Date.now();
         if (event.session_id && !sessionIdRef.current) {
@@ -472,7 +528,7 @@ function App() {
         );
       } else if (event.type === 'goal_start') {
         inGoal = true;
-        setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "" });
+        setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
       } else if (event.type === 'goal_round') {
         setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
       } else if (event.type === 'goal_checkpoint') {
@@ -620,6 +676,13 @@ function App() {
     if (!trimmed) return;
     setEditingMessage(null);
     setEditDraft('');
+
+    // 编辑模式下，如果内容包含 /goal 等斜杠命令，走 sendMessage 路径
+    if (trimmed.startsWith('/')) {
+      handleSlashCommand(trimmed);
+      return;
+    }
+
     setIsThinking(true);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setMessages((current) => {
@@ -1235,6 +1298,7 @@ function App() {
   const startNewChat = (projectId?: string) => {
     startProjectDraft(projectId);
     setDraftMode(true);
+    setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
   };
 
   // 草稿态下切换 workspace：仅改归属，不清空已输入内容
@@ -1367,9 +1431,10 @@ function App() {
           running: false,
           round: 0,
           progress: '',
+          editingDraft: false,
         });
       } else {
-        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
+        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
       }
       // 后台 resume 可能仍在运行：切回时首扫可能早于新审批创建，延迟重扫兜底。
       for (const delay of [5000, 15000]) {
@@ -1403,6 +1468,7 @@ function App() {
         setMessages([]);
         setInput('');
         setAttachments([]);
+        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
         pendingProjectIdRef.current = activeProjectId;
       }
       await refreshSessions();
@@ -1478,7 +1544,7 @@ function App() {
         setMessages((current) => [...current, createMessage('assistant', t('chat.goal_help_text'), { status: 'done' })]);
         return;
       }
-      setGoal({ goalText, done: false, paused: false, todos: [], running: true, round: 0, progress: "" });
+      setGoal({ goalText, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
       void sendMessage({ message: goalText, goalMode: true, goalText });
       return;
     }
@@ -1523,11 +1589,21 @@ function App() {
     }
   };
 
+  const draftEditGoal = () => {
+    if (!sessionIdRef.current || !goal.goalText) return;
+    const textarea = document.querySelector('textarea');
+    const currentComposerVal = textarea?.value || goal.goalText;
+    setInput(currentComposerVal);
+    goalDraftRef.current = currentComposerVal;
+    setEditingGoalDraft(true);
+    setGoal((prev) => ({ ...prev, editingDraft: true }));
+  };
+
   const saveGoalEdit = async (goalText: string) => {
     if (!sessionIdRef.current) return;
     try {
       await chatService.editGoal(sessionIdRef.current, goalText);
-      setGoal((current) => ({ ...current, goalText }));
+      setGoal((current) => ({ ...current, goalText, editingDraft: false }));
     } catch (error) {
       console.error('Failed to edit goal:', error);
     }
@@ -1537,13 +1613,19 @@ function App() {
     if (!sessionIdRef.current) return;
     try {
       await chatService.deleteGoal(sessionIdRef.current);
-      setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
+      setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
     } catch (error) {
       console.error('Failed to delete goal:', error);
     }
   };
 
+  const cancelGoalEdit = () => {
+    setEditingGoalDraft(false);
+    setGoal((current) => ({ ...current, editingDraft: false }));
+  };
+
   const handleGoalResumeEvent = (event: StreamEvent) => {
+    if (event.session_id && event.session_id !== sessionIdRef.current) return;
     if (event.type === 'goal_start' || event.type === 'goal_round') {
       setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
     } else if (event.type === 'goal_checkpoint') {
@@ -1716,8 +1798,16 @@ function App() {
                   )}
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
-                      {goal.goalText && (
-                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onSaveEdit={saveGoalEdit} />
+                      {goal.goalText && !editingGoalDraft && (
+                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} />
+                      )}
+                      {editingGoalDraft && (
+                        <div className="goal-edit-banner">
+                          <p className="goal-edit-banner__text">编辑目标：在下方输入框中输入新目标，按回车确认</p>
+                          <button type="button" className="goal-edit-banner__cancel" onClick={cancelGoalEdit} aria-label="取消编辑">
+                            取消
+                          </button>
+                        </div>
                       )}
                       {currentSessionPending.length > 0 ? (
                         <div className="workspace-dock-area">
@@ -1733,7 +1823,7 @@ function App() {
                         </div>
                       ) : (
                         <ChatInput
-                        value={editingMessage ? editDraft : input}
+                        value={editingMessage ? editDraft : (editingGoalDraft ? input : input)}
                         disabled={isThinking || runtimeStatus === 'connecting'}
                         isThinking={isThinking}
                         workMode={workMode}

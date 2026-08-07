@@ -2181,6 +2181,44 @@ body.bottom-panel-resizing {
   word-break: break-word;
 }
 
+.goal-edit-banner {
+  position: relative;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  background: var(--accent);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.goal-edit-banner__text {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-foreground);
+}
+
+.goal-edit-banner__cancel {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-foreground);
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.goal-edit-banner__cancel:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
 /* 底部卡片共用外壳（composer / 提问 / 回答 / 批准共用）：
    高度由内部容器撑起，内部容器顶满 slot 宽度 */
 .card-slot {
