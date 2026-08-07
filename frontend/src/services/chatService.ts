@@ -112,9 +112,12 @@ export interface ChatService {
   ) => Promise<void>;
   getGoalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
   pauseGoal: (sessionId: string) => Promise<{ status: string }>;
+  stopGoal: (sessionId: string) => Promise<{ status: string }>;
   editGoal: (sessionId: string, goal: string) => Promise<{ status: string }>;
   deleteGoal: (sessionId: string) => Promise<{ status: string }>;
   resumeGoal: (sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
+  fetchSettings: () => Promise<{ goal_max_rounds: number }>;
+  saveSettings: (settings: { goal_max_rounds?: number }) => Promise<{ status: string; goal_max_rounds: number }>;
 }
 
 class ElectronChatService implements ChatService {
@@ -335,6 +338,11 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.goalPause(sessionId);
   }
 
+  async stopGoal(sessionId: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalStop(sessionId);
+  }
+
   async editGoal(sessionId: string, goal: string): Promise<{ status: string }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.goalEdit({ session_id: sessionId, goal });
@@ -348,6 +356,16 @@ class ElectronChatService implements ChatService {
   async resumeGoal(sessionId: string, onEvent: StreamEventCallback): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent);
+  }
+
+  async fetchSettings(): Promise<{ goal_max_rounds: number }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.fetchSettings?.() ?? { goal_max_rounds: 50 };
+  }
+
+  async saveSettings(settings: { goal_max_rounds?: number }): Promise<{ status: string; goal_max_rounds: number }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', goal_max_rounds: 50 };
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -669,6 +687,14 @@ class HttpChatService implements ChatService {
     });
   }
 
+  async stopGoal(sessionId: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>('/goal/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
   async editGoal(sessionId: string, goal: string): Promise<{ status: string }> {
     return this.request<{ status: string }>('/goal/edit', {
       method: 'POST',
@@ -790,6 +816,18 @@ class HttpChatService implements ChatService {
       body: JSON.stringify({ first_user_message: firstUserMessage, assistant_response: assistantResponse || '' }),
     });
     return response.title;
+  }
+
+  async fetchSettings(): Promise<{ goal_max_rounds: number }> {
+    return this.request<{ goal_max_rounds: number }>('/settings');
+  }
+
+  async saveSettings(settings: { goal_max_rounds?: number }): Promise<{ status: string; goal_max_rounds: number }> {
+    return this.request<{ status: string; goal_max_rounds: number }>('/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

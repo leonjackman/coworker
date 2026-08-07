@@ -2094,6 +2094,25 @@ body.bottom-panel-resizing {
   color: var(--muted-foreground);
 }
 
+.goal-card[data-state='stalled'] .goal-card__status {
+  color: var(--destructive, #f44336);
+}
+
+.goal-card__header-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.goal-card__round {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  padding: 1px 6px;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+}
+
 .goal-card__actions {
   display: inline-flex;
   align-items: center;
@@ -2179,6 +2198,46 @@ body.bottom-panel-resizing {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.goal-card__verification {
+  margin: 6px 0;
+  padding: 6px 10px;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.goal-card__verification-label {
+  display: block;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+.goal-card__stalled {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--destructive, #f44336);
+  line-height: 1.5;
+}
+
+.goal-card__todo {
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+
+.goal-card__todo:hover {
+  opacity: 0.7;
 }
 
 .goal-edit-banner {

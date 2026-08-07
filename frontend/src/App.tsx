@@ -539,14 +539,24 @@ function App() {
         }));
       } else if (event.type === 'todos') {
         setGoal((current) => ({ ...current, todos: event.todos }));
+      } else if (event.type === 'goal_force') {
+        // Force-loop nudge: agent didn't use tools, system will retry.
+        setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
       } else if (event.type === 'goal_done') {
-        setGoal((current) => ({ ...current, done: true, running: false, progress: event.content || current.progress }));
+        setGoal((current) => {
+          const next: GoalState = { ...current, done: true, running: false, stalled: event.stalled || false, progress: event.content || current.progress };
+          if (event.reason) next.reason = event.reason;
+          if (event.verification) next.verification = event.verification;
+          return next;
+        });
         if (event.content) streamedContent = event.content;
         localParts = settleRunningTools(localParts);
+        const msgStatus = event.stalled ? 'error' : 'done';
+        const msgContent = event.stalled ? (event.reason === 'stalled' || event.reason === 'max_rounds_exceeded' ? 'Agent stalled' : (event.reason || 'Unknown')) : (streamedContent || '✓ 目标已完成');
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: streamedContent || '✓ 目标已完成', status: 'done', parts: [...localParts], streamEndAt: Date.now() }
+              ? { ...item, content: msgContent, status: msgStatus, parts: [...localParts], streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -1421,8 +1431,9 @@ function App() {
         goal_done?: boolean;
         goal_paused?: boolean;
         goal_todos?: GoalTodo[];
+        goal_stopped?: boolean;
       };
-      if (sessionRecord.goal_text) {
+      if (sessionRecord.goal_text && !sessionRecord.goal_stopped) {
         setGoal({
           goalText: sessionRecord.goal_text,
           done: Boolean(sessionRecord.goal_done),
@@ -1431,6 +1442,7 @@ function App() {
           running: false,
           round: 0,
           progress: '',
+          stalled: false,
           editingDraft: false,
         });
       } else {
@@ -1589,6 +1601,29 @@ function App() {
     }
   };
 
+  const stopGoal = async () => {
+    if (!sessionIdRef.current) return;
+    try {
+      await chatService.stopGoal(sessionIdRef.current);
+      setGoal((current) => ({ ...current, running: false, done: true }));
+    } catch (error) {
+      console.error('Failed to stop goal:', error);
+    }
+  };
+
+  const toggleTodo = async (index: number) => {
+    const todo = goal.todos[index];
+    if (!todo) return;
+    const newStatus = todo.status === 'completed' ? 'pending' : 'completed';
+    const newTodos = goal.todos.map((t, i) => (i === index ? { ...t, status: newStatus } : t));
+    setGoal((current) => ({ ...current, todos: newTodos }));
+    try {
+      await chatService.editGoal(sessionIdRef.current, goal.goalText);
+    } catch (error) {
+      console.error('Failed to sync todo:', error);
+    }
+  };
+
   const draftEditGoal = () => {
     if (!sessionIdRef.current || !goal.goalText) return;
     const textarea = document.querySelector('textarea');
@@ -1633,9 +1668,15 @@ function App() {
     } else if (event.type === 'todos') {
       setGoal((current) => ({ ...current, todos: event.todos }));
     } else if (event.type === 'goal_done') {
-      setGoal((current) => ({ ...current, done: true, running: false, progress: event.content || current.progress }));
+      setGoal((current) => {
+        const next: GoalState = { ...current, done: true, running: false, stalled: event.stalled || false, progress: event.content || current.progress };
+        if (event.reason) next.reason = event.reason;
+        return next;
+      });
     } else if (event.type === 'goal_paused') {
       setGoal((current) => ({ ...current, paused: true, running: false }));
+    } else if (event.type === 'goal_force') {
+      setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
     }
   };
 
@@ -1799,7 +1840,7 @@ function App() {
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
                       {goal.goalText && !editingGoalDraft && (
-                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} />
+                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} onToggleTodo={toggleTodo} onGoalStop={stopGoal} />
                       )}
                       {editingGoalDraft && (
                         <div className="goal-edit-banner">

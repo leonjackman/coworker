@@ -114,6 +114,9 @@ class ApprovalEventBus:
 
 approval_event_bus = ApprovalEventBus()
 
+# Per-session locks to prevent concurrent goal_resume calls for the same session.
+_goal_locks: dict[str, asyncio.Lock] = {}
+
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
@@ -492,6 +495,59 @@ async def chat_stream(request: ChatStreamRequest):
 class GoalPauseRequest(BaseModel):
     session_id: str
 
+
+class GoalResumeRequest(BaseModel):
+    session_id: str
+    language: Language = "zh"
+
+
+class GoalStopRequest(BaseModel):
+    session_id: str
+
+
+class SettingsUpdate(BaseModel):
+    goal_max_rounds: int = 50
+
+
+SETTING_FILE = os.path.join(os.path.dirname(__file__), '..', '.coworker_settings.json')
+
+@app.get("/settings")
+async def get_settings():
+    """Get user-level settings for the goal feature."""
+    try:
+        settings_path = Path(SETTING_FILE)
+        data = json.loads(settings_path.read_text() or "{}")
+        if "goal_max_rounds" in data:
+            return {"goal_max_rounds": int(data["goal_max_rounds"])}
+    except Exception:
+        pass
+    return {"goal_max_rounds": 50}
+
+
+@app.post("/settings")
+async def set_settings(request: SettingsUpdate):
+    """Update user-level settings for the goal feature."""
+    max_rounds = request.goal_max_rounds
+    if max_rounds < 0 or max_rounds > 1000:
+        max_rounds = max(0, min(1000, max_rounds))
+    try:
+        path = Path(SETTING_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"goal_max_rounds": max_rounds}))
+    except Exception:
+        pass
+    return {"status": "ok", "goal_max_rounds": max_rounds}
+
+
+@app.post("/goal/stop")
+async def goal_stop(request: GoalStopRequest):
+    """Stop an active goal loop: set the stopped flag so the loop terminates."""
+    try:
+        session_store.update_goal(request.session_id, goal_stopped=True)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "stopped", "session_id": request.session_id}
+
 class GoalEditRequest(BaseModel):
     session_id: str
     goal: str
@@ -510,6 +566,9 @@ async def goal_status(session_id: str):
             "goal_done": session.goal_done,
             "goal_paused": session.goal_paused,
             "goal_todos": session.goal_todos,
+            "goal_max_rounds": session.goal_max_rounds,
+            "goal_force_count": session.goal_force_count,
+            "goal_stopped": session.goal_stopped,
         },
     }
 
@@ -532,71 +591,77 @@ async def goal_edit(request: GoalEditRequest):
 @app.post("/goal/delete")
 async def goal_delete(request: GoalPauseRequest):
     try:
-        session_store.update_goal(request.session_id, goal_text="", goal_done=False, goal_paused=False, goal_todos=[])
+        session_store.update_goal(request.session_id, goal_text="", goal_done=False, goal_paused=False, goal_todos=[], goal_stopped=False)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "ok", "session_id": request.session_id}
 
 @app.post("/goal/resume")
-async def goal_resume(request: GoalPauseRequest):
+async def goal_resume(request: GoalResumeRequest):
     """Resume a paused goal: clear the pause flag and continue the autonomous
     goal loop from the checkpoint (round 2+), streaming progress via SSE."""
-    try:
-        session = session_store.require(request.session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    session_store.update_goal(request.session_id, goal_paused=False)
-    goal_text = session.goal_text
-    work_mode = normalize_work_mode(session.work_mode)
-    autonomy = normalize_autonomy(session.autonomy)
-    language = request_language_for_session(session)
-    references = []
-    referenced_ids: set[str] = set()
-    try:
-        resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
-        runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids)
-    except (KeyError, ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    lock = _goal_locks.get(request.session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _goal_locks[request.session_id] = lock
 
-    async def event_stream():
-        terminal_sent = False
-        goal_parts_accum: list[dict[str, Any]] = []
+    async with lock:
         try:
-            async for event in runtime.goal_stream([], request.session_id, language, work_mode, autonomy, goal_text=goal_text, goal_continue_first=True):
-                event["session_id"] = request.session_id
-                etype = event.get("type")
-                if etype == "done":
-                    for part in (event.get("parts") or []):
-                        goal_parts_accum.append(part)
-                elif etype == "goal_done":
-                    try:
-                        session_store.update_goal(request.session_id, goal_done=True)
-                        session_store.append_message(
-                            request.session_id,
-                            role="assistant",
-                            content=str(event.get("content") or ""),
-                            mode="single",
-                            work_mode=work_mode,
-                            autonomy=autonomy,
-                            parts=_merge_goal_parts(goal_parts_accum),
-                        )
-                    except KeyError:
-                        pass
-                    terminal_sent = True
-                elif etype == "goal_paused":
-                    terminal_sent = True
-                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            yield f"data: {_json.dumps({'type': 'error', 'session_id': request.session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
-            return
-        if not terminal_sent:
-            yield f"data: {_json.dumps({'type': 'done', 'session_id': request.session_id, 'content': '', 'stream_end': True}, ensure_ascii=False)}\n\n"
+            session = session_store.require(request.session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        session_store.update_goal(request.session_id, goal_paused=False, goal_stopped=False)
+        goal_text = session.goal_text
+        work_mode = normalize_work_mode(session.work_mode)
+        autonomy = normalize_autonomy(session.autonomy)
+        language = request.language
+        references = []
+        referenced_ids: set[str] = set()
+        try:
+            resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
+            runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+        async def event_stream():
+            terminal_sent = False
+            goal_parts_accum: list[dict[str, Any]] = []
+            try:
+                async for event in runtime.goal_stream([], request.session_id, language, work_mode, autonomy, goal_text=goal_text, goal_continue_first=True):
+                    event["session_id"] = request.session_id
+                    etype = event.get("type")
+                    if etype == "done":
+                        for part in (event.get("parts") or []):
+                            goal_parts_accum.append(part)
+                    elif etype == "goal_done":
+                        try:
+                            session_store.update_goal(request.session_id, goal_done=True)
+                            session_store.append_message(
+                                request.session_id,
+                                role="assistant",
+                                content=str(event.get("content") or ""),
+                                mode="single",
+                                work_mode=work_mode,
+                                autonomy=autonomy,
+                                parts=_merge_goal_parts(goal_parts_accum),
+                            )
+                        except KeyError:
+                            pass
+                        terminal_sent = True
+                    elif etype == "goal_paused":
+                        terminal_sent = True
+                    yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+            except Exception as exc:
+                yield f"data: {_json.dumps({'type': 'error', 'session_id': request.session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
+                return
+            if not terminal_sent:
+                yield f"data: {_json.dumps({'type': 'done', 'session_id': request.session_id, 'content': '', 'stream_end': True}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
 class SessionCreateRequest(BaseModel):
     title: str = ""

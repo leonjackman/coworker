@@ -46,6 +46,9 @@ class Session:
     goal_done: bool = False
     goal_paused: bool = False
     goal_todos: list[dict[str, Any]] = field(default_factory=list)
+    goal_max_rounds: int = 50
+    goal_force_count: int = 0
+    goal_stopped: bool = False
     title_auto: bool = False
     messages: list[SessionMessage] = field(default_factory=list)
 
@@ -68,6 +71,9 @@ class Session:
             goal_done=bool(payload.get("goal_done", False)),
             goal_paused=bool(payload.get("goal_paused", False)),
             goal_todos=[dict(item) for item in payload.get("goal_todos", []) if isinstance(item, dict)],
+            goal_max_rounds=int(payload.get("goal_max_rounds", 50)),
+            goal_force_count=int(payload.get("goal_force_count", 0)),
+            goal_stopped=bool(payload.get("goal_stopped", False)),
             title_auto=bool(payload.get("title_auto", False)),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
@@ -88,6 +94,8 @@ class Session:
             "goal_done": self.goal_done,
             "goal_paused": self.goal_paused,
             "goal_todos": self.goal_todos,
+            "goal_max_rounds": self.goal_max_rounds,
+            "goal_stopped": self.goal_stopped,
             "message_count": len(self.messages),
         }
 
@@ -104,6 +112,9 @@ class Session:
             "goal_done": self.goal_done,
             "goal_paused": self.goal_paused,
             "goal_todos": self.goal_todos,
+            "goal_max_rounds": self.goal_max_rounds,
+            "goal_force_count": self.goal_force_count,
+            "goal_stopped": self.goal_stopped,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -176,6 +187,9 @@ class SessionStore:
         goal_done: bool | None = None,
         goal_paused: bool | None = None,
         goal_todos: list[dict[str, Any]] | None = None,
+        goal_max_rounds: int | None = None,
+        goal_force_count: int | None = None,
+        goal_stopped: bool | None = None,
     ) -> Session:
         session = self.require(session_id)
         if goal_text is not None:
@@ -186,8 +200,20 @@ class SessionStore:
             session.goal_paused = goal_paused
         if goal_todos is not None:
             session.goal_todos = goal_todos
+        if goal_max_rounds is not None:
+            session.goal_max_rounds = goal_max_rounds
+        if goal_force_count is not None:
+            session.goal_force_count = goal_force_count
+        if goal_stopped is not None:
+            session.goal_stopped = goal_stopped
         self.save(session)
         return session
+
+    def update_force_count(self, session_id: str, count: int) -> Session:
+        return self.update_goal(session_id, goal_force_count=count)
+
+    def update_max_rounds(self, session_id: str, max_rounds: int) -> Session:
+        return self.update_goal(session_id, goal_max_rounds=max_rounds)
 
     def get(self, session_id: str) -> Session | None:
         return self.load(session_id)

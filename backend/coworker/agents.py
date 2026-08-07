@@ -1677,7 +1677,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
     async def _stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool,
-        goal_mode: bool = False, goal_text: str = "", goal_continue: bool = False,
+        goal_mode: bool = False, goal_text: str = "", goal_continue: bool = False, _nudge: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
@@ -1698,6 +1698,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             prepared_messages = []
         else:
             prepared_messages = prepare_agent_messages(messages)
+        # Inject force-loop nudge as a synthetic user message.
+        if _nudge:
+            prepared_messages.append({"role": "user", "content": _nudge})
         turn_index = self._next_turn_index(session_id)
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
@@ -1793,6 +1796,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             try:
                 session_state = self.session_store.require(session_id)
                 goal_text = str(session_state.goal_text or goal_text)
+                goal_max_rounds = int(session_state.goal_max_rounds or 50)
                 if session_state.goal_done:
                     # Already achieved — nothing left to run.
                     yield {"type": "goal_done", "round": 0, "goal": goal_text, "content": "", "already": True}
@@ -1805,7 +1809,28 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         yield {"type": "goal_start", "goal": goal_text, "session_id": session_id}
         while True:
             round_no += 1
+            # Re-read goal_text from store so inline edits are visible each round.
+            if self.session_store is not None:
+                try:
+                    session_state = self.session_store.require(session_id)
+                    goal_text = str(session_state.goal_text or goal_text)
+                    # Check for explicit stop request.
+                    if session_state.goal_stopped:
+                        yield {
+                            "type": "goal_done", "round": round_no, "goal": goal_text,
+                            "content": "", "reason": "stopped",
+                        }
+                        return
+                except Exception:
+                    pass
             is_first = round_no == 1
+            # Max rounds guard: stop when we exceed goal_max_rounds (0 = no limit).
+            if self.session_store is not None and goal_max_rounds > 0 and round_no > goal_max_rounds:
+                yield {
+                    "type": "goal_done", "round": round_no, "goal": goal_text,
+                    "content": "", "reason": "max_rounds_exceeded",
+                }
+                return
             yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running"}
             round_had_tools = False
             async for event in self._stream(
@@ -1850,7 +1875,91 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             if last_checkpoint is None and not round_had_tools:
                 # The agent concluded with plain text without calling finalize_goal
                 # and made no tool calls this round — it is stalling, not working.
-                # Stop the loop so it never runs away; the text is the answer.
+                # Apply force-loop nudges up to MAX_FORCE times before giving up.
+                if self.session_store is not None:
+                    try:
+                        session_state = self.session_store.require(session_id)
+                        goal_force = int(session_state.goal_force_count or 0)
+                    except Exception:
+                        goal_force = 0
+                else:
+                    goal_force = 0
+                if goal_force < self.MAX_FORCE:
+                    # Yield a force_continue event to inform the client, then
+                    # re-invoke _stream with a nudge appended to the user message.
+                    yield {"type": "goal_force", "round": round_no, "reason": "agent_without_tools", "count": goal_force}
+                    goal_force += 1
+                    # Persist the incremented force count so it survives at round boundary
+                    if self.session_store is not None:
+                        try:
+                            self.session_store.update_goal(session_id, goal_force_count=goal_force)
+                        except Exception:
+                            pass
+                    # Reset checkpoint state for the forced continuation round.
+                    last_checkpoint = None
+                    last_todos = []
+                    round_had_tools = False
+                    # Re-invoke _stream with a nudge appended as a synthetic user message.
+                    nudge = (
+                        "\n\n[Coworker] You gave a plain-text answer without calling "
+                        "`finalize_goal` or using any tools. Keep working toward the goal "
+                        "using your tools (read_file, search_files, write_file, run_command, etc.) "
+                        "and call finalize_goal when done."
+                    )
+                    async for event in self._stream(
+                        messages if (is_first and not goal_continue_first) else [],
+                        session_id, language, work_mode, autonomy, rerun=False,
+                        goal_mode=True, goal_text=goal_text,
+                        goal_continue=(not is_first or goal_continue_first),
+                        _nudge=nudge,
+                    ):
+                        etype = event.get("type", "")
+                        if etype == "goal_checkpoint":
+                            last_checkpoint = event
+                        elif etype == "todos":
+                            last_todos = event.get("todos") or []
+                        elif etype == "tool_start":
+                            round_had_tools = True
+                        yield event
+                    # Check again after the forced continuation.
+                    if last_checkpoint is not None:
+                        continue
+                    # Second attempt also stalled — check force count again.
+                    if self.session_store is not None:
+                        try:
+                            session_state = self.session_store.require(session_id)
+                            goal_force = int(session_state.goal_force_count or 0)
+                        except Exception:
+                            goal_force = 0
+                    if goal_force < self.MAX_FORCE:
+                        goal_force += 1
+                        yield {"type": "goal_force", "round": round_no, "reason": "agent_without_tools", "count": goal_force}
+                        last_checkpoint = None
+                        last_todos = []
+                        round_had_tools = False
+                        if self.session_store is not None:
+                            try:
+                                self.session_store.update_goal(session_id, goal_force_count=goal_force)
+                            except Exception:
+                                pass
+                        async for event in self._stream(
+                            messages if (is_first and not goal_continue_first) else [],
+                            session_id, language, work_mode, autonomy, rerun=False,
+                            goal_mode=True, goal_text=goal_text,
+                            goal_continue=(not is_first or goal_continue_first),
+                            _nudge=nudge,
+                        ):
+                            etype = event.get("type", "")
+                            if etype == "goal_checkpoint":
+                                last_checkpoint = event
+                            elif etype == "todos":
+                                last_todos = event.get("todos") or []
+                            elif etype == "tool_start":
+                                round_had_tools = True
+                            yield event
+                    if last_checkpoint is not None:
+                        continue
+                # Force exhausted or goal_force >= MAX_FORCE — stop with stall signal.
                 yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "stalled": True}
                 return
 
