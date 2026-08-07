@@ -239,6 +239,7 @@ function App() {
     if (!firstProject) return;
     pendingProjectIdRef.current = firstProject.id;
     setActiveProjectId(firstProject.id);
+    setDraftMode(true);
   }, [activeProjectId, messages.length, projects, sessionId, sessions.length]);
 
   const resolveSessionReference = async (sessionId: string): Promise<SessionReference | null> => {
