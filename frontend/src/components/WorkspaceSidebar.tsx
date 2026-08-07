@@ -149,7 +149,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <button type="button" className="sidebar-project__new-trigger" onClick={() => onNewChat(project.id)} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>
+            <button type="button" className="sidebar-project__new-trigger" onClick={(e) => { e.stopPropagation(); onNewChat(project.id); }} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>
               <MessageSquarePlus size={15} />
             </button>
           </div>
