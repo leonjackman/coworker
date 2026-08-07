@@ -656,7 +656,7 @@ function App() {
       if (requestId !== requestSeqRef.current) return;
       console.error('Failed to stream message:', error);
       if ((error as Error).name === 'AbortError') {
-        // For goal mode, stopGoal calls abortRef.abort() — check session status to let backend finalize
+        // For goal mode, abort on disconnect — check session status to let backend finalize
         if (inGoal) {
           void (async () => {
             try {
@@ -1660,16 +1660,6 @@ function App() {
     }
   };
 
-  const stopGoal = async () => {
-    if (!sessionIdRef.current) return;
-    try {
-      await chatService.stopGoal(sessionIdRef.current);
-      setGoal((current) => ({ ...current, running: false }));
-    } catch (error) {
-      console.error('Failed to stop goal:', error);
-    }
-  };
-
   const toggleTodo = (index: number) => {
     const todo = goal.todos[index];
     if (!todo) return;
@@ -1949,7 +1939,7 @@ function App() {
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
                       {goal.goalText && !editingGoalDraft && (
-                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} onToggleTodo={toggleTodo} onGoalStop={stopGoal} recentToolNames={goal.recentToolNames ?? undefined} />
+                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} onToggleTodo={toggleTodo} recentToolNames={goal.recentToolNames ?? undefined} />
                       )}
                       {editingGoalDraft && (
                         <div className="goal-edit-banner">

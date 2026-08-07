@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Pause, Pencil, Play, Target, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, Pause, Play, Pencil, Target, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { t } from '../lib/i18n';
 import type { GoalState } from '../types';
@@ -11,11 +11,10 @@ interface GoalCardProps {
   onDelete: () => void;
   onDraftEdit: () => void;
   onToggleTodo?: (index: number) => void;
-  onGoalStop?: () => void;
   recentToolNames?: string[] | undefined;
 }
 
-export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onToggleTodo, onGoalStop, recentToolNames }: GoalCardProps) {
+export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onToggleTodo, recentToolNames }: GoalCardProps) {
   const [expanded, setExpanded] = useState(true);
   const hasTodos = goal.todos.length > 0;
   const doneCount = goal.todos.filter((todo) => todo.status === 'completed').length;
@@ -31,18 +30,19 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onTog
           <span className="goal-card__round">Round {goal.round}</span>
         </div>
         <div className="goal-card__actions">
-          {!goal.done && (
-            <Button type="button" variant="secondary" size="sm" onClick={goal.paused ? onResume : onPause} aria-label={goal.paused ? t('chat.goal_resume') : t('chat.goal_pause')}>
-              {goal.paused ? <Play size={13} /> : <Pause size={13} />}
-              {goal.paused ? t('chat.goal_resume') : t('chat.goal_pause')}
+          {!goal.done && !goal.stalled && !goal.paused && (
+            <Button type="button" variant="secondary" size="sm" onClick={onPause} aria-label={t('chat.goal_pause')}>
+              <Pause size={13} />
+              {t('chat.goal_pause')}
             </Button>
           )}
-          {!goal.done && !goal.paused && !goal.stalled && onGoalStop && (
-            <Button type="button" variant="icon" size="icon-sm" onClick={onGoalStop} aria-label="停止目标">
-              <X size={14} />
+          {!goal.done && !goal.stalled && goal.paused && (
+            <Button type="button" variant="secondary" size="sm" onClick={onResume} aria-label={t('chat.goal_resume')}>
+              <Play size={13} />
+              {t('chat.goal_resume')}
             </Button>
           )}
-          {!goal.done && (
+          {!goal.done && !goal.stalled && (
             <Button type="button" variant="icon" size="icon-sm" onClick={onDraftEdit} aria-label={t('chat.goal_edit')}>
               <Pencil size={14} />
             </Button>

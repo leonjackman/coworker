@@ -113,7 +113,6 @@ export interface ChatService {
   ) => Promise<void>;
   getGoalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
   pauseGoal: (sessionId: string) => Promise<{ status: string }>;
-  stopGoal: (sessionId: string) => Promise<{ status: string }>;
   editGoal: (sessionId: string, goal: string) => Promise<{ status: string }>;
   deleteGoal: (sessionId: string) => Promise<{ status: string }>;
   resumeGoal: (sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
@@ -345,12 +344,6 @@ class ElectronChatService implements ChatService {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.goalPause(sessionId);
   }
-
-  async stopGoal(sessionId: string): Promise<{ status: string }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.goalStop(sessionId);
-  }
-
   async editGoal(sessionId: string, goal: string): Promise<{ status: string }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.goalEdit({ session_id: sessionId, goal });
@@ -697,14 +690,6 @@ class HttpChatService implements ChatService {
 
   async pauseGoal(sessionId: string): Promise<{ status: string }> {
     return this.request<{ status: string }>('/goal/pause', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
-  }
-
-  async stopGoal(sessionId: string): Promise<{ status: string }> {
-    return this.request<{ status: string }>('/goal/stop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: sessionId }),
