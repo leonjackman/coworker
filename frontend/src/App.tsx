@@ -322,6 +322,23 @@ function App() {
       return;
     }
 
+    // 首次发消息：先创建 session，防止 agent 已开始但前端不知 session_id 导致对话丢失
+    if (requestProjectId && !sessionIdRef.current) {
+      try {
+        const sessionResp = await chatService.createSession({ project_id: requestProjectId });
+        const newSession = sessionResp.session;
+        if (newSession) {
+          sessionIdRef.current = newSession.id;
+          setSessionId(newSession.id);
+          // 立即加入本地会话列表，保证侧栏即时可见
+          setSessions((current) => [newSession, ...current]);
+        }
+      } catch (error) {
+        // 创建失败不影响消息发送（后端会兜底创建）
+        console.error('Failed to auto-create session:', error);
+      }
+    }
+
     setDraftMode(false);
 
     const message = typedMessage || t('chat.attachment_only_message');
