@@ -1397,7 +1397,6 @@ function App() {
 
   const openProject = (projectId: string) => {
     startProjectDraft(projectId);
-    setDraftMode(false);
   };
 
   const pickWorkspaceDirectory = async () => {
