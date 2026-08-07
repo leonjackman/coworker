@@ -1557,8 +1557,12 @@ function App() {
         setInput('');
         setAttachments([]);
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
-        pendingProjectIdRef.current = activeProjectId;
+        setDraftMode(true);
       }
+      abortRef.current?.abort();
+      requestSeqRef.current += 1;
+      activeAssistantMessageIdRef.current = undefined;
+      setPendingRequests([]);
       await refreshSessions();
       await refreshProjects();
     } catch (error) {
