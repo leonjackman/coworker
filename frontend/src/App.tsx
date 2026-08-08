@@ -116,6 +116,10 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(276);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [isNarrowViewport, setIsNarrowViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 860px)').matches,
+  );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
@@ -146,6 +150,40 @@ function App() {
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  // 窄屏（<=860px）时侧边栏切换为抽屉模式：进入窄屏解除折叠态，离开窄屏自动收起抽屉。
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const query = window.matchMedia('(max-width: 860px)');
+    const apply = (matches: boolean) => {
+      setIsNarrowViewport(matches);
+      if (matches) {
+        setSidebarCollapsed(false);
+      } else {
+        setMobileSidebarOpen(false);
+      }
+    };
+    apply(query.matches);
+    const onChange = (event: MediaQueryListEvent) => apply(event.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+
+  // 窄屏下切换视图/会话/项目后自动收起抽屉，避免遮挡主内容。
+  useEffect(() => {
+    if (!isNarrowViewport) return;
+    setMobileSidebarOpen(false);
+  }, [isNarrowViewport, activeView, sessionId, activeProjectId]);
+
+  // 抽屉展开时支持 ESC 关闭。
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileSidebarOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mobileSidebarOpen]);
 
   const refreshProviders = async () => {
     try {
@@ -1874,7 +1912,7 @@ function App() {
 
     return (
     <main
-      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
+      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
       style={{ '--sidebar-width': `${sidebarWidth}px`, '--bottom-panel-height': `${bottomPanelHeight}px`, '--inspector-width': `${inspectorWidth}px`, '--changes-width': `${changesPanelWidth}px` } as CSSProperties}
     >
       <WorkspaceTitlebar
@@ -1882,13 +1920,19 @@ function App() {
         activeView={activeView}
         sessionTitle={titlebarSessionTitle}
         projectName={titlebarProjectName}
-        sidebarCollapsed={sidebarCollapsed}
+        sidebarCollapsed={isNarrowViewport ? !mobileSidebarOpen : sidebarCollapsed}
         rightSidebarOpen={rightSidebarOpen}
         bottomPanelOpen={bottomPanelOpen}
         changesPanelOpen={changesPanelOpen}
         canEditSession={Boolean(sessionId)}
         pendingCount={currentSessionPending.length}
-        onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
+        onToggleSidebar={() => {
+          if (isNarrowViewport) {
+            setMobileSidebarOpen((value) => !value);
+          } else {
+            setSidebarCollapsed((value) => !value);
+          }
+        }}
         onToggleRightSidebar={() => setRightSidebarOpen((value) => !value)}
         onToggleBottomPanel={() => setBottomPanelOpen((value) => !value)}
         onToggleChangesPanel={() => setChangesPanelOpen((value) => !value)}
@@ -1896,12 +1940,20 @@ function App() {
         onDeleteSession={deleteCurrentSession}
       />
       <div className="app-body">
+        {isNarrowViewport ? (
+          <div
+            className={`sidebar-scrim ${mobileSidebarOpen ? 'sidebar-scrim--visible' : ''}`}
+            role="presentation"
+            aria-hidden={!mobileSidebarOpen}
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+        ) : null}
         <WorkspaceSidebar
           config={runtimeConfig}
           sessions={sessions}
           projects={projects}
           activeView={activeView}
-          collapsed={sidebarCollapsed}
+          collapsed={isNarrowViewport ? false : sidebarCollapsed}
           {...(currentProjectId ? { activeProjectId: currentProjectId } : {})}
           onResizeStart={() => setSidebarResizing(true)}
           onResizeEnd={() => setSidebarResizing(false)}

@@ -190,10 +190,35 @@ textarea {
 }
 
 .app-body {
+  position: relative;
   min-height: 0;
   display: grid;
   grid-template-columns: var(--sidebar-width, 276px) minmax(0, 1fr);
   transition: grid-template-columns 200ms ease;
+}
+
+/* 窄屏抽屉遮罩：仅在 <=860px 时由 App 渲染 */
+.sidebar-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  background: color-mix(in srgb, var(--background) 20%, rgba(0, 0, 0, 0.55));
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.sidebar-scrim--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-scrim,
+  .sidebar {
+    transition-duration: 1ms;
+  }
 }
 
 .app-shell--sidebar-collapsed .app-body {
@@ -202,6 +227,9 @@ textarea {
 
 .sidebar {
   position: relative;
+  /* 以侧栏自身宽度为基准做容器查询，内容随宽度自适应 */
+  container-type: inline-size;
+  container-name: sidebar;
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -212,7 +240,10 @@ textarea {
   border-right: 1px solid var(--material-border);
   background: var(--sidebar);
   transition: padding 200ms ease;
-  overflow: hidden;
+  /* clip 而非 hidden：配合 overflow-clip-margin 让 right:-3px 的拖拽手柄
+     外半部分仍可见可点（热区 3px → 6px），同时保留对内容溢出的兜底裁剪 */
+  overflow: clip;
+  overflow-clip-margin: 3px;
 }
 
 .sidebar__resizer {
@@ -287,6 +318,7 @@ body.sidebar-resizing {
 .sidebar__brand-logo {
   display: block;
   width: auto;
+  max-width: 100%;
   height: 24px;
   object-fit: contain;
 }
@@ -308,6 +340,9 @@ body.sidebar-resizing {
 .sidebar-group,
 .sidebar-project {
   display: grid;
+  /* 显式单列 minmax(0,1fr)：隐式 auto 列的最小尺寸是 min-content，
+     会让子项拒绝收缩、在窄宽度下撑破侧栏边界并被 overflow:hidden 裁掉 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
 }
 
@@ -359,19 +394,38 @@ body.sidebar-resizing {
 .sidebar-session {
   display: flex;
   align-items: center;
+  min-width: 0;
+}
+
+/* 侧栏内所有图标不参与收缩，避免窄宽度下被压扁变形 */
+.sidebar-nav-item > svg,
+.sidebar-session > svg,
+.sidebar-project__title > svg,
+.sidebar-group__header svg {
+  flex: 0 0 auto;
 }
 
 .sidebar-group__header {
   justify-content: space-between;
+  gap: 6px;
   min-height: 30px;
   padding: 0 4px;
 }
 
 .sidebar-group__header h2 {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted-foreground);
   font-size: 13px;
   font-weight: 700;
+}
+
+/* 新建项目按钮固定尺寸，不被标题挤压 */
+.sidebar-group__header > button {
+  flex: 0 0 auto;
 }
 
 .sidebar-nav-item,
@@ -424,6 +478,7 @@ body.sidebar-resizing {
   position: relative;
   display: flex;
   align-items: center;
+  min-width: 0;
 }
 
 .sidebar-project__title-row--active .sidebar-project__title {
@@ -481,6 +536,7 @@ body.sidebar-resizing {
 
 .sidebar-project__actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 2px;
   margin-left: auto;
@@ -532,6 +588,7 @@ body.sidebar-resizing {
 .sidebar-project__sessions {
   overflow: hidden;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
   padding: 2px 0 4px 18px;
 }
@@ -551,13 +608,18 @@ body.sidebar-resizing {
 .sidebar-project__footer {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 6px;
   padding: 4px 6px 0;
 }
 
 .pg-btn {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 32px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -663,7 +725,47 @@ body.sidebar-resizing {
 .sidebar__settings {
   margin-top: auto;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+}
+
+/* ===== 侧栏内容随自身宽度自适应（容器查询，基准为 .sidebar 宽度） ===== */
+
+/* 注意：容器查询基准是 content-box，.sidebar 左右 padding 共 24px，
+   故阈值 215px ≈ 侧栏总宽 240px，190px ≈ 总宽 215px。 */
+
+/* 中等窄（总宽 ≲240px）：收紧内边距与间距，把空间让给文字 */
+@container sidebar (max-width: 215px) {
+  .sidebar-nav-item,
+  .sidebar-session__inner,
+  .sidebar-project__title {
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .sidebar-project__sessions {
+    padding-left: 12px;
+  }
+
+  .sidebar-project__footer-meta {
+    padding: 6px 8px 2px;
+  }
+}
+
+/* 更窄（总宽 ≲215px）：隐藏会话时间戳，避免与标题争抢宽度 */
+@container sidebar (max-width: 190px) {
+  .sidebar-session__time {
+    display: none;
+  }
+
+  .sidebar-project__footer {
+    padding: 4px 2px 0;
+  }
+
+  .pg-btn {
+    padding: 0 6px;
+    font-size: 12px;
+  }
 }
 
 .workspace-shell {
@@ -3598,11 +3700,41 @@ body.bottom-panel-resizing {
 }
 
 @media (max-width: 860px) {
-  .app-body {
-    grid-template-columns: 1fr;
+  .app-body,
+  .app-shell--sidebar-collapsed .app-body {
+    grid-template-columns: minmax(0, 1fr);
   }
 
+  /* 侧边栏改为可滑出的抽屉，不再整体隐藏 */
   .sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    width: min(300px, 86vw);
+    max-width: 300px;
+    border-right: 1px solid var(--material-border);
+    background: var(--sidebar);
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.32);
+    transform: translate3d(-101%, 0, 0);
+    visibility: hidden;
+    will-change: transform;
+    transition:
+      transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+      visibility 0s linear 220ms;
+  }
+
+  .app-shell--drawer-open .sidebar {
+    transform: translate3d(0, 0, 0);
+    visibility: visible;
+    transition:
+      transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+      visibility 0s linear 0s;
+  }
+
+  /* 抽屉模式下禁用宽度拖拽 */
+  .sidebar__resizer {
     display: none;
   }
 
