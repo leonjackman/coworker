@@ -1,10 +1,12 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 import shlex
 import signal
 import struct
 import subprocess
+import sys
 import uuid
 from collections import defaultdict
 from typing import Any, Optional
@@ -347,6 +349,9 @@ import json as _json
 
 class ChatStreamRequest(ChatRequest):
     session_id: str = ""
+    # 前端乐观渲染时生成的消息 id，回传以统一前后端 id（修复按 id 回退/重生成时 404）
+    user_message_id: str = ""
+    assistant_message_id: str = ""
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatStreamRequest):
@@ -382,7 +387,7 @@ async def chat_stream(request: ChatStreamRequest):
         session_id = session.id
 
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references)}
-    session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references)
+    session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
     if runtime.owns_runtime_messages and agent_registry.has_runtime_checkpoint(session_id):
         messages = [user_message]
     else:
@@ -408,6 +413,7 @@ async def chat_stream(request: ChatStreamRequest):
                     work_mode=work_mode,
                     autonomy=autonomy,
                     parts=parts or [],
+                    message_id=request.assistant_message_id or None,
                 )
                 last = session.messages[-1] if session.messages else None
                 if last is not None:
@@ -469,6 +475,7 @@ async def chat_stream(request: ChatStreamRequest):
                     session_id, goal_text=goal_text, goal_done=False, goal_paused=False,
                     goal_todos=[], goal_stopped=False, goal_interrupted=False,
                     goal_force_count=0, goal_just_edited=False, goal_stream_id=new_stream_id,
+                    goal_max_rounds=read_user_goal_max_rounds(),
                 )
             except KeyError:
                 pass
@@ -551,6 +558,23 @@ class SettingsUpdate(BaseModel):
 
 SETTING_FILE = os.path.join(os.path.dirname(__file__), '..', '.coworker_settings.json')
 
+
+def read_user_goal_max_rounds() -> int:
+    """Read the user-level goal step cap from .coworker_settings.json.
+
+    Falls back to 50 (the product default) when the file is missing or the
+    key is absent. This is the bridge between the Settings page and the actual
+    /goal loop, which otherwise only sees the per-session default.
+    """
+    try:
+        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
+        if "goal_max_rounds" in data:
+            return int(data["goal_max_rounds"])
+    except Exception:
+        pass
+    return 50
+
+
 @app.get("/settings")
 async def get_settings():
     """Get user-level settings for the goal feature."""
@@ -574,8 +598,9 @@ async def set_settings(request: SettingsUpdate):
         path = Path(SETTING_FILE)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"goal_max_rounds": max_rounds}))
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[settings] failed to persist goal_max_rounds={max_rounds}: {exc!r}", file=sys.stderr)
+        return {"status": "error", "goal_max_rounds": max_rounds, "detail": str(exc)}
     return {"status": "ok", "goal_max_rounds": max_rounds}
 
 
@@ -671,6 +696,7 @@ async def goal_start(request: GoalStartRequest):
             goal_force_count=0,
             goal_just_edited=False,
             goal_stream_id=str(uuid.uuid4()),
+            goal_max_rounds=read_user_goal_max_rounds(),
         )
 
         return { "status": "ok", "goal_text": goal_text }

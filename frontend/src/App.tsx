@@ -132,6 +132,7 @@ function App() {
   const [changesPanelWidth, setChangesPanelWidth] = useState(380);
   const [changesPanelResizing, setChangesPanelResizing] = useState(false);
   const [autonomy, setAutonomy] = useState<Autonomy>('guarded');
+  const [goalMaxRounds, setGoalMaxRounds] = useState<number>(50);
   const [workMode, setWorkMode] = useState<WorkMode>('build');
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -243,7 +244,12 @@ function App() {
         }
         await refreshSessions();
         await refreshProjects();
-        try { await chatService.fetchSettings(); } catch { /* ignore */ }
+        try {
+          const settings = await chatService.fetchSettings();
+          if (typeof settings.goal_max_rounds === 'number') {
+            setGoalMaxRounds(settings.goal_max_rounds);
+          }
+        } catch { /* ignore */ }
       } catch (error) {
         console.error('Failed to load runtime config:', error);
         if (!mounted) return;
@@ -402,9 +408,13 @@ function App() {
     }
 
     // 在消息墙展示用户输入（含 /goal 等命令令牌）
+    // 前端生成稳定的消息 id，回传后端以统一前后端 id（修复按 id 回退/重生成时 404）
+    const userMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setMessages((current) => [
       ...current,
       createMessage('user', message, {
+        id: userMessageId,
         status: 'done',
         ...(requestSessionId ? { sessionId: requestSessionId } : {}),
         autonomy,
@@ -417,7 +427,6 @@ function App() {
     setInput('');
     setIsThinking(true);
 
-    const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setMessages((current) => [
       ...current,
       createMessage('assistant', '', {
@@ -680,6 +689,8 @@ function App() {
           ...(requestReferences.length > 0 ? { referenced_sessions: requestReferences.map((reference) => reference.id) } : {}),
           ...(requestSessionId ? { session_id: requestSessionId } : {}),
           ...(requestProjectId ? { project_id: requestProjectId } : {}),
+          user_message_id: userMessageId,
+          assistant_message_id: assistantMessageId,
           ...(override?.goalMode ? { goal_mode: true, goal_text: override.goalText || message } : {}),
         },
         handleEvent,
@@ -1915,6 +1926,11 @@ function App() {
     setThemeSettings(nextSettings);
   };
 
+  const changeGoalMaxRounds = (value: number) => {
+    setGoalMaxRounds(value);
+    chatService.saveSettings({ goal_max_rounds: value }).catch(() => { /* ignore */ });
+  };
+
     return (
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
@@ -2082,6 +2098,8 @@ function App() {
                 <SettingsView
                   themeSettings={themeSettings}
                   autonomy={autonomy}
+                  goalMaxRounds={goalMaxRounds}
+                  onGoalMaxRoundsChange={changeGoalMaxRounds}
                   onThemeSettingsChange={changeThemeSettings}
                   onAutonomyChange={setAutonomy}
                   onClose={() => setActiveView('chat')}

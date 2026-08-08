@@ -565,12 +565,14 @@ export function ChatInput({
                     </button>
                   </Tooltip>
 
-                  <Tooltip content={t(`chat.autonomy_${autonomy}_tip`)}>
-                    <button type="button" className="composer-toggle-button" onClick={() => onAutonomyChange(nextAutonomy)} aria-label={t("chat.toggle_autonomy")}>
-                      <ShieldCheck size={14} />
-                      <span>{t(`chat.autonomy_${autonomy}`)}</span>
-                    </button>
-                  </Tooltip>
+                  {workMode === "build" && (
+                    <Tooltip content={t(`chat.autonomy_${autonomy}_tip`)}>
+                      <button type="button" className="composer-toggle-button" onClick={() => onAutonomyChange(nextAutonomy)} aria-label={t("chat.toggle_autonomy")}>
+                        <ShieldCheck size={14} />
+                        <span>{t(`chat.autonomy_${autonomy}`)}</span>
+                      </button>
+                    </Tooltip>
+                  )}
                   {branchStatus && (
                     <span
                      style={{ display: "flex", alignItems: "center", gap: "4px" ,color: "#666666"}}

@@ -13,6 +13,8 @@ import { autonomyOptions, languageOptions, themeOptions } from './preference-opt
 interface SettingsViewProps {
   themeSettings: ThemeSettings;
   autonomy: Autonomy;
+  goalMaxRounds: number;
+  onGoalMaxRoundsChange: (value: number) => void;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAutonomyChange: (mode: Autonomy) => void;
   onLanguageChange?: () => void;
@@ -22,6 +24,8 @@ interface SettingsViewProps {
 export function SettingsView({
   themeSettings,
   autonomy,
+  goalMaxRounds,
+  onGoalMaxRoundsChange,
   onThemeSettingsChange,
   onAutonomyChange,
   onLanguageChange,
@@ -136,6 +140,21 @@ export function SettingsView({
                 description: t('settings.audit_entry_desc'),
                 actionLabel: t('settings.audit_open'),
                 onAction: () => setSettingsPage('audit'),
+              },
+            ],
+          },
+          {
+            id: 'goal',
+            title: t('settings.goal_group'),
+            description: t('settings.goal_group_desc'),
+            items: [
+              {
+                id: 'goal_rounds',
+                type: 'goal_rounds',
+                label: t('settings.goal_rounds'),
+                description: t('settings.goal_rounds_desc'),
+                value: goalMaxRounds,
+                onChange: onGoalMaxRoundsChange,
               },
             ],
           },

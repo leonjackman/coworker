@@ -3415,6 +3415,40 @@ body.bottom-panel-resizing {
   flex: 0 0 auto;
 }
 
+.settings-goal-rounds {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-goal-rounds__field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-goal-rounds__input {
+  width: 84px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input);
+  color: var(--text-base, var(--foreground));
+  font-size: 13px;
+  outline: none;
+}
+
+.settings-goal-rounds__input:focus {
+  border-color: var(--accent, #6366f1);
+}
+
+.settings-goal-rounds__unit {
+  font-size: 13px;
+  color: var(--text-muted, #9ca3af);
+}
+
 .settings-row__meta {
   margin-left: auto;
 }

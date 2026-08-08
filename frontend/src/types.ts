@@ -186,6 +186,9 @@ export interface ChatRequest {
   project_id?: string;
   attachments?: ComposerAttachment[];
   referenced_sessions?: string[];
+  // 前端乐观渲染时生成的消息 id，回传后端以统一前后端 id（修复回退/重生成时 404）
+  user_message_id?: string;
+  assistant_message_id?: string;
 }
 
 export interface ChatResponse {

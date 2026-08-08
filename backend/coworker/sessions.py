@@ -283,11 +283,15 @@ class SessionStore:
         attachments: list[dict[str, Any]] | None = None,
         parts: list[dict[str, Any]] | None = None,
         references: list[dict[str, Any]] | None = None,
+        message_id: str | None = None,
     ) -> Session:
         session = self.require(session_id)
+        # 优先使用调用方传入的 id（通常是前端乐观渲染时生成的 id），
+        # 保证前端展示的 message id 与后端持久化 id 一致，避免按 id 检索（回退/重生成）时 404。
+        resolved_id = message_id or str(uuid.uuid4())
         session.messages.append(
             SessionMessage(
-                id=str(uuid.uuid4()),
+                id=resolved_id,
                 role=role,
                 content=content,
                 created_at=_now(),
