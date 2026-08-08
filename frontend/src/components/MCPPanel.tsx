@@ -1,4 +1,4 @@
-import { ChevronDown, Loader2, Network, Plus, Save, Search, Trash2 } from 'lucide-react';
+import { ChevronDown, Database, Globe, Loader2, Network, Plus, Save, Search, Shield, Terminal, Trash2, Wrench, FileText, Code, Cloud, GitBranch } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
@@ -14,6 +14,24 @@ import { WorkspacePage } from './ui/workspace-page';
 const SECRET_PLACEHOLDER = '__CW_SECRET_KEPT__';
 
 type ViewMode = 'list' | 'form' | 'catalog';
+
+// Color icon map for popular MCP templates — each returns a colored SVG icon.
+const MCP_ICONS: Record<string, { icon: React.ReactNode; color: string }> = {
+  filesystem: { icon: <FileText size={12} />, color: '#000000' },
+  git: { icon: <GitBranch size={12} />, color: '#F05032' },
+  context7: { icon: <Shield size={12} />, color: '#7C3AED' },
+  deepwiki: { icon: <FileText size={12} />, color: '#F59E0B' },
+  'sequential-thinking': { icon: <Code size={12} />, color: '#10B981' },
+  'memory-server': { icon: <Database size={12} />, color: '#3B82F6' },
+  playwright: { icon: <Globe size={12} />, color: '#2EAD33' },
+  'everything-server': { icon: <Wrench size={12} />, color: '#6366F1' },
+};
+
+function TemplateIcon(template: McpTemplateEntry): React.ReactNode {
+  const entry = MCP_ICONS[template.id];
+  if (!entry) return <Network size={12} />;
+  return <span style={{ color: entry.color }}>{entry.icon}</span>;
+}
 
 type FormState = {
   id: string | null;
@@ -331,7 +349,7 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
                 <div className="mcp-template-row">
                   {templates.map((template) => (
                     <button key={template.id} type="button" className="mcp-template-pill" onClick={() => selectTemplate(template)}>
-                      {template.icon || <Network size={12} />}
+                      {TemplateIcon(template)}
                       {template.name}
                     </button>
                   ))}
@@ -453,7 +471,9 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
                 key={template.id}
                 onClick={() => selectTemplate(template)}
               >
-                <div className="mcp-catalog-card__icon">{template.icon || '📦'}</div>
+                <div className="mcp-catalog-card__icon" style={{ color: template.color }}>
+                  {TemplateIcon(template)}
+                </div>
                 <div className="mcp-catalog-card__name">{template.name}</div>
                 <div className="mcp-catalog-card__desc">{template.description || ''}</div>
                 <div className="mcp-catalog-card__tags">

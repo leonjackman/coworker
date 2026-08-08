@@ -38,6 +38,7 @@ export interface McpTemplateEntry {
   url: string;
   env: Record<string, string>;
   headers?: Record<string, string>;
+  color?: string;
 }
 
 export interface McpServerCreateRequest {

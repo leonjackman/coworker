@@ -5306,7 +5306,7 @@ body.bottom-panel-resizing {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  border: 1px solid transparent;
+  border: 1px solid var(--material-border);
   border-radius: 8px;
   padding: 0 10px;
   color: var(--muted-foreground);
@@ -5327,6 +5327,13 @@ body.bottom-panel-resizing {
   border-style: dashed;
   border-color: var(--material-border);
   background: transparent;
+}
+
+/* Dashed "custom" pill icon should be inline-flex to center */
+.mcp-template-pill--dashed > svg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* List heading (aligned with provider-list-heading) */
