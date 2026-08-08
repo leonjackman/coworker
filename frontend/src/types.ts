@@ -464,6 +464,7 @@ export interface PendingRequest {
   header?: string;
   options?: ApprovalOption[];
   multiple?: boolean;
+  allowCustom?: boolean;
   plan?: string;
   // Internal: preserved form state across remount (not sent to backend)
   _savedPicked?: number[];
@@ -497,6 +498,7 @@ export interface PendingRequest {
         header?: string;
         options?: ApprovalOption[];
         multiple?: boolean;
+        allowCustom?: boolean;
         approval_status: string;
         session_id?: string;
       }

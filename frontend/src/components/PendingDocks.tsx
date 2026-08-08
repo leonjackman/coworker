@@ -196,11 +196,15 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
     el.style.height = `${el.scrollHeight}px`;
   }, [customAnswer]);
 
+  // 参考 opencode 的 `custom` 模型：默认允许"其他（自由文本）"作为最后一个显式选项，
+  // 但必须先选中该选项才能填写，杜绝"不选任何选项只填空"绕过选择。
+  const allowCustom = request.allowCustom !== false;
+  const otherIndex = request.options?.length ?? 0;
+  const pickedOther = picked.includes(otherIndex);
+
   const hasAnswer = request.options
-    ? (request.multiple
-        ? picked.length > 0
-        : picked.length > 0 || customAnswer.trim() !== '')
-    : true;
+    ? picked.length > 0 && (!pickedOther || customAnswer.trim() !== '')
+    : customAnswer.trim() !== '';
 
   const dispatch = useCallback(async (decision: ApprovalDecisionPayload) => {
     if (resolving) return;
@@ -215,22 +219,26 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
   const handleSubmit = useCallback(async () => {
     if (resolving || !hasAnswer) return;
     if (request.options) {
-      if (request.multiple && picked.length > 0) {
-        await dispatch({ type: 'respond', message: picked
+      if (request.multiple) {
+        const labels = picked
+          .filter((i) => i !== otherIndex)
           .map((i) => request.options?.[i]?.label)
-          .filter(Boolean)
-          .join(', ') });
-      } else if (!request.multiple && picked.length > 0 && request.options) {
-        await dispatch({ type: 'respond', message: request.options[picked[0]!]?.label ?? '' });
-      } else if (customAnswer.trim()) {
+          .filter(Boolean) as string[];
+        const message = pickedOther && customAnswer.trim()
+          ? [...labels, customAnswer.trim()].join(', ')
+          : labels.join(', ');
+        await dispatch({ type: 'respond', message });
+      } else if (pickedOther) {
         await dispatch({ type: 'respond', message: customAnswer.trim() });
+      } else if (picked.length > 0) {
+        await dispatch({ type: 'respond', message: request.options[picked[0]!]?.label ?? '' });
       } else {
         await dispatch({ type: 'respond', message: '' });
       }
     } else {
       await dispatch({ type: 'respond', message: customAnswer.trim() || '' });
     }
-  }, [resolving, hasAnswer, request.multiple, request.options, request.question, picked, customAnswer, dispatch]);
+  }, [resolving, hasAnswer, request.multiple, request.options, request.question, otherIndex, pickedOther, picked, customAnswer, dispatch]);
 
   const showProgress = typeof total === 'number' && total > 1;
 
@@ -291,22 +299,62 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
               </label>
             );
           })}
+          {allowCustom ? (
+            <label
+              key="__other__"
+              className="pending-dock__option"
+              data-slot="question-option"
+              data-type={request.multiple ? 'checkbox' : 'radio'}
+              data-picked={pickedOther}
+            >
+              <input
+                type={request.multiple ? 'checkbox' : 'radio'}
+                name={request.approval_id}
+                checked={pickedOther}
+                onChange={() => {
+                  if (request.multiple) {
+                    setPicked((prev) =>
+                      prev.includes(otherIndex)
+                        ? prev.filter((i) => i !== otherIndex)
+                        : [...prev, otherIndex],
+                    );
+                  } else {
+                    setPicked((prev) => (prev.includes(otherIndex) ? [] : [otherIndex]));
+                  }
+                }}
+                className="pending-dock__option-native"
+              />
+              <span
+                className="pending-dock__option-box"
+                data-type={request.multiple ? 'checkbox' : 'radio'}
+                data-picked={pickedOther}
+                aria-hidden="true"
+              >
+                <span className="pending-dock__option-check" />
+              </span>
+              <span className="pending-dock__option-main">
+                <span className="pending-dock__option-label">{t('chat.question_other_option')}</span>
+              </span>
+            </label>
+          ) : null}
         </fieldset>
       ) : null}
-      <textarea
-        ref={answerInputRef}
-        className="pending-dock__option-input"
-        rows={2}
-        placeholder={t('chat.question_custom_input') || t('chat.question_input_placeholder')}
-        value={customAnswer}
-        onChange={(e) => setCustomAnswer(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSubmit();
-          }
-        }}
-      />
+      {(!request.options || (allowCustom && pickedOther)) ? (
+        <textarea
+          ref={answerInputRef}
+          className="pending-dock__option-input"
+          rows={2}
+          placeholder={request.options ? t('chat.question_other_placeholder') : (t('chat.question_custom_input') || t('chat.question_input_placeholder'))}
+          value={customAnswer}
+          onChange={(e) => setCustomAnswer(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              handleSubmit();
+            }
+          }}
+        />
+      ) : null}
       <div className="pending-dock__footer">
         <button
           type="button"

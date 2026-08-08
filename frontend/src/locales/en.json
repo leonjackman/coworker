@@ -147,6 +147,8 @@
   "chat.question_disagree_tooltip": "Decline this question",
   "chat.question_custom_input": "Type your answer",
   "chat.question_input_placeholder": "Type your answer...",
+  "chat.question_other_option": "Other (please specify)",
+  "chat.question_other_placeholder": "Describe your answer…",
   "chat.status_queued": "queued",
   "chat.status_running": "running",
   "chat.status_done": "done",
