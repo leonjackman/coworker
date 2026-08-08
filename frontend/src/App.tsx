@@ -623,16 +623,34 @@ function App() {
         // Force-loop nudge: agent didn't use tools, system will retry.
         setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
       } else if (event.type === 'goal_done') {
+        const failed =
+          Boolean(event.stalled) ||
+          ['timeout', 'stopped', 'interrupted', 'max_rounds_exceeded'].includes(event.reason || '');
         setGoal((current) => {
-          const next: GoalState = { ...current, done: true, running: false, stalled: event.stalled || false, progress: event.content || current.progress };
+          const next: GoalState = {
+            ...current,
+            done: true,
+            running: false,
+            stalled: failed,
+            progress: event.content || current.progress,
+          };
           if (event.reason) next.reason = event.reason;
           if (event.verification) next.verification = event.verification;
           return next;
         });
         if (event.content) streamedContent = event.content;
         localParts = settleRunningTools(localParts);
-        const msgStatus = event.stalled ? 'error' : 'done';
-        const msgContent = event.stalled ? (event.reason === 'stalled' || event.reason === 'max_rounds_exceeded' ? 'Agent stalled' : (event.reason || 'Unknown')) : (streamedContent || '✓ 目标已完成');
+        const msgStatus = failed ? 'error' : 'done';
+        const failedReasonLabel: Record<string, string> = {
+          timeout: 'Agent timed out',
+          stopped: 'Goal stopped',
+          interrupted: 'Goal interrupted',
+          max_rounds_exceeded: 'Max rounds exceeded',
+          stalled: 'Agent stalled',
+        };
+        const msgContent = failed
+          ? event.content || failedReasonLabel[event.reason || ''] || 'Goal failed'
+          : streamedContent || '✓ 目标已完成';
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -709,11 +727,19 @@ function App() {
           try {
             const status = await chatService.getGoalStatus(sessionIdRef.current || '');
             if (status.status === 'done') {
-              setGoal((current) => {
-                const next: GoalState = { ...current, done: true, running: false, stalled: status.goal?.stalled || false, progress: status.goal?.progress || current.progress };
-                if (status.goal?.reason) next.reason = status.goal.reason;
-                return next;
-              });
+              // Don't clobber a correctly-set stalled/error state with a plain
+              // "done" — the SSE goal_done event already carried the truth.
+              setGoal((current) =>
+                current.stalled
+                  ? current
+                  : {
+                      ...current,
+                      done: true,
+                      running: false,
+                      progress: status.goal?.progress || current.progress,
+                      ...(status.goal?.reason ? { reason: status.goal.reason } : {}),
+                    },
+              );
             } else if (status.status === 'paused') {
               setGoal((current) => ({ ...current, paused: true, running: false }));
             }
@@ -732,11 +758,17 @@ function App() {
               if (!sessionIdRef.current) throw new Error('no session');
               const status = await chatService.getGoalStatus(sessionIdRef.current);
               if (status.status === 'done') {
-                setGoal((current) => {
-                  const next: GoalState = { ...current, done: true, running: false, stalled: status.goal?.stalled || false, progress: status.goal?.progress || current.progress };
-                  if (status.goal?.reason) next.reason = status.goal.reason;
-                  return next;
-                });
+                setGoal((current) =>
+                  current.stalled
+                    ? current
+                    : {
+                        ...current,
+                        done: true,
+                        running: false,
+                        progress: status.goal?.progress || current.progress,
+                        ...(status.goal?.reason ? { reason: status.goal.reason } : {}),
+                      },
+                );
               } else if (status.status === 'paused') {
                 setGoal((current) => ({ ...current, paused: true, running: false }));
               } else {
@@ -1561,12 +1593,17 @@ function App() {
         goal_paused?: boolean;
         goal_todos?: GoalTodo[];
         goal_stopped?: boolean;
+        goal_interrupted?: boolean;
       };
       if (sessionRecord.goal_text && !sessionRecord.goal_stopped) {
+        // An interrupted goal (e.g. a crash) still has goal_text but no
+        // goal_paused flag — treat it as resumable so the user can restart it
+        // from the checkpoint instead of being stuck with no controls.
+        const recoverable = Boolean(sessionRecord.goal_paused || sessionRecord.goal_interrupted);
         setGoal({
           goalText: sessionRecord.goal_text,
           done: Boolean(sessionRecord.goal_done),
-          paused: Boolean(sessionRecord.goal_paused),
+          paused: recoverable,
           todos: sessionRecord.goal_todos || [],
           running: false,
           round: 0,
@@ -1727,11 +1764,16 @@ function App() {
   const resumeGoal = async () => {
     const targetSessionId = sessionIdRef.current;
     if (!targetSessionId) return;
+    // Lock the composer for the duration of the resumed loop so the user
+    // cannot spin up a concurrent stream that would race the running goal.
+    setIsThinking(true);
     try {
       await chatService.resumeGoal(targetSessionId, handleGoalResumeEventWithChat);
     } catch (error) {
       console.error('Failed to resume goal:', error);
       setGoal((current) => ({ ...current, running: false }));
+    } finally {
+      setIsThinking(false);
     }
   };
 
@@ -1794,8 +1836,11 @@ function App() {
     } else if (event.type === 'todos') {
       setGoal((current) => ({ ...current, todos: event.todos }));
     } else if (event.type === 'goal_done') {
+      const failed =
+        Boolean(event.stalled) ||
+        ['timeout', 'stopped', 'interrupted', 'max_rounds_exceeded'].includes(event.reason || '');
       setGoal((current) => {
-        const next: GoalState = { ...current, done: true, running: false, stalled: event.stalled || false, progress: event.content || current.progress };
+        const next: GoalState = { ...current, done: true, running: false, stalled: failed, progress: event.content || current.progress };
         if (event.reason) next.reason = event.reason;
         return next;
       });

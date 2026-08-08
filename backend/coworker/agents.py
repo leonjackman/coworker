@@ -1237,6 +1237,12 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
 GOAL_MARKER = "[CW-GOAL]"
 
+# Max forced-continuation nudges before declaring a goal stalled. Shared by
+# GoalModeMiddleware (docstring reference) and the goal loop in
+# OpenAICompatibleStreamRuntime, which previously referenced `self.MAX_FORCE`
+# on a class that never defined it (AttributeError on every stall).
+GOAL_MAX_FORCE = 3
+
 
 class FinalizeGoalArgs(BaseModel):
     achieved: bool = Field(description="True only when the goal is fully achieved and verified.")
@@ -1315,7 +1321,7 @@ class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
       the loop keeps working instead of stopping early.
     """
 
-    MAX_FORCE = 3
+    MAX_FORCE = GOAL_MAX_FORCE
 
     def __init__(self, language: Language = "en"):
         self.language = language
@@ -1805,7 +1811,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             try:
                 session_state = self.session_store.require(session_id)
                 goal_text = str(session_state.goal_text or goal_text)
-                goal_max_rounds = int(session_state.goal_max_rounds or 50)
+                # Preserve 0 (unlimited); only fall back to 50 when unset (None).
+                goal_max_rounds = 50 if session_state.goal_max_rounds is None else int(session_state.goal_max_rounds)
                 if session_state.goal_interrupted:
                     yield {"type": "goal_done", "round": 0, "goal": goal_text, "content": "", "reason": "interrupted"}
                     return
@@ -1837,11 +1844,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             "content": "", "reason": "stopped",
                         }
                         return
-                    goal_max_rounds = int(session_state.goal_max_rounds or 50)
+                    # Preserve 0 (unlimited); only fall back to 50 when unset (None).
+                    goal_max_rounds = 50 if session_state.goal_max_rounds is None else int(session_state.goal_max_rounds)
                 except Exception:
-                    goal_max_rounds = 0
+                    # Failed to read session state: fail safe to the default cap
+                    # rather than 0, which would otherwise mean "unlimited".
+                    goal_max_rounds = 50
             else:
-                goal_max_rounds = 0
+                goal_max_rounds = 50
             is_first = round_no == 1
             # Max rounds guard: stop when we exceed goal_max_rounds (0 = no limit).
             if goal_max_rounds > 0 and round_no > goal_max_rounds:
@@ -1852,11 +1862,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 return
             yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running"}
             round_had_tools = False
+            round_had_interrupt = False
             try:
                 async with asyncio.timeout(600):  # 5 min per turn
                     async for event in self._stream(
                         messages if (is_first and not goal_continue_first) else [],
-                        session_id, language, work_mode, autonomy, rerun=False,
+                        # A goal is an autonomous "do the work" loop: always run in
+                        # the execute phase so write/run tools are available,
+                        # regardless of the session's plan/build toggle.
+                        session_id, language, "build", autonomy, rerun=False,
                         goal_mode=True, goal_text=goal_text,
                         goal_continue=(not is_first or goal_continue_first),
                         _cancel_event=_cancel_event,
@@ -1868,6 +1882,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             last_todos = event.get("todos") or []
                         elif etype == "tool_start":
                             round_had_tools = True
+                        elif etype in ("plan_required", "approval_required"):
+                            round_had_interrupt = True
                         yield event
             except asyncio.TimeoutError:
                 yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
@@ -1883,6 +1899,19 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 except Exception:
                     paused = False
             achieved = bool(last_checkpoint and last_checkpoint.get("achieved"))
+            if round_had_interrupt and not achieved:
+                # A human-in-the-loop interrupt (plan / command approval) fired
+                # during this goal round. Pause the loop cleanly instead of
+                # re-entering and re-triggering the same interrupt repeatedly
+                # until the round cap — the user approves, then resumes from the
+                # checkpoint.
+                if self.session_store is not None:
+                    try:
+                        self.session_store.update_goal(session_id, goal_paused=True)
+                    except Exception:
+                        pass
+                yield {"type": "goal_paused", "round": round_no, "goal": goal_text}
+                return
             if self.session_store is not None:
                 try:
                     self.session_store.update_goal(
@@ -1912,7 +1941,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         goal_force = 0
                 else:
                     goal_force = 0
-                if goal_force < self.MAX_FORCE:
+                if goal_force < GOAL_MAX_FORCE:
                     # Yield a force_continue event to inform the client, then
                     # re-invoke _stream with a nudge appended to the user message.
                     yield {"type": "goal_force", "round": round_no, "reason": "agent_without_tools", "count": goal_force}
@@ -1938,7 +1967,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         async with asyncio.timeout(5 * 60):  # 5 min per turn
                             async for event in self._stream(
                                 messages if (is_first and not goal_continue_first) else [],
-                                session_id, language, work_mode, autonomy, rerun=False,
+                                # A goal is an autonomous "do the work" loop: always run in
+                        # the execute phase so write/run tools are available,
+                        # regardless of the session's plan/build toggle.
+                        session_id, language, "build", autonomy, rerun=False,
                                 goal_mode=True, goal_text=goal_text,
                                 goal_continue=(not is_first or goal_continue_first),
                                 _nudge=nudge,
@@ -1968,7 +2000,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             goal_force = int(session_state.goal_force_count or 0)
                         except Exception:
                             goal_force = 0
-                    if goal_force < self.MAX_FORCE:
+                    if goal_force < GOAL_MAX_FORCE:
                         goal_force += 1
                         yield {"type": "goal_force", "round": round_no, "reason": "agent_without_tools", "count": goal_force}
                         last_checkpoint = None
@@ -1983,7 +2015,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             async with asyncio.timeout(600):  # 5 min per turn
                                 async for event in self._stream(
                                     messages if (is_first and not goal_continue_first) else [],
-                                    session_id, language, work_mode, autonomy, rerun=False,
+                                    # A goal is an autonomous "do the work" loop: always run in
+                        # the execute phase so write/run tools are available,
+                        # regardless of the session's plan/build toggle.
+                        session_id, language, "build", autonomy, rerun=False,
                                     goal_mode=True, goal_text=goal_text,
                                     goal_continue=(not is_first or goal_continue_first),
                                     _nudge=nudge,
