@@ -69,6 +69,14 @@
   --material-border: var(--border);
   --material-shadow: var(--shadow);
   --material-blur: none;
+  /* MCP panel tokens (alias to the material system so the MCP page
+     stays visually aligned with the provider page) */
+  --muted-border: var(--material-border);
+  --material-card: var(--material-panel);
+  --destructive-bg: color-mix(in srgb, var(--destructive) 12%, var(--material-panel));
+  --destructive-border: color-mix(in srgb, var(--destructive) 45%, var(--material-border));
+  --success: #22c55e;
+  --success-foreground: #16a34a;
   color: var(--foreground);
   background: var(--background);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
@@ -5257,6 +5265,467 @@ body.bottom-panel-resizing {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  font-weight: 600;
+}
+
+/* ── MCP Panel ───────────────────────────────── */
+
+.mcp-quick-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 16px 20px;
+  border: 1px solid var(--muted-border);
+  border-radius: 8px;
+  margin-bottom: 24px;
+  background: var(--material-card);
+}
+.mcp-quick-card p {
+  margin: 4px 0 12px;
+  font-size: 13px;
   color: var(--muted-foreground);
+}
+
+.mcp-template-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mcp-template-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--muted-border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+  white-space: nowrap;
+}
+.mcp-template-pill:hover {
+  background: var(--muted);
+  border-color: var(--muted-border);
+}
+
+/* Form card shared with providers */
+.mcp-form-card {
+  max-width: 640px;
+  background: var(--material-card);
+  border: 1px solid var(--muted-border);
+  border-radius: 10px;
+  padding: 24px 28px 20px;
+}
+.mcp-form-card .mcp-form-card__icon {
+  margin-bottom: 12px;
+  color: var(--muted-foreground);
+}
+.mcp-form-card__body h2 {
+  margin: 0 0 20px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Transport row */
+.mcp-transport-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.mcp-transport-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--muted-border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.mcp-transport-pill:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.mcp-transport-pill--active {
+  background: var(--muted);
+  border-color: var(--muted-border);
+  color: var(--foreground);
+  box-shadow: inset 0 0 0 1px var(--muted-border);
+}
+
+/* Cmd row */
+.mcp-cmd-row {
+  display: grid;
+  grid-template-columns: 60% 1fr;
+  gap: 12px;
+}
+.mcp-args-field {
+  display: flex;
+  flex-direction: column;
+}
+.mcp-args-label {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.mcp-args-field > input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Env rows */
+.mcp-env-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.mcp-env-input {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--muted-border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+}
+.mcp-env-input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+.mcp-env-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+}
+.mcp-env-add-btn {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+/* Test row */
+.mcp-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.mcp-test-result {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--muted);
+}
+.mcp-test-result--ok {
+  color: #ffffff;
+  background: var(--success);
+}
+.mcp-test-result--error {
+  color: var(--destructive-foreground);
+  background: var(--destructive);
+}
+
+/* Form footer */
+.mcp-form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--muted-border);
+}
+.mcp-form-footer__actions {
+  display: flex;
+  gap: 8px;
+}
+.mcp-danger-button {
+  color: var(--destructive);
+}
+
+/* Delete inline */
+.mcp-delete-confirm {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 20px;
+  margin-top: 16px;
+  background: var(--destructive-bg);
+  border-radius: 6px;
+  color: var(--destructive);
+}
+.mcp-delete-confirm p {
+  margin: 0;
+  font-size: 12px;
+}
+.mcp-delete-confirm__button {
+  background: var(--destructive) !important;
+  color: var(--destructive-foreground) !important;
+}
+
+/* List view */
+.mcp-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.mcp-list-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mcp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  text-align: center;
+  color: var(--muted-foreground);
+  gap: 4px;
+}
+.mcp-empty p {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--foreground);
+  margin: 0;
+}
+.mcp-empty span {
+  font-size: 12px;
+}
+
+.mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mcp-card {
+  background: var(--material-card);
+  border: 1px solid var(--muted-border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  transition: border-color 120ms ease;
+}
+.mcp-card--error {
+  border-color: var(--destructive-border);
+}
+.mcp-card--disabled {
+  opacity: 0.65;
+}
+
+.mcp-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.mcp-card__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+.mcp-card__identity strong {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.mcp-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+.mcp-status-connected {
+  background: var(--success);
+}
+.mcp-status-error {
+  background: var(--destructive);
+}
+.mcp-status-auth {
+  background: #f59e0b;
+}
+.mcp-status-disabled {
+  background: var(--muted-foreground);
+}
+.mcp-status-unknown {
+  background: var(--muted-foreground);
+  opacity: 0.6;
+}
+
+.mcp-card__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mcp-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--muted-border);
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.mcp-status-text {
+  font-weight: 500;
+}
+.mcp-status-text--ok {
+  color: var(--success-foreground);
+}
+.mcp-status-text--error {
+  color: var(--destructive);
+}
+.mcp-transport-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  text-transform: uppercase;
+}
+.mcp-tool-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  opacity: 0.8;
+}
+.mcp-error-msg {
+  color: var(--destructive);
+  font-size: 11px;
+}
+
+.mcp-inline-delete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: var(--destructive-bg);
+  border-radius: 6px;
+}
+.mcp-inline-delete p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.mcp-message {
+  text-align: center;
+  padding: 8px 0 0;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.mcp-menu__content {
+  min-width: 140px;
+}
+
+/* Inline delete for mcp (shared style defined above; no duplicate here) */
+
+/* List toolbar: search + actions */
+.mcp-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mcp-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.mcp-search__icon {
+  position: absolute;
+  left: 10px;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+.mcp-search__input {
+  height: 32px;
+  width: 200px;
+  max-width: 50vw;
+  padding: 0 10px 0 30px;
+  border: 1px solid var(--muted-border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+}
+.mcp-search__input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+
+/* Tool chips */
+.mcp-tools {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--muted-border);
+}
+.mcp-tools__label {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  padding-top: 3px;
+}
+.mcp-tools__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mcp-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  padding: 3px 8px;
+  border: 1px solid var(--muted-border);
+  border-radius: 12px;
+  background: var(--muted);
+  font-size: 11px;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Secret hint for masked env values */
+.mcp-secret-hint {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+/* Media: narrow viewport */
+@media (max-width: 640px) {
+  .mcp-cmd-row {
+    grid-template-columns: 1fr;
+  }
+  .mcp-form-card {
+    padding: 16px;
+  }
+  .mcp-search__input {
+    width: 140px;
+  }
 }

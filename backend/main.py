@@ -33,6 +33,7 @@ from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
+from coworker.mcp import McpManager
 from coworker.sessions import SessionStore
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
@@ -56,6 +57,7 @@ session_store = SessionStore(settings.data_dir / "sessions")
 agent_registry = AgentRuntimeRegistry(settings, session_store)
 provider_manager = ProviderManager(settings.data_dir / "providers.json")
 config_controller = AppConfigController(settings, provider_manager)
+mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
@@ -229,6 +231,38 @@ class WorkspaceCommandRequest(BaseModel):
     cwd: str = ""
     timeout_seconds: int = 20
     project_id: str = ""
+
+
+class McpServerCreatePayload(BaseModel):
+    name: str
+    transport: str  # "stdio" | "http" | "sse"
+    command: str = ""
+    args: str = ""
+    url: str = ""
+    env: dict[str, str] = {}
+    headers: dict[str, str] = {}
+
+
+class McpServerUpdatePayload(BaseModel):
+    name: str | None = None
+    transport: str | None = None
+    enabled: bool | None = None
+    command: str | None = None
+    args: str | None = None
+    url: str | None = None
+    env: dict[str, str] | None = None
+    headers: dict[str, str] | None = None
+
+
+class McpTestPayload(BaseModel):
+    transport: str
+    command: str = ""
+    args: str = ""
+    url: str = ""
+    env: dict[str, str] = {}
+    headers: dict[str, str] = {}
+    server_id: str = ""
+
 
 class CommandApprovalAction(BaseModel):
     approval_id: str
@@ -1605,6 +1639,187 @@ async def fetch_provider_models(request: ProviderFetchModelsPayload):
     except Exception as exc:
         return {"status": "error", "models": [], "error": str(exc)[:300]}
     return {"status": "ok", "models": models}
+
+
+# ─────────────────────────── MCP ──────────────────────────
+
+from coworker.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
+from coworker.mcp_discover import TEMPLATES
+from coworker.mcp_test import test_mcp_connection_sync
+from coworker.mcp_loader import invalidate_tools_cache, list_mcp_tools_sync
+
+import logging as _logging
+
+mcp_logger = _logging.getLogger("coworker.mcp.api")
+
+MCP_CHECK_TIMEOUT_SECONDS = 25.0
+
+
+def _mcp_not_found(exc: ValueError) -> HTTPException:
+    detail = str(exc)
+    code = 404 if "not found" in detail.lower() else 400
+    return HTTPException(status_code=code, detail=detail)
+
+
+def _resolve_secret_map(
+    incoming: dict[str, str] | None, stored: dict[str, str] | None
+) -> dict[str, str]:
+    """Swap placeholder values for the real stored secret (test path only)."""
+    if not incoming:
+        return {}
+    stored = stored or {}
+    return {
+        key: (stored.get(key, "") if value == SECRET_PLACEHOLDER else value)
+        for key, value in incoming.items()
+    }
+
+
+def _check_server(server_id: str) -> dict[str, Any]:
+    """Run a live connection check and persist the resulting status."""
+    runtime = mcp_manager.get_runtime_config(server_id)
+    result = test_mcp_connection_sync(
+        transport=runtime["transport"],
+        command=runtime.get("command", ""),
+        args=runtime.get("args", ""),
+        url=runtime.get("url", ""),
+        env=runtime.get("env") or {},
+        headers=runtime.get("headers") or {},
+        timeout=MCP_CHECK_TIMEOUT_SECONDS,
+    )
+
+    if result["ok"]:
+        status = STATUS_CONNECTED
+    elif "auth" in (result.get("error") or "").lower() or "401" in (result.get("error") or ""):
+        status = STATUS_NEEDS_AUTH
+    else:
+        status = STATUS_ERROR
+
+    server = mcp_manager.update_server_status(
+        server_id,
+        status=status,
+        error_message=result.get("error", ""),
+        tool_count=result.get("tool_count", 0),
+        tools=result.get("tools", []),
+    )
+    invalidate_tools_cache()
+    return server
+
+
+@app.get("/mcp/servers")
+def list_mcp_servers():
+    return {"status": "ok", "servers": mcp_manager.list_servers()}
+
+
+@app.post("/mcp/servers")
+def create_mcp_server(request: McpServerCreatePayload):
+    try:
+        result = mcp_manager.add_server(
+            name=request.name,
+            transport=request.transport,
+            command=request.command or "",
+            args=request.args or "",
+            url=request.url or "",
+            env=request.env or {},
+            headers=request.headers or {},
+        )
+    except ValueError as exc:
+        raise _mcp_not_found(exc) from exc
+    invalidate_tools_cache()
+    return {"status": "ok", "server": result}
+
+
+@app.patch("/mcp/servers/{server_id}")
+def update_mcp_server(server_id: str, request: McpServerUpdatePayload):
+    kwargs: dict[str, Any] = {"server_id": server_id}
+    for key in ("name", "transport", "enabled", "command", "args", "url", "env", "headers"):
+        value = getattr(request, key)
+        if value is not None:
+            kwargs[key] = value
+    try:
+        result = mcp_manager.update_server(**kwargs)
+    except ValueError as exc:
+        raise _mcp_not_found(exc) from exc
+    invalidate_tools_cache()
+    return {"status": "ok", "server": result}
+
+
+@app.delete("/mcp/servers/{server_id}")
+def delete_mcp_server(server_id: str):
+    try:
+        mcp_manager.delete_server(server_id)
+    except ValueError as exc:
+        raise _mcp_not_found(exc) from exc
+    invalidate_tools_cache()
+    return {"status": "ok"}
+
+
+@app.get("/mcp/discover")
+def discover_mcp_templates():
+    return {"status": "ok", "servers": TEMPLATES}
+
+
+@app.post("/mcp/servers/{server_id}/check")
+def check_mcp_server(server_id: str):
+    try:
+        server = _check_server(server_id)
+    except ValueError as exc:
+        raise _mcp_not_found(exc) from exc
+    return {"status": "ok", "server": server}
+
+
+@app.post("/mcp/check-all")
+def check_all_mcp_servers():
+    servers = mcp_manager.list_servers(enabled_only=True)
+    for entry in servers:
+        try:
+            _check_server(entry["id"])
+        except Exception as exc:  # noqa: BLE001 - one failure must not abort the sweep
+            mcp_logger.warning("MCP check failed for %s: %s", entry.get("name"), exc)
+    return {"status": "ok", "servers": mcp_manager.list_servers()}
+
+
+@app.post("/mcp/test")
+def test_mcp(request: McpTestPayload):
+    env = request.env or {}
+    headers = request.headers or {}
+
+    # When testing an existing server, placeholder secrets resolve to the real ones.
+    if request.server_id:
+        try:
+            stored = mcp_manager.get_runtime_config(request.server_id)
+        except ValueError:
+            stored = {}
+        env = _resolve_secret_map(env, stored.get("env"))
+        headers = _resolve_secret_map(headers, stored.get("headers"))
+
+    result = test_mcp_connection_sync(
+        transport=request.transport,
+        command=request.command or "",
+        args=request.args or "",
+        url=request.url or "",
+        env=env,
+        headers=headers,
+        timeout=MCP_CHECK_TIMEOUT_SECONDS,
+    )
+    return {"status": "ok", "result": result}
+
+
+@app.post("/mcp/tools")
+def discover_mcp_tools(request: McpTestPayload):
+    server_config = [
+        {
+            "id": "probe",
+            "name": "",
+            "transport": request.transport,
+            "command": request.command or "",
+            "args": request.args or "",
+            "url": request.url or "",
+            "env": request.env or {},
+            "headers": request.headers or {},
+        }
+    ]
+    tools = list_mcp_tools_sync(server_config, timeout=MCP_CHECK_TIMEOUT_SECONDS)
+    return {"status": "ok", "tools": tools}
 
 @app.websocket("/ws/terminal")
 async def ws_terminal(websocket: WebSocket):

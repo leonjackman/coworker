@@ -4,6 +4,7 @@ import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { GoalCard } from './components/GoalCard';
 import { ProvidersPanel } from './components/ProvidersPanel';
+import { MCPPanel } from './components/MCPPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
@@ -2139,6 +2140,8 @@ function App() {
                 </>
               ) : activeView === 'providers' ? (
                 <ProvidersPanel onProviderChange={refreshProviders} />
+              ) : activeView === 'mcp' ? (
+                <MCPPanel onMcpChange={refreshProviders} />
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}

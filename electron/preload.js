@@ -100,4 +100,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolveCommandApproval: (approvalId, decision) => ipcRenderer.invoke('resolve-command-approval', { approval_id: approvalId, decision }),
   getSessionChanges: (sessionId) => ipcRenderer.invoke('get-session-changes', sessionId),
   getCurrentDiff: (options = {}) => ipcRenderer.invoke('get-current-diff', options),
+  listMcps: () => ipcRenderer.invoke('list-mcps'),
+  discoverMcps: () => ipcRenderer.invoke('discover-mcps'),
+  createMcp: (payload) => ipcRenderer.invoke('create-mcp', payload),
+  updateMcp: (serverId, payload) => ipcRenderer.invoke('update-mcp', { server_id: serverId, ...payload }),
+  deleteMcp: (serverId) => ipcRenderer.invoke('delete-mcp', serverId),
+  testMcp: (payload) => ipcRenderer.invoke('test-mcp', payload),
+  checkMcp: (serverId) => ipcRenderer.invoke('check-mcp', serverId),
+  checkAllMcps: () => ipcRenderer.invoke('check-all-mcps'),
 });

@@ -2,7 +2,96 @@ export type AgentMode = 'single';
 export type Language = 'zh' | 'en';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
-export type AppView = 'chat' | 'providers' | 'settings';
+export type AppView = 'chat' | 'providers' | 'settings' | 'mcp';
+
+export interface McpToolEntry {
+  name: string;
+  description: string;
+}
+
+export interface McpServerEntry {
+  id: string;
+  name: string;
+  transport: string;
+  command: string;
+  args: string;
+  url: string;
+  env: Record<string, string>;
+  headers: Record<string, string>;
+  enabled: boolean;
+  status: string;
+  error_message: string;
+  tool_count: number;
+  tools: McpToolEntry[];
+  last_checked_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface McpTemplateEntry {
+  id: string;
+  name: string;
+  description: string;
+  transport: string;
+  command: string;
+  args: string;
+  url: string;
+  env: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+export interface McpServerCreateRequest {
+  name: string;
+  transport: string;
+  command?: string;
+  args?: string;
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+export interface McpServerUpdateRequest {
+  name?: string;
+  transport?: string;
+  enabled?: boolean;
+  command?: string;
+  args?: string;
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+}
+
+export interface McpTestRequest {
+  transport: string;
+  command?: string;
+  args?: string;
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  server_id?: string;
+}
+
+export interface McpTestResult {
+  ok: boolean;
+  latency_ms: number | null;
+  error?: string;
+  tool_count?: number;
+}
+
+export interface McpDiscoverPayload {
+  status: string;
+  servers: McpTemplateEntry[];
+}
+
+export interface McpServerListPayload {
+  status: string;
+  servers: McpServerEntry[];
+}
+
+export interface McpToolListPayload {
+  status: string;
+  tools: McpToolEntry[];
+}
 
 export interface ComposerAttachment {
   id: string;

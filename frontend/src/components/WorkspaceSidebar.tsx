@@ -1,4 +1,4 @@
-import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -122,16 +122,16 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
   return (
     <div className="sidebar-project">
       <div className={`sidebar-project__title-row ${active ? 'sidebar-project__title-row--active' : ''}`}>
-        <button type="button"className="sidebar-project__title"onClick={handleTitleClick}aria-expanded={expanded}>
+        <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
           {expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
           <span>{project.name}</span>
-          <span className="sidebar-project__chevron-icon"onClick={(e) => {e.stopPropagation();setExpanded((v) => !v);}}>
+          <span className="sidebar-project__chevron-icon" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </span>
           <div className="sidebar-project__actions">
             <DropdownMenu>
-              <DropdownMenuTrigger className="sidebar-project__more-trigger" aria-label="Project actions">
-                <MoreHorizontal size={15} />
+              <DropdownMenuTrigger asChild className="sidebar-project__more-trigger" aria-label="Project actions">
+                <span className="more-icon-wrapper"><MoreHorizontal size={15} /></span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" alignOffset={-8}>
                 <DropdownMenuItem onClick={() => onOpenProject(project.id)}>
@@ -149,10 +149,10 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <button type="button" className="sidebar-project__new-trigger" onClick={(e) => { e.stopPropagation(); onNewChat(project.id); }} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>
-              <MessageSquarePlus size={15} />
-            </button>
           </div>
+        </div>
+        <button type="button" className="sidebar-project__new-trigger" onClick={(e) => { e.stopPropagation(); onNewChat(project.id); }} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>
+          <MessageSquarePlus size={15} />
         </button>
       </div>
 
@@ -311,6 +311,10 @@ export function WorkspaceSidebar({
         <button className={`sidebar-nav-item ${activeView === 'providers' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('providers')}>
           <Settings2 size={17} />
           {!collapsed && <span>{t('nav.providers')}</span>}
+        </button>
+        <button className={`sidebar-nav-item ${activeView === 'mcp' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('mcp')}>
+          <Network size={17} />
+          {!collapsed && <span>{t('nav.mcp')}</span>}
         </button>
       </nav>
 

@@ -8,6 +8,14 @@ import type {
   CreateProjectRequest,
   CreateSessionRequest,
   CurrentDiffResponse,
+  McpDiscoverPayload,
+  McpServerCreateRequest,
+  McpServerEntry,
+  McpServerListPayload,
+  McpServerUpdateRequest,
+  McpTestRequest,
+  McpTestResult,
+  McpToolListPayload,
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
@@ -118,6 +126,14 @@ export interface ChatService {
   resumeGoal: (sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
   fetchSettings: () => Promise<{ goal_max_rounds: number }>;
   saveSettings: (settings: { goal_max_rounds?: number }) => Promise<{ status: string; goal_max_rounds: number }>;
+  listMcps: () => Promise<McpServerListPayload>;
+  discoverMcps: () => Promise<McpDiscoverPayload>;
+  createMcp: (request: McpServerCreateRequest) => Promise<McpServerEntry>;
+  updateMcp: (serverId: string, request: McpServerUpdateRequest) => Promise<McpServerEntry>;
+  deleteMcp: (serverId: string) => Promise<void>;
+  testMcp: (request: McpTestRequest) => Promise<McpTestResult>;
+  checkMcp: (serverId: string) => Promise<McpServerEntry>;
+  checkAllMcps: () => Promise<McpServerListPayload>;
 }
 
 class ElectronChatService implements ChatService {
@@ -212,6 +228,50 @@ class ElectronChatService implements ChatService {
   async deleteProject(projectId: string): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     await window.electronAPI.deleteProject(projectId);
+  }
+
+  async listMcps(): Promise<McpServerListPayload> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listMcps();
+  }
+
+  async discoverMcps(): Promise<McpDiscoverPayload> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.discoverMcps();
+  }
+
+  async createMcp(request: McpServerCreateRequest): Promise<McpServerEntry> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const response = await window.electronAPI.createMcp(request);
+    return response.server;
+  }
+
+  async updateMcp(serverId: string, request: McpServerUpdateRequest): Promise<McpServerEntry> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const response = await window.electronAPI.updateMcp(serverId, request);
+    return response.server;
+  }
+
+  async deleteMcp(serverId: string): Promise<void> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    await window.electronAPI.deleteMcp(serverId);
+  }
+
+  async testMcp(request: McpTestRequest): Promise<McpTestResult> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const response = await window.electronAPI.testMcp(request);
+    return response.result;
+  }
+
+  async checkMcp(serverId: string): Promise<McpServerEntry> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const response = await window.electronAPI.checkMcp(serverId);
+    return response.server;
+  }
+
+  async checkAllMcps(): Promise<McpServerListPayload> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.checkAllMcps();
   }
 
   async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
@@ -848,6 +908,61 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
+    });
+  }
+
+  async listMcps(): Promise<McpServerListPayload> {
+    return this.request<McpServerListPayload>('/mcp/servers');
+  }
+
+  async discoverMcps(): Promise<McpDiscoverPayload> {
+    return this.request<McpDiscoverPayload>('/mcp/discover');
+  }
+
+  async createMcp(request: McpServerCreateRequest): Promise<McpServerEntry> {
+    const response = await this.request<{ status: string; server: McpServerEntry }>('/mcp/servers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return response.server;
+  }
+
+  async updateMcp(serverId: string, request: McpServerUpdateRequest): Promise<McpServerEntry> {
+    const response = await this.request<{ status: string; server: McpServerEntry }>(`/mcp/servers/${encodeURIComponent(serverId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return response.server;
+  }
+
+  async deleteMcp(serverId: string): Promise<void> {
+    await this.request<void>(`/mcp/servers/${encodeURIComponent(serverId)}`, { method: 'DELETE' });
+  }
+
+  async testMcp(request: McpTestRequest): Promise<McpTestResult> {
+    const response = await this.request<{ status: string; result: McpTestResult }>('/mcp/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    return response.result;
+  }
+
+  async checkMcp(serverId: string): Promise<McpServerEntry> {
+    const response = await this.request<{ status: string; server: McpServerEntry }>(
+      `/mcp/servers/${encodeURIComponent(serverId)}/check`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) },
+    );
+    return response.server;
+  }
+
+  async checkAllMcps(): Promise<McpServerListPayload> {
+    return this.request<McpServerListPayload>('/mcp/check-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
     });
   }
 

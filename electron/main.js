@@ -2,6 +2,26 @@ const { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage, nativeThem
 const path = require('path');
 const http = require('http');
 
+// `app.isPackaged` is the only reliable packaged/dev signal in Electron —
+// NODE_ENV and IS_PACKAGED are not set automatically.
+const IS_DEV = !app.isPackaged || process.env.COWORKER_DEV === '1';
+
+// Disable GPU to avoid IMKCFRunLoopWakeUpReliable crash on macOS
+app.commandLine.appendSwitch('ignore-gpu-blocklist');
+app.commandLine.appendSwitch('disable-software-rasterizer');
+app.commandLine.appendSwitch('disable-gpu');
+app.commandLine.appendSwitch('disable-gpu-compositing');
+app.commandLine.appendSwitch('disable-gpu-vsync');
+app.commandLine.appendSwitch('disable-features', 'InputMethodServiceOverlay');
+
+// Opt-in only: both of these weaken security and must never ship enabled.
+if (process.env.COWORKER_INSECURE_TLS === '1') {
+  app.commandLine.appendSwitch('ignore-certificate-errors');
+}
+if (IS_DEV && process.env.COWORKER_REMOTE_DEBUG_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.COWORKER_REMOTE_DEBUG_PORT);
+}
+
 const BACKEND_HOST = process.env.COWORKER_BACKEND_HOST || 'localhost';
 const BACKEND_PORT = Number(process.env.COWORKER_BACKEND_PORT || 9527);
 const FRONTEND_URL = process.env.COWORKER_FRONTEND_URL || 'http://localhost:3000';
@@ -201,9 +221,11 @@ function createWindow() {
 
   applyAppIcon(mainWindow);
 
-  if (process.env.NODE_ENV === 'development') {
+  if (IS_DEV) {
     mainWindow.loadURL(FRONTEND_URL);
-    mainWindow.webContents.openDevTools();
+    if (process.env.COWORKER_DEVTOOLS !== '0') {
+      mainWindow.webContents.openDevTools();
+    }
   } else {
     mainWindow.loadFile(FRONTEND_DIST_ENTRY).catch((error) => {
       console.error('Failed to load frontend entry:', error);
@@ -768,3 +790,19 @@ ipcMain.handle('test-provider', async (event, payload) => {
 ipcMain.handle('fetch-provider-models', async (event, payload) => {
   return requestBackend('/providers/fetch-models', 'POST', payload);
 });
+
+ipcMain.handle('list-mcps', () => requestBackend('/mcp/servers', 'GET'));
+ipcMain.handle('discover-mcps', () => requestBackend('/mcp/discover', 'GET'));
+ipcMain.handle('create-mcp', (event, payload) => requestBackend('/mcp/servers', 'POST', payload));
+ipcMain.handle('update-mcp', (event, payload = {}) => {
+  const { server_id: serverId, ...body } = payload;
+  return requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}`, 'PATCH', body);
+});
+ipcMain.handle('delete-mcp', (event, serverId) =>
+  requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}`, 'DELETE'),
+);
+ipcMain.handle('test-mcp', (event, payload) => requestBackend('/mcp/test', 'POST', payload));
+ipcMain.handle('check-mcp', (event, serverId) =>
+  requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}/check`, 'POST', {}),
+);
+ipcMain.handle('check-all-mcps', () => requestBackend('/mcp/check-all', 'POST', {}));

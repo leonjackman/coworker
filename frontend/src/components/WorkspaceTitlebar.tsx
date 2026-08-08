@@ -175,6 +175,7 @@ export function WorkspaceTitlebar({
 
 function titleForView(activeView: AppView, sessionTitle: string): string {
   if (activeView === 'providers') return t('providers.title');
+  if (activeView === 'mcp') return t('mcp.title');
   if (activeView === 'settings') return t('settings.title');
   return sessionTitle.trim() || t('sidebar.new_chat');
 }

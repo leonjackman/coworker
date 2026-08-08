@@ -17,6 +17,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, Runtime
 
 from .config import BackendSettings
+from .mcp import McpManager
 from .providers import ProviderEntry, ProviderManager
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .changes import ChangeStore
@@ -1519,6 +1520,14 @@ def build_coworker_agent_graph(
     middleware.append(PlanApprovalMiddleware(language))
     middleware.extend(command_approval_middleware(approval_store))
 
+    from .mcp_middleware import McpToolMiddleware
+
+    _mcp_manager = McpManager(
+        Path(settings.data_dir) / "mcp_servers.json",
+    )
+
+    middleware.append(McpToolMiddleware(_mcp_manager))
+
     system_prompt = (
         f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
         "Use workspace tools only when they are needed and keep answers concise."
@@ -2293,6 +2302,7 @@ class AgentRuntimeRegistry:
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
         self.change_store = ChangeStore(settings.data_dir)
         self.provider_manager = ProviderManager(settings.data_dir / "providers.json")
+        self.mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
         self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
