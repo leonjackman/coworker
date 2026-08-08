@@ -406,6 +406,7 @@ function App() {
       ...current,
       createMessage('user', message, {
         status: 'done',
+        ...(requestSessionId ? { sessionId: requestSessionId } : {}),
         autonomy,
         provider: requestProvider,
         model: requestModel,
@@ -423,6 +424,7 @@ function App() {
         streamStartAt: Date.now(),
         id: assistantMessageId,
         status: 'running',
+        ...(requestSessionId ? { sessionId: requestSessionId } : {}),
         autonomy,
         provider: requestProvider,
         model: requestModel,
@@ -750,13 +752,10 @@ function App() {
         );
       }
     } finally {
-      if (requestId === requestSeqRef.current) {
-        setIsThinking(false);
-        abortRef.current = null;
-        activeAssistantMessageIdRef.current = undefined;
-        // Safety net: if the stream ended without a terminal event reaching us
-        // (e.g. the backend dropped the `done` frame), force the assistant
-        // message out of the "running" state so the blue bar always clears.
+      // 安全网：无论如何强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
+      // 仅当该流仍属当前请求、或消息仍属于当前会话时才收尾，避免把已切走的其它会话消息误改。
+      const belongsToCurrent = requestId === requestSeqRef.current || sessionIdRef.current === requestSessionId;
+      if (belongsToCurrent) {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId && item.status === 'running'
@@ -764,6 +763,11 @@ function App() {
               : item,
           ),
         );
+      }
+      if (requestId === requestSeqRef.current) {
+        setIsThinking(false);
+        abortRef.current = null;
+        activeAssistantMessageIdRef.current = undefined;
       }
     }
   };
@@ -1571,12 +1575,13 @@ function App() {
         }, delay);
       }
       setActiveProjectId(response.session.project_id || undefined);
-      // 归而非覆盖：保留本地 status === 'running' 的消息（半截回复可能由 AbortError 兜底已写入）
+      // 归而非覆盖：保留本地 status === 'running' 的消息（半截回复可能由 AbortError 兜底已写入）。
+      // 关键：只合并「属于目标会话」的 running 消息，避免把其它会话正在回复的半截内容串入当前会话。
       setMessages((current) => {
         const running = current.filter((m) => m.status === 'running');
         if (running.length === 0) return loaded;
         const loadedIds = new Set(loaded.map((m) => m.id));
-        const merged = running.filter((m) => !loadedIds.has(m.id));
+        const merged = running.filter((m) => m.sessionId === sessionIdToOpen && !loadedIds.has(m.id));
         return [...loaded, ...merged];
       });
       setAttachments([]);

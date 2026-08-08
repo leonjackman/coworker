@@ -143,6 +143,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  sessionId?: string;
   status?: 'queued' | 'running' | 'done' | 'stopped' | 'error';
   streamStartAt?: number;
   streamEndAt?: number;

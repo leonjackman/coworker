@@ -413,6 +413,10 @@ class ElectronChatService implements ChatService {
   }
 }
 
+// 空闲超时：后端超过该时长未推任何数据（既不 delta 也不 done）则视为挂起，主动断开，
+// 避免前端「蓝条一直挂起不结束」。每次收到数据都会重置计时。
+const STREAM_IDLE_TIMEOUT_MS = 60_000;
+
 class HttpChatService implements ChatService {
   async getRuntimeConfig(): Promise<RuntimeConfig> {
     return this.request<RuntimeConfig>('/config');
@@ -443,56 +447,72 @@ class HttpChatService implements ChatService {
   }
 
   async sendMessageStream(request: ChatRequest, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/chat/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-      ...(signal instanceof AbortSignal ? { signal } : {}),
-    });
-    if (!response.ok) {
-      let detail = `Backend returned ${response.status}`;
-      try {
-        const payload = await response.json();
-        detail = payload.detail || detail;
-      } catch {
-        // ignore
-      }
-      throw new Error(detail);
-    }
-    if (!response.body) throw new Error('Backend returned no stream');
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+    // 合并外部 abort 信号与「空闲超时」：若后端长时间不推任何数据（既不 delta 也不 done），
+    // 主动断开，避免前端「蓝条一直挂起不结束」。每次收到数据都会重置空闲计时。
+    const internal = new AbortController();
+    const detachExternal = attachAbortListener(signal, () => internal.abort());
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => internal.abort(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() ?? '';
-        for (const frame of frames) {
-          const line = frame.split('\n').find((item) => item.startsWith('data:'));
-          if (!line) continue;
-          const raw = line.slice(5).trim();
-          if (!raw) continue;
-          try {
-            onEvent(JSON.parse(raw) as StreamEvent);
-          } catch {
-            // skip malformed frames
+      const response = await fetch(`${BACKEND_URL}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: internal.signal,
+      });
+      if (!response.ok) {
+        let detail = `Backend returned ${response.status}`;
+        try {
+          const payload = await response.json();
+          detail = payload.detail || detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(detail);
+      }
+      if (!response.body) throw new Error('Backend returned no stream');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          resetIdle();
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            const line = frame.split('\n').find((item) => item.startsWith('data:'));
+            if (!line) continue;
+            const raw = line.slice(5).trim();
+            if (!raw) continue;
+            try {
+              onEvent(JSON.parse(raw) as StreamEvent);
+            } catch {
+              // skip malformed frames
+            }
           }
         }
-      }
-      const remaining = buffer.split('\n').find((item) => item.startsWith('data:'));
-      if (remaining) {
-        try {
-          onEvent(JSON.parse(remaining.slice(5).trim()) as StreamEvent);
-        } catch {
-          // skip
+        const remaining = buffer.split('\n').find((item) => item.startsWith('data:'));
+        if (remaining) {
+          try {
+            onEvent(JSON.parse(remaining.slice(5).trim()) as StreamEvent);
+          } catch {
+            // skip
+          }
         }
+      } finally {
+        reader.releaseLock();
       }
     } finally {
-      reader.releaseLock();
+      if (idleTimer) clearTimeout(idleTimer);
+      detachExternal();
     }
   }
 
