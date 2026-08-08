@@ -240,7 +240,6 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
         {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
         {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
         {toolParts.length > 0 && <ToolChain toolParts={toolParts} running={isRunning} />}
-        {!isRunning && fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
 
         {isRunning && hasRunningTools && <AgentActivity working={isRunning} />}
 
@@ -280,6 +279,8 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
             </span>
           </div>
         )}
+
+        {!isRunning && fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
 
         {isError ? (
           <div className="stream-error">{message.content}</div>
