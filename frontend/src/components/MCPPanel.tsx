@@ -13,7 +13,7 @@ import { WorkspacePage } from './ui/workspace-page';
 // secrets survive an edit without the UI ever seeing the raw value.
 const SECRET_PLACEHOLDER = '__CW_SECRET_KEPT__';
 
-type ViewMode = 'list' | 'form';
+type ViewMode = 'list' | 'form' | 'catalog';
 
 type FormState = {
   id: string | null;
@@ -52,6 +52,8 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [templates, setTemplates] = useState<McpTemplateEntry[]>([]);
   const [search, setSearch] = useState('');
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogCategory, setCatalogCategory] = useState('all');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,8 +70,6 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
 
   useEffect(() => {
     void load();
-    // Templates power the quick-add card on the LIST view, so load them on
-    // mount (not only when entering the form), otherwise the card never shows.
     chatService.discoverMcps().then((res) => setTemplates(res.servers ?? [])).catch(() => {});
   }, [load]);
 
@@ -78,6 +78,18 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
     if (!q) return servers;
     return servers.filter((s) => s.name.toLowerCase().includes(q));
   }, [servers, search]);
+
+  const catalogFiltered = useMemo(() => {
+    const q = catalogSearch.trim().toLowerCase();
+    let list = templates;
+    if (catalogCategory !== 'all') {
+      list = list.filter((t) => (t.category || '').toLowerCase() === catalogCategory);
+    }
+    if (q) {
+      list = list.filter((t) => t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q));
+    }
+    return list;
+  }, [templates, catalogSearch, catalogCategory]);
 
   function selectTemplate(template: McpTemplateEntry) {
     setForm({
@@ -278,17 +290,6 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
     }
   }
 
-  function statusLabel(status: string): string {
-    switch (status) {
-      case 'connected': return t('mcp.connected_short');
-      case 'error_connecting': return t('mcp.error_short');
-      case 'needs_auth': return t('mcp.needs_auth');
-      case 'disabled': return t('mcp.disabled_short');
-      case 'unknown': return t('mcp.unknown');
-      default: return t('mcp.connected_short');
-    }
-  }
-
   function formatStatus(status: string): string {
     const labels: Record<string, string> = {
       connected: t('mcp.connected'),
@@ -306,141 +307,193 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
   const canSave =
     !!form.name.trim() && (form.transport === 'stdio' ? !!form.command.trim() : !!form.url.trim());
 
-  if (viewMode === 'form') {
+  // ========== LIST VIEW (aligned with provider list structure) ==========
+  if (viewMode === 'list') {
     return (
       <WorkspacePage
         eyebrow={t('mcp.title')}
-        title={form.id ? t('mcp.edit_server') : t('mcp.add_title')}
+        title="模型上下文协议"
+        description={t('mcp.description')}
         action={
-          <Button variant="ghost" onClick={cancelForm}>
+          <Button variant="secondary" onClick={() => setViewMode('catalog')}>
+            更多 ▾
+          </Button>
+        }
+      >
+        <div className="workspace-page__content">
+          {/* Quick-add card (aligned with provider-quick-card) */}
+          {templates.length > 0 && (
+            <div className="mcp-quick-card">
+              <Network size={18} className="mcp-form-card__icon" />
+              <div>
+                <strong>{t('mcp.quick_add')}</strong>
+                <p>{t('mcp.quick_add_desc')}</p>
+                <div className="mcp-template-row">
+                  {templates.map((template) => (
+                    <button key={template.id} type="button" className="mcp-template-pill" onClick={() => selectTemplate(template)}>
+                      {template.icon || <Network size={12} />}
+                      {template.name}
+                    </button>
+                  ))}
+                  <button type="button" className="mcp-template-pill mcp-template-pill--dashed" onClick={startAdd}>
+                    <Plus size={12} />
+                    {t('mcp.custom_extension')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* List heading (aligned with provider-list-heading) */}
+          <div className="mcp-list-heading">
+            <h2>{t('mcp.my_extensions')} ({servers.length})</h2>
+            <Button variant="primary" onClick={startAdd}>
+              <Plus size={14} />
+              {t('mcp.add_server')}
+            </Button>
+          </div>
+
+          {/* Server list (aligned with provider-list / provider-card--mir) */}
+          {loading ? (
+            <div className="mcp-empty">{t('common.loading')}</div>
+          ) : servers.length === 0 ? (
+            <div className="mcp-empty">
+              <p>{t('mcp.empty')}</p>
+              <span>{t('mcp.empty_hint')}</span>
+            </div>
+          ) : filteredServers.length === 0 ? (
+            <div className="mcp-empty">
+              <p>{t('mcp.no_match')}</p>
+            </div>
+          ) : (
+            <div className="mcp-list">
+              {filteredServers.map((server) => (
+                <article
+                  className={`mcp-card ${!server.enabled || server.status === 'disabled' ? 'mcp-card--disabled' : ''}`}
+                  key={server.id}
+                  onClick={() => {
+                    startEdit(server);
+                    setViewMode('form');
+                  }}
+                >
+                  <div className="mcp-card__top">
+                    <div className="mcp-card__identity">
+                      <span className={`mcp-status-dot ${statusDot(server.status)}`} />
+                      <strong>{server.name}</strong>
+                      <Badge className="mcp-transport-badge">{server.transport}</Badge>
+                      {!server.enabled || server.status === 'disabled' ? <Badge>{t('mcp.disabled')}</Badge> : null}
+                    </div>
+                    <div className="mcp-card__controls" onClick={(e) => e.stopPropagation()}>
+                      <Switch
+                        id={`mcp-switch-${server.id}`}
+                        checked={server.enabled}
+                        onChange={() => handleToggle(server)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mcp-card__meta">
+                    <span className="mcp-card__subtitle">
+                      {t('mcp.tool_count').replace('{count}', String(server.tool_count || 0))}
+                      {server.error_message && <span className="mcp-error-msg">{server.error_message}</span>}
+                    </span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+
+          {message && <p className="mcp-message">{message}</p>}
+        </div>
+      </WorkspacePage>
+    );
+  }
+
+  // ========== CATALOG VIEW (service directory, "更多" entry) ==========
+  if (viewMode === 'catalog') {
+    return (
+      <WorkspacePage
+        eyebrow={t('mcp.title')}
+        title="全部支持的 MCP 服务"
+        description="浏览所有可添加的 MCP 服务，选择一个服务即可快速配置。"
+        action={
+          <Button variant="ghost" onClick={() => setViewMode('list')}>
             {t('mcp.back')}
           </Button>
         }
       >
-        <div className="mcp-form-card">
-          <Network size={18} className="mcp-form-card__icon" />
-          <div className="mcp-form-card__body">
-            <h2>{form.id ? t('mcp.edit_server') : t('mcp.add_title')}</h2>
+        <div className="workspace-page__content">
+          {/* Search + categories */}
+          <div style={{ marginBottom: 16 }}>
+            <input
+              type="text"
+              className="mcp-catalog-search"
+              value={catalogSearch}
+              onChange={(event) => setCatalogSearch(event.target.value)}
+              placeholder="搜索服务..."
+            />
+          </div>
 
-            <label className="field">
-              <span>{t('mcp.name')}</span>
-              <input
-                value={form.name}
-                onChange={(event) => setForm({ ...form, name: event.target.value })}
-                placeholder={t('mcp.name_placeholder')}
-                disabled={saving}
-              />
-            </label>
+          {/* Category tabs (placeholder - templates don't have categories yet) */}
+          <div className="mcp-catalog-categories">
+            <button
+              className={`mcp-catalog-tab ${catalogCategory === 'all' ? 'mcp-catalog-tab--active' : ''}`}
+              onClick={() => setCatalogCategory('all')}
+            >
+              全部
+            </button>
+            {/* TODO: render actual categories from template metadata when available */}
+          </div>
 
-            <div className="field">
-              <span>{t('mcp.transport')}</span>
-              <div className="mcp-transport-row" role="group" aria-label={t('mcp.transport')}>
-                <button
-                  type="button"
-                  className={`mcp-transport-pill ${form.transport === 'stdio' ? 'mcp-transport-pill--active' : ''}`}
-                  aria-pressed={form.transport === 'stdio'}
-                  onClick={() => setForm({ ...form, transport: 'stdio', command: '', args: '' })}
-                  disabled={saving}
-                >
-                  {t('mcp.transport_stdio')}
-                </button>
-                <button
-                  type="button"
-                  className={`mcp-transport-pill ${form.transport === 'http' ? 'mcp-transport-pill--active' : ''}`}
-                  aria-pressed={form.transport === 'http'}
-                  onClick={() => setForm({ ...form, transport: 'http', url: '' })}
-                  disabled={saving}
-                >
-                  {t('mcp.transport_http')}
-                </button>
-                <button
-                  type="button"
-                  className={`mcp-transport-pill ${form.transport === 'sse' ? 'mcp-transport-pill--active' : ''}`}
-                  aria-pressed={form.transport === 'sse'}
-                  onClick={() => setForm({ ...form, transport: 'sse', url: '' })}
-                  disabled={saving}
-                >
-                  {t('mcp.transport_sse')}
-                </button>
-              </div>
-            </div>
-
-            {hasTransportFields && (
-              <>
-                <div className="mcp-cmd-row">
-                  <label className="field">
-                    <span>{t('mcp.command')}</span>
-                    <input
-                      value={form.command}
-                      onChange={(event) => setForm({ ...form, command: event.target.value })}
-                      placeholder={t('mcp.command_placeholder')}
-                      disabled={saving}
-                    />
-                  </label>
-                  <label className="field mcp-args-field">
-                    <span className="mcp-args-label">{t('mcp.args')}</span>
-                    <input
-                      value={form.args}
-                      onChange={(event) => setForm({ ...form, args: event.target.value })}
-                      placeholder={t('mcp.args_placeholder')}
-                      disabled={saving}
-                    />
-                  </label>
+          {/* Service card grid */}
+          <div className="mcp-catalog-grid">
+            {catalogFiltered.map((template) => (
+              <div
+                className="mcp-catalog-card"
+                key={template.id}
+                onClick={() => selectTemplate(template)}
+              >
+                <div className="mcp-catalog-card__icon">{template.icon || '📦'}</div>
+                <div className="mcp-catalog-card__name">{template.name}</div>
+                <div className="mcp-catalog-card__desc">{template.description || ''}</div>
+                <div className="mcp-catalog-card__tags">
+                  <Badge className="mcp-transport-badge">{template.transport}</Badge>
                 </div>
-              </>
-            )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </WorkspacePage>
+    );
+  }
 
-            {isRemoteTransport && (
-              <label className="field">
-                <span>{t('mcp.url')}</span>
-                <input
-                  value={form.url}
-                  onChange={(event) => setForm({ ...form, url: event.target.value })}
-                  placeholder={t('mcp.url_placeholder')}
-                  disabled={saving}
-                />
-              </label>
-            )}
-
-            <div className="field">
-              <span>{t('mcp.env_desc')}</span>
-              {form.envPairs.map((pair, i) => {
-                const isSecret = pair.value === SECRET_PLACEHOLDER;
-                return (
-                  <div className="mcp-env-row" key={i}>
-                    <input
-                      value={pair.key}
-                      onChange={(event) => updateEnvPair(i, 'key', event.target.value)}
-                      placeholder={t('mcp.env_key')}
-                      className="mcp-env-input"
-                      disabled={saving}
-                    />
-                    <input
-                      value={pair.value}
-                      onChange={(event) => updateEnvPair(i, 'value', event.target.value)}
-                      placeholder={t('mcp.env_value')}
-                      className="mcp-env-input"
-                      type={isSecret ? 'password' : 'text'}
-                      disabled={saving}
-                    />
-                    {isSecret && <small className="mcp-secret-hint">{t('mcp.secret_kept')}</small>}
-                    <Button variant="icon" className="mcp-env-remove" onClick={() => removeEnvPair(i)} disabled={saving} title={t('common.delete')}>
-                      <Trash2 size={12} />
-                    </Button>
-                  </div>
-                );
-              })}
-              <Button variant="ghost" onClick={addEnvPair} disabled={saving} className="mcp-env-add-btn">
-                <Plus size={12} />
-                {t('mcp.env_add')}
-              </Button>
-            </div>
-
-            <div className="mcp-test-row">
+  // ========== FORM VIEW (server detail/edit form, aligned with provider form) ==========
+  return (
+    <WorkspacePage
+      className="mcp-shell--form"
+      eyebrow={t('mcp.title')}
+      title={form.id ? t('mcp.edit_server') : t('mcp.add_title')}
+      action={
+        <Button variant="ghost" onClick={cancelForm}>
+          {t('mcp.back')}
+        </Button>
+      }
+    >
+      <div className="mcp-form-card">
+        <Network size={18} className="mcp-form-card__icon" />
+        <div className="mcp-form-card__body">
+          {/* Connection status row (only on edit) */}
+          {form.id && (
+            <div className="mcp-status-row">
+              <span className={`mcp-status-dot ${statusDot(servers.find((s) => s.id === form.id)?.status || 'unknown')}`} style={{ width: 12, height: 12 }} />
+              <Badge className={servers.find((s) => s.id === form.id)?.status === 'connected' ? 'mcp-status-badge--ok' : ''}>
+                {formatStatus(servers.find((s) => s.id === form.id)?.status || 'unknown')}
+              </Badge>
               <Button
                 variant="secondary"
                 onClick={handleTest}
                 disabled={testing || (hasTransportFields && !form.command.trim()) || (isRemoteTransport && !form.url.trim())}
+                className="mcp-test-btn"
               >
                 {testing ? (
                   <Loader2 size={14} className="animate-spin" />
@@ -457,178 +510,156 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
                 </span>
               )}
             </div>
+          )}
 
-            <div className="mcp-form-footer">
-              {form.id && (
-                <Button variant="ghost" className="mcp-danger-button" onClick={() => setDeleteConfirm(form.id)} disabled={saving}>
-                  <Trash2 size={14} />
-                  {t('common.delete')}
-                </Button>
-              )}
-              <div className="mcp-form-footer__actions">
-                <Button variant="secondary" onClick={cancelForm} disabled={saving}>{t('mcp.cancel')}</Button>
-                <Button
-                  variant="primary"
-                  onClick={handleSave}
-                  disabled={saving || !canSave}
-                >
-                  {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  {t('mcp.save')}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
+          <h2>{form.id ? t('mcp.edit_server') : t('mcp.add_title')}</h2>
 
-        {deleteConfirm && (
-          <div className="mcp-delete-confirm">
-            <p>{t('mcp.delete_confirm')}</p>
-            <div>
-              <Button variant="secondary" onClick={() => setDeleteConfirm(null)}>{t('mcp.cancel')}</Button>
-              <Button variant="primary" className="mcp-delete-confirm__button" onClick={() => handleDelete(deleteConfirm)}>
-                <Trash2 size={13} />
-                {t('common.delete')}
-              </Button>
-            </div>
-          </div>
-        )}
-      </WorkspacePage>
-    );
-  }
+          <label className="field">
+            <span>{t('mcp.name')}</span>
+            <input
+              value={form.name}
+              onChange={(event) => setForm({ ...form, name: event.target.value })}
+              placeholder={t('mcp.name_placeholder')}
+              disabled={saving}
+            />
+          </label>
 
-  return (
-    <WorkspacePage title={t('mcp.title')} description={t('mcp.description')}>
-      {templates.length > 0 && viewMode === 'list' && (
-        <div className="mcp-quick-card">
-          <Network size={18} className="mcp-form-card__icon" />
-          <div>
-            <strong>{t('mcp.quick_add')}</strong>
-            <p>{t('mcp.quick_add_desc')}</p>
-            <div className="mcp-template-row">
-              {templates.map((template) => (
-                <button key={template.id} type="button" className="mcp-template-pill" onClick={() => selectTemplate(template)}>
-                  <Network size={12} />
-                  {template.name}
-                </button>
-              ))}
-              <button type="button" className="mcp-template-pill mcp-template-pill--dashed" onClick={startAdd}>
-                <Plus size={12} />
-                {t('mcp.custom_extension')}
+          <div className="field">
+            <span>{t('mcp.transport')}</span>
+            <div className="mcp-transport-row" role="group" aria-label={t('mcp.transport')}>
+              <button
+                type="button"
+                className={`mcp-transport-pill ${form.transport === 'stdio' ? 'mcp-transport-pill--active' : ''}`}
+                aria-pressed={form.transport === 'stdio'}
+                onClick={() => setForm({ ...form, transport: 'stdio', command: '', args: '' })}
+                disabled={saving}
+              >
+                {t('mcp.transport_stdio')}
+              </button>
+              <button
+                type="button"
+                className={`mcp-transport-pill ${form.transport === 'http' ? 'mcp-transport-pill--active' : ''}`}
+                aria-pressed={form.transport === 'http'}
+                onClick={() => setForm({ ...form, transport: 'http', url: '' })}
+                disabled={saving}
+              >
+                {t('mcp.transport_http')}
+              </button>
+              <button
+                type="button"
+                className={`mcp-transport-pill ${form.transport === 'sse' ? 'mcp-transport-pill--active' : ''}`}
+                aria-pressed={form.transport === 'sse'}
+                onClick={() => setForm({ ...form, transport: 'sse', url: '' })}
+                disabled={saving}
+              >
+                {t('mcp.transport_sse')}
               </button>
             </div>
           </div>
-        </div>
-      )}
 
-      <div className="mcp-list-heading">
-        <h2>{t('mcp.my_extensions')}</h2>
-        <div className="mcp-list-actions">
-          <div className="mcp-search">
-            <Search size={14} className="mcp-search__icon" />
-            <input
-              className="mcp-search__input"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder={t('mcp.search_placeholder')}
-              disabled={loading}
-            />
+          {hasTransportFields && (
+            <>
+              <div className="mcp-cmd-row">
+                <label className="field">
+                  <span>{t('mcp.command')}</span>
+                  <input
+                    value={form.command}
+                    onChange={(event) => setForm({ ...form, command: event.target.value })}
+                    placeholder={t('mcp.command_placeholder')}
+                    disabled={saving}
+                  />
+                </label>
+                <label className="field mcp-args-field">
+                  <span className="mcp-args-label">{t('mcp.args')}</span>
+                  <input
+                    value={form.args}
+                    onChange={(event) => setForm({ ...form, args: event.target.value })}
+                    placeholder={t('mcp.args_placeholder')}
+                    disabled={saving}
+                  />
+                </label>
+              </div>
+            </>
+          )}
+
+          {isRemoteTransport && (
+            <label className="field">
+              <span>{t('mcp.url')}</span>
+              <input
+                value={form.url}
+                onChange={(event) => setForm({ ...form, url: event.target.value })}
+                placeholder={t('mcp.url_placeholder')}
+                disabled={saving}
+              />
+            </label>
+          )}
+
+          <div className="field">
+            <span>{t('mcp.env_desc')}</span>
+            {form.envPairs.map((pair, i) => {
+              const isSecret = pair.value === SECRET_PLACEHOLDER;
+              return (
+                <div className="mcp-env-row" key={i}>
+                  <input
+                    value={pair.key}
+                    onChange={(event) => updateEnvPair(i, 'key', event.target.value)}
+                    placeholder={t('mcp.env_key')}
+                    className="mcp-env-input"
+                    disabled={saving}
+                  />
+                  <input
+                    value={pair.value}
+                    onChange={(event) => updateEnvPair(i, 'value', event.target.value)}
+                    placeholder={t('mcp.env_value')}
+                    className="mcp-env-input"
+                    type={isSecret ? 'password' : 'text'}
+                    disabled={saving}
+                  />
+                  {isSecret && <small className="mcp-secret-hint">{t('mcp.secret_kept')}</small>}
+                  <Button variant="icon" className="mcp-env-remove" onClick={() => removeEnvPair(i)} disabled={saving} title={t('common.delete')}>
+                    <Trash2 size={12} />
+                  </Button>
+                </div>
+              );
+            })}
+            <Button variant="ghost" onClick={addEnvPair} disabled={saving} className="mcp-env-add-btn">
+              <Plus size={12} />
+              {t('mcp.env_add')}
+            </Button>
           </div>
-          <Button variant="secondary" onClick={handleCheckAll} disabled={checking || servers.length === 0}>
-            {checking ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />}
-            {t('mcp.check_all')}
-          </Button>
-          <Button variant="primary" onClick={startAdd}>
-            <Plus size={14} />
-            {t('mcp.add_server')}
-          </Button>
+
+          <div className="mcp-form-footer">
+            {form.id && (
+              <Button variant="ghost" className="mcp-danger-button" onClick={() => setDeleteConfirm(form.id)} disabled={saving}>
+                <Trash2 size={14} />
+                {t('common.delete')}
+              </Button>
+            )}
+            <div className="mcp-form-footer__actions">
+              <Button variant="secondary" onClick={cancelForm} disabled={saving}>{t('mcp.cancel')}</Button>
+              <Button
+                variant="primary"
+                onClick={handleSave}
+                disabled={saving || !canSave}
+              >
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                {t('mcp.save')}
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
-      {loading ? (
-        <div className="mcp-empty">{t('common.loading')}</div>
-      ) : servers.length === 0 ? (
-        <div className="mcp-empty">
-          <p>{t('mcp.empty')}</p>
-          <span>{t('mcp.empty_hint')}</span>
-        </div>
-      ) : filteredServers.length === 0 ? (
-        <div className="mcp-empty">
-          <p>{t('mcp.no_match')}</p>
-        </div>
-      ) : (
-        <div className="mcp-list">
-          {filteredServers.map((server) => (
-            <article
-              className={`mcp-card ${!server.enabled || server.status === 'disabled' ? 'mcp-card--disabled' : ''} ${server.status === 'error_connecting' ? 'mcp-card--error' : ''}`}
-              key={server.id}
-            >
-              <div className="mcp-card__top">
-                <div className="mcp-card__identity">
-                  <span className={`mcp-status-dot ${statusDot(server.status)}`} />
-                  <strong>{server.name}</strong>
-                  <Badge className="mcp-transport-badge">{server.transport}</Badge>
-                  {!server.enabled || server.status === 'disabled' ? <Badge>{t('mcp.disabled')}</Badge> : null}
-                </div>
-                <div className="mcp-card__controls">
-                  <Switch
-                    id={`mcp-switch-${server.id}`}
-                    checked={server.enabled}
-                    onChange={() => handleToggle(server)}
-                  />
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="icon" className="h-7 w-7">
-                        <ChevronDown size={14} />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="mcp-menu__content">
-                      <DropdownMenuItem onSelect={() => startEdit(server)}>{t('mcp.edit')}</DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem variant="destructive" onSelect={() => setDeleteConfirm(server.id)}>
-                        <Trash2 size={12} />
-                        {t('mcp.delete')}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-
-              <div className="mcp-card__footer">
-                <div className="mcp-card__status">
-                  <span className={`mcp-status-text ${server.status === 'error_connecting' ? 'mcp-status-text--error' : 'mcp-status-text--ok'}`}>
-                    {formatStatus(server.status)}
-                  </span>
-                  {server.tool_count > 0 && (
-                    <Badge className="mcp-tool-badge">{t('mcp.tool_count').replace('{count}', String(server.tool_count))}</Badge>
-                  )}
-                  {server.error_message && <span className="mcp-error-msg">{server.error_message}</span>}
-                </div>
-              </div>
-
-              {server.tools && server.tools.length > 0 && (
-                <div className="mcp-tools">
-                  <span className="mcp-tools__label">{t('mcp.tools')}</span>
-                  <div className="mcp-tools__list">
-                    {server.tools.map((tool) => (
-                      <span className="mcp-tool-chip" key={tool.name} title={tool.description}>
-                        {tool.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {deleteConfirm === server.id && (
-                <div className="mcp-inline-delete">
-                  <p>{t('mcp.delete_confirm')}</p>
-                  <div>
-                    <Button variant="secondary" className="h-7" onClick={() => setDeleteConfirm(null)}>{t('mcp.cancel')}</Button>
-                    <Button variant="primary" className="h-7 mcp-delete-confirm__button" onClick={() => handleDelete(server.id)}>{t('common.delete')}</Button>
-                  </div>
-                </div>
-              )}
-            </article>
-          ))}
+      {deleteConfirm && (
+        <div className="mcp-delete-confirm">
+          <p>{t('mcp.delete_confirm')}</p>
+          <div>
+            <Button variant="secondary" onClick={() => setDeleteConfirm(null)}>{t('mcp.cancel')}</Button>
+            <Button variant="primary" className="mcp-delete-confirm__button" onClick={() => handleDelete(deleteConfirm)}>
+              <Trash2 size={13} />
+              {t('common.delete')}
+            </Button>
+          </div>
         </div>
       )}
 
