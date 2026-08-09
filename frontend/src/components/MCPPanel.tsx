@@ -544,11 +544,6 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
         eyebrow={t('mcp.title')}
         title={t('mcp.title')}
         description={t('mcp.description')}
-        action={
-          <Button variant="secondary" onClick={() => setViewMode('catalog')}>
-            {t('mcp.more')} ▾
-          </Button>
-        }
       >
         <div className="workspace-page__content">
           {/* Quick-add card (aligned with provider-quick-card) */}
@@ -568,6 +563,10 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                   <button type="button" className="mcp-template-pill mcp-template-pill--dashed" onClick={() => startAdd()}>
                     <Plus size={12} />
                     {t('mcp.custom_extension')}
+                  </button>
+                  <button type="button" className="mcp-template-pill mcp-template-pill--dashed" onClick={() => setViewMode('catalog')}>
+                    <Network size={12} />
+                    {t('mcp.more')} ▾
                   </button>
                 </div>
               </div>
