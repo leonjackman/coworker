@@ -1,6 +1,6 @@
 import { ChevronDown, Database, FileText, Globe, GitBranch, Loader2, Network, Plus, Save, Search, Shield, Terminal, Trash2, Wrench, Code, Cloud, Settings2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { t, translateError } from '../lib/i18n';
+import { t, tOrDefault, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type { McpServerEntry, McpTemplateEntry, McpToolEntry } from '../types';
 import { Badge } from './ui/badge';
@@ -100,6 +100,14 @@ function renderLogo(template: McpTemplateEntry): React.ReactNode {
       dangerouslySetInnerHTML={{ __html: def?.svg ?? '' }}
     />
   );
+}
+
+function templateName(template: McpTemplateEntry): string {
+  return tOrDefault(`mcp.tpl.${template.id}.name`, template.name);
+}
+
+function templateDescription(template: McpTemplateEntry): string {
+  return tOrDefault(`mcp.tpl.${template.id}.desc`, template.description);
 }
 
 // ── Form state ───────────────────────────────────────────────────────────────
@@ -433,11 +441,11 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     return (
       <WorkspacePage
         eyebrow={t('mcp.title')}
-        title="模型上下文协议"
+        title={t('mcp.title')}
         description={t('mcp.description')}
         action={
           <Button variant="secondary" onClick={() => setViewMode('catalog')}>
-            更多 ▾
+            {t('mcp.more')} ▾
           </Button>
         }
       >
@@ -453,7 +461,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                   {templates.map((template) => (
                     <button key={template.id} type="button" className="mcp-template-pill" onClick={() => startAdd(template)}>
                       {renderLogo(template)}
-                      {template.name}
+                      {templateName(template)}
                     </button>
                   ))}
                   <button type="button" className="mcp-template-pill mcp-template-pill--dashed" onClick={() => startAdd()}>
@@ -537,7 +545,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                           const normalize = (s: string) => s.toLowerCase().replace(/\b(mcp|server|extension|tool)\b/g, '').trim().replace(/\s+/g, '-');
                           const normServer = normalize(server.name);
                           const tpl = templates.find(t => normalize(t.id) === normServer || normalize(t.name) === normServer);
-                          return tpl?.description || server.name;
+                          return tpl ? templateDescription(tpl) : server.name;
                         })()} · {t('mcp.tool_count').replace('{count}', String(server.tool_count || 0))}
                         {server.error_message && <span className="mcp-error-msg"> · {server.error_message}</span>}
                       </span>
@@ -614,8 +622,8 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                 <div className="mcp-catalog-card__icon" style={{ color: (MCP_LOGOS[template.id] ?? MCP_LOGOS.default)?.color ?? '#8b949e' }}>
                   {renderLogo(template)}
                 </div>
-                <div className="mcp-catalog-card__name">{template.name}</div>
-                <div className="mcp-catalog-card__desc">{template.description || ''}</div>
+                <div className="mcp-catalog-card__name">{templateName(template)}</div>
+                <div className="mcp-catalog-card__desc">{templateDescription(template)}</div>
                 <div className="mcp-catalog-card__tags">
                   <Badge className="mcp-transport-badge">{template.transport}</Badge>
                   {template.category && <Badge className="mcp-category-badge">{CATEGORY_LABELS[template.category] || template.category}</Badge>}

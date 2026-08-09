@@ -67,6 +67,12 @@ export function t(key: string, params?: Record<string, string | number>): string
   return message;
 }
 
+/** Like `t`, but returns `fallback` when the key is missing from the dictionary. */
+export function tOrDefault(key: string, fallback: string, params?: Record<string, string | number>): string {
+  if (dictionary[key]) return t(key, params);
+  return fallback;
+}
+
 export function translateError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error || '');
   if (message.includes('Failed to fetch')) return t('error.fetch_failed');
