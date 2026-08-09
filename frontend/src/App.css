@@ -4499,6 +4499,30 @@ body.bottom-panel-resizing {
   font-size: 11px;
 }
 
+/* MCP tool approval: JSON args block + destructive-tool warning. */
+.pending-dock__command-args {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  color: var(--muted-foreground);
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pending-dock__warning {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--destructive-border);
+  border-radius: 8px;
+  background: var(--destructive-bg);
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .pending-dock__footer {
   margin-top: 14px;
   display: flex;

@@ -789,23 +789,7 @@ class Workspace:
         details: dict[str, Any],
         context: dict[str, Any] | None = None,
     ) -> None:
-        if not self.audit_path:
-            return
-
-        event = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "operation": operation,
-            "status": status,
-            "context": context or {},
-            "details": details,
-        }
-        try:
-            with self.audit_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
-        except OSError:
-            # Audit must not mask the tool's real outcome.
-            return
-        trim_jsonl_file(self.audit_path, MAX_TOOL_AUDIT_LINES)
+        append_tool_audit(self.audit_path, operation, status, details, context)
 
     @staticmethod
     def redact_command(command: list[str]) -> list[str]:
@@ -991,6 +975,37 @@ def _find_sequence(haystack: list[str], needle: list[str]) -> int:
         if haystack[i : i + m] == needle:
             return i
     return -1
+
+
+def append_tool_audit(
+    audit_path: Path | None,
+    operation: str,
+    status: str,
+    details: dict[str, Any],
+    context: dict[str, Any] | None = None,
+) -> None:
+    """Append one JSONL audit event. Never raises.
+
+    Shared by :meth:`Workspace.audit_tool_action` and the MCP middleware, so
+    external MCP calls land in the same audit trail as builtin tool actions.
+    """
+    if not audit_path:
+        return
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "operation": operation,
+        "status": status,
+        "context": context or {},
+        "details": details,
+    }
+    try:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        with audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True, default=str) + "\n")
+    except OSError:
+        # Audit must not mask the tool's real outcome.
+        return
+    trim_jsonl_file(audit_path, MAX_TOOL_AUDIT_LINES)
 
 
 def list_tool_audit_events(audit_path: Path, limit: int = 100) -> list[dict[str, Any]]:

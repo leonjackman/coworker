@@ -554,13 +554,22 @@ export interface ApprovalOption {
 
 export interface PendingRequest {
   approval_id: string;
-  kind: 'command' | 'question' | 'plan';
+  kind: 'command' | 'question' | 'plan' | 'mcp';
   session_id: string;
   approval_status: string;
   messageId: string;
   resolving?: boolean;
   command?: string[];
   cwd?: string;
+  // MCP tool approval (kind === 'mcp'): the call leaves the workspace sandbox,
+  // so the card shows tool + server + args instead of an argv line.
+  tool_name?: string;
+  tool_args?: Record<string, unknown>;
+  server_name?: string;
+  server_id?: string;
+  remote_name?: string;
+  read_only?: boolean;
+  destructive?: boolean;
   question?: string;
   header?: string;
   options?: ApprovalOption[];
@@ -591,6 +600,15 @@ export interface PendingRequest {
         cwd: string;
         approval_status: string;
         session_id?: string;
+        /** `'mcp'` marks an external MCP tool call; omitted/`'command'` is a workspace command. */
+        kind?: 'command' | 'mcp';
+        tool_name?: string;
+        tool_args?: Record<string, unknown>;
+        server_name?: string;
+        server_id?: string;
+        remote_name?: string;
+        read_only?: boolean;
+        destructive?: boolean;
       }
     | {
         type: 'question_required';

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Command, HelpCircle, ListChecks } from 'lucide-react';
+import { Command, HelpCircle, ListChecks, Plug } from 'lucide-react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { CardSlot } from '@/components/ui/card-slot';
 import { t } from '@/lib/i18n';
@@ -152,6 +152,90 @@ function ApprovalDock({ request, onResolve }: { request: PendingRequest & { kind
           disabled={resolving}
         >
           {t('chat.approval_always', { command: request.command?.[0] || '' })}
+        </button>
+        <button
+          type="button"
+          className="button-primary"
+          onClick={() => dispatch({ type: 'approve' })}
+          disabled={resolving}
+        >
+          {t('chat.approval_once')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Pretty-print MCP tool args; falls back to the raw value if it is not JSON-safe. */
+function formatToolArgs(args: Record<string, unknown> | undefined): string {
+  if (!args || Object.keys(args).length === 0) return '';
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
+}
+
+/**
+ * Approval card for an external MCP tool call.
+ *
+ * MCP calls leave the workspace sandbox, so the card names the server and the
+ * remote tool explicitly instead of showing an argv line, and "always allow"
+ * is scoped to that one server+tool pair.
+ */
+function McpApprovalDock({ request, onResolve }: { request: PendingRequest & { kind: 'mcp' }; onResolve: (req: PendingRequest & { kind: 'mcp' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
+  const [resolving, setResolving] = useState(false);
+
+  const dispatch = useCallback(async (decision: ApprovalDecisionPayload) => {
+    if (resolving) return;
+    setResolving(true);
+    try {
+      await onResolve(request, decision);
+    } finally {
+      setResolving(false);
+    }
+  }, [resolving, request, onResolve]);
+
+  const toolLabel = request.remote_name || request.tool_name || '';
+  const serverLabel = request.server_name || request.server_id || '';
+  const argsText = formatToolArgs(request.tool_args);
+
+  return (
+    <div className="pending-dock__body">
+      <div className="pending-dock__intent">
+        <span className="pending-dock__intent-icon" aria-hidden>▶</span>
+        <span className="pending-dock__intent-text">
+          <span className="pending-dock__intent-eyebrow">{t('chat.approval_intent')}</span>
+          <span className="pending-dock__intent-desc">
+            {t('chat.mcp_approval_intent', { tool: toolLabel, server: serverLabel })}
+          </span>
+        </span>
+      </div>
+      {request.destructive ? (
+        <div className="pending-dock__warning" data-slot="mcp-destructive">
+          {t('chat.mcp_approval_destructive')}
+        </div>
+      ) : null}
+      <div className="pending-dock__command">
+        <span className="pending-dock__command-line">{request.tool_name || toolLabel}</span>
+        {argsText ? <pre className="pending-dock__command-args">{argsText}</pre> : null}
+      </div>
+      <div className="pending-dock__footer" data-slot="approval-actions">
+        <button
+          type="button"
+          className="button-ghost"
+          onClick={() => dispatch({ type: 'reject' })}
+          disabled={resolving}
+        >
+          {t('chat.approval_disagree')}
+        </button>
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={() => dispatch({ type: 'always' })}
+          disabled={resolving}
+        >
+          {t('chat.approval_always', { command: toolLabel })}
         </button>
         <button
           type="button"
@@ -440,9 +524,18 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
   const isResolving = front.resolving;
   const kindLabel = front.kind === 'command'
     ? t('chat.kind_command')
-    : front.kind === 'question'
-      ? t('chat.kind_question')
-      : t('chat.kind_plan');
+    : front.kind === 'mcp'
+      ? t('chat.kind_mcp')
+      : front.kind === 'question'
+        ? t('chat.kind_question')
+        : t('chat.kind_plan');
+  const titleText = front.kind === 'command'
+    ? t('chat.command_pending')
+    : front.kind === 'mcp'
+      ? t('chat.mcp_pending')
+      : front.kind === 'question'
+        ? t('chat.question_pending')
+        : t('chat.plan_pending');
   const questionTotal = requests.filter((r) => r.kind === 'question').length;
 
   return (
@@ -456,11 +549,9 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
         <div className="pending-dock__header">
           <div className="pending-dock__title">
             <span className="pending-dock__icon">
-              {front.kind === 'command' ? <Command size={14} /> : front.kind === 'question' ? <HelpCircle size={14} /> : <ListChecks size={14} />}
+              {front.kind === 'command' ? <Command size={14} /> : front.kind === 'mcp' ? <Plug size={14} /> : front.kind === 'question' ? <HelpCircle size={14} /> : <ListChecks size={14} />}
             </span>
-            <span className="pending-dock__title-text">
-              {front.kind === 'command' ? t('chat.command_pending') : front.kind === 'question' ? t('chat.question_pending') : t('chat.plan_pending')}
-            </span>
+            <span className="pending-dock__title-text">{titleText}</span>
             <span className="pending-dock__kind">{kindLabel}</span>
           </div>
           <div className="pending-dock__header-actions">
@@ -479,6 +570,8 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
         </div>
         {front.kind === 'command' ? (
           <ApprovalDock request={front as PendingRequest & { kind: 'command' }} onResolve={onResolve} />
+        ) : front.kind === 'mcp' ? (
+          <McpApprovalDock request={front as PendingRequest & { kind: 'mcp' }} onResolve={onResolve} />
         ) : front.kind === 'question' ? (
           <QuestionDock request={front as PendingRequest & { kind: 'question' }} total={questionTotal} onResolve={onResolve} />
         ) : (

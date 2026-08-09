@@ -518,8 +518,60 @@ def _command_is_allowed(tool_call: Any) -> bool:
     return Path(executable).name in ALLOWED_COMMANDS
 
 
+class _DynamicInterruptOn(dict):
+    """``interrupt_on`` mapping that resolves MCP tool names on demand.
+
+    ``HumanInTheLoopMiddleware`` looks its config up by tool name at interrupt
+    time (``self.interrupt_on.get(name)`` / ``[name]``), so tool names that are
+    only known once an MCP server connects can be resolved lazily here instead
+    of being frozen into a static dict at graph-build time.
+    """
+
+    def __init__(self, static: dict[str, Any], resolver: Callable[[str], Any | None]):
+        super().__init__(static)
+        self._resolver = resolver
+
+    def _resolve(self, key: Any) -> Any | None:
+        if not isinstance(key, str) or not key:
+            return None
+        try:
+            return self._resolver(key)
+        except Exception:  # noqa: BLE001 - approval lookup must never break a run
+            return None
+
+    def get(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        resolved = self._resolve(key)
+        return default if resolved is None else resolved
+
+    def __missing__(self, key: Any) -> Any:
+        resolved = self._resolve(key)
+        if resolved is None:
+            raise KeyError(key)
+        return resolved
+
+    def __contains__(self, key: Any) -> bool:  # type: ignore[override]
+        return dict.__contains__(self, key) or self._resolve(key) is not None
+
+
+def _mcp_interrupt_description(tool_call: Any, state: Any, runtime: Any) -> str:
+    """Human-readable description for an MCP tool approval request."""
+    name = str((tool_call or {}).get("name") or "")
+    args = (tool_call or {}).get("args")
+    try:
+        rendered = json.dumps(args, ensure_ascii=False, default=str)[:600]
+    except Exception:  # noqa: BLE001
+        rendered = str(args)[:600]
+    return (
+        "Coworker needs approval before calling an external MCP tool.\n\n"
+        f"Tool: {name}\nArgs: {rendered}"
+    )
+
+
 def command_approval_middleware(
     approval_store: CommandApprovalStore | None = None,
+    mcp_policy: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> list[Any]:
     """Always-mounted HITL middleware; approval decisions live in ``when``
     predicates that read phase/autonomy from agent state.
@@ -530,6 +582,21 @@ def command_approval_middleware(
     * ``ask_user``: always interrupts — the tool is only reachable when the
       phase gate exposes it, so this is decoupled from the permission switch
       (fixes D3: full access no longer kills the question capability).
+    * MCP tools (resolved dynamically through ``mcp_policy``): MCP calls leave
+      the workspace sandbox entirely, so they get their own risk ladder derived
+      from the server's ``ToolAnnotations``:
+
+      =============  ==========  ==================  ================
+      autonomy       read-only   write / undeclared  destructive
+      =============  ==========  ==================  ================
+      supervised     auto        ask                 ask
+      guarded        auto        auto                ask
+      autonomous     auto        auto                auto
+      =============  ==========  ==================  ================
+
+      A server the user marked ``trusted`` is exempt at every level (that is
+      the entire meaning of the trust toggle), and "always allow" adds the
+      individual tool to the approval allowlist.
     """
     from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
 
@@ -566,6 +633,58 @@ def command_approval_middleware(
             return False
         return True
 
+    def needs_mcp_approval(req: Any) -> bool:
+        state = req.state
+        # MCP tools are execute-phase only (the phase gate hides them in
+        # discuss); this is belt-and-braces for a stray call.
+        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+            return False
+        policy = _mcp_policy_for(req.tool_call)
+        if policy is None:
+            return False
+        if policy.get("trusted"):
+            return False
+        if policy.get("read_only"):
+            return False
+        autonomy = normalize_autonomy(state.get("autonomy"))
+        if autonomy == "autonomous":
+            return False
+        if autonomy == "guarded":
+            # Guarded only stops for calls the server itself flags destructive.
+            annotations = policy.get("annotations") or {}
+            if annotations.get("destructive") is not True:
+                return False
+        if approval_store is not None:
+            digest = str(policy.get("digest") or "")
+            if digest and approval_store.is_always_allowed(digest):
+                return False
+        return True
+
+    def _mcp_policy_for(tool_call: Any) -> dict[str, Any] | None:
+        if mcp_policy is None:
+            return None
+        name = tool_call.get("name") if isinstance(tool_call, dict) else getattr(tool_call, "name", None)
+        if not name:
+            return None
+        try:
+            return mcp_policy(str(name))
+        except Exception:  # noqa: BLE001 - a broken policy lookup must not break the run
+            return None
+
+    def resolve_mcp_config(name: str) -> dict[str, Any] | None:
+        if mcp_policy is None:
+            return None
+        try:
+            if mcp_policy(name) is None:
+                return None
+        except Exception:  # noqa: BLE001
+            return None
+        return {
+            "allowed_decisions": ["approve", "reject"],
+            "description": _mcp_interrupt_description,
+            "when": needs_mcp_approval,
+        }
+
     write_configs: dict[str, Any] = {}
     for tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
         write_configs[tool_name] = {
@@ -573,23 +692,27 @@ def command_approval_middleware(
             "when": needs_write_approval,
         }
 
-    return [
-        HumanInTheLoopMiddleware(
-            interrupt_on={
-                "run_command": {
-                    "allowed_decisions": ["approve", "reject"],
-                    "description": "Coworker needs approval before running this workspace command.",
-                    "when": needs_command_approval,
-                },
-                **write_configs,
-                "ask_user": {
-                    "allowed_decisions": ["respond", "reject"],
-                    "description": "Coworker asks the user a question that needs an answer.",
-                    "when": needs_ask_user,
-                },
-            }
-        )
-    ]
+    static_configs: dict[str, Any] = {
+        "run_command": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker needs approval before running this workspace command.",
+            "when": needs_command_approval,
+        },
+        **write_configs,
+        "ask_user": {
+            "allowed_decisions": ["respond", "reject"],
+            "description": "Coworker asks the user a question that needs an answer.",
+            "when": needs_ask_user,
+        },
+    }
+
+    hitl = HumanInTheLoopMiddleware(interrupt_on=static_configs)
+    if mcp_policy is not None:
+        # ``HumanInTheLoopMiddleware`` normalizes ``interrupt_on`` in its
+        # constructor, so the dynamic mapping is swapped in afterwards, seeded
+        # with the already-resolved static configs.
+        hitl.interrupt_on = _DynamicInterruptOn(hitl.interrupt_on, resolve_mcp_config)
+    return [hitl]
 
 
 def interrupt_payload(interrupt: Any) -> dict[str, Any]:
@@ -608,12 +731,21 @@ def interrupt_action_requests(value: dict[str, Any]) -> list[dict[str, Any]]:
     return [action for action in action_requests if isinstance(action, dict)]
 
 
-def interrupt_action_kind(action: dict[str, Any]) -> str:
+def interrupt_action_kind(
+    action: dict[str, Any],
+    mcp_policy: Callable[[str], dict[str, Any] | None] | None = None,
+) -> str:
     name = str(action.get("name") or "")
     if name == "ask_user":
         return "question"
     if name == "submit_plan":
         return "plan"
+    if mcp_policy is not None and name:
+        try:
+            if mcp_policy(name) is not None:
+                return "mcp"
+        except Exception:  # noqa: BLE001 - classification must never break a run
+            pass
     return "command"
 
 
@@ -642,10 +774,40 @@ def interrupt_command_details(value: dict[str, Any]) -> tuple[list[str], str, in
     return safe_command, str(cwd or ""), int(timeout_seconds or 20)
 
 
+def _mcp_context(policy: dict[str, Any] | None) -> dict[str, Any]:
+    """JSON-safe MCP descriptor stored on the approval record.
+
+    ``digest`` is what "always allow" writes to the approval allowlist, so it
+    has to survive the round-trip through the store.
+    """
+    if not policy:
+        return {}
+    return {
+        "mcp": {
+            "server_id": str(policy.get("server_id") or ""),
+            "server_name": str(policy.get("server_name") or ""),
+            "remote_name": str(policy.get("remote_name") or ""),
+            "digest": str(policy.get("digest") or ""),
+            "read_only": bool(policy.get("read_only")),
+            "trusted": bool(policy.get("trusted")),
+            "annotations": _json_safe(policy.get("annotations") or {}),
+        }
+    }
+
+
+def mcp_policy_resolver(session_manager: Any | None) -> Callable[[str], dict[str, Any] | None] | None:
+    """``tool_policy`` accessor for a session manager (``None`` when absent)."""
+    if session_manager is None:
+        return None
+    resolver = getattr(session_manager, "tool_policy", None)
+    return resolver if callable(resolver) else None
+
+
 def record_runtime_interrupts(
     interrupts: Iterable[Any],
     approval_store: CommandApprovalStore,
     context: dict[str, Any],
+    mcp_policy: Callable[[str], dict[str, Any] | None] | None = None,
 ) -> list[dict[str, Any]]:
     approvals: list[dict[str, Any]] = []
     for interrupt in interrupts:
@@ -667,14 +829,20 @@ def record_runtime_interrupts(
                 key: ([item.model_dump() if isinstance(item, AskUserOption) else item for item in value] if key == "options" and isinstance(value, list) else value)
                 for key, value in args.items()
             }
-            kind = interrupt_action_kind(action)
-            if kind == "question":
+            kind = interrupt_action_kind(action, mcp_policy)
+            policy: dict[str, Any] | None = None
+            if kind in ("question", "mcp"):
                 command, cwd, timeout_seconds = [], "", 20
+                if kind == "mcp" and mcp_policy is not None:
+                    try:
+                        policy = mcp_policy(str(action.get("name") or ""))
+                    except Exception:  # noqa: BLE001
+                        policy = None
             else:
                 command, cwd, timeout_seconds = interrupt_command_details({"action_requests": [action]})
             approval = approval_store.request_runtime_interrupt(
                 current_interrupt_id, action_index, kind, command, cwd, timeout_seconds,
-                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": action_index, "action_count": len(actions), "tool_name": str(action.get("name") or ""), "action_args": args, "hitl_request": _json_safe(value)},
+                {**context, "source": "agent_langgraph_hitl", "interrupt_id": current_interrupt_id, "action_index": action_index, "action_count": len(actions), "tool_name": str(action.get("name") or ""), "action_args": args, **_mcp_context(policy), "hitl_request": _json_safe(value)},
             )
             approvals.append(approval)
     return approvals
@@ -707,7 +875,25 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
             "command": approval.get("command", []),
             "cwd": approval.get("cwd", ""),
         }
-    return {**base, "type": "approval_required", "command": approval.get("command", []), "cwd": approval.get("cwd", "")}
+    if kind == "mcp":
+        args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
+        mcp = context.get("mcp") if isinstance(context.get("mcp"), dict) else {}
+        annotations = mcp.get("annotations") if isinstance(mcp.get("annotations"), dict) else {}
+        return {
+            **base,
+            "type": "approval_required",
+            "kind": "mcp",
+            "command": [],
+            "cwd": "",
+            "tool_name": str(context.get("tool_name") or ""),
+            "tool_args": _json_safe(args),
+            "server_name": str(mcp.get("server_name") or ""),
+            "server_id": str(mcp.get("server_id") or ""),
+            "remote_name": str(mcp.get("remote_name") or ""),
+            "read_only": bool(mcp.get("read_only")),
+            "destructive": annotations.get("destructive") is True,
+        }
+    return {**base, "type": "approval_required", "kind": "command", "command": approval.get("command", []), "cwd": approval.get("cwd", "")}
 
 
 def trace_context(
@@ -1520,6 +1706,26 @@ def build_coworker_agent_graph(
     """
     from langchain.agents import create_agent
 
+    from .mcp_middleware import McpToolMiddleware
+
+    if mcp_session_manager is None:
+        from .mcp_session import McpSessionManager
+
+        _mcp_manager = McpManager(
+            Path(data_dir if data_dir is not None else Path.cwd()) / "mcp_servers.json",
+        )
+        mcp_session_manager = McpSessionManager(
+            Path(data_dir if data_dir is not None else Path.cwd()), _mcp_manager
+        )
+        mcp_session_manager.start()
+
+    # Built before the middleware list so the HITL middleware can resolve MCP
+    # approval policies through it (MCP tool names are only known at runtime).
+    mcp_middleware = McpToolMiddleware(
+        mcp_session_manager,
+        audit_path=(Path(data_dir) / TOOL_AUDIT_FILENAME) if data_dir is not None else None,
+    )
+
     phase_gate = PhaseToolGateMiddleware()
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
@@ -1535,22 +1741,8 @@ def build_coworker_agent_graph(
         # tool node can execute it (the middleware also exposes it to the model).
         tools = [*tools, _goal_tools()[0]]
     middleware.append(PlanApprovalMiddleware(language))
-    middleware.extend(command_approval_middleware(approval_store))
+    middleware.extend(command_approval_middleware(approval_store, mcp_middleware.tool_policy))
 
-    from .mcp_middleware import McpToolMiddleware
-
-    if mcp_session_manager is None:
-        from .mcp_session import McpSessionManager
-
-        _mcp_manager = McpManager(
-            Path(data_dir if data_dir is not None else Path.cwd()) / "mcp_servers.json",
-        )
-        mcp_session_manager = McpSessionManager(
-            Path(data_dir if data_dir is not None else Path.cwd()), _mcp_manager
-        )
-        mcp_session_manager.start()
-
-    mcp_middleware = McpToolMiddleware(mcp_session_manager)
     middleware.append(mcp_middleware)
     phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names
 
@@ -1672,6 +1864,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             approvals = record_runtime_interrupts(
                 result["__interrupt__"], self.approval_store,
                 {**audit_context, "language": language, "work_mode": work_mode, "autonomy": autonomy, "referenced_sessions": list(self.referenced_sessions)},
+                mcp_policy_resolver(self.mcp_session_manager),
             )
             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
             approval_ids = ", ".join(str(a.get("id", "")) for a in approvals)
@@ -1805,7 +1998,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                 yield chunk
                     elif stream_mode == "updates":
                         if "__interrupt__" in chunk:
-                            approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, interrupt_context)
+                            approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, interrupt_context, mcp_policy_resolver(self.mcp_session_manager))
                             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
                             for approval in approvals:
                                 event = stream_event_from_interrupt(approval)
@@ -2271,7 +2464,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                 yield chunk
                     elif stream_mode == "updates":
                         if "__interrupt__" in chunk:
-                            approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context)
+                            approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, context, mcp_policy_resolver(self.mcp_session_manager))
                             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals], "resumed": True})
                             for item in approvals:
                                 event = stream_event_from_interrupt(item)

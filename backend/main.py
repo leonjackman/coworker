@@ -1402,12 +1402,19 @@ async def resolve_command_approval(request: CommandApprovalResolve):
         decision_type = request.decision.type
 
         if decision_type == "always":
-            command = approval.get("command") if isinstance(approval.get("command"), list) else []
-            cwd = str(approval.get("cwd") or "")
-            if command:
-                from coworker.workspace import Workspace
+            # MCP approvals carry their own allowlist key (server + remote tool
+            # name); workspace commands are keyed by argv + cwd.
+            mcp = context.get("mcp") if isinstance(context.get("mcp"), dict) else {}
+            mcp_digest = str(mcp.get("digest") or "")
+            if mcp_digest:
+                command_approval_store.always_allow(mcp_digest)
+            else:
+                command = approval.get("command") if isinstance(approval.get("command"), list) else []
+                cwd = str(approval.get("cwd") or "")
+                if command:
+                    from coworker.workspace import Workspace
 
-                command_approval_store.always_allow(Workspace.command_digest(command, cwd))
+                    command_approval_store.always_allow(Workspace.command_digest(command, cwd))
             decision = {"type": "approve"}
             status = "approved"
         elif decision_type == "approve":

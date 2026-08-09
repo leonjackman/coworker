@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -22,6 +24,9 @@ from langchain_core.messages import SystemMessage
 from .mcp_session import McpSessionManager
 
 logger = logging.getLogger(__name__)
+
+# Cap on how much of a tool result is copied into the audit trail.
+_AUDIT_PREVIEW_CHARS = 400
 
 
 def _phase_is_discuss(state: Any) -> bool:
@@ -42,14 +47,23 @@ def _tool_name(request: Any) -> str:
 
 class McpToolMiddleware(AgentMiddleware):
 
-    def __init__(self, session_manager: McpSessionManager):
+    def __init__(self, session_manager: McpSessionManager, audit_path: Path | None = None):
         self.mcp_manager = session_manager.mcp_manager
         self.session_manager = session_manager
+        self.audit_path = Path(audit_path) if audit_path is not None else None
         # Opportunistic ToolNode registration: populated once sessions are
         # connected. Execution does not depend on this -- the dynamic
         # ``wrap_tool_call`` path below resolves unregistered MCP tools.
         self.tools: list[Any] = list(session_manager.all_tools())
         self._servers: list[dict[str, Any]] = []
+
+    def tool_policy(self, name: str) -> dict[str, Any] | None:
+        """Approval metadata for an MCP tool name (``None`` for builtins)."""
+        try:
+            return self.session_manager.tool_policy(name)
+        except Exception:  # noqa: BLE001 - approval checks must never crash a run
+            logger.debug("MCP tool policy lookup failed for %r", name)
+            return None
 
     def _refresh_tools(self) -> None:
         self._servers = []
@@ -96,7 +110,20 @@ class McpToolMiddleware(AgentMiddleware):
             if not server_tools:
                 continue
             lines.append(f"- {name}: {', '.join(server_tools)}")
-        return "\n".join(lines) if lines else None
+        if not lines:
+            return None
+        try:
+            conflicts = self.session_manager.list_conflicts()
+        except Exception:  # noqa: BLE001
+            conflicts = {}
+        if conflicts:
+            lines.append(
+                "- Note: tools named "
+                + ", ".join(sorted(conflicts))
+                + " exist on several servers and are exposed with a "
+                "`<server>__<tool>` prefix. Use the prefixed name shown above."
+            )
+        return "\n".join(lines)
 
     def _overrides(self, request: Any) -> dict[str, Any]:
         self.session_manager.ensure_connected(enable_browser_flow=False)
@@ -168,19 +195,116 @@ class McpToolMiddleware(AgentMiddleware):
                 return tool
         return None
 
+    def _prepare(self, request: Any) -> tuple[Any, dict[str, Any] | None]:
+        """Resolve an unregistered MCP tool and look up its policy.
+
+        ``request.tool`` is already set for tools the ``ToolNode`` knows about
+        (``self.tools`` was populated at graph build time). Tools that
+        connected later are not registered, so they are resolved dynamically
+        here -- the pattern the langchain agent factory documents for
+        middleware-provided tools.
+        """
+        name = _tool_name(request)
+        policy = self.tool_policy(name) if name else None
+        if request.tool is None:
+            tool = self._resolve_tool(request)
+            if tool is not None:
+                request = request.override(tool=tool)
+        return request, policy
+
+    # ── audit ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _redact_args(args: Any) -> Any:
+        sensitive = ("key", "token", "secret", "password", "authorization", "credential")
+        if isinstance(args, dict):
+            out: dict[str, Any] = {}
+            for key, value in args.items():
+                if any(word in str(key).lower() for word in sensitive):
+                    out[str(key)] = "***"
+                else:
+                    out[str(key)] = McpToolMiddleware._redact_args(value)
+            return out
+        if isinstance(args, list):
+            return [McpToolMiddleware._redact_args(item) for item in args]
+        if isinstance(args, str) and len(args) > _AUDIT_PREVIEW_CHARS:
+            return args[:_AUDIT_PREVIEW_CHARS] + "..."
+        return args
+
+    @staticmethod
+    def _result_preview(result: Any) -> str:
+        content = getattr(result, "content", result)
+        if isinstance(content, list):
+            content = " ".join(str(part) for part in content)
+        text = str(content or "")
+        return text[:_AUDIT_PREVIEW_CHARS] + ("..." if len(text) > _AUDIT_PREVIEW_CHARS else "")
+
+    def _audit(
+        self,
+        policy: dict[str, Any],
+        request: Any,
+        status: str,
+        started: float,
+        result: Any = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """Record one MCP tool call in the shared tool audit trail.
+
+        MCP calls run outside the workspace sandbox, so they are exactly the
+        calls that most need a trace. Failures here are swallowed: auditing must
+        never change the outcome of the call it is describing.
+        """
+        if self.audit_path is None:
+            return
+        try:
+            from .workspace import append_tool_audit
+
+            tool_call = getattr(request, "tool_call", None)
+            args = tool_call.get("args") if isinstance(tool_call, dict) else None
+            details: dict[str, Any] = {
+                "tool": policy.get("tool"),
+                "remote_name": policy.get("remote_name"),
+                "server_id": policy.get("server_id"),
+                "server_name": policy.get("server_name"),
+                "read_only": policy.get("read_only"),
+                "trusted": policy.get("trusted"),
+                "args": self._redact_args(args or {}),
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            }
+            if error is not None:
+                details["error"] = str(error)[:_AUDIT_PREVIEW_CHARS]
+            elif result is not None:
+                details["result_preview"] = self._result_preview(result)
+                if getattr(result, "status", None) == "error":
+                    status = "error"
+            append_tool_audit(self.audit_path, "mcp_tool_call", status, details)
+        except Exception:  # noqa: BLE001 - audit is best-effort
+            logger.debug("MCP audit write failed for %s", policy.get("tool"))
+
+    # ── execution ────────────────────────────────────────────────────────
+
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
-        # Already registered tools (or builtins) pass straight through.
-        if request.tool is not None:
+        request, policy = self._prepare(request)
+        if policy is None:
             return handler(request)
-        tool = self._resolve_tool(request)
-        if tool is None:
-            return handler(request)
-        return handler(request.override(tool=tool))
+        started = time.monotonic()
+        try:
+            result = handler(request)
+        except BaseException as exc:
+            self._audit(policy, request, "error", started, error=exc)
+            raise
+        self._audit(policy, request, "ok", started, result=result)
+        return result
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
-        if request.tool is not None:
+        request, policy = self._prepare(request)
+        if policy is None:
             return await handler(request)
-        tool = self._resolve_tool(request)
-        if tool is None:
-            return await handler(request)
-        return await handler(request.override(tool=tool))
+        started = time.monotonic()
+        try:
+            result = await handler(request)
+        except BaseException as exc:
+            self._audit(policy, request, "error", started, error=exc)
+            raise
+        self._audit(policy, request, "ok", started, result=result)
+        return result

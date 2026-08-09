@@ -82,6 +82,62 @@ function upsertToolPart(parts: MessagePart[], id: string, name: string, input: s
   return next;
 }
 
+type ApprovalStreamEvent = Extract<
+  StreamEvent,
+  { type: 'approval_required' } | { type: 'question_required' } | { type: 'plan_required' }
+>;
+
+/**
+ * Single mapping from an interrupt stream event to a `PendingRequest`.
+ *
+ * All four call paths (stream, non-stream, goal loop and resume) funnel through
+ * here so a new interrupt field only has to be handled once.
+ */
+function pendingRequestFromEvent(
+  event: ApprovalStreamEvent,
+  sessionId: string,
+  messageId: string,
+): PendingRequest {
+  const base: PendingRequest = {
+    approval_id: event.approval_id,
+    kind:
+      event.type === 'approval_required'
+        ? event.kind === 'mcp'
+          ? 'mcp'
+          : 'command'
+        : event.type === 'question_required'
+          ? 'question'
+          : 'plan',
+    session_id: event.session_id ?? sessionId,
+    approval_status: event.approval_status,
+    messageId,
+  };
+  if (event.type === 'plan_required') return { ...base, plan: event.plan };
+  if (event.type === 'question_required') {
+    return {
+      ...base,
+      ...(event.question !== undefined ? { question: event.question } : {}),
+      ...(event.header !== undefined ? { header: event.header } : {}),
+      ...(event.options !== undefined ? { options: event.options } : {}),
+      ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
+      ...(event.allowCustom !== undefined ? { allowCustom: event.allowCustom } : {}),
+    };
+  }
+  if (event.kind === 'mcp') {
+    return {
+      ...base,
+      tool_name: event.tool_name ?? '',
+      tool_args: event.tool_args ?? {},
+      server_name: event.server_name ?? '',
+      server_id: event.server_id ?? '',
+      remote_name: event.remote_name ?? '',
+      read_only: Boolean(event.read_only),
+      destructive: Boolean(event.destructive),
+    };
+  }
+  return { ...base, command: event.command, cwd: event.cwd };
+}
+
 function createMessage(
   role: ChatMessage['role'],
   content: string,
@@ -556,25 +612,7 @@ function App() {
         );
       } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
-        const base: PendingRequest = {
-          approval_id: event.approval_id,
-          kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
-          session_id: sessionIdValue,
-          approval_status: event.approval_status,
-          messageId: assistantMessageId,
-        };
-        const pending: PendingRequest =
-          event.type === 'approval_required'
-            ? { ...base, command: event.command, cwd: event.cwd }
-            : event.type === 'question_required'
-              ? {
-                  ...base,
-                  ...(event.question !== undefined ? { question: event.question } : {}),
-                  ...(event.header !== undefined ? { header: event.header } : {}),
-                  ...(event.options !== undefined ? { options: event.options } : {}),
-                  ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
-                }
-              : { ...base, plan: event.plan };
+        const pending = pendingRequestFromEvent(event, sessionIdValue, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
         if (event.type === 'plan_required') {
           localParts.push({ type: 'plan', content: event.plan });
@@ -963,19 +1001,7 @@ function App() {
           ),
         );
       } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
-        const pending: PendingRequest = {
-          approval_id: event.approval_id,
-          kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
-          session_id: currentSessionId,
-          approval_status: event.approval_status,
-          messageId: assistantMessageId,
-          ...(event.type === 'approval_required' ? { command: event.command, cwd: event.cwd } : {}),
-          ...(event.type === 'question_required' && event.question !== undefined ? { question: event.question } : {}),
-          ...(event.type === 'question_required' && event.header !== undefined ? { header: event.header } : {}),
-          ...(event.type === 'question_required' && event.options !== undefined ? { options: event.options } : {}),
-          ...(event.type === 'question_required' && event.multiple !== undefined ? { multiple: event.multiple } : {}),
-          ...(event.type === 'plan_required' ? { plan: event.plan } : {}),
-        };
+        const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
         if (event.type === 'plan_required') {
           localParts.push({ type: 'plan', content: event.plan });
@@ -1144,19 +1170,7 @@ function App() {
           ),
         );
       } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
-        const pending: PendingRequest = {
-          approval_id: event.approval_id,
-          kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
-          session_id: currentSessionId,
-          approval_status: event.approval_status,
-          messageId: assistantMessageId,
-          ...(event.type === 'approval_required' ? { command: event.command, cwd: event.cwd } : {}),
-          ...(event.type === 'question_required' && event.question !== undefined ? { question: event.question } : {}),
-          ...(event.type === 'question_required' && event.header !== undefined ? { header: event.header } : {}),
-          ...(event.type === 'question_required' && event.options !== undefined ? { options: event.options } : {}),
-          ...(event.type === 'question_required' && event.multiple !== undefined ? { multiple: event.multiple } : {}),
-          ...(event.type === 'plan_required' ? { plan: event.plan } : {}),
-        };
+        const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
         if (event.type === 'plan_required') {
           localParts.push({ type: 'plan', content: event.plan });
@@ -1303,7 +1317,7 @@ function App() {
       );
       setPendingRequests((current) => [
         ...current.filter((item) => item.approval_id !== request.approval_id),
-        ...chained.map((event): PendingRequest => pendingFromEvent(event, request.session_id, targetMessageId)),
+        ...chained.map((event): PendingRequest => pendingRequestFromEvent(event, request.session_id, targetMessageId)),
       ]);
       if (response.resumed === false && !response.resume_id) {
         setMessages((current) =>
@@ -1400,7 +1414,7 @@ function App() {
           } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
             setPendingRequests((current) => {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
-              return [...current, pendingFromEvent(event, resumeSessionId, targetMessageId)];
+              return [...current, pendingRequestFromEvent(event, resumeSessionId, targetMessageId)];
             });
             resumeParts = settleRunningTools(resumeParts);
             setMessages((current) =>
@@ -1434,31 +1448,6 @@ function App() {
         abortRef.current = null;
       }
     }
-  };
-
-  const pendingFromEvent = (
-    event: Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' } | { type: 'plan_required' }>,
-    sessionId: string,
-    messageId: string,
-  ): PendingRequest => {
-    const base: PendingRequest = {
-      approval_id: event.approval_id,
-      kind: event.type === 'approval_required' ? 'command' : event.type === 'question_required' ? 'question' : 'plan',
-      session_id: event.session_id ?? sessionId,
-      approval_status: event.approval_status,
-      messageId,
-    };
-    return event.type === 'approval_required'
-      ? { ...base, command: event.command, cwd: event.cwd }
-      : event.type === 'question_required'
-        ? {
-            ...base,
-            ...(event.question !== undefined ? { question: event.question } : {}),
-            ...(event.header !== undefined ? { header: event.header } : {}),
-            ...(event.options !== undefined ? { options: event.options } : {}),
-            ...(event.multiple !== undefined ? { multiple: event.multiple } : {}),
-          }
-        : { ...base, plan: event.plan };
   };
 
   const dismissPendingRequest = (request: PendingRequest) => {
