@@ -1,4 +1,4 @@
-import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -315,6 +315,10 @@ export function WorkspaceSidebar({
         <button className={`sidebar-nav-item ${activeView === 'mcp' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('mcp')}>
           <Network size={17} />
           {!collapsed && <span>{t('nav.mcp')}</span>}
+        </button>
+        <button className={`sidebar-nav-item ${activeView === 'skills' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('skills')}>
+          <FileText size={17} />
+          {!collapsed && <span>{t('nav.skills')}</span>}
         </button>
       </nav>
 

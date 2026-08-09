@@ -18,8 +18,8 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from backend.coworker.mcp.mcp import McpManager  # noqa: E402
-from backend.coworker.mcp.mcp_session import McpSessionManager  # noqa: E402
+from coworker.mcp.mcp import McpManager  # noqa: E402
+from coworker.mcp.mcp_session import McpSessionManager  # noqa: E402
 
 # A minimal stdio MCP server. ``annotations`` is what the approval ladder reads,
 # so the fixture exposes one tool of each risk class.

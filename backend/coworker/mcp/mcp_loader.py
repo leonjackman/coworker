@@ -5,7 +5,7 @@ record into a ``langchain-mcp-adapters`` connection dict. Every transport has a
 different accepted keyword set, so the connection must be built per transport --
 passing ``command``/``args`` to a Streamable HTTP session raises ``TypeError``.
 
-Live sessions are owned by :class:`coworker.mcp_session.McpSessionManager`;
+Live sessions are owned by :class:`coworker.mcp.mcp_session.McpSessionManager`;
 this module deliberately contains no caching or process-spawning logic.
 """
 

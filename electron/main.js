@@ -846,3 +846,14 @@ ipcMain.handle('check-all-mcps', () => requestBackend('/mcp/check-all', 'POST', 
 ipcMain.handle('reauthorize-mcp', (event, serverId) =>
   requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}/reauthorize`, 'POST', {}),
 );
+ipcMain.handle('list-skills', (event, enabledOnly) =>
+  requestBackend(`/skills${enabledOnly ? '?enabled_only=true' : ''}`, 'GET'),
+);
+ipcMain.handle('get-skill', (event, name) =>
+  requestBackend(`/skills/${encodeURIComponent(name || '')}`, 'GET'),
+);
+ipcMain.handle('update-skill', (event, name, payload = {}) =>
+  requestBackend(`/skills/${encodeURIComponent(name || '')}`, 'PATCH', payload),
+);
+ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
+ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));

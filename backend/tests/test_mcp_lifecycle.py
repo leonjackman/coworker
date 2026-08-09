@@ -19,8 +19,8 @@ from pathlib import Path
 import pytest
 
 from .conftest import write_server
-from backend.coworker.mcp.mcp import McpManager
-from backend.coworker.mcp.mcp_session import McpSessionManager
+from coworker.mcp.mcp import McpManager
+from coworker.mcp.mcp_session import McpSessionManager
 
 
 def add_stdio_server(mgr: McpManager, tmp_path: Path, name: str) -> str:
@@ -161,8 +161,8 @@ def test_process_exit_emits_no_teardown_noise(tmp_path: Path, mode: str):
             import sys, time
             from pathlib import Path
             sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})
-            from coworker.mcp import McpManager
-            from coworker.mcp_session import McpSessionManager
+            from coworker.mcp.mcp import McpManager
+            from coworker.mcp.mcp_session import McpSessionManager
 
             tmp = Path({str(tmp_path)!r})
             mgr = McpManager(tmp / "probe_{mode.replace('-', '_')}.json")

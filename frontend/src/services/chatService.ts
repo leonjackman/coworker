@@ -30,6 +30,11 @@ import type {
   SessionMessageRecord,
   SessionResponse,
   SessionsListResponse,
+  SkillDetailResponse,
+  SkillsListResponse,
+  SkillUpdateRequest,
+  SkillValidateRequest,
+  SkillValidateResponse,
   StreamEvent,
   ToolAuditResponse,
   WorkspaceCommandRequest,
@@ -134,6 +139,11 @@ export interface ChatService {
   checkMcp: (serverId: string) => Promise<McpServerEntry>;
   checkAllMcps: () => Promise<McpServerListPayload>;
   reauthorizeMcp: (serverId: string) => Promise<McpServerEntry>;
+  listSkills: (enabledOnly?: boolean) => Promise<SkillsListResponse>;
+  getSkill: (name: string) => Promise<SkillDetailResponse>;
+  updateSkill: (name: string, request: SkillUpdateRequest) => Promise<SkillDetailResponse>;
+  scanSkills: () => Promise<SkillsListResponse>;
+  validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
 }
 
 class ElectronChatService implements ChatService {
@@ -279,6 +289,31 @@ class ElectronChatService implements ChatService {
     const response = await window.electronAPI.reauthorizeMcp(serverId);
     if (!response.server) throw new Error(response.error || 'Reauthorization failed');
     return response.server;
+  }
+
+  async listSkills(enabledOnly = false): Promise<SkillsListResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listSkills(enabledOnly);
+  }
+
+  async getSkill(name: string): Promise<SkillDetailResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getSkill(name);
+  }
+
+  async updateSkill(name: string, request: SkillUpdateRequest): Promise<SkillDetailResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.updateSkill(name, request);
+  }
+
+  async scanSkills(): Promise<SkillsListResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.scanSkills();
+  }
+
+  async validateSkill(request: SkillValidateRequest): Promise<SkillValidateResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.validateSkill(request);
   }
 
   async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
@@ -979,6 +1014,39 @@ class HttpChatService implements ChatService {
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) },
     );
     return response.server;
+  }
+
+  async listSkills(enabledOnly = false): Promise<SkillsListResponse> {
+    const query = enabledOnly ? '?enabled_only=true' : '';
+    return this.request<SkillsListResponse>(`/skills${query}`);
+  }
+
+  async getSkill(name: string): Promise<SkillDetailResponse> {
+    return this.request<SkillDetailResponse>(`/skills/${encodeURIComponent(name)}`);
+  }
+
+  async updateSkill(name: string, request: SkillUpdateRequest): Promise<SkillDetailResponse> {
+    return this.request<SkillDetailResponse>(`/skills/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async scanSkills(): Promise<SkillsListResponse> {
+    return this.request<SkillsListResponse>('/skills/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  }
+
+  async validateSkill(request: SkillValidateRequest): Promise<SkillValidateResponse> {
+    return this.request<SkillValidateResponse>('/skills/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

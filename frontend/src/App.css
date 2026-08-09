@@ -6091,3 +6091,148 @@ body.bottom-panel-resizing {
     width: 140px;
   }
 }
+
+/* ===== Skills panel (Agent Skills) ===== */
+.skills-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.skills-header h2 {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0;
+}
+
+.mcp-form-message {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  margin-bottom: 12px;
+  background: var(--color-background-secondary);
+  color: var(--color-text-secondary);
+}
+
+.mcp-form-message--error {
+  background: var(--destructive-bg, rgba(220, 38, 38, 0.12));
+  color: var(--destructive-foreground, #dc2626);
+}
+
+.mcp-diagnostics {
+  border: 1px solid var(--muted-border, var(--material-border));
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.mcp-diagnostics__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--color-text-primary);
+}
+
+.mcp-diagnostics__item {
+  padding: 4px 0;
+  color: var(--color-text-secondary);
+}
+
+.mcp-diagnostics__item--invalid strong {
+  color: var(--destructive-foreground, #dc2626);
+}
+
+.mcp-diagnostics__item--collision strong {
+  color: #d29922;
+}
+
+.mcp-diagnostics__message {
+  color: var(--color-text-tertiary);
+}
+
+.mcp-card__detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--muted-border, var(--material-border));
+  font-size: 12px;
+}
+
+.mcp-detail-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-tertiary);
+  padding: 4px 0;
+}
+
+.skill-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skill-detail__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.skill-detail__label {
+  flex: 0 0 auto;
+  min-width: 44px;
+  color: var(--color-text-tertiary);
+}
+
+.skill-detail__row code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  word-break: break-all;
+}
+
+.skill-detail__path {
+  max-width: 480px;
+}
+
+.skill-detail__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill-detail__pre {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--color-background-secondary);
+  border: 1px solid var(--muted-border, var(--material-border));
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--color-text-secondary);
+}
+
+.skill-validate-result {
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.skill-validate-result--ok {
+  color: var(--success-foreground, #16a34a);
+  background: rgba(34, 197, 94, 0.10);
+}
+
+.skill-validate-result--bad {
+  color: var(--destructive-foreground, #dc2626);
+  background: var(--destructive-bg, rgba(220, 38, 38, 0.12));
+}

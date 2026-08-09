@@ -1,0 +1,249 @@
+"""Skill entry model, frontmatter parsing, and validation.
+
+A skill is a directory containing a ``SKILL.md`` file. The YAML frontmatter
+declares metadata (only ``name`` and ``description`` are required); the rest of
+the file is the instruction body loaded on demand by the agent.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# Agent Skills standard limits.
+MAX_NAME_LENGTH = 64
+MAX_DESCRIPTION_LENGTH = 1024
+MAX_SKILL_FILE_BYTES = 256 * 1024  # 256 KiB
+
+# name: lowercase alphanumeric with single hyphen separators.
+_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+# Known frontmatter keys (unknown keys are ignored).
+_KNOWN_KEYS = frozenset(
+    {
+        "name",
+        "description",
+        "version",
+        "license",
+        "author",
+        "platforms",
+        "metadata",
+        "compatibility",
+        "disable-model-invocation",
+        "user-invocable",
+        "allowed-tools",
+        "disallowed-tools",
+        "model",
+        "effort",
+        "context",
+        "paths",
+        "invocation",
+        "when_to_use",
+        "prerequisites",
+        "required_environment_variables",
+        "setup",
+    }
+)
+
+
+@dataclass(frozen=True)
+class SkillEntry:
+    """A discovered skill (catalog view; body loaded on demand)."""
+
+    name: str
+    description: str
+    file_path: Path
+    base_dir: Path
+    source: str  # "user" | "project" | "coworker-user" | "coworker-project"
+    version: str = ""
+    disable_model_invocation: bool = False
+    enabled: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "file_path": str(self.file_path),
+            "base_dir": str(self.base_dir),
+            "source": self.source,
+            "version": self.version,
+            "disable_model_invocation": self.disable_model_invocation,
+            "enabled": self.enabled,
+        }
+
+
+@dataclass(frozen=True)
+class SkillDiagnostic:
+    """A validation problem found while scanning (invalid / collision)."""
+
+    type: str  # "invalid" | "collision"
+    name: str
+    path: Path | None
+    message: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "name": self.name,
+            "path": str(self.path) if self.path is not None else None,
+            "message": self.message,
+        }
+
+
+def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+    """Parse YAML frontmatter from markdown content.
+
+    Returns ``(frontmatter, body)``; ``({}, content)`` when there is no valid
+    frontmatter block. Malformed YAML is treated as "no frontmatter" so a
+    single broken skill never breaks the whole scan.
+    """
+    if not content.startswith("---"):
+        return {}, content
+    end = content.find("\n---", 3)
+    if end == -1:
+        return {}, content
+    raw = content[3:end].strip()
+    body = content[end + 4 :].lstrip("\n")
+    if not raw:
+        return {}, body
+    try:
+        import yaml
+    except ImportError:  # pragma: no cover - PyYAML is a project dependency
+        return {}, body
+    try:
+        data = yaml.safe_load(raw)
+    except Exception:
+        return {}, body
+    return (data if isinstance(data, dict) else {}), body
+
+
+def _frontmatter_str(frontmatter: dict[str, Any], key: str) -> str:
+    value = frontmatter.get(key)
+    return value if isinstance(value, str) else ""
+
+
+def validate_name(name: str) -> list[str]:
+    """Return validation errors for a skill name (empty when valid)."""
+    errors: list[str] = []
+    if not name:
+        errors.append("name is required")
+        return errors
+    if len(name) > MAX_NAME_LENGTH:
+        errors.append(f"name exceeds {MAX_NAME_LENGTH} characters")
+    if not _NAME_RE.match(name):
+        errors.append("name must be lowercase alphanumeric with single hyphen separators")
+    return errors
+
+
+def validate_description(description: str) -> list[str]:
+    """Return validation errors for a skill description (empty when valid)."""
+    errors: list[str] = []
+    if not description or not description.strip():
+        errors.append("description is required (the agent uses it to decide when to load the skill)")
+    elif len(description) > MAX_DESCRIPTION_LENGTH:
+        errors.append(f"description exceeds {MAX_DESCRIPTION_LENGTH} characters")
+    return errors
+
+
+def content_version(content: str) -> str:
+    """Deterministic version marker for the SKILL.md body (prompt cache invalidation)."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+
+
+def load_skill_from_file(
+    skill_file: Path,
+    source: str,
+    *,
+    max_bytes: int = MAX_SKILL_FILE_BYTES,
+) -> tuple[SkillEntry | None, list[SkillDiagnostic]]:
+    """Parse and validate a single ``SKILL.md`` file into a skill entry."""
+    diagnostics: list[SkillDiagnostic] = []
+    try:
+        stat = skill_file.stat()
+        if stat.st_size > max_bytes:
+            diagnostics.append(
+                SkillDiagnostic(
+                    "invalid",
+                    skill_file.parent.name,
+                    skill_file,
+                    f"SKILL.md exceeds {max_bytes} bytes",
+                )
+            )
+            return None, diagnostics
+        content = skill_file.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        diagnostics.append(
+            SkillDiagnostic("invalid", skill_file.parent.name, skill_file, f"unreadable: {exc}")
+        )
+        return None, diagnostics
+
+    frontmatter, _body = parse_frontmatter(content)
+    fallback_name = skill_file.parent.name.strip()
+    name = _frontmatter_str(frontmatter, "name").strip() or fallback_name
+    description = _frontmatter_str(frontmatter, "description").strip()
+
+    problems = validate_name(name) + validate_description(description)
+    if problems:
+        diagnostics.append(
+            SkillDiagnostic("invalid", name, skill_file, "; ".join(problems))
+        )
+        return None, diagnostics
+
+    disable_model_invocation = bool(frontmatter.get("disable-model-invocation", False))
+    version_raw = _frontmatter_str(frontmatter, "version").strip()
+    version = version_raw or content_version(content)
+
+    return (
+        SkillEntry(
+            name=name,
+            description=description,
+            file_path=skill_file,
+            base_dir=skill_file.parent,
+            source=source,
+            version=version,
+            disable_model_invocation=disable_model_invocation,
+        ),
+        diagnostics,
+    )
+
+
+def format_skills_prompt(skills: list[SkillEntry]) -> str:
+    """Render the Agent Skills catalog block injected into the system prompt.
+
+    Format follows the agentskills.io integration template (byte-compatible with
+    openclaw/pi). Only the catalog is always in context; bodies load on demand.
+    """
+    if not skills:
+        return ""
+    lines = [
+        "\n\nThe following skills provide specialized instructions for specific tasks.",
+        "Use the read_file tool to load a skill's file when the task matches its description.",
+        "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+        "When a skill file references a relative path, resolve it against the skill directory "
+        "(parent of SKILL.md) and use that absolute path in tool calls.",
+        "",
+        "<available_skills>",
+    ]
+    for skill in skills:
+        lines.append("  <skill>")
+        lines.append(f"    <name>{_escape_xml(skill.name)}</name>")
+        lines.append(f"    <description>{_escape_xml(skill.description)}</description>")
+        lines.append(f"    <location>{_escape_xml(str(skill.file_path))}</location>")
+        if skill.version:
+            lines.append(f"    <version>{_escape_xml(skill.version)}</version>")
+        lines.append("  </skill>")
+    lines.append("</available_skills>")
+    return "\n".join(lines)
+
+
+def _escape_xml(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&apos;")
+    )

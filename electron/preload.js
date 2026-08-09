@@ -109,4 +109,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkMcp: (serverId) => ipcRenderer.invoke('check-mcp', serverId),
   checkAllMcps: () => ipcRenderer.invoke('check-all-mcps'),
   reauthorizeMcp: (serverId) => ipcRenderer.invoke('reauthorize-mcp', serverId),
+  listSkills: (enabledOnly) => ipcRenderer.invoke('list-skills', enabledOnly),
+  getSkill: (name) => ipcRenderer.invoke('get-skill', name),
+  updateSkill: (name, request) => ipcRenderer.invoke('update-skill', name, request),
+  scanSkills: () => ipcRenderer.invoke('scan-skills'),
+  validateSkill: (request) => ipcRenderer.invoke('validate-skill', request),
 });

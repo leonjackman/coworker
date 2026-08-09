@@ -5,6 +5,7 @@ import { PendingDocks } from './components/PendingDocks';
 import { GoalCard } from './components/GoalCard';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { MCPPanel } from './components/MCPPanel';
+import { SkillsPanel } from './components/SkillsPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
@@ -19,7 +20,7 @@ import { RollbackDialog } from './components/RollbackDialog';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -197,6 +198,8 @@ function App() {
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
   const [mcpTemplates, setMcpTemplates] = useState<McpTemplateEntry[]>([]);
+  const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
+  const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnostic[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
   const requestSeqRef = useRef(0);
@@ -1755,7 +1758,39 @@ function App() {
       setActiveView('settings');
       return;
     }
+    if (command === '/skills') {
+      setActiveView('skills');
+      return;
+    }
+    if (command === '/skill') {
+      void handleSkillSlash(message);
+      return;
+    }
     setMessages((current) => [...current, createMessage('assistant', t('chat.command_help_text'), { status: 'done' })]);
+  };
+
+  /** /skill <name> [free-form prompt] -- load the skill body and send it with the prompt. */
+  const handleSkillSlash = async (message: string) => {
+    const rest = message.slice('/skill'.length).trim();
+    const skillName = rest.split(/\s+/)[0] ?? '';
+    const prompt = rest.slice(skillName.length).trim();
+    if (!skillName) {
+      setMessages((current) => [...current, createMessage('assistant', t('skills.slash_usage'), { status: 'done' })]);
+      return;
+    }
+    try {
+      const response = await chatService.getSkill(skillName);
+      const skill = response.skill;
+      if (!skill?.body || !skill.enabled) {
+        setMessages((current) => [...current, createMessage('assistant', t('skills.slash_not_found').replace('{name}', skillName), { status: 'done' })]);
+        return;
+      }
+      const injected = `${t('skills.slash_loaded').replace('{name}', skillName)}\n\n${skill.body}\n\n---\n${prompt}`;
+      setInput('');
+      void sendMessage({ message: injected });
+    } catch (error) {
+      setMessages((current) => [...current, createMessage('assistant', t('skills.slash_not_found').replace('{name}', skillName), { status: 'done' })]);
+    }
   };
 
   const pauseGoal = async () => {
@@ -2148,6 +2183,13 @@ function App() {
                 <ProvidersPanel onProviderChange={refreshProviders} />
               ) : activeView === 'mcp' ? (
                 <MCPPanel servers={mcpServers} templates={mcpTemplates} setServers={setMcpServers} onMcpChange={refreshProviders} />
+              ) : activeView === 'skills' ? (
+                <SkillsPanel
+                  skills={skillEntries}
+                  diagnostics={skillDiagnostics}
+                  setSkills={setSkillEntries}
+                  setDiagnostics={setSkillDiagnostics}
+                />
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}

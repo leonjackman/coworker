@@ -2,7 +2,7 @@ export type AgentMode = 'single';
 export type Language = 'zh' | 'en';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
-export type AppView = 'chat' | 'providers' | 'settings' | 'mcp';
+export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills';
 
 export interface McpToolEntry {
   name: string;
@@ -667,4 +667,54 @@ export interface GoalStatusResponse {
   goal: GoalState;
   goal_stream_id?: string;
   goal_interrupted?: boolean;
+}
+
+// -- Skills -----------------------------------------------------------------
+
+export interface SkillEntry {
+  name: string;
+  description: string;
+  file_path: string;
+  base_dir: string;
+  source: string;
+  version: string;
+  disable_model_invocation: boolean;
+  enabled: boolean;
+  body?: string;
+}
+
+export interface SkillDiagnostic {
+  type: string;
+  name: string;
+  path: string | null;
+  message: string;
+}
+
+export interface SkillsListResponse {
+  status: string;
+  skills: SkillEntry[];
+  diagnostics: SkillDiagnostic[];
+  count: number;
+}
+
+export interface SkillDetailResponse {
+  status: string;
+  skill: SkillEntry;
+}
+
+export interface SkillUpdateRequest {
+  enabled?: boolean;
+  permission?: string;
+}
+
+export interface SkillValidateRequest {
+  path: string;
+  name?: string;
+}
+
+export interface SkillValidateResponse {
+  status: string;
+  valid: boolean;
+  skill: SkillEntry | null;
+  diagnostics: SkillDiagnostic[];
 }

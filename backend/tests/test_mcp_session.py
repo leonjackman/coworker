@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.coworker.mcp.mcp_session import (
+from coworker.mcp.mcp_session import (
     MAX_TOOL_NAME_LEN,
     McpSessionManager,
     mcp_approval_digest,

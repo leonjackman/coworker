@@ -35,9 +35,11 @@ from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
-from backend.coworker.mcp.mcp import McpManager
-from backend.coworker.mcp.mcp_session import McpSessionManager
+from coworker.mcp.mcp import McpManager
+from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
+from coworker.skills.skill_manager import SKILLS_CONFIG_FILENAME, SkillManager
+from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
@@ -61,11 +63,12 @@ provider_manager = ProviderManager(settings.data_dir / "providers.json")
 config_controller = AppConfigController(settings, provider_manager)
 mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
 mcp_sessions = McpSessionManager(settings.data_dir, mcp_manager)
+skill_manager = SkillManager(settings.data_dir, settings.workspace_dir)
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
-agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions)
+agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager)
 
 # Persistent MCP sessions: start the background loop, pre-warm connections so
 # the first chat is instant, and tear sessions down on exit.
@@ -282,13 +285,37 @@ class McpTestPayload(BaseModel):
     server_id: str = ""
 
 
+class SkillUpdatePayload(BaseModel):
+    enabled: bool | None = None
+    permission: str | None = None
+
+
+class SkillValidatePayload(BaseModel):
+    path: str = ""
+    name: str = ""
+
+
 class CommandApprovalAction(BaseModel):
     approval_id: str
-
-class ApprovalDecisionPayload(BaseModel):
     type: str
     message: str = ""
     autonomy: Optional[str] = None
+
+
+class ApprovalDecisionPayload(BaseModel):
+    approval_id: str
+    type: str = ""
+    decision: str = ""
+    reason: str = ""
+    provider_id: str = ""
+    model: str = ""
+    workspace: str = ""
+    message: str = ""
+    session_id: str = ""
+    always_allow: bool = False
+    respond_text: str = ""
+    plan_text: str = ""
+
 
 class CommandApprovalResolve(BaseModel):
     approval_id: str
@@ -1668,9 +1695,9 @@ async def fetch_provider_models(request: ProviderFetchModelsPayload):
 
 # ─────────────────────────── MCP ──────────────────────────
 
-from backend.coworker.mcp.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
-from backend.coworker.mcp.mcp_discover import TEMPLATES
-from backend.coworker.mcp.mcp_test import test_mcp_connection_sync
+from coworker.mcp.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
+from coworker.mcp.mcp_discover import TEMPLATES
+from coworker.mcp.mcp_test import test_mcp_connection_sync
 
 MCP_CHECK_TIMEOUT_SECONDS = 25.0
 
@@ -1989,6 +2016,91 @@ async def ws_terminal(websocket: WebSocket):
                 os.close(master_fd)
             except OSError:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# Skills API
+# ---------------------------------------------------------------------------
+
+
+@app.get("/skills")
+def list_skills(enabled_only: bool = False):
+    """List discovered skills (catalog) with scan diagnostics."""
+    result = skill_manager.refresh()
+    skills = [s.to_dict() for s in result.skills if not enabled_only or s.enabled]
+    return {
+        "status": "ok",
+        "skills": skills,
+        "diagnostics": [d.to_dict() for d in result.diagnostics],
+        "count": len(skills),
+    }
+
+
+@app.get("/skills/{skill_name}")
+def get_skill(skill_name: str):
+    """Return one skill's catalog entry plus its body (progressive disclosure)."""
+    skill = skill_manager.get(skill_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    body = skill_manager.read_body(skill_name)
+    payload = skill.to_dict()
+    if body is not None:
+        payload["body"] = body[0]
+        payload["base_dir"] = body[1]
+    return {"status": "ok", "skill": payload}
+
+
+@app.patch("/skills/{skill_name}")
+def update_skill(skill_name: str, request: SkillUpdatePayload):
+    """Toggle a skill's enabled state or permission override."""
+    skill = skill_manager.get(skill_name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    try:
+        if request.enabled is not None:
+            skill = skill_manager.set_enabled(skill_name, request.enabled)
+        if request.permission is not None:
+            skill = skill_manager.set_permission(skill_name, request.permission)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "skill": skill.to_dict() if skill else None}
+
+
+@app.post("/skills/scan")
+def scan_skills():
+    """Force a re-scan of all skill roots."""
+    result = skill_manager.refresh()
+    return {
+        "status": "ok",
+        "skills": [s.to_dict() for s in result.skills],
+        "diagnostics": [d.to_dict() for d in result.diagnostics],
+        "count": len(result.skills),
+    }
+
+
+@app.post("/skills/validate")
+def validate_skill(request: SkillValidatePayload):
+    """Validate a single skill directory/file without loading it into the catalog."""
+    from coworker.skills.skill_discovery import SKILL_FILE, SkillScanner
+    from coworker.skills.skills import load_skill_from_file
+
+    target = request.path.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="path is required")
+    candidate = Path(target).expanduser().resolve()
+    if not candidate.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {target}")
+    if candidate.is_dir():
+        candidate = candidate / SKILL_FILE
+        if not candidate.exists():
+            raise HTTPException(status_code=404, detail=f"No {SKILL_FILE} in {target}")
+    entry, diagnostics = load_skill_from_file(candidate, "validate")
+    return {
+        "status": "ok",
+        "valid": entry is not None,
+        "skill": entry.to_dict() if entry else None,
+        "diagnostics": [d.to_dict() for d in diagnostics],
+    }
 
 
 if __name__ == "__main__":
