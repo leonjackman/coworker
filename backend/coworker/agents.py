@@ -1486,6 +1486,7 @@ def build_coworker_agent_graph(
     checkpointer: Any | None = None,
     approval_store: CommandApprovalStore | None = None,
     goal_mode: bool = False,
+    data_dir: Path | None = None,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -1523,7 +1524,7 @@ def build_coworker_agent_graph(
     from .mcp_middleware import McpToolMiddleware
 
     _mcp_manager = McpManager(
-        Path(settings.data_dir) / "mcp_servers.json",
+        Path(data_dir if data_dir is not None else Path.cwd()) / "mcp_servers.json",
     )
 
     middleware.append(McpToolMiddleware(_mcp_manager))
@@ -1577,7 +1578,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1590,6 +1591,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.change_store = change_store
         self.session_store = session_store
         self.referenced_sessions = set(referenced_sessions or set())
+        self.data_dir = data_dir
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1620,6 +1622,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             autonomy=autonomy,
             checkpointer=self.checkpointer,
             approval_store=self.approval_store,
+            data_dir=self.data_dir,
         )
         try:
             result = graph.invoke(
@@ -1657,7 +1660,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1670,6 +1673,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.change_store = change_store
         self.session_store = session_store
         self.referenced_sessions = set(referenced_sessions or set())
+        self.data_dir = data_dir
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1729,7 +1733,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
-                goal_mode=goal_mode,
+                goal_mode=goal_mode, data_dir=self.data_dir,
             )
 
             inputs = {
@@ -2213,6 +2217,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
+                data_dir=self.data_dir,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
@@ -2351,10 +2356,10 @@ class AgentRuntimeRegistry:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
@@ -2377,7 +2382,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:

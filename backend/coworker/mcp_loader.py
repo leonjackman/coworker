@@ -241,7 +241,9 @@ def load_mcp_tools_sync(
         return []
 
     # Attribute each tool to its server via the name prefix, drop disabled
-    # tools, and restore the bare tool name for the model.
+    # tools, and restore the bare tool name for the model. The server id is
+    # also recorded in tool metadata so the middleware can tell the model which
+    # MCP service each tool belongs to.
     filtered: list[Any] = []
     for tool in tools:
         name = getattr(tool, "name", None)
@@ -255,6 +257,13 @@ def load_mcp_tools_sync(
             try:
                 tool.name = bare
             except Exception:  # noqa: BLE001 - cosmetic rename; keep prefixed name
+                pass
+            try:
+                tool.metadata = {
+                    **(getattr(tool, "metadata", None) or {}),
+                    "coworker_server": server_id,
+                }
+            except Exception:  # noqa: BLE001 - attribution is best-effort
                 pass
         filtered.append(tool)
 

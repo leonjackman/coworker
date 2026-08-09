@@ -22,24 +22,17 @@ interface CatalogCategory {
   label: string;
 }
 
-const CATEGORIES: CatalogCategory[] = [
-  { value: 'all', label: t('mcp.cat_all') },
-  { value: 'code', label: t('mcp.cat_code') },
-  { value: 'data', label: t('mcp.cat_data') },
-  { value: 'web', label: t('mcp.cat_web') },
-  { value: 'devops', label: t('mcp.cat_devops') },
-  { value: 'productivity', label: t('mcp.cat_productivity') },
-  { value: 'basic', label: t('mcp.cat_basic') },
-];
+const CATEGORY_VALUES = ['all', 'code', 'data', 'web', 'devops', 'productivity', 'basic'] as const;
 
-const CATEGORY_LABELS: Record<string, string> = {
-  code: t('mcp.cat_code'),
-  data: t('mcp.cat_data'),
-  web: t('mcp.cat_web'),
-  devops: t('mcp.cat_devops'),
-  productivity: t('mcp.cat_productivity'),
-  basic: t('mcp.cat_basic'),
-};
+// Labels are resolved at render time (not module load) so they follow the
+// active language; `CATEGORY_VALUES` keeps the canonical order stable.
+function catalogCategories(): CatalogCategory[] {
+  return CATEGORY_VALUES.map((value) => ({ value, label: t(`mcp.cat_${value}`) }));
+}
+
+function categoryLabel(value: string): string {
+  return tOrDefault(`mcp.cat_${value}`, value);
+}
 
 // ── SVG icon map for MCP templates (real service logos) ──────────────────────
 
@@ -600,7 +593,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
 
           {/* Category tabs */}
           <div className="mcp-catalog-categories">
-            {CATEGORIES.map((cat) => (
+            {catalogCategories().map((cat) => (
               <button
                 key={cat.value}
                 className={`mcp-catalog-tab ${catalogCategory === cat.value ? 'mcp-catalog-tab--active' : ''}`}
@@ -626,7 +619,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                 <div className="mcp-catalog-card__desc">{templateDescription(template)}</div>
                 <div className="mcp-catalog-card__tags">
                   <Badge className="mcp-transport-badge">{template.transport}</Badge>
-                  {template.category && <Badge className="mcp-category-badge">{CATEGORY_LABELS[template.category] || template.category}</Badge>}
+                  {template.category && <Badge className="mcp-category-badge">{categoryLabel(template.category)}</Badge>}
                 </div>
               </div>
             ))}
