@@ -111,8 +111,11 @@ type FormState = {
   transport: string;
   command: string;
   args: string;
+  cwd: string;
+  timeout: string;
   url: string;
   envPairs: { key: string; value: string }[];
+  headersPairs: { key: string; value: string }[];
 };
 
 const emptyForm = (): FormState => ({
@@ -121,9 +124,25 @@ const emptyForm = (): FormState => ({
   transport: 'stdio',
   command: '',
   args: '',
+  cwd: '',
+  timeout: '',
   url: '',
   envPairs: [],
+  headersPairs: [],
 });
+
+function mapToPairs(values: Record<string, string>): { key: string; value: string }[] {
+  return Object.entries(values).map(([key, value]) => ({ key, value }));
+}
+
+function pairsToMap(pairs: { key: string; value: string }[]): Record<string, string> {
+  return pairs
+    .filter((p) => p.key.trim())
+    .reduce<Record<string, string>>((acc, p) => {
+      acc[p.key.trim()] = p.value;
+      return acc;
+    }, {});
+}
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -143,6 +162,8 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
   type TestResultType = { ok: boolean; latency_ms: number; tool_count?: number | undefined; error?: string };
   const [testResult, setTestResult] = useState<TestResultType | null>(null);
   const [checking, setChecking] = useState(false);
+  const [checkProgress, setCheckProgress] = useState<{ done: number; total: number } | null>(null);
+  const [reauthorizing, setReauthorizing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [search, setSearch] = useState('');
 
@@ -187,10 +208,8 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     setMessage(null);
     setTestResult(null);
 
-    const env = form.envPairs.filter((p) => p.key.trim()).reduce<Record<string, string>>((acc, p) => {
-      acc[p.key.trim()] = p.value;
-      return acc;
-    }, {});
+    const env = pairsToMap(form.envPairs);
+    const headers = pairsToMap(form.headersPairs);
 
     const payload: Record<string, unknown> = {
       name: form.name.trim(),
@@ -199,10 +218,18 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     if (form.transport === 'stdio') {
       payload.command = form.command;
       payload.args = form.args;
+      payload.cwd = form.cwd;
     } else {
       payload.url = form.url;
     }
-    if (Object.keys(env).length) payload.env = env;
+    if (form.timeout.trim()) {
+      const seconds = Number(form.timeout);
+      if (Number.isFinite(seconds) && seconds > 0) payload.timeout = seconds;
+    }
+    // Always send env/headers (even empty) so omitted keys are cleared, and a
+    // SECRET_PLACEHOLDER value preserves the stored secret on the backend.
+    payload.env = env;
+    payload.headers = headers;
 
     try {
       const saved = form.id
@@ -273,10 +300,10 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
   }
 
   async function handleTrustToggle(server: McpServerEntry, trusted: boolean) {
-    const optimistic = { ...server, trusted };
+    const optimistic = { ...server, trusted, disabled_tools: trusted ? [] : server.disabled_tools };
     setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === server.id ? optimistic : s)));
     try {
-      await chatService.updateMcp(server.id, { trusted });
+      await chatService.updateMcp(server.id, { trusted, disabled_tools: trusted ? [] : server.disabled_tools });
       onMcpChange?.();
     } catch (error) {
       setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === server.id ? server : s)));
@@ -287,15 +314,60 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
   async function handleCheckAll() {
     setChecking(true);
     setMessage(null);
+    const targets = servers.filter((s) => s.enabled && s.status !== 'disabled');
+    if (targets.length === 0) {
+      setChecking(false);
+      return;
+    }
+    setCheckProgress({ done: 0, total: targets.length });
+    let done = 0;
     try {
-      const res = await chatService.checkAllMcps();
-      setServers(res.servers);
+      await Promise.all(
+        targets.map(async (server) => {
+          try {
+            const res = await chatService.checkMcp(server.id);
+            setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === server.id ? res : s)));
+          } catch {
+            /* best-effort: keep the stale status */
+          } finally {
+            done += 1;
+            setCheckProgress({ done, total: targets.length });
+          }
+        }),
+      );
       onMcpChange?.();
-    } catch (error) {
-      setMessage(translateError(error));
     } finally {
       setChecking(false);
+      setCheckProgress(null);
     }
+  }
+
+  async function handleReauthorize(serverId: string) {
+    setReauthorizing(true);
+    setMessage(null);
+    try {
+      const server = await chatService.reauthorizeMcp(serverId);
+      setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === serverId ? server : s)));
+      onMcpChange?.();
+      setTestResult(null);
+    } catch (error) {
+      setMessage(translateError(error) || t('mcp.reauthorize_failed'));
+    } finally {
+      setReauthorizing(false);
+    }
+  }
+
+  function relativeTime(iso: string | undefined | null): string {
+    if (!iso) return '';
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return '';
+    const seconds = Math.floor((Date.now() - then) / 1000);
+    if (seconds < 60) return t('mcp.last_checked_now');
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return t('mcp.last_checked_min').replace('{n}', String(minutes));
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return t('mcp.last_checked_hour').replace('{n}', String(hours));
+    return t('mcp.last_checked_day').replace('{n}', String(Math.floor(hours / 24)));
   }
 
   function formatStatus(status: string): string {
@@ -323,7 +395,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
   }
 
   function isRemoteTransport(f: FormState) {
-    return f.transport === 'http' || f.transport === 'sse';
+    return f.transport === 'http' || f.transport === 'sse' || f.transport === 'websocket';
   }
 
   function startEdit(server: McpServerEntry) {
@@ -333,8 +405,11 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
       transport: server.transport,
       command: server.command,
       args: server.args,
+      cwd: server.cwd,
+      timeout: server.timeout != null ? String(server.timeout) : '',
       url: server.url,
-      envPairs: Object.entries(server.env).map(([key, value]) => ({ key, value })),
+      envPairs: mapToPairs(server.env),
+      headersPairs: mapToPairs(server.headers),
     });
   }
 
@@ -346,8 +421,11 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
         transport: template.transport,
         command: template.command,
         args: template.args,
+        cwd: '',
+        timeout: '',
         url: template.url,
-        envPairs: Object.entries(template.env ?? {}).map(([k, v]) => ({ key: k, value: v })),
+        envPairs: mapToPairs(template.env ?? {}),
+        headersPairs: mapToPairs(template.headers ?? {}),
       });
     } else {
       setForm(emptyForm());
@@ -366,12 +444,20 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     setTesting(true);
     setTestResult(null);
     try {
+      const env = pairsToMap(form.envPairs);
+      const headers = pairsToMap(form.headersPairs);
+      const timeout = form.timeout.trim() ? Number(form.timeout) : undefined;
       const result = await chatService.testMcp({
         name: form.name,
         transport: form.transport,
         command: form.transport === 'stdio' ? form.command : undefined,
         args: form.transport === 'stdio' ? form.args : undefined,
+        cwd: form.transport === 'stdio' ? form.cwd : undefined,
+        timeout,
         url: isRemoteTransport(form) ? form.url : undefined,
+        env,
+        headers,
+        server_id: form.id ?? undefined,
       } as never);
       setTestResult({
         ok: result.ok,
@@ -404,12 +490,34 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     setForm((f) => ({ ...f, envPairs: [...f.envPairs, { key: '', value: '' }] }));
   }
 
+  function updateHeaderPair(index: number, field: 'key' | 'value', value: string) {
+    setForm((f: FormState) => {
+      const pairs = [...f.headersPairs];
+      const current = pairs[index];
+      if (current) {
+        pairs[index] = { ...current, [field]: value };
+      }
+      return { ...f, headersPairs: pairs };
+    });
+  }
+
+  function removeHeaderPair(index: number) {
+    setForm((f) => ({ ...f, headersPairs: f.headersPairs.filter((_, i) => i !== index) }));
+  }
+
+  function addHeaderPair() {
+    setForm((f) => ({ ...f, headersPairs: [...f.headersPairs, { key: '', value: '' }] }));
+  }
+
   // ── Filtered servers list ──
 
   const filteredServers = useMemo(() => {
-    if (!search) return servers;
-    const q = search.toLowerCase();
-    return servers.filter((s) => s.name.toLowerCase().includes(q) || s.transport.toLowerCase().includes(q));
+    let list = servers;
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter((s) => s.name.toLowerCase().includes(q) || s.transport.toLowerCase().includes(q));
+    }
+    return [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   }, [servers, search]);
 
   // ── Catalog filtered ──
@@ -481,7 +589,9 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
               </div>
               <Button variant="ghost" onClick={handleCheckAll} disabled={checking} className="mcp-check-all-btn">
                 {checking ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />}
-                {t('mcp.check_connection')}
+                {checkProgress
+                  ? t('mcp.checking_progress').replace('{done}', String(checkProgress.done)).replace('{total}', String(checkProgress.total))
+                  : t('mcp.check_connection')}
               </Button>
             </div>
             <Button variant="primary" onClick={() => startAdd()}>
@@ -541,6 +651,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                           return tpl ? templateDescription(tpl) : server.name;
                         })()} · {t('mcp.tool_count').replace('{count}', String(server.tool_count || 0))}
                         {server.error_message && <span className="mcp-error-msg"> · {server.error_message}</span>}
+                        {relativeTime(server.last_checked_at) && <span className="mcp-last-checked"> · {relativeTime(server.last_checked_at)}</span>}
                       </span>
                       <button
                         className="mcp-card-edit-btn"
@@ -675,6 +786,12 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                     : `${t('mcp.test_failed')}: ${testResult.error || ''}`}
                 </span>
               )}
+              {editingServer?.status === 'needs_auth' && (
+                <Button variant="secondary" onClick={() => void handleReauthorize(form.id!)} disabled={reauthorizing} className="mcp-reauth-btn">
+                  {reauthorizing ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
+                  {t('mcp.reauthorize')}
+                </Button>
+              )}
             </div>
           )}
 
@@ -698,7 +815,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                 type="button"
                 className={`mcp-transport-pill ${form.transport === 'stdio' ? 'mcp-transport-pill--active' : ''}`}
                 aria-pressed={form.transport === 'stdio'}
-                onClick={() => setForm({ ...form, transport: 'stdio', command: '', args: '' })}
+                onClick={() => form.transport !== 'stdio' && setForm({ ...form, transport: 'stdio', command: '', args: '' })}
                 disabled={saving}
               >
                 {t('mcp.transport_stdio')}
@@ -707,7 +824,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                 type="button"
                 className={`mcp-transport-pill ${form.transport === 'http' ? 'mcp-transport-pill--active' : ''}`}
                 aria-pressed={form.transport === 'http'}
-                onClick={() => setForm({ ...form, transport: 'http', url: '' })}
+                onClick={() => form.transport !== 'http' && setForm({ ...form, transport: 'http', url: '' })}
                 disabled={saving}
               >
                 {t('mcp.transport_http')}
@@ -716,10 +833,19 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                 type="button"
                 className={`mcp-transport-pill ${form.transport === 'sse' ? 'mcp-transport-pill--active' : ''}`}
                 aria-pressed={form.transport === 'sse'}
-                onClick={() => setForm({ ...form, transport: 'sse', url: '' })}
+                onClick={() => form.transport !== 'sse' && setForm({ ...form, transport: 'sse', url: '' })}
                 disabled={saving}
               >
                 {t('mcp.transport_sse')}
+              </button>
+              <button
+                type="button"
+                className={`mcp-transport-pill ${form.transport === 'websocket' ? 'mcp-transport-pill--active' : ''}`}
+                aria-pressed={form.transport === 'websocket'}
+                onClick={() => form.transport !== 'websocket' && setForm({ ...form, transport: 'websocket', url: '' })}
+                disabled={saving}
+              >
+                {t('mcp.transport_websocket')}
               </button>
             </div>
           </div>
@@ -744,10 +870,19 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                   disabled={saving}
                 />
               </label>
+              <label className="field mcp-cwd-field">
+                <span className="mcp-args-label">{t('mcp.cwd')}</span>
+                <input
+                  value={form.cwd}
+                  onChange={(event) => setForm({ ...form, cwd: event.target.value })}
+                  placeholder={t('mcp.cwd_placeholder')}
+                  disabled={saving}
+                />
+              </label>
             </div>
           )}
 
-          {(form.transport === 'http' || form.transport === 'sse') && (
+          {(form.transport === 'http' || form.transport === 'sse' || form.transport === 'websocket') && (
             <label className="field">
               <span>{t('mcp.url')}</span>
               <input
@@ -795,6 +930,20 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
             <Switch id="mcp-trust" checked={Boolean(editingServer?.trusted)} onChange={() => editingServer && void handleTrustToggle(editingServer, !editingServer.trusted)} />
           </div>
 
+          {/* Connection timeout */}
+          <label className="field">
+            <span>{t('mcp.timeout')}</span>
+            <input
+              value={form.timeout}
+              onChange={(event) => setForm({ ...form, timeout: event.target.value })}
+              placeholder={t('mcp.timeout_placeholder')}
+              type="number"
+              min="1"
+              step="1"
+              disabled={saving}
+            />
+          </label>
+
           {/* Environment variables */}
           <div className="mcp-tool-row">
             <div>
@@ -838,6 +987,53 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
               {t('mcp.env_add')}
             </Button>
           </div>
+
+          {/* HTTP headers */}
+          {isRemoteTransport(form) && (
+            <>
+              <div className="mcp-tool-row">
+                <div>
+                  <div className="mcp-tool-name">{t('mcp.headers')}</div>
+                  <div className="mcp-tool-desc">{t('mcp.headers_desc')}</div>
+                </div>
+                <Button variant="secondary" onClick={() => addHeaderPair()} className="mcp-edit-env-btn">
+                  {t('mcp.edit')}
+                </Button>
+              </div>
+              <div className="field">
+                {form.headersPairs.map((pair, i) => {
+                  const isSecret = pair.value === SECRET_PLACEHOLDER;
+                  return (
+                    <div className="mcp-env-row" key={i}>
+                      <input
+                        value={pair.key}
+                        onChange={(event) => updateHeaderPair(i, 'key', event.target.value)}
+                        placeholder={t('mcp.headers_key')}
+                        className="mcp-env-input"
+                        disabled={saving}
+                      />
+                      <input
+                        value={pair.value}
+                        onChange={(event) => updateHeaderPair(i, 'value', event.target.value)}
+                        placeholder={t('mcp.headers_value')}
+                        className="mcp-env-input"
+                        type={isSecret ? 'password' : 'text'}
+                        disabled={saving}
+                      />
+                      {isSecret && <small className="mcp-secret-hint">{t('mcp.secret_kept')}</small>}
+                      <Button variant="icon" className="mcp-env-remove" onClick={() => removeHeaderPair(i)} disabled={saving} title={t('common.delete')}>
+                        <Trash2 size={12} />
+                      </Button>
+                    </div>
+                  );
+                })}
+                <Button variant="ghost" onClick={addHeaderPair} disabled={saving} className="mcp-env-add-btn">
+                  <Plus size={12} />
+                  {t('mcp.headers_add')}
+                </Button>
+              </div>
+            </>
+          )}
 
           {/* ── Footer ── */}
           <div className="mcp-form-footer">

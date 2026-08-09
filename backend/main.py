@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import subprocess
 import sys
 import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 
 import uvicorn
@@ -34,6 +36,7 @@ from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
 from coworker.mcp import McpManager
+from coworker.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
@@ -54,14 +57,21 @@ app.add_middleware(
 )
 settings = load_settings()
 session_store = SessionStore(settings.data_dir / "sessions")
-agent_registry = AgentRuntimeRegistry(settings, session_store)
 provider_manager = ProviderManager(settings.data_dir / "providers.json")
 config_controller = AppConfigController(settings, provider_manager)
 mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
+mcp_sessions = McpSessionManager(settings.data_dir, mcp_manager)
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
+agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions)
+
+# Persistent MCP sessions: start the background loop, pre-warm connections so
+# the first chat is instant, and tear sessions down on exit.
+mcp_sessions.start()
+mcp_sessions.prewarm()
+atexit.register(mcp_sessions.shutdown)
 
 # Run-observation retention: shrink pre-policy stores to the current caps so
 # old approvals and append-only logs don't accumulate forever.
@@ -235,9 +245,11 @@ class WorkspaceCommandRequest(BaseModel):
 
 class McpServerCreatePayload(BaseModel):
     name: str
-    transport: str  # "stdio" | "http" | "sse"
+    transport: str  # "stdio" | "http" | "sse" | "websocket"
     command: str = ""
     args: str = ""
+    cwd: str = ""
+    timeout: float | None = None
     url: str = ""
     env: dict[str, str] = {}
     headers: dict[str, str] = {}
@@ -249,6 +261,8 @@ class McpServerUpdatePayload(BaseModel):
     enabled: bool | None = None
     command: str | None = None
     args: str | None = None
+    cwd: str | None = None
+    timeout: float | None = None
     url: str | None = None
     env: dict[str, str] | None = None
     headers: dict[str, str] | None = None
@@ -260,6 +274,8 @@ class McpTestPayload(BaseModel):
     transport: str
     command: str = ""
     args: str = ""
+    cwd: str = ""
+    timeout: float | None = None
     url: str = ""
     env: dict[str, str] = {}
     headers: dict[str, str] = {}
@@ -1648,11 +1664,6 @@ async def fetch_provider_models(request: ProviderFetchModelsPayload):
 from coworker.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
 from coworker.mcp_discover import TEMPLATES
 from coworker.mcp_test import test_mcp_connection_sync
-from coworker.mcp_loader import invalidate_tools_cache, list_mcp_tools_sync
-
-import logging as _logging
-
-mcp_logger = _logging.getLogger("coworker.mcp.api")
 
 MCP_CHECK_TIMEOUT_SECONDS = 25.0
 
@@ -1683,10 +1694,11 @@ def _check_server(server_id: str) -> dict[str, Any]:
         transport=runtime["transport"],
         command=runtime.get("command", ""),
         args=runtime.get("args", ""),
+        cwd=runtime.get("cwd", ""),
         url=runtime.get("url", ""),
         env=runtime.get("env") or {},
         headers=runtime.get("headers") or {},
-        timeout=MCP_CHECK_TIMEOUT_SECONDS,
+        timeout=runtime.get("timeout") or MCP_CHECK_TIMEOUT_SECONDS,
     )
 
     if result["ok"]:
@@ -1703,7 +1715,8 @@ def _check_server(server_id: str) -> dict[str, Any]:
         tool_count=result.get("tool_count", 0),
         tools=result.get("tools", []),
     )
-    invalidate_tools_cache()
+    # Drop any live session so the next graph build reconnects with the check result.
+    mcp_sessions.close_server(server_id)
     return server
 
 
@@ -1720,20 +1733,21 @@ def create_mcp_server(request: McpServerCreatePayload):
             transport=request.transport,
             command=request.command or "",
             args=request.args or "",
+            cwd=request.cwd or "",
+            timeout=request.timeout,
             url=request.url or "",
             env=request.env or {},
             headers=request.headers or {},
         )
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
-    invalidate_tools_cache()
     return {"status": "ok", "server": result}
 
 
 @app.patch("/mcp/servers/{server_id}")
 def update_mcp_server(server_id: str, request: McpServerUpdatePayload):
     kwargs: dict[str, Any] = {"server_id": server_id}
-    for key in ("name", "transport", "enabled", "command", "args", "url", "env", "headers", "trusted", "disabled_tools"):
+    for key in ("name", "transport", "enabled", "command", "args", "cwd", "timeout", "url", "env", "headers", "trusted", "disabled_tools"):
         value = getattr(request, key)
         if value is not None:
             kwargs[key] = value
@@ -1741,7 +1755,9 @@ def update_mcp_server(server_id: str, request: McpServerUpdatePayload):
         result = mcp_manager.update_server(**kwargs)
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
-    invalidate_tools_cache()
+    # A connection-relevant field may have changed: drop the live session so the
+    # next graph build reconnects with the new config.
+    mcp_sessions.close_server(server_id)
     return {"status": "ok", "server": result}
 
 
@@ -1751,7 +1767,7 @@ def delete_mcp_server(server_id: str):
         mcp_manager.delete_server(server_id)
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
-    invalidate_tools_cache()
+    mcp_sessions.close_server(server_id)
     return {"status": "ok"}
 
 
@@ -1772,11 +1788,10 @@ def check_mcp_server(server_id: str):
 @app.post("/mcp/check-all")
 def check_all_mcp_servers():
     servers = mcp_manager.list_servers(enabled_only=True)
-    for entry in servers:
-        try:
-            _check_server(entry["id"])
-        except Exception as exc:  # noqa: BLE001 - one failure must not abort the sweep
-            mcp_logger.warning("MCP check failed for %s: %s", entry.get("name"), exc)
+    ids = [entry["id"] for entry in servers]
+    if ids:
+        with ThreadPoolExecutor(max_workers=min(len(ids), 4)) as pool:
+            results = list(pool.map(_check_server, ids))
     return {"status": "ok", "servers": mcp_manager.list_servers()}
 
 
@@ -1798,30 +1813,25 @@ def test_mcp(request: McpTestPayload):
         transport=request.transport,
         command=request.command or "",
         args=request.args or "",
+        cwd=request.cwd or "",
         url=request.url or "",
         env=env,
         headers=headers,
-        timeout=MCP_CHECK_TIMEOUT_SECONDS,
+        timeout=request.timeout or MCP_CHECK_TIMEOUT_SECONDS,
     )
     return {"status": "ok", "result": result}
 
 
-@app.post("/mcp/tools")
-def discover_mcp_tools(request: McpTestPayload):
-    server_config = [
-        {
-            "id": "probe",
-            "name": "",
-            "transport": request.transport,
-            "command": request.command or "",
-            "args": request.args or "",
-            "url": request.url or "",
-            "env": request.env or {},
-            "headers": request.headers or {},
-        }
-    ]
-    tools = list_mcp_tools_sync(server_config, timeout=MCP_CHECK_TIMEOUT_SECONDS)
-    return {"status": "ok", "tools": tools}
+@app.post("/mcp/servers/{server_id}/reauthorize")
+def reauthorize_mcp_server(server_id: str):
+    """Run the OAuth 2.1+PKCE browser flow for a remote server and reconnect it."""
+    try:
+        mcp_manager.get_server(server_id)
+    except ValueError as exc:
+        raise _mcp_not_found(exc) from exc
+    result = mcp_sessions.reauthorize(server_id)
+    return {"status": "ok", **result}
+
 
 @app.websocket("/ws/terminal")
 async def ws_terminal(websocket: WebSocket):

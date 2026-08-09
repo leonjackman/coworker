@@ -15,7 +15,6 @@ import type {
   McpServerUpdateRequest,
   McpTestRequest,
   McpTestResult,
-  McpToolListPayload,
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
@@ -134,6 +133,7 @@ export interface ChatService {
   testMcp: (request: McpTestRequest) => Promise<McpTestResult>;
   checkMcp: (serverId: string) => Promise<McpServerEntry>;
   checkAllMcps: () => Promise<McpServerListPayload>;
+  reauthorizeMcp: (serverId: string) => Promise<McpServerEntry>;
 }
 
 class ElectronChatService implements ChatService {
@@ -272,6 +272,13 @@ class ElectronChatService implements ChatService {
   async checkAllMcps(): Promise<McpServerListPayload> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.checkAllMcps();
+  }
+
+  async reauthorizeMcp(serverId: string): Promise<McpServerEntry> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const response = await window.electronAPI.reauthorizeMcp(serverId);
+    if (!response.server) throw new Error(response.error || 'Reauthorization failed');
+    return response.server;
   }
 
   async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
@@ -964,6 +971,14 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
+  }
+
+  async reauthorizeMcp(serverId: string): Promise<McpServerEntry> {
+    const response = await this.request<{ status: string; server: McpServerEntry }>(
+      `/mcp/servers/${encodeURIComponent(serverId)}/reauthorize`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) },
+    );
+    return response.server;
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

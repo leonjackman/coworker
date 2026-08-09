@@ -45,9 +45,11 @@ def _now() -> str:
 class McpServerEntry:
     id: str
     name: str
-    transport: str  # "stdio" | "http" | "sse"
+    transport: str  # "stdio" | "http" | "sse" | "streamable_http" | "websocket"
     command: str = ""
     args: str = ""
+    cwd: str = ""
+    timeout: float | None = None
     url: str = ""
     env: dict[str, str] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)
@@ -101,6 +103,14 @@ class McpServerEntry:
         except (TypeError, ValueError):
             tool_count = 0
 
+        def _timeout(value: Any) -> float | None:
+            if value is None or value == "":
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
         def _disabled_tools(value: Any) -> list[str]:
             if not isinstance(value, list):
                 return []
@@ -117,6 +127,8 @@ class McpServerEntry:
             transport=transport,
             command=str(data.get("command") or ""),
             args=str(data.get("args") or ""),
+            cwd=str(data.get("cwd") or ""),
+            timeout=_timeout(data.get("timeout")),
             url=str(data.get("url") or ""),
             env=_str_map(data.get("env")),
             headers=_str_map(data.get("headers")),
@@ -215,6 +227,8 @@ class McpManager:
         transport: str,
         command: str = "",
         args: str = "",
+        cwd: str = "",
+        timeout: float | None = None,
         url: str = "",
         env: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
@@ -240,6 +254,8 @@ class McpManager:
                 transport=clean_transport,
                 command=(command or "").strip(),
                 args=args or "",
+                cwd=(cwd or "").strip(),
+                timeout=timeout,
                 url=(url or "").strip(),
                 env=self._clean_map(env),
                 headers=self._clean_map(headers),
@@ -262,6 +278,8 @@ class McpManager:
         enabled: bool | None = None,
         command: str | None = None,
         args: str | None = None,
+        cwd: str | None = None,
+        timeout: float | None = None,
         url: str | None = None,
         env: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
@@ -289,6 +307,13 @@ class McpManager:
                 server.command = command.strip()
             if args is not None:
                 server.args = args or ""
+            if cwd is not None:
+                server.cwd = (cwd or "").strip()
+            if timeout is not None:
+                try:
+                    server.timeout = None if timeout == "" else float(timeout)
+                except (TypeError, ValueError):
+                    raise ValueError("Timeout must be a number of seconds")
             if url is not None:
                 server.url = url.strip()
 
@@ -313,7 +338,7 @@ class McpManager:
                 server.disabled_tools = [str(item).strip() for item in disabled_tools if str(item).strip()]
 
             # Any connection-relevant change invalidates the cached health state.
-            if any(value is not None for value in (transport, command, args, url, env, headers)):
+            if any(value is not None for value in (transport, command, args, cwd, timeout, url, env, headers)):
                 if server.enabled:
                     server.status = STATUS_UNKNOWN
                 server.error_message = ""
@@ -445,6 +470,8 @@ class McpManager:
             "transport": server.transport,
             "command": server.command,
             "args": server.args,
+            "cwd": server.cwd,
+            "timeout": server.timeout,
             "url": server.url,
             "env": cls._mask(server.env),
             "headers": cls._mask(server.headers),
@@ -468,6 +495,8 @@ class McpManager:
             "transport": server.transport,
             "command": server.command,
             "args": server.args,
+            "cwd": server.cwd,
+            "timeout": server.timeout,
             "url": server.url,
             "env": dict(server.env),
             "headers": dict(server.headers),

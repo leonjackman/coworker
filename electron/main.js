@@ -843,3 +843,6 @@ ipcMain.handle('check-mcp', (event, serverId) =>
   requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}/check`, 'POST', {}),
 );
 ipcMain.handle('check-all-mcps', () => requestBackend('/mcp/check-all', 'POST', {}));
+ipcMain.handle('reauthorize-mcp', (event, serverId) =>
+  requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}/reauthorize`, 'POST', {}),
+);

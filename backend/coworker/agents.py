@@ -6,6 +6,7 @@ import sqlite3
 import time
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, AsyncGenerator, Iterable, Literal, TypedDict
@@ -1161,7 +1162,15 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
     The phase/autonomy-aware system prompt is also injected here so there is a
     single prompt source (fixing the previous double-injection).
+
+    MCP tools are treated as execute-phase tools: they are allowed (and only
+    visible) while ``phase == "execute"``. A provider callable supplies the
+    currently-connected MCP tool names so the gate can tell them apart from
+    unknown tool calls without coupling this module to the MCP layer.
     """
+
+    def __init__(self, mcp_tool_names_provider: Callable[[], set[str]] | None = None):
+        self.mcp_tool_names_provider = mcp_tool_names_provider
 
     def _allowed_tools(self, state: CoworkerAgentState) -> set[str]:
         work_mode = normalize_work_mode(state.get("work_mode"))
@@ -1174,6 +1183,11 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             allowed |= _CHANGE_TOOL_NAMES | _EXEC_TOOLS
             if autonomy != "autonomous":
                 allowed |= {"ask_user"}
+            if self.mcp_tool_names_provider is not None:
+                try:
+                    allowed |= self.mcp_tool_names_provider()
+                except Exception:  # noqa: BLE001 - a broken provider must not gate tools
+                    pass
         if state.get("goal_mode"):
             allowed |= {"finalize_goal", "write_todos"}
         return allowed
@@ -1487,6 +1501,7 @@ def build_coworker_agent_graph(
     approval_store: CommandApprovalStore | None = None,
     goal_mode: bool = False,
     data_dir: Path | None = None,
+    mcp_session_manager: Any | None = None,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -1505,10 +1520,11 @@ def build_coworker_agent_graph(
     """
     from langchain.agents import create_agent
 
+    phase_gate = PhaseToolGateMiddleware()
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
         ToolCallCleanerMiddleware(),
-        PhaseToolGateMiddleware(),
+        phase_gate,
         GoalModeMiddleware(language),
     ]
     if goal_mode:
@@ -1523,11 +1539,20 @@ def build_coworker_agent_graph(
 
     from .mcp_middleware import McpToolMiddleware
 
-    _mcp_manager = McpManager(
-        Path(data_dir if data_dir is not None else Path.cwd()) / "mcp_servers.json",
-    )
+    if mcp_session_manager is None:
+        from .mcp_session import McpSessionManager
 
-    middleware.append(McpToolMiddleware(_mcp_manager))
+        _mcp_manager = McpManager(
+            Path(data_dir if data_dir is not None else Path.cwd()) / "mcp_servers.json",
+        )
+        mcp_session_manager = McpSessionManager(
+            Path(data_dir if data_dir is not None else Path.cwd()), _mcp_manager
+        )
+        mcp_session_manager.start()
+
+    mcp_middleware = McpToolMiddleware(mcp_session_manager)
+    middleware.append(mcp_middleware)
+    phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names
 
     system_prompt = (
         f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
@@ -1578,7 +1603,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1592,6 +1617,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.session_store = session_store
         self.referenced_sessions = set(referenced_sessions or set())
         self.data_dir = data_dir
+        self.mcp_session_manager = mcp_session_manager
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1623,6 +1649,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             checkpointer=self.checkpointer,
             approval_store=self.approval_store,
             data_dir=self.data_dir,
+            mcp_session_manager=self.mcp_session_manager,
         )
         try:
             result = graph.invoke(
@@ -1660,7 +1687,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1674,6 +1701,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.session_store = session_store
         self.referenced_sessions = set(referenced_sessions or set())
         self.data_dir = data_dir
+        self.mcp_session_manager = mcp_session_manager
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -1734,6 +1762,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
                 goal_mode=goal_mode, data_dir=self.data_dir,
+                mcp_session_manager=self.mcp_session_manager,
             )
 
             inputs = {
@@ -2218,6 +2247,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
                 data_dir=self.data_dir,
+                mcp_session_manager=self.mcp_session_manager,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
@@ -2297,7 +2327,7 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
 
 class AgentRuntimeRegistry:
-    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None):
+    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None):
         from langgraph.checkpoint.sqlite import SqliteSaver
 
         self.settings = settings
@@ -2308,6 +2338,7 @@ class AgentRuntimeRegistry:
         self.change_store = ChangeStore(settings.data_dir)
         self.provider_manager = ProviderManager(settings.data_dir / "providers.json")
         self.mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
+        self.mcp_session_manager = mcp_session_manager
         self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
@@ -2356,10 +2387,10 @@ class AgentRuntimeRegistry:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
@@ -2382,7 +2413,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:

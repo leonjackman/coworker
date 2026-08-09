@@ -1,8 +1,13 @@
 """MCP middleware for the Coworker agent graph.
 
-Loads tools from every enabled MCP server and appends them to the tool list of
-each model call. Loading is lazy (first model call) and cached in
-``mcp_loader`` so repeated graph builds do not respawn server processes.
+Attaches dispatch tools from the persistent :class:`McpSessionManager` to the
+model call, registers them with the agent's ``ToolNode`` when they are already
+loaded, and dynamically resolves MCP tool calls at execution time (the pattern
+the langchain agent factory documents for middleware-added tools).
+
+MCP tools are only exposed in the **execute** phase. In ``discuss`` (plan
+mode) they are hidden entirely, matching the product decision that planning is
+read-only and never touches external services.
 """
 
 from __future__ import annotations
@@ -14,46 +19,49 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage
 
-from .mcp import McpManager
-from .mcp_loader import load_mcp_tools_sync
+from .mcp_session import McpSessionManager
 
 logger = logging.getLogger(__name__)
 
 
+def _phase_is_discuss(state: Any) -> bool:
+    """Mirror of ``agents.normalize_phase`` (avoid a circular import)."""
+    phase = str((state or {}).get("phase") or "")
+    if phase in ("discuss", "execute"):
+        return phase == "discuss"
+    work_mode = str((state or {}).get("work_mode") or "build")
+    return work_mode == "plan"
+
+
+def _tool_name(request: Any) -> str:
+    tool_call = getattr(request, "tool_call", None)
+    if isinstance(tool_call, dict):
+        return str(tool_call.get("name") or "")
+    return str(getattr(tool_call, "name", "") or "")
+
+
 class McpToolMiddleware(AgentMiddleware):
 
-    def __init__(self, mcp_manager: McpManager):
-        self.mcp_manager = mcp_manager
-        self.mcp_tools: list[Any] = []
+    def __init__(self, session_manager: McpSessionManager):
+        self.mcp_manager = session_manager.mcp_manager
+        self.session_manager = session_manager
+        # Opportunistic ToolNode registration: populated once sessions are
+        # connected. Execution does not depend on this -- the dynamic
+        # ``wrap_tool_call`` path below resolves unregistered MCP tools.
+        self.tools: list[Any] = list(session_manager.all_tools())
         self._servers: list[dict[str, Any]] = []
-        self._loaded = False
 
-    def _ensure_loaded(self) -> None:
-        if self._loaded:
-            return
-        self._loaded = True
-
+    def _refresh_tools(self) -> None:
+        self._servers = []
         try:
-            servers = self.mcp_manager.list_runtime_configs(enabled_only=True)
+            self._servers = self.mcp_manager.list_runtime_configs(enabled_only=True)
         except Exception as exc:  # noqa: BLE001 - config problems must not break chat
             logger.warning("Failed to read MCP config: %s", exc)
-            return
+        self.tools = list(self.session_manager.all_tools())
 
-        self._servers = servers
-
-        if not servers:
-            return
-
-        try:
-            self.mcp_tools = load_mcp_tools_sync(servers)
-            logger.info(
-                "Loaded %d MCP tool(s) from %d enabled server(s)",
-                len(self.mcp_tools),
-                len(servers),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to load MCP tools: %s", exc)
-            self.mcp_tools = []
+    def tool_names(self) -> set[str]:
+        """Names of currently-connected MCP tools (for the phase gate)."""
+        return self.session_manager.tool_names()
 
     def _server_names(self) -> dict[str, str]:
         return {
@@ -64,14 +72,15 @@ class McpToolMiddleware(AgentMiddleware):
 
     def _mcp_summary(self) -> str | None:
         """One line per enabled server with the tools the model can call."""
-        if not self.mcp_tools:
+        tools = self.tools
+        if not tools:
             return None
         names = self._server_names()
         if not names:
             return None
 
         by_server: dict[str, list[str]] = {}
-        for tool in self.mcp_tools:
+        for tool in tools:
             metadata = getattr(tool, "metadata", None)
             server_id = metadata.get("coworker_server") if isinstance(metadata, dict) else None
             tool_name = getattr(tool, "name", None)
@@ -83,25 +92,31 @@ class McpToolMiddleware(AgentMiddleware):
 
         lines = []
         for server_id, name in names.items():
-            tools = sorted(by_server.get(server_id) or [])
-            if not tools:
+            server_tools = sorted(by_server.get(server_id) or [])
+            if not server_tools:
                 continue
-            lines.append(f"- {name}: {', '.join(tools)}")
+            lines.append(f"- {name}: {', '.join(server_tools)}")
         return "\n".join(lines) if lines else None
 
     def _overrides(self, request: Any) -> dict[str, Any]:
-        self._ensure_loaded()
-        if not self.mcp_tools:
+        self.session_manager.ensure_connected(enable_browser_flow=False)
+        self._refresh_tools()
+        tools = self.tools
+        if not tools:
             return {}
 
-        existing = list(getattr(request, "tools", []) or [])
+        if _phase_is_discuss(getattr(request, "state", None)):
+            logger.debug("MCP tools hidden in discuss phase")
+            return {}
+
+        existing = list(getattr(request, "tools", None) or [])
         taken = {getattr(tool, "name", None) for tool in existing}
 
         additions = []
-        for t in self.mcp_tools:
+        for t in tools:
             name = getattr(t, "name", None)
             if name in taken:
-                logger.warning("Skipping MCP tool %r: name collides with a builtin tool", name)
+                logger.debug("MCP tool %r already exposed (registered or colliding)", name)
                 continue
             taken.add(name)
             additions.append(t)
@@ -118,8 +133,6 @@ class McpToolMiddleware(AgentMiddleware):
         if summary:
             current = getattr(request, "system_message", None)
             base_text = getattr(current, "text", "") or ""
-            # Put attribution BEFORE the rest of the prompt so the model uses it
-            # to correctly attribute all tools it sees.
             section = (
                 f"## MCP 服务与工具归属 / MCP Server Attribution\n\n"
                 "以下工具来自已连接的 MCP 服务（按服务器分组）。"
@@ -139,9 +152,35 @@ class McpToolMiddleware(AgentMiddleware):
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         # Streaming/resume run the graph asynchronously (`astream`/`ainvoke`).
-        # The initial MCP tool load can block for seconds, so run it off the
+        # The initial MCP connect can block for seconds, so run it off the
         # event loop via `to_thread`; `_overrides` itself is idempotent.
         overrides = await asyncio.to_thread(self._overrides, request)
         if overrides:
             return await handler(request.override(**overrides))
         return await handler(request)
+
+    def _resolve_tool(self, request: Any) -> Any:
+        name = _tool_name(request)
+        if not name:
+            return None
+        for tool in self.session_manager.all_tools():
+            if getattr(tool, "name", None) == name:
+                return tool
+        return None
+
+    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+        # Already registered tools (or builtins) pass straight through.
+        if request.tool is not None:
+            return handler(request)
+        tool = self._resolve_tool(request)
+        if tool is None:
+            return handler(request)
+        return handler(request.override(tool=tool))
+
+    async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+        if request.tool is not None:
+            return await handler(request)
+        tool = self._resolve_tool(request)
+        if tool is None:
+            return await handler(request)
+        return await handler(request.override(tool=tool))

@@ -108,4 +108,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   testMcp: (payload) => ipcRenderer.invoke('test-mcp', payload),
   checkMcp: (serverId) => ipcRenderer.invoke('check-mcp', serverId),
   checkAllMcps: () => ipcRenderer.invoke('check-all-mcps'),
+  reauthorizeMcp: (serverId) => ipcRenderer.invoke('reauthorize-mcp', serverId),
 });

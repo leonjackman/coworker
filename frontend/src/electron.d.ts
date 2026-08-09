@@ -109,6 +109,7 @@ declare global {
       testMcp: (request: McpTestRequest) => Promise<{ result: McpTestResult }>;
       checkMcp: (serverId: string) => Promise<{ server: McpServerEntry }>;
       checkAllMcps: () => Promise<McpServerListPayload>;
+      reauthorizeMcp: (serverId: string) => Promise<{ status: string; ok: boolean; error?: string; needs_auth?: boolean; server?: McpServerEntry }>;
     };
   }
 }

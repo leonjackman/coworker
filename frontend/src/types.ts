@@ -15,6 +15,8 @@ export interface McpServerEntry {
   transport: string;
   command: string;
   args: string;
+  cwd: string;
+  timeout: number | null;
   url: string;
   env: Record<string, string>;
   headers: Record<string, string>;
@@ -49,6 +51,8 @@ export interface McpServerCreateRequest {
   transport: string;
   command?: string;
   args?: string;
+  cwd?: string;
+  timeout?: number | null;
   url?: string;
   env?: Record<string, string>;
   headers?: Record<string, string>;
@@ -60,6 +64,8 @@ export interface McpServerUpdateRequest {
   enabled?: boolean;
   command?: string;
   args?: string;
+  cwd?: string;
+  timeout?: number | null;
   url?: string;
   env?: Record<string, string>;
   headers?: Record<string, string>;
@@ -71,6 +77,8 @@ export interface McpTestRequest {
   transport: string;
   command?: string;
   args?: string;
+  cwd?: string;
+  timeout?: number | null;
   url?: string;
   env?: Record<string, string>;
   headers?: Record<string, string>;
@@ -92,11 +100,6 @@ export interface McpDiscoverPayload {
 export interface McpServerListPayload {
   status: string;
   servers: McpServerEntry[];
-}
-
-export interface McpToolListPayload {
-  status: string;
-  tools: McpToolEntry[];
 }
 
 export interface ComposerAttachment {

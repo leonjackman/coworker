@@ -1,16 +1,17 @@
-"""MCP client loader and shared connection helpers for the Coworker runtime.
+"""Shared MCP connection helpers for the Coworker runtime.
 
 This module owns the single source of truth for turning a stored MCP server
 record into a ``langchain-mcp-adapters`` connection dict. Every transport has a
 different accepted keyword set, so the connection must be built per transport --
 passing ``command``/``args`` to a Streamable HTTP session raises ``TypeError``.
+
+Live sessions are owned by :class:`coworker.mcp_session.McpSessionManager`;
+this module deliberately contains no caching or process-spawning logic.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 import shlex
 import threading
@@ -123,31 +124,14 @@ def build_connection(server: dict[str, Any]) -> dict[str, Any]:
     return conn
 
 
-def build_mcp_config(servers_config: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Build the ``{server_key: connection}`` map, skipping invalid entries."""
-    mcp_config: dict[str, dict[str, Any]] = {}
-    for server in servers_config:
-        server_id = str(server.get("id") or server.get("name") or "").strip()
-        if not server_id:
-            continue
-        try:
-            mcp_config[server_id] = build_connection(server)
-        except ValueError as exc:
-            logger.warning("Skipping MCP server %s: %s", server_id, exc)
-    return mcp_config
-
-
-# Backwards-compatible alias (older call sites used the private name).
-_build_mcp_config = build_mcp_config
-
-
 def run_blocking(coro_factory, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Any:
     """Run an async factory on a private event loop in a dedicated thread.
 
     The MCP SDK spawns subprocesses and long-lived task groups. Running it on
     the caller's loop (or patching the global loop policy with ``nest_asyncio``)
     breaks uvicorn. A throwaway thread keeps everything isolated and lets us
-    enforce a hard timeout.
+    enforce a hard timeout. Used only for one-shot test/check operations; live
+    sessions live on the ``McpSessionManager`` loop instead.
     """
     box: dict[str, Any] = {}
 
@@ -176,114 +160,3 @@ def run_blocking(coro_factory, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Any:
     if "error" in box:
         raise box["error"]
     return box.get("value")
-
-
-_tools_cache: dict[str, list[Any]] = {}
-_tools_cache_lock = threading.Lock()
-
-
-def _cache_key(mcp_config: dict[str, dict[str, Any]]) -> str:
-    blob = json.dumps(mcp_config, sort_keys=True, default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def invalidate_tools_cache() -> None:
-    """Drop cached MCP tools so the next agent build reloads them."""
-    with _tools_cache_lock:
-        _tools_cache.clear()
-
-
-def load_mcp_tools_sync(
-    servers_config: list[dict[str, Any]],
-    *,
-    timeout: float = DEFAULT_TIMEOUT_SECONDS,
-    use_cache: bool = True,
-) -> list[Any]:
-    """Synchronously load LangChain tools from the given MCP servers.
-
-    Tools are loaded with a per-server name prefix so they can be attributed
-    back to their server; tools listed in a server's ``disabled_tools`` are
-    dropped here (so they never reach the agent), and the prefix is stripped
-    again so the model still sees the bare tool name.
-
-    Never raises: a broken server must not take down agent construction.
-    """
-    if not servers_config:
-        return []
-
-    mcp_config = build_mcp_config(servers_config)
-    if not mcp_config:
-        return []
-
-    key = _cache_key(mcp_config)
-    if use_cache:
-        with _tools_cache_lock:
-            cached = _tools_cache.get(key)
-        if cached is not None:
-            return cached
-
-    disabled_by_server: dict[str, set[str]] = {}
-    for server in servers_config:
-        server_id = str(server.get("id") or server.get("name") or "").strip()
-        if not server_id or server_id not in mcp_config:
-            continue
-        raw = server.get("disabled_tools")
-        if isinstance(raw, list):
-            disabled_by_server[server_id] = {str(item).strip() for item in raw if str(item).strip()}
-
-    try:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
-
-        client = MultiServerMCPClient(mcp_config, tool_name_prefix=True)
-        tools = run_blocking(client.get_tools, timeout=timeout) or []
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to load MCP tools: %s", exc)
-        return []
-
-    # Attribute each tool to its server via the name prefix, drop disabled
-    # tools, and restore the bare tool name for the model. The server id is
-    # also recorded in tool metadata so the middleware can tell the model which
-    # MCP service each tool belongs to.
-    filtered: list[Any] = []
-    for tool in tools:
-        name = getattr(tool, "name", None)
-        if not isinstance(name, str):
-            filtered.append(tool)
-            continue
-        server_id, separator, bare = name.partition("_")
-        if separator and server_id in disabled_by_server and bare in disabled_by_server[server_id]:
-            continue
-        if separator and server_id in mcp_config and bare:
-            try:
-                tool.name = bare
-            except Exception:  # noqa: BLE001 - cosmetic rename; keep prefixed name
-                pass
-            try:
-                tool.metadata = {
-                    **(getattr(tool, "metadata", None) or {}),
-                    "coworker_server": server_id,
-                }
-            except Exception:  # noqa: BLE001 - attribution is best-effort
-                pass
-        filtered.append(tool)
-
-    if use_cache:
-        with _tools_cache_lock:
-            _tools_cache[key] = filtered
-    return filtered
-
-
-def list_mcp_tools_sync(
-    servers_config: list[dict[str, Any]],
-    *,
-    timeout: float = DEFAULT_TIMEOUT_SECONDS,
-) -> list[dict[str, Any]]:
-    """List discovered MCP tools as plain metadata dicts for the UI."""
-    tools = load_mcp_tools_sync(servers_config, timeout=timeout, use_cache=False)
-    return [
-        {
-            "name": getattr(tool, "name", "unknown"),
-            "description": getattr(tool, "description", "") or "",
-        }
-        for tool in tools
-    ]
