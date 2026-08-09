@@ -252,6 +252,8 @@ class McpServerUpdatePayload(BaseModel):
     url: str | None = None
     env: dict[str, str] | None = None
     headers: dict[str, str] | None = None
+    trusted: bool | None = None
+    disabled_tools: list[str] | None = None
 
 
 class McpTestPayload(BaseModel):
@@ -1731,7 +1733,7 @@ def create_mcp_server(request: McpServerCreatePayload):
 @app.patch("/mcp/servers/{server_id}")
 def update_mcp_server(server_id: str, request: McpServerUpdatePayload):
     kwargs: dict[str, Any] = {"server_id": server_id}
-    for key in ("name", "transport", "enabled", "command", "args", "url", "env", "headers"):
+    for key in ("name", "transport", "enabled", "command", "args", "url", "env", "headers", "trusted", "disabled_tools"):
         value = getattr(request, key)
         if value is not None:
             kwargs[key] = value

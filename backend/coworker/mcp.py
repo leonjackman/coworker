@@ -56,6 +56,8 @@ class McpServerEntry:
     error_message: str = ""
     tool_count: int = 0
     tools: list[dict[str, str]] = field(default_factory=list)
+    trusted: bool = False
+    disabled_tools: list[str] = field(default_factory=list)
     last_checked_at: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -99,6 +101,16 @@ class McpServerEntry:
         except (TypeError, ValueError):
             tool_count = 0
 
+        def _disabled_tools(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            out: list[str] = []
+            for item in value:
+                name = str(item or "").strip()
+                if name:
+                    out.append(name)
+            return out
+
         return cls(
             id=server_id,
             name=name,
@@ -113,6 +125,8 @@ class McpServerEntry:
             error_message=str(data.get("error_message") or ""),
             tool_count=tool_count,
             tools=_tool_list(data.get("tools")),
+            trusted=bool(data.get("trusted", False)),
+            disabled_tools=_disabled_tools(data.get("disabled_tools")),
             last_checked_at=str(data.get("last_checked_at") or ""),
             created_at=str(data.get("created_at") or _now()),
             updated_at=str(data.get("updated_at") or _now()),
@@ -251,6 +265,8 @@ class McpManager:
         url: str | None = None,
         env: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
+        trusted: bool | None = None,
+        disabled_tools: list[str] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             config = self.load()
@@ -289,6 +305,12 @@ class McpManager:
                     server.status = STATUS_DISABLED
                 elif server.status == STATUS_DISABLED:
                     server.status = STATUS_UNKNOWN
+
+            if trusted is not None:
+                server.trusted = trusted
+
+            if disabled_tools is not None:
+                server.disabled_tools = [str(item).strip() for item in disabled_tools if str(item).strip()]
 
             # Any connection-relevant change invalidates the cached health state.
             if any(value is not None for value in (transport, command, args, url, env, headers)):
@@ -431,6 +453,8 @@ class McpManager:
             "error_message": server.error_message,
             "tool_count": server.tool_count,
             "tools": list(server.tools),
+            "trusted": server.trusted,
+            "disabled_tools": list(server.disabled_tools),
             "last_checked_at": server.last_checked_at,
             "created_at": server.created_at,
             "updated_at": server.updated_at,
@@ -447,4 +471,6 @@ class McpManager:
             "url": server.url,
             "env": dict(server.env),
             "headers": dict(server.headers),
+            "trusted": server.trusted,
+            "disabled_tools": list(server.disabled_tools),
         }

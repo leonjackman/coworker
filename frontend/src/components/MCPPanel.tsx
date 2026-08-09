@@ -255,6 +255,34 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     }
   }
 
+  async function handleToolToggle(server: McpServerEntry, toolName: string, enabled: boolean) {
+    const disabled = new Set(server.disabled_tools ?? []);
+    if (enabled) disabled.delete(toolName);
+    else disabled.add(toolName);
+    const disabledTools = Array.from(disabled);
+    const optimistic = { ...server, disabled_tools: disabledTools };
+    setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === server.id ? optimistic : s)));
+    try {
+      await chatService.updateMcp(server.id, { disabled_tools: disabledTools });
+      onMcpChange?.();
+    } catch (error) {
+      setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === server.id ? server : s)));
+      setMessage(translateError(error) || t('common.operation_failed'));
+    }
+  }
+
+  async function handleTrustToggle(server: McpServerEntry, trusted: boolean) {
+    const optimistic = { ...server, trusted };
+    setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === server.id ? optimistic : s)));
+    try {
+      await chatService.updateMcp(server.id, { trusted });
+      onMcpChange?.();
+    } catch (error) {
+      setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === server.id ? server : s)));
+      setMessage(translateError(error) || t('common.operation_failed'));
+    }
+  }
+
   async function handleCheckAll() {
     setChecking(true);
     setMessage(null);
@@ -602,6 +630,9 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
 
   // ========== FORM VIEW (server detail/edit form, aligned with provider form) ==========
 
+  const editingServer = form.id ? servers.find((s) => s.id === form.id) : undefined;
+  const disabledTools = new Set(editingServer?.disabled_tools ?? []);
+
   return (
     <WorkspacePage
       className="mcp-shell--form"
@@ -617,11 +648,11 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
         <Network size={18} className="mcp-form-card__icon" />
         <div className="mcp-form-card__body">
           {/* Connection status row (only on edit) */}
-          {form.id && (
+          {form.id && editingServer && (
             <div className="mcp-status-row">
-              <span className={`mcp-status-dot ${statusDot(servers.find((s) => s.id === form.id)?.status || 'unknown')}`} style={{ width: 12, height: 12 }} />
-              <Badge className={servers.find((s) => s.id === form.id)?.status === 'connected' ? 'mcp-status-badge--ok' : ''}>
-                {formatStatus(servers.find((s) => s.id === form.id)?.status || 'unknown')}
+              <span className={`mcp-status-dot ${statusDot(editingServer.status || 'unknown')}`} style={{ width: 12, height: 12 }} />
+              <Badge className={editingServer.status === 'connected' ? 'mcp-status-badge--ok' : ''}>
+                {formatStatus(editingServer.status || 'unknown')}
               </Badge>
               <Button
                 variant="secondary"
@@ -731,19 +762,22 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
           <div className="mcp-divider"></div>
 
           {/* ── Discovered tools (server detail only) ── */}
-          {form.id && servers.find((s) => s.id === form.id)?.tools && (
-            <div className="mcp-detail-section">{t('mcp.discovered_tools').replace('{count}', String(servers.find((s) => s.id === form.id)?.tools?.length || 0))}</div>
+          {form.id && editingServer?.tools && (
+            <div className="mcp-detail-section">{t('mcp.discovered_tools').replace('{count}', String(editingServer.tools.length))}</div>
           )}
 
-          {form.id && servers.find((s) => s.id === form.id)?.tools?.map((tool: McpToolEntry) => (
-            <div className="mcp-tool-row" key={tool.name}>
-              <div>
-                <div className="mcp-tool-name">{tool.name}</div>
-                {tool.description && <div className="mcp-tool-desc">{tool.description}</div>}
+          {editingServer?.tools?.map((tool: McpToolEntry) => {
+            const enabled = !disabledTools.has(tool.name);
+            return (
+              <div className={`mcp-tool-row ${enabled ? '' : 'mcp-tool-row--disabled'}`} key={tool.name}>
+                <div>
+                  <div className="mcp-tool-name">{tool.name}</div>
+                  {tool.description && <div className="mcp-tool-desc">{tool.description}</div>}
+                </div>
+                <Switch id={`mcp-tool-${tool.name}`} checked={enabled} onChange={() => void handleToolToggle(editingServer, tool.name, !enabled)} />
               </div>
-              <Switch id={`mcp-tool-${tool.name}`} checked={true} onChange={() => {}} />
-            </div>
-          ))}
+            );
+          })}
 
           {/* ── Divider ── */}
           <div className="mcp-divider"></div>
@@ -757,7 +791,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
               <div className="mcp-tool-name">{t('mcp.trust_server')}</div>
               <div className="mcp-tool-desc">{t('mcp.trust_desc')}</div>
             </div>
-            <Switch id="mcp-trust" checked={false} onChange={() => {}} />
+            <Switch id="mcp-trust" checked={Boolean(editingServer?.trusted)} onChange={() => editingServer && void handleTrustToggle(editingServer, !editingServer.trusted)} />
           </div>
 
           {/* Environment variables */}

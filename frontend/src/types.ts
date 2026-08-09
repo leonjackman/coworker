@@ -23,6 +23,8 @@ export interface McpServerEntry {
   error_message: string;
   tool_count: number;
   tools: McpToolEntry[];
+  trusted: boolean;
+  disabled_tools: string[];
   last_checked_at: string;
   created_at: string;
   updated_at: string;
@@ -61,6 +63,8 @@ export interface McpServerUpdateRequest {
   url?: string;
   env?: Record<string, string>;
   headers?: Record<string, string>;
+  trusted?: boolean;
+  disabled_tools?: string[];
 }
 
 export interface McpTestRequest {

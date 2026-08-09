@@ -201,6 +201,11 @@ def load_mcp_tools_sync(
 ) -> list[Any]:
     """Synchronously load LangChain tools from the given MCP servers.
 
+    Tools are loaded with a per-server name prefix so they can be attributed
+    back to their server; tools listed in a server's ``disabled_tools`` are
+    dropped here (so they never reach the agent), and the prefix is stripped
+    again so the model still sees the bare tool name.
+
     Never raises: a broken server must not take down agent construction.
     """
     if not servers_config:
@@ -217,19 +222,46 @@ def load_mcp_tools_sync(
         if cached is not None:
             return cached
 
+    disabled_by_server: dict[str, set[str]] = {}
+    for server in servers_config:
+        server_id = str(server.get("id") or server.get("name") or "").strip()
+        if not server_id or server_id not in mcp_config:
+            continue
+        raw = server.get("disabled_tools")
+        if isinstance(raw, list):
+            disabled_by_server[server_id] = {str(item).strip() for item in raw if str(item).strip()}
+
     try:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        client = MultiServerMCPClient(mcp_config)
+        client = MultiServerMCPClient(mcp_config, tool_name_prefix=True)
         tools = run_blocking(client.get_tools, timeout=timeout) or []
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to load MCP tools: %s", exc)
         return []
 
+    # Attribute each tool to its server via the name prefix, drop disabled
+    # tools, and restore the bare tool name for the model.
+    filtered: list[Any] = []
+    for tool in tools:
+        name = getattr(tool, "name", None)
+        if not isinstance(name, str):
+            filtered.append(tool)
+            continue
+        server_id, separator, bare = name.partition("_")
+        if separator and server_id in disabled_by_server and bare in disabled_by_server[server_id]:
+            continue
+        if separator and server_id in mcp_config and bare:
+            try:
+                tool.name = bare
+            except Exception:  # noqa: BLE001 - cosmetic rename; keep prefixed name
+                pass
+        filtered.append(tool)
+
     if use_cache:
         with _tools_cache_lock:
-            _tools_cache[key] = tools
-    return tools
+            _tools_cache[key] = filtered
+    return filtered
 
 
 def list_mcp_tools_sync(

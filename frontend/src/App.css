@@ -789,6 +789,7 @@ body.sidebar-resizing {
 }
 
 .workspace-shell--providers,
+.workspace-shell--mcp,
 .workspace-shell--settings {
   overflow-y: auto;
 }
@@ -3088,10 +3089,6 @@ body.bottom-panel-resizing {
   color: var(--foreground);
 }
 
-.provider-shell--form {
-  width: min(760px, 100%);
-}
-
 .provider-list-heading h2,
 .provider-form-card h2 {
   margin: 0;
@@ -3783,8 +3780,7 @@ body.bottom-panel-resizing {
 
   .messages__inner,
   .composer,
-  .workspace-page,
-  .provider-shell--form {
+  .workspace-page {
     width: min(860px, calc(100vw - 28px));
   }
 
@@ -5518,6 +5514,13 @@ body.bottom-panel-resizing {
 }
 .mcp-tool-row:last-child { border-bottom: none; }
 
+.mcp-tool-row--disabled {
+  opacity: 0.55;
+}
+.mcp-tool-row--disabled .mcp-tool-name {
+  text-decoration: line-through;
+}
+
 .mcp-tool-name {
   font-size: 13px;
   color: var(--foreground);
@@ -5576,10 +5579,7 @@ body.bottom-panel-resizing {
   font-size: 11px;
 }
 
-/* Form shell (aligned with provider-shell--form) */
-.mcp-shell--form {
-  width: min(760px, 100%);
-}
+/* Form shell: width unified with list/catalog views (inherits .workspace-page). */
 
 /* Form card (aligned with provider-form-card) */
 .mcp-form-card {
