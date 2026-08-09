@@ -389,7 +389,11 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           {providers.map((provider) => {
             const isDefault = provider.id === defaultProviderId;
             return (
-              <article className={`provider-card provider-card--mir ${!provider.enabled ? 'provider-card--disabled' : ''}`} key={provider.id}>
+              <article
+                className={`provider-card provider-card--mir provider-card--mir-hover ${!provider.enabled ? 'provider-card--disabled' : ''} ${isDefault ? 'provider-card--is-default' : ''}`}
+                key={provider.id}
+              >
+                {/* Row 1: icon + name + badges / switcher / menu */}
                 <div className="provider-card__top">
                   <div className="provider-card__identity">
                     <ProviderIcon type={provider.provider_type} size={18} />
@@ -400,7 +404,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                     <Switch id={`provider-switch-${provider.id}`} checked={provider.enabled} onChange={() => handleToggle(provider)} />
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="icon" className="h-7 w-7">
+                        <Button variant="icon" className="h-7 w-7" aria-label={t('common.more')}>
                           <ChevronDown size={14} />
                         </Button>
                       </DropdownMenuTrigger>
@@ -423,11 +427,13 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                   </div>
                 </div>
 
+                {/* Row 2: URL badges + default */}
                 <div className="provider-card__meta">
-                  <Badge className="provider-url-badge">{provider.base_url}</Badge>
+                  {provider.base_url && <Badge className="provider-url-badge">{provider.base_url}</Badge>}
                   {isDefault && <Badge className="provider-default-badge">{t('providers.default_badge')}</Badge>}
                 </div>
 
+                {/* Row 3: model */}
                 {provider.model && (
                   <div className="provider-card__model">
                     <span>{t('providers.model')}: </span>
@@ -435,6 +441,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                   </div>
                 )}
 
+                {/* Delete inline confirm */}
                 {deleteConfirm === provider.id && (
                   <div className="provider-inline-delete">
                     <p>{t('providers.delete_confirm')}</p>
