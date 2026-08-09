@@ -1,3 +1,43 @@
+// Patch for Electron 43: Remove node_modules/electron package from require path
+// to allow Electron's built-in electron module to be used.
+// Without this patch, require('electron') returns a binary path string instead
+// of the electron module object (containing app, BrowserWindow, etc.)
+(function patchElectronRequire() {
+  const Module = require('module');
+  const origResolve = Module._resolveFilename;
+  const path = require('path');
+  const projectRoot = __dirname;
+
+  Module._resolveFilename = function(request, parent, isMain, options) {
+    if (request === 'electron') {
+      // In Electron process, skip node_modules/electron and use built-in module
+      // We do this by temporarily removing electron from the resolution path
+      const origPaths = parent ? parent.paths : [];
+      const filteredPaths = origPaths.filter(p => {
+        return !p.includes('/node_modules/electron') &&
+               !p.includes('\\node_modules\\electron');
+      });
+
+      // Save original paths and use filtered ones
+      if (filteredPaths.length < origPaths.length && parent) {
+        const origResolvePaths = parent.paths;
+        parent.paths = filteredPaths;
+        try {
+          const resolved = origResolve.call(this, request, parent, isMain, options);
+          // Restore original paths
+          parent.paths = origResolvePaths;
+          return resolved;
+        } catch (e) {
+          parent.paths = origResolvePaths;
+          // If resolution fails, try with original paths as fallback
+          return origResolve.call(this, request, parent, isMain, options);
+        }
+      }
+    }
+    return origResolve.apply(this, arguments);
+  };
+})();
+
 const { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage, nativeTheme } = require('electron');
 const path = require('path');
 const http = require('http');
@@ -223,9 +263,6 @@ function createWindow() {
 
   if (IS_DEV) {
     mainWindow.loadURL(FRONTEND_URL);
-    if (process.env.COWORKER_DEVTOOLS !== '0') {
-      mainWindow.webContents.openDevTools();
-    }
   } else {
     mainWindow.loadFile(FRONTEND_DIST_ENTRY).catch((error) => {
       console.error('Failed to load frontend entry:', error);

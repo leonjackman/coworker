@@ -434,5 +434,6 @@
   "mcp.search_placeholder": "搜索扩展…",
   "mcp.check_all": "检查连接",
   "mcp.secret_kept": "已保存的密钥（未修改）",
-  "mcp.no_match": "没有匹配的扩展。"
+  "mcp.no_match": "没有匹配的扩展。",
+  "mcp.catalog_search": "搜索 MCP 服务..."
 }

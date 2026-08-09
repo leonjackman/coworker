@@ -5499,8 +5499,7 @@ body.bottom-panel-resizing {
 
 .mcp-form-card__body h2 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 600;
+  /* Aligned with provider-form-card h2 — no explicit size, uses browser/form default */
 }
 
 /* Connection status row (on edit form) */
@@ -5934,6 +5933,16 @@ body.bottom-panel-resizing {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.mcp-category-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--muted);
+  border: 1px solid var(--material-border);
+  border-radius: 12px;
+  color: var(--muted-foreground);
+  font-weight: 500;
 }
 
 /* Media: narrow viewport */

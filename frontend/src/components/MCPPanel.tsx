@@ -53,6 +53,25 @@ const emptyForm = (): FormState => ({
   envPairs: [],
 });
 
+// Catalog categories for filtering
+const catalogCategories = [
+  { value: 'all', label: '全部' },
+  { value: 'code', label: '代码 & 开发' },
+  { value: 'data', label: '数据服务' },
+  { value: 'web', label: 'Web 服务' },
+  { value: 'devops', label: 'DevOps' },
+  { value: 'productivity', label: '办公效率' },
+];
+
+// Category label lookup for display on cards
+const CATEGORY_LABELS: Record<string, string> = {
+  code: '代码 & 开发',
+  data: '数据服务',
+  web: 'Web 服务',
+  devops: 'DevOps',
+  productivity: '办公效率',
+};
+
 interface MCPPanelProps {
   onMcpChange?: () => void;
 }
@@ -448,19 +467,21 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
               className="mcp-catalog-search"
               value={catalogSearch}
               onChange={(event) => setCatalogSearch(event.target.value)}
-              placeholder="搜索服务..."
+              placeholder={t('mcp.catalog_search')}
             />
           </div>
 
-          {/* Category tabs (placeholder - templates don't have categories yet) */}
+          {/* Category tabs */}
           <div className="mcp-catalog-categories">
-            <button
-              className={`mcp-catalog-tab ${catalogCategory === 'all' ? 'mcp-catalog-tab--active' : ''}`}
-              onClick={() => setCatalogCategory('all')}
-            >
-              全部
-            </button>
-            {/* TODO: render actual categories from template metadata when available */}
+            {catalogCategories.map((cat) => (
+              <button
+                key={cat.value}
+                className={`mcp-catalog-tab ${catalogCategory === cat.value ? 'mcp-catalog-tab--active' : ''}`}
+                onClick={() => setCatalogCategory(cat.value)}
+              >
+                {cat.label}
+              </button>
+            ))}
           </div>
 
           {/* Service card grid */}
@@ -478,6 +499,7 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
                 <div className="mcp-catalog-card__desc">{template.description || ''}</div>
                 <div className="mcp-catalog-card__tags">
                   <Badge className="mcp-transport-badge">{template.transport}</Badge>
+                  {template.category && <Badge className="mcp-category-badge">{CATEGORY_LABELS[template.category] || template.category}</Badge>}
                 </div>
               </div>
             ))}

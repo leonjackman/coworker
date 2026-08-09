@@ -20,6 +20,7 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://github.com/modelcontextprotocol/servers",
         "color": "#000000",
+        "category": "code",
     },
     {
         "id": "git",
@@ -33,6 +34,7 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://github.com/modelcontextprotocol/servers",
         "color": "#F05032",
+        "category": "code",
     },
     {
         "id": "context7",
@@ -46,6 +48,7 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://context7.com",
         "color": "#7C3AED",
+        "category": "code",
     },
     {
         "id": "deepwiki",
@@ -59,6 +62,7 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://mcp.deepwiki.com",
         "color": "#F59E0B",
+        "category": "data",
     },
     {
         "id": "sequential-thinking",
@@ -72,6 +76,7 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://github.com/modelcontextprotocol/servers",
         "color": "#10B981",
+        "category": "code",
     },
     {
         "id": "memory-server",
@@ -85,6 +90,7 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://github.com/modelcontextprotocol/servers",
         "color": "#3B82F6",
+        "category": "data",
     },
     {
         "id": "playwright",
@@ -98,6 +104,7 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://playwright.dev",
         "color": "#2EAD33",
+        "category": "devops",
     },
     {
         "id": "everything-server",
@@ -111,5 +118,6 @@ TEMPLATES: list[dict[str, Any]] = [
         "headers": {},
         "homepage": "https://github.com/modelcontextprotocol/servers",
         "color": "#6366F1",
+        "category": "code",
     },
 ]

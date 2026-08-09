@@ -434,5 +434,6 @@
   "mcp.search_placeholder": "Search extensions…",
   "mcp.check_all": "Check connections",
   "mcp.secret_kept": "Saved secret (unchanged)",
-  "mcp.no_match": "No matching extensions."
+  "mcp.no_match": "No matching extensions.",
+  "mcp.catalog_search": "Search MCP services..."
 }
