@@ -5282,6 +5282,27 @@ body.bottom-panel-resizing {
   margin-bottom: 18px;
 }
 
+.mcp-quick-card__content {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mcp-quick-card__content > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-catalog-btn {
+  align-self: flex-end;
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 0 10px;
+  min-height: 32px;
+}
+
 .mcp-quick-card strong {
   font-size: 14px;
   color: var(--foreground);
@@ -5336,6 +5357,20 @@ body.bottom-panel-resizing {
   justify-content: center;
 }
 
+/* Colored SVG logo inside template pills & catalog cards */
+.mcp-template-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.mcp-template-logo svg {
+  width: 12px;
+  height: 12px;
+}
+
 /* List heading (aligned with provider-list-heading) */
 .mcp-list-heading {
   justify-content: space-between;
@@ -5344,11 +5379,20 @@ body.bottom-panel-resizing {
   margin-bottom: 16px;
 }
 
-.mcp-list-heading h2 {
+.mcp-list-heading > h2 {
   font-size: 14px;
   color: var(--foreground);
   font-weight: 600;
   margin: 0;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.mcp-list-heading .mcp-list-actions {
+  flex: 1;
+  justify-content: flex-end;
+  max-width: 400px;
+  margin: 0 16px;
 }
 
 /* Server list (aligned with provider-list) */
@@ -5418,6 +5462,7 @@ body.bottom-panel-resizing {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  justify-content: space-between;
 }
 
 .mcp-card__subtitle {
@@ -5426,6 +5471,68 @@ body.bottom-panel-resizing {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* Edit button on row 2 of list card */
+.mcp-card-edit-btn {
+  background: none;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: all 200ms;
+  white-space: nowrap;
+}
+.mcp-card-edit-btn:hover {
+  color: var(--foreground);
+  border-color: var(--muted-border);
+  background: var(--panel-hover);
+}
+
+/* ── Detail sections (form view) ───────────────────────────────── */
+
+.mcp-detail-section {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+  margin-top: 4px;
+}
+
+.mcp-divider {
+  border-top: 1px solid var(--material-border);
+  margin: 4px 0;
+  padding-top: 12px;
+}
+
+.mcp-tool-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  gap: 12px;
+}
+.mcp-tool-row:last-child { border-bottom: none; }
+
+.mcp-tool-name {
+  font-size: 13px;
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.mcp-tool-desc {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-top: 2px;
+}
+
+.mcp-edit-env-btn {
+  padding: 6px 12px;
+  font-size: 12px;
 }
 
 /* Status dot */
@@ -5651,10 +5758,13 @@ body.bottom-panel-resizing {
 
 /* Form footer (aligned with provider-form-footer) */
 .mcp-form-footer {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   border-top: 1px solid var(--material-border);
   padding-top: 12px;
   margin-top: 0;
+  gap: 10px;
 }
 
 .mcp-form-footer__actions {

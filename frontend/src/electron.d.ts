@@ -8,6 +8,13 @@ import type {
   CreateProjectRequest,
   CreateSessionRequest,
   CurrentDiffResponse,
+  McpDiscoverPayload,
+  McpServerCreateRequest,
+  McpServerEntry,
+  McpServerListPayload,
+  McpServerUpdateRequest,
+  McpTestRequest,
+  McpTestResult,
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
@@ -92,8 +99,16 @@ declare global {
       goalDelete: (sessionId: string) => Promise<{ status: string }>;
   goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
   goalStart: (request: { session_id: string; goal: string; language: string }) => Promise<{ status: string }>;
-  fetchSettings?: () => Promise<{ goal_max_rounds: number }>;
+      fetchSettings?: () => Promise<{ goal_max_rounds: number }>;
       saveSettings?: (settings: { goal_max_rounds?: number }) => Promise<{ status: string; goal_max_rounds: number }>;
+      listMcps: () => Promise<McpServerListPayload>;
+      discoverMcps: () => Promise<McpDiscoverPayload>;
+      createMcp: (request: McpServerCreateRequest) => Promise<{ server: McpServerEntry }>;
+      updateMcp: (serverId: string, request: McpServerUpdateRequest) => Promise<{ server: McpServerEntry }>;
+      deleteMcp: (serverId: string) => Promise<{ status: string }>;
+      testMcp: (request: McpTestRequest) => Promise<{ result: McpTestResult }>;
+      checkMcp: (serverId: string) => Promise<{ server: McpServerEntry }>;
+      checkAllMcps: () => Promise<McpServerListPayload>;
     };
   }
 }

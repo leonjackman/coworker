@@ -19,7 +19,7 @@ import { RollbackDialog } from './components/RollbackDialog';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -139,6 +139,8 @@ function App() {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [references, setReferences] = useState<SessionReference[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
+  const [mcpTemplates, setMcpTemplates] = useState<McpTemplateEntry[]>([]);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
   const requestSeqRef = useRef(0);
@@ -204,6 +206,20 @@ function App() {
     }
   };
 
+  const refreshMcps = async () => {
+    try {
+      const [serversRes, templatesRes] = await Promise.all([
+        chatService.listMcps().catch(() => ({ servers: [] as any[] })),
+        chatService.discoverMcps().catch(() => ({ servers: [] as any[] })),
+      ]);
+      setMcpServers(serversRes?.servers || []);
+      // discoverMcps returns { status, servers: McpTemplateEntry[] } — the `servers` key holds templates
+      setMcpTemplates((templatesRes as any)?.servers || (templatesRes as any)?.templates || []);
+    } catch {
+      /* Best-effort */
+    }
+  };
+
   const refreshSessions = async () => {
     try {
       const response = await chatService.listSessions();
@@ -245,6 +261,7 @@ function App() {
         }
         await refreshSessions();
         await refreshProjects();
+        await refreshMcps();
         try {
           const settings = await chatService.fetchSettings();
           if (typeof settings.goal_max_rounds === 'number') {
@@ -2141,7 +2158,7 @@ function App() {
               ) : activeView === 'providers' ? (
                 <ProvidersPanel onProviderChange={refreshProviders} />
               ) : activeView === 'mcp' ? (
-                <MCPPanel onMcpChange={refreshProviders} />
+                <MCPPanel servers={mcpServers} templates={mcpTemplates} setServers={setMcpServers} onMcpChange={refreshProviders} />
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}

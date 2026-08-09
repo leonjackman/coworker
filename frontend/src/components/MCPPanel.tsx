@@ -1,8 +1,8 @@
-import { ChevronDown, Database, Globe, Loader2, Network, Plus, Save, Search, Shield, Terminal, Trash2, Wrench, FileText, Code, Cloud, GitBranch } from 'lucide-react';
+import { ChevronDown, Database, FileText, Globe, GitBranch, Loader2, Network, Plus, Save, Search, Shield, Terminal, Trash2, Wrench, Code, Cloud, Settings2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
-import type { McpServerEntry, McpTemplateEntry } from '../types';
+import type { McpServerEntry, McpTemplateEntry, McpToolEntry } from '../types';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -15,23 +15,94 @@ const SECRET_PLACEHOLDER = '__CW_SECRET_KEPT__';
 
 type ViewMode = 'list' | 'form' | 'catalog';
 
-// Color icon map for popular MCP templates — each returns a colored SVG icon.
-const MCP_ICONS: Record<string, { icon: React.ReactNode; color: string }> = {
-  filesystem: { icon: <FileText size={12} />, color: '#000000' },
-  git: { icon: <GitBranch size={12} />, color: '#F05032' },
-  context7: { icon: <Shield size={12} />, color: '#7C3AED' },
-  deepwiki: { icon: <FileText size={12} />, color: '#F59E0B' },
-  'sequential-thinking': { icon: <Code size={12} />, color: '#10B981' },
-  'memory-server': { icon: <Database size={12} />, color: '#3B82F6' },
-  playwright: { icon: <Globe size={12} />, color: '#2EAD33' },
-  'everything-server': { icon: <Wrench size={12} />, color: '#6366F1' },
+// ── Catalog category definition ──────────────────────────────────────────────
+
+interface CatalogCategory {
+  value: string;
+  label: string;
+}
+
+const CATEGORIES: CatalogCategory[] = [
+  { value: 'all', label: t('mcp.cat_all') },
+  { value: 'code', label: t('mcp.cat_code') },
+  { value: 'data', label: t('mcp.cat_data') },
+  { value: 'web', label: t('mcp.cat_web') },
+  { value: 'devops', label: t('mcp.cat_devops') },
+  { value: 'productivity', label: t('mcp.cat_productivity') },
+  { value: 'basic', label: t('mcp.cat_basic') },
+];
+
+const CATEGORY_LABELS: Record<string, string> = {
+  code: t('mcp.cat_code'),
+  data: t('mcp.cat_data'),
+  web: t('mcp.cat_web'),
+  devops: t('mcp.cat_devops'),
+  productivity: t('mcp.cat_productivity'),
+  basic: t('mcp.cat_basic'),
 };
 
-function TemplateIcon(template: McpTemplateEntry): React.ReactNode {
-  const entry = MCP_ICONS[template.id];
-  if (!entry) return <Network size={12} />;
-  return <span style={{ color: entry.color }}>{entry.icon}</span>;
+// ── SVG icon map for MCP templates (real service logos) ──────────────────────
+
+interface TemplateIconDef {
+  svg: string;       // raw SVG markup for a ~24px colored logo
+  color: string;
 }
+
+const MCP_LOGOS: Record<string, TemplateIconDef> = {
+  filesystem: {
+    color: '#000000',
+    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
+  },
+  git: {
+    // GitHub Octocat logo (official brand)
+    color: '#1B1F23',
+    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.66-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>',
+  },
+  context7: {
+    // Upstash Context7 logo (shield icon)
+    color: '#7C3AED',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+  },
+  deepwiki: {
+    color: '#F59E0B',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
+  },
+  'sequential-thinking': {
+    color: '#10B981',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>',
+  },
+  'memory-server': {
+    color: '#3B82F6',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
+  },
+  playwright: {
+    // Playwright logo (official brand - purple P)
+    color: '#EC433F',
+    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.162 15.835a2.404 2.404 0 0 0 1.747-.743l6.73-6.792a.676.676 0 0 0-.006-.964.693.693 0 0 0-.973.003L5.934 14.13a.686.686 0 0 0-.005.973c.267.272.722.269.99-.005zm4.87-4.923a2.404 2.404 0 0 0 1.747-.743l4.185-4.227a.676.676 0 0 0-.006-.964.693.693 0 0 0-.973.003L10.804 10.1c-.266.269-.264.705.005.973.269.269.723.266.99-.005zM12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z"/></svg>',
+  },
+  'everything-server': {
+    color: '#6366F1',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6m11-7h-6m-6 0H1m15.364-6.364l-4.243 4.243m-3.942 0L4.636 5.636m12.728 12.728l-4.243-4.243m-3.942 0L4.636 18.364"/></svg>',
+  },
+  // fallback generic icon
+  default: {
+    color: '#8b949e',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"/></svg>',
+  },
+};
+
+function renderLogo(template: McpTemplateEntry): React.ReactNode {
+  const def = MCP_LOGOS[template.id] ?? MCP_LOGOS.default;
+  return (
+    <span
+      className="mcp-template-logo"
+      style={{ color: def?.color ?? '#8b949e' }}
+      dangerouslySetInnerHTML={{ __html: def?.svg ?? '' }}
+    />
+  );
+}
+
+// ── Form state ───────────────────────────────────────────────────────────────
 
 type FormState = {
   id: string | null;
@@ -53,172 +124,56 @@ const emptyForm = (): FormState => ({
   envPairs: [],
 });
 
-// Catalog categories for filtering
-const catalogCategories = [
-  { value: 'all', label: '全部' },
-  { value: 'code', label: '代码 & 开发' },
-  { value: 'data', label: '数据服务' },
-  { value: 'web', label: 'Web 服务' },
-  { value: 'devops', label: 'DevOps' },
-  { value: 'productivity', label: '办公效率' },
-];
-
-// Category label lookup for display on cards
-const CATEGORY_LABELS: Record<string, string> = {
-  code: '代码 & 开发',
-  data: '数据服务',
-  web: 'Web 服务',
-  devops: 'DevOps',
-  productivity: '办公效率',
-};
+// ── Component ────────────────────────────────────────────────────────────────
 
 interface MCPPanelProps {
+  servers: McpServerEntry[];
+  templates: McpTemplateEntry[];
+  setServers: React.Dispatch<React.SetStateAction<McpServerEntry[]>>;
   onMcpChange?: () => void;
 }
 
-export function MCPPanel({ onMcpChange }: MCPPanelProps) {
-  const [servers, setServers] = useState<McpServerEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms: number | null; error?: string; tool_count?: number } | null>(null);
+function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [form, setForm] = useState<FormState>(emptyForm());
+  const [message, setMessage] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  type TestResultType = { ok: boolean; latency_ms: number; tool_count?: number | undefined; error?: string };
+  const [testResult, setTestResult] = useState<TestResultType | null>(null);
+  const [checking, setChecking] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
-  const [templates, setTemplates] = useState<McpTemplateEntry[]>([]);
   const [search, setSearch] = useState('');
+
+  // Catalog state
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogCategory, setCatalogCategory] = useState('all');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  useEffect(() => {
     setMessage(null);
+    setTestResult(null);
+  }, [viewMode]);
+
+  async function load() {
     try {
-      const response = await chatService.listMcps();
-      setServers(response.servers);
-    } catch (error) {
-      setMessage(translateError(error));
-    } finally {
-      setLoading(false);
+      const res = await chatService.listMcps();
+      setServers(res.servers);
+      onMcpChange?.();
+    } catch {
+      /* ignore — best-effort */
     }
-  }, []);
+  }
 
   useEffect(() => {
-    void load();
-    chatService.discoverMcps().then((res) => setTemplates(res.servers ?? [])).catch(() => {});
-  }, [load]);
+    load();
+  }, []);
 
-  const filteredServers = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return servers;
-    return servers.filter((s) => s.name.toLowerCase().includes(q));
-  }, [servers, search]);
-
-  const catalogFiltered = useMemo(() => {
-    const q = catalogSearch.trim().toLowerCase();
-    let list = templates;
-    if (catalogCategory !== 'all') {
-      list = list.filter((t) => (t.category || '').toLowerCase() === catalogCategory);
-    }
-    if (q) {
-      list = list.filter((t) => t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q));
-    }
-    return list;
-  }, [templates, catalogSearch, catalogCategory]);
-
-  function selectTemplate(template: McpTemplateEntry) {
-    setForm({
-      id: null,
-      name: template.name,
-      transport: template.transport,
-      command: template.command || '',
-      args: template.args || '',
-      url: template.url || '',
-      envPairs: Object.entries({ ...(template.env || {}) }).map(([k, v]) => ({ key: k, value: v })),
-    });
-    setViewMode('form');
-  }
-
-  function startAdd() {
-    setForm(emptyForm());
-    setTestResult(null);
-    setViewMode('form');
-  }
-
-  function startEdit(server: McpServerEntry) {
-    // Carry the masked env values as-is: secrets arrive as SECRET_PLACEHOLDER
-    // and round-trip unchanged, so saving never wipes an existing API key.
-    const envPairs = Object.entries(server.env || {}).map(([k, v]) => ({ key: k, value: v }));
-    setForm({
-      id: server.id,
-      name: server.name,
-      transport: server.transport,
-      command: server.command || '',
-      args: server.args || '',
-      url: server.url || '',
-      envPairs,
-    });
-    setTestResult(null);
-    setViewMode('form');
-  }
-
-  function cancelForm() {
-    setViewMode('list');
-    setForm(emptyForm());
-    setTestResult(null);
-    setDeleteConfirm(null);
-  }
-
-  async function handleTest() {
-    const env = form.envPairs.filter((p) => p.key.trim()).reduce<Record<string, string>>((acc, p) => {
-      acc[p.key.trim()] = p.value;
-      return acc;
-    }, {});
-    setTesting(true);
-    setTestResult(null);
-    setMessage(null);
+  async function refreshOne(serverId: string) {
     try {
-      const result = await chatService.testMcp({
-        transport: form.transport,
-        command: form.transport === 'stdio' ? form.command : undefined,
-        args: form.transport === 'stdio' ? form.args : undefined,
-        url: ['http', 'sse'].includes(form.transport) ? form.url : undefined,
-        env,
-        // On edit, let the backend resolve masked secrets to the real values.
-        server_id: form.id ?? undefined,
-      });
-      setTestResult(result);
-    } catch (error) {
-      setTestResult({ ok: false, latency_ms: null, error: translateError(error) });
-    } finally {
-      setTesting(false);
-    }
-  }
-
-  function addEnvPair() {
-    setForm((prev) => ({ ...prev, envPairs: [...prev.envPairs, { key: '', value: '' }] }));
-  }
-
-  function removeEnvPair(index: number) {
-    setForm((prev) => ({ ...prev, envPairs: prev.envPairs.filter((_, i) => i !== index) }));
-  }
-
-  function updateEnvPair(index: number, field: 'key' | 'value', value: string) {
-    setForm((prev) => {
-      const next = [...prev.envPairs];
-      next[index] = { ...next[index], [field]: value };
-      return { ...prev, envPairs: next };
-    });
-  }
-
-  async function refreshOne(id: string) {
-    try {
-      const updated = await chatService.checkMcp(id);
-      setServers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      const res = await chatService.checkMcp(serverId);
+      setServers((prev: McpServerEntry[]) => prev.map((s: McpServerEntry) => (s.id === serverId ? { ...s, ...res } : s)));
     } catch {
-      // Best-effort: a failed re-check must not break the save flow.
+      /* Best-effort: a failed re-check must not break the save flow. */
     }
   }
 
@@ -229,6 +184,7 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
     if (!canSave) return;
     setSaving(true);
     setMessage(null);
+    setTestResult(null);
 
     const env = form.envPairs.filter((p) => p.key.trim()).reduce<Record<string, string>>((acc, p) => {
       acc[p.key.trim()] = p.value;
@@ -279,10 +235,9 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
 
   async function handleToggle(server: McpServerEntry) {
     const next = !server.enabled;
-    // Optimistic update so the switch never flickers. Revert on failure.
     const prevStatus = server.status;
-    setServers((prev) =>
-      prev.map((s) =>
+    setServers((prev: McpServerEntry[]) =>
+      prev.map((s: McpServerEntry) =>
         s.id === server.id
           ? { ...s, enabled: next, status: next ? (s.status === 'disabled' ? 'unknown' : s.status) : 'disabled' }
           : s,
@@ -291,12 +246,10 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
     try {
       await chatService.updateMcp(server.id, { enabled: next });
       onMcpChange?.();
-      // After enabling, re-check the connection so the status reflects reality
-      // instead of lingering on a neutral "unknown" until the next manual check.
       if (next) void refreshOne(server.id);
     } catch (error) {
-      setServers((prev) =>
-        prev.map((s) => (s.id === server.id ? { ...s, enabled: server.enabled, status: prevStatus } : s)),
+      setServers((prev: McpServerEntry[]) =>
+        prev.map((s: McpServerEntry) => (s.id === server.id ? { ...s, enabled: server.enabled, status: prevStatus } : s)),
       );
       setMessage(translateError(error) || t('common.operation_failed'));
     }
@@ -316,35 +269,138 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
     }
   }
 
+  function formatStatus(status: string): string {
+    switch (status) {
+      case 'connected': return t('mcp.connected');
+      case 'error_connecting': return t('mcp.error_connecting');
+      case 'needs_auth': return t('mcp.needs_auth');
+      case 'disabled': return t('mcp.disabled');
+      default: return t('mcp.unknown');
+    }
+  }
+
   function statusDot(status: string): string {
     switch (status) {
       case 'connected': return 'mcp-status-connected';
       case 'error_connecting': return 'mcp-status-error';
       case 'needs_auth': return 'mcp-status-auth';
       case 'disabled': return 'mcp-status-disabled';
-      case 'unknown': return 'mcp-status-unknown';
-      default: return 'mcp-status-connected';
+      default: return 'mcp-status-unknown';
     }
   }
 
-  function formatStatus(status: string): string {
-    const labels: Record<string, string> = {
-      connected: t('mcp.connected'),
-      error_connecting: t('mcp.error'),
-      needs_auth: t('mcp.needs_auth'),
-      disabled: t('mcp.disabled'),
-      connecting: t('mcp.connecting'),
-      unknown: t('mcp.unknown'),
-    };
-    return labels[status] || status;
+  function hasStdioFields(f: FormState | McpServerEntry) {
+    return f.transport === 'stdio' && !!f.command;
   }
 
-  const hasTransportFields = form.transport === 'stdio';
-  const isRemoteTransport = ['http', 'sse'].includes(form.transport);
-  const canSave =
-    !!form.name.trim() && (form.transport === 'stdio' ? !!form.command.trim() : !!form.url.trim());
+  function isRemoteTransport(f: FormState) {
+    return f.transport === 'http' || f.transport === 'sse';
+  }
 
-  // ========== LIST VIEW (aligned with provider list structure) ==========
+  function startEdit(server: McpServerEntry) {
+    setForm({
+      id: server.id,
+      name: server.name,
+      transport: server.transport,
+      command: server.command,
+      args: server.args,
+      url: server.url,
+      envPairs: Object.entries(server.env).map(([key, value]) => ({ key, value })),
+    });
+  }
+
+  function startAdd(template?: McpTemplateEntry) {
+    if (template) {
+      setForm({
+        id: null,
+        name: template.name,
+        transport: template.transport,
+        command: template.command,
+        args: template.args,
+        url: template.url,
+        envPairs: Object.entries(template.env ?? {}).map(([k, v]) => ({ key: k, value: v })),
+      });
+    } else {
+      setForm(emptyForm());
+    }
+    setViewMode('form');
+  }
+
+  function cancelForm() {
+    setViewMode('list');
+    setForm(emptyForm());
+    setMessage(null);
+    setTestResult(null);
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await chatService.testMcp({
+        name: form.name,
+        transport: form.transport,
+        command: form.transport === 'stdio' ? form.command : undefined,
+        args: form.transport === 'stdio' ? form.args : undefined,
+        url: isRemoteTransport(form) ? form.url : undefined,
+      } as never);
+      setTestResult({
+        ok: result.ok,
+        latency_ms: result.latency_ms ?? 0,
+        tool_count: result.tool_count ?? undefined,
+      });
+    } catch (error) {
+      setTestResult({ ok: false, latency_ms: 0, error: translateError(error) || t('common.operation_failed') });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  function updateEnvPair(index: number, field: 'key' | 'value', value: string) {
+    setForm((f: FormState) => {
+      const pairs = [...f.envPairs];
+      const current = pairs[index];
+      if (current) {
+        pairs[index] = { ...current, [field]: value };
+      }
+      return { ...f, envPairs: pairs };
+    });
+  }
+
+  function removeEnvPair(index: number) {
+    setForm((f) => ({ ...f, envPairs: f.envPairs.filter((_, i) => i !== index) }));
+  }
+
+  function addEnvPair() {
+    setForm((f) => ({ ...f, envPairs: [...f.envPairs, { key: '', value: '' }] }));
+  }
+
+  // ── Filtered servers list ──
+
+  const filteredServers = useMemo(() => {
+    if (!search) return servers;
+    const q = search.toLowerCase();
+    return servers.filter((s) => s.name.toLowerCase().includes(q) || s.transport.toLowerCase().includes(q));
+  }, [servers, search]);
+
+  // ── Catalog filtered ──
+
+  const catalogFiltered = useMemo(() => {
+    let list = templates;
+    if (catalogCategory !== 'all') {
+      list = list.filter((t) => t.category === catalogCategory);
+    }
+    if (catalogSearch.trim()) {
+      const q = catalogSearch.toLowerCase();
+      list = list.filter((t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q));
+    }
+    return list;
+  }, [templates, catalogCategory, catalogSearch]);
+
+  const isFormDirty = form.name.trim() && (form.transport === 'stdio' ? !!form.command.trim() : !!form.url.trim());
+
+  // ── LIST VIEW ──
+
   if (viewMode === 'list') {
     return (
       <WorkspacePage
@@ -367,12 +423,12 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
                 <p>{t('mcp.quick_add_desc')}</p>
                 <div className="mcp-template-row">
                   {templates.map((template) => (
-                    <button key={template.id} type="button" className="mcp-template-pill" onClick={() => selectTemplate(template)}>
-                      {TemplateIcon(template)}
+                    <button key={template.id} type="button" className="mcp-template-pill" onClick={() => startAdd(template)}>
+                      {renderLogo(template)}
                       {template.name}
                     </button>
                   ))}
-                  <button type="button" className="mcp-template-pill mcp-template-pill--dashed" onClick={startAdd}>
+                  <button type="button" className="mcp-template-pill mcp-template-pill--dashed" onClick={() => startAdd()}>
                     <Plus size={12} />
                     {t('mcp.custom_extension')}
                   </button>
@@ -381,19 +437,32 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
             </div>
           )}
 
-          {/* List heading (aligned with provider-list-heading) */}
+          {/* List heading: title | search + check | add button */}
           <div className="mcp-list-heading">
             <h2>{t('mcp.my_extensions')} ({servers.length})</h2>
-            <Button variant="primary" onClick={startAdd}>
+            <div className="mcp-list-actions">
+              <div className="mcp-search">
+                <Search size={14} className="mcp-search__icon" />
+                <input
+                  className="mcp-search__input"
+                  placeholder={t('mcp.search_placeholder')}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              <Button variant="ghost" onClick={handleCheckAll} disabled={checking} className="mcp-check-all-btn">
+                {checking ? <Loader2 size={14} className="animate-spin" /> : <Network size={14} />}
+                {t('mcp.check_connection')}
+              </Button>
+            </div>
+            <Button variant="primary" onClick={() => startAdd()}>
               <Plus size={14} />
               {t('mcp.add_server')}
             </Button>
           </div>
 
-          {/* Server list (aligned with provider-list / provider-card--mir) */}
-          {loading ? (
-            <div className="mcp-empty">{t('common.loading')}</div>
-          ) : servers.length === 0 ? (
+          {/* Server list */}
+          {servers.length === 0 ? (
             <div className="mcp-empty">
               <p>{t('mcp.empty')}</p>
               <span>{t('mcp.empty_hint')}</span>
@@ -404,39 +473,60 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
             </div>
           ) : (
             <div className="mcp-list">
-              {filteredServers.map((server) => (
-                <article
-                  className={`mcp-card ${!server.enabled || server.status === 'disabled' ? 'mcp-card--disabled' : ''}`}
-                  key={server.id}
-                  onClick={() => {
-                    startEdit(server);
-                    setViewMode('form');
-                  }}
-                >
-                  <div className="mcp-card__top">
-                    <div className="mcp-card__identity">
-                      <span className={`mcp-status-dot ${statusDot(server.status)}`} />
-                      <strong>{server.name}</strong>
-                      <Badge className="mcp-transport-badge">{server.transport}</Badge>
-                      {!server.enabled || server.status === 'disabled' ? <Badge>{t('mcp.disabled')}</Badge> : null}
+              {filteredServers.map((server) => {
+                const disabled = !server.enabled || server.status === 'disabled';
+                return (
+                  <article
+                    className={`mcp-card ${disabled ? 'mcp-card--disabled' : ''}`}
+                    key={server.id}
+                    onClick={() => {
+                      startEdit(server);
+                      setViewMode('form');
+                    }}
+                  >
+                    {/* Row 1: status dot + name + badge ─ switcher */}
+                    <div className="mcp-card__top">
+                      <div className="mcp-card__identity">
+                        <span className={`mcp-status-dot ${statusDot(server.status)}`} />
+                        <strong>{server.name}</strong>
+                        <Badge className="mcp-transport-badge">{server.transport}</Badge>
+                        {disabled && <Badge>{t('mcp.disabled')}</Badge>}
+                      </div>
+                      <div className="mcp-card__controls" onClick={(e) => e.stopPropagation()}>
+                        <Switch
+                          id={`mcp-switch-${server.id}`}
+                          checked={server.enabled}
+                          onChange={() => handleToggle(server)}
+                        />
+                      </div>
                     </div>
-                    <div className="mcp-card__controls" onClick={(e) => e.stopPropagation()}>
-                      <Switch
-                        id={`mcp-switch-${server.id}`}
-                        checked={server.enabled}
-                        onChange={() => handleToggle(server)}
-                      />
-                    </div>
-                  </div>
 
-                  <div className="mcp-card__meta">
-                    <span className="mcp-card__subtitle">
-                      {t('mcp.tool_count').replace('{count}', String(server.tool_count || 0))}
-                      {server.error_message && <span className="mcp-error-msg">{server.error_message}</span>}
-                    </span>
-                  </div>
-                </article>
-              ))}
+                    {/* Row 2: subtitle + tool count ─ edit button */}
+                    <div className="mcp-card__meta">
+                      <span className="mcp-card__subtitle">
+                        {(() => {
+                          // Normalize: lowercase, strip common suffixes, replace spaces with hyphens
+                          const normalize = (s: string) => s.toLowerCase().replace(/\b(mcp|server|extension|tool)\b/g, '').trim().replace(/\s+/g, '-');
+                          const normServer = normalize(server.name);
+                          const tpl = templates.find(t => normalize(t.id) === normServer || normalize(t.name) === normServer);
+                          return tpl?.description || server.name;
+                        })()} · {t('mcp.tool_count').replace('{count}', String(server.tool_count || 0))}
+                        {server.error_message && <span className="mcp-error-msg"> · {server.error_message}</span>}
+                      </span>
+                      <button
+                        className="mcp-card-edit-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEdit(server);
+                          setViewMode('form');
+                        }}
+                      >
+                        {t('mcp.edit')}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           )}
 
@@ -447,12 +537,13 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
   }
 
   // ========== CATALOG VIEW (service directory, "更多" entry) ==========
+
   if (viewMode === 'catalog') {
     return (
       <WorkspacePage
         eyebrow={t('mcp.title')}
-        title="全部支持的 MCP 服务"
-        description="浏览所有可添加的 MCP 服务，选择一个服务即可快速配置。"
+        title={t('mcp.catalog_title')}
+        description={t('mcp.catalog_desc')}
         action={
           <Button variant="ghost" onClick={() => setViewMode('list')}>
             {t('mcp.back')}
@@ -473,7 +564,7 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
 
           {/* Category tabs */}
           <div className="mcp-catalog-categories">
-            {catalogCategories.map((cat) => (
+            {CATEGORIES.map((cat) => (
               <button
                 key={cat.value}
                 className={`mcp-catalog-tab ${catalogCategory === cat.value ? 'mcp-catalog-tab--active' : ''}`}
@@ -490,10 +581,10 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
               <div
                 className="mcp-catalog-card"
                 key={template.id}
-                onClick={() => selectTemplate(template)}
+                onClick={() => startAdd(template)}
               >
-                <div className="mcp-catalog-card__icon" style={{ color: template.color }}>
-                  {TemplateIcon(template)}
+                <div className="mcp-catalog-card__icon" style={{ color: (MCP_LOGOS[template.id] ?? MCP_LOGOS.default)?.color ?? '#8b949e' }}>
+                  {renderLogo(template)}
                 </div>
                 <div className="mcp-catalog-card__name">{template.name}</div>
                 <div className="mcp-catalog-card__desc">{template.description || ''}</div>
@@ -510,11 +601,12 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
   }
 
   // ========== FORM VIEW (server detail/edit form, aligned with provider form) ==========
+
   return (
     <WorkspacePage
       className="mcp-shell--form"
       eyebrow={t('mcp.title')}
-      title={form.id ? t('mcp.edit_server') : t('mcp.add_title')}
+      title={form.id ? servers.find((s) => s.id === form.id)?.name || '' : t('mcp.add_title')}
       action={
         <Button variant="ghost" onClick={cancelForm}>
           {t('mcp.back')}
@@ -534,7 +626,7 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
               <Button
                 variant="secondary"
                 onClick={handleTest}
-                disabled={testing || (hasTransportFields && !form.command.trim()) || (isRemoteTransport && !form.url.trim())}
+                disabled={testing || (hasStdioFields({ ...emptyForm(), ...form }) && !form.command.trim()) || (isRemoteTransport(form) && !form.url.trim())}
                 className="mcp-test-btn"
               >
                 {testing ? (
@@ -554,7 +646,8 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
             </div>
           )}
 
-          <h2>{form.id ? t('mcp.edit_server') : t('mcp.add_title')}</h2>
+          {/* ── Connection config ── */}
+          <div className="mcp-detail-section">{t('mcp.connection_config')}</div>
 
           <label className="field">
             <span>{t('mcp.name')}</span>
@@ -599,32 +692,30 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
             </div>
           </div>
 
-          {hasTransportFields && (
-            <>
-              <div className="mcp-cmd-row">
-                <label className="field">
-                  <span>{t('mcp.command')}</span>
-                  <input
-                    value={form.command}
-                    onChange={(event) => setForm({ ...form, command: event.target.value })}
-                    placeholder={t('mcp.command_placeholder')}
-                    disabled={saving}
-                  />
-                </label>
-                <label className="field mcp-args-field">
-                  <span className="mcp-args-label">{t('mcp.args')}</span>
-                  <input
-                    value={form.args}
-                    onChange={(event) => setForm({ ...form, args: event.target.value })}
-                    placeholder={t('mcp.args_placeholder')}
-                    disabled={saving}
-                  />
-                </label>
-              </div>
-            </>
+          {form.transport === 'stdio' && (
+            <div className="mcp-cmd-row">
+              <label className="field">
+                <span>{t('mcp.command')}</span>
+                <input
+                  value={form.command}
+                  onChange={(event) => setForm({ ...form, command: event.target.value })}
+                  placeholder={t('mcp.command_placeholder')}
+                  disabled={saving}
+                />
+              </label>
+              <label className="field mcp-args-field">
+                <span className="mcp-args-label">{t('mcp.args')}</span>
+                <input
+                  value={form.args}
+                  onChange={(event) => setForm({ ...form, args: event.target.value })}
+                  placeholder={t('mcp.args_placeholder')}
+                  disabled={saving}
+                />
+              </label>
+            </div>
           )}
 
-          {isRemoteTransport && (
+          {(form.transport === 'http' || form.transport === 'sse') && (
             <label className="field">
               <span>{t('mcp.url')}</span>
               <input
@@ -636,8 +727,51 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
             </label>
           )}
 
+          {/* ── Divider ── */}
+          <div className="mcp-divider"></div>
+
+          {/* ── Discovered tools (server detail only) ── */}
+          {form.id && servers.find((s) => s.id === form.id)?.tools && (
+            <div className="mcp-detail-section">{t('mcp.discovered_tools').replace('{count}', String(servers.find((s) => s.id === form.id)?.tools?.length || 0))}</div>
+          )}
+
+          {form.id && servers.find((s) => s.id === form.id)?.tools?.map((tool: McpToolEntry) => (
+            <div className="mcp-tool-row" key={tool.name}>
+              <div>
+                <div className="mcp-tool-name">{tool.name}</div>
+                {tool.description && <div className="mcp-tool-desc">{tool.description}</div>}
+              </div>
+              <Switch id={`mcp-tool-${tool.name}`} checked={true} onChange={() => {}} />
+            </div>
+          ))}
+
+          {/* ── Divider ── */}
+          <div className="mcp-divider"></div>
+
+          {/* ── Advanced settings ── */}
+          <div className="mcp-detail-section">{t('mcp.advanced_settings')}</div>
+
+          {/* Auto-approve all */}
+          <div className="mcp-tool-row">
+            <div>
+              <div className="mcp-tool-name">{t('mcp.trust_server')}</div>
+              <div className="mcp-tool-desc">{t('mcp.trust_desc')}</div>
+            </div>
+            <Switch id="mcp-trust" checked={false} onChange={() => {}} />
+          </div>
+
+          {/* Environment variables */}
+          <div className="mcp-tool-row">
+            <div>
+              <div className="mcp-tool-name">{t('mcp.env_vars')}</div>
+            </div>
+            <Button variant="secondary" onClick={() => addEnvPair()} className="mcp-edit-env-btn">
+              {t('mcp.edit')}
+            </Button>
+          </div>
+
+          {/* ── Environment variables editor ── */}
           <div className="field">
-            <span>{t('mcp.env_desc')}</span>
             {form.envPairs.map((pair, i) => {
               const isSecret = pair.value === SECRET_PLACEHOLDER;
               return (
@@ -670,6 +804,7 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
             </Button>
           </div>
 
+          {/* ── Footer ── */}
           <div className="mcp-form-footer">
             {form.id && (
               <Button variant="ghost" className="mcp-danger-button" onClick={() => setDeleteConfirm(form.id)} disabled={saving}>
@@ -677,35 +812,33 @@ export function MCPPanel({ onMcpChange }: MCPPanelProps) {
                 {t('common.delete')}
               </Button>
             )}
+
             <div className="mcp-form-footer__actions">
-              <Button variant="secondary" onClick={cancelForm} disabled={saving}>{t('mcp.cancel')}</Button>
-              <Button
-                variant="primary"
-                onClick={handleSave}
-                disabled={saving || !canSave}
-              >
+              <Button variant="ghost" onClick={cancelForm} disabled={saving}>
+                {t('mcp.cancel')}
+              </Button>
+              <Button variant="primary" onClick={handleSave} disabled={saving || !isFormDirty}>
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 {t('mcp.save')}
               </Button>
             </div>
           </div>
+
+          {message && <p className="mcp-message">{message}</p>}
+
+          {/* Delete inline confirm */}
+          {deleteConfirm && form.id && (
+            <div className="mcp-delete-confirm">
+              <p>{t('mcp.delete_confirm')}</p>
+              <Button variant="icon" className="mcp-delete-confirm__button" onClick={() => handleDelete(form.id!)} disabled={saving}>
+                {t('common.delete')}
+              </Button>
+            </div>
+          )}
         </div>
       </div>
-
-      {deleteConfirm && (
-        <div className="mcp-delete-confirm">
-          <p>{t('mcp.delete_confirm')}</p>
-          <div>
-            <Button variant="secondary" onClick={() => setDeleteConfirm(null)}>{t('mcp.cancel')}</Button>
-            <Button variant="primary" className="mcp-delete-confirm__button" onClick={() => handleDelete(deleteConfirm)}>
-              <Trash2 size={13} />
-              {t('common.delete')}
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {message && <p className="mcp-message">{message}</p>}
     </WorkspacePage>
   );
 }
+
+export { MCPPanel };
