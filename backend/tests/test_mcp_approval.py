@@ -18,7 +18,7 @@ from coworker.agents import (
     record_runtime_interrupts,
     stream_event_from_interrupt,
 )
-from coworker.mcp_session import mcp_approval_digest
+from backend.coworker.mcp.mcp_session import mcp_approval_digest
 from coworker.workspace import CommandApprovalStore
 
 SERVER_ID = "srv-1"

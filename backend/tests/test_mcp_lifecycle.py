@@ -19,8 +19,8 @@ from pathlib import Path
 import pytest
 
 from .conftest import write_server
-from coworker.mcp import McpManager
-from coworker.mcp_session import McpSessionManager
+from backend.coworker.mcp.mcp import McpManager
+from backend.coworker.mcp.mcp_session import McpSessionManager
 
 
 def add_stdio_server(mgr: McpManager, tmp_path: Path, name: str) -> str:

@@ -35,8 +35,8 @@ from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
-from coworker.mcp import McpManager
-from coworker.mcp_session import McpSessionManager
+from backend.coworker.mcp.mcp import McpManager
+from backend.coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
@@ -1668,9 +1668,9 @@ async def fetch_provider_models(request: ProviderFetchModelsPayload):
 
 # ─────────────────────────── MCP ──────────────────────────
 
-from coworker.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
-from coworker.mcp_discover import TEMPLATES
-from coworker.mcp_test import test_mcp_connection_sync
+from backend.coworker.mcp.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
+from backend.coworker.mcp.mcp_discover import TEMPLATES
+from backend.coworker.mcp.mcp_test import test_mcp_connection_sync
 
 MCP_CHECK_TIMEOUT_SECONDS = 25.0
 

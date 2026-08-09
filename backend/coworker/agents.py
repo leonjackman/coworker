@@ -18,7 +18,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, Runtime
 
 from .config import BackendSettings
-from .mcp import McpManager
+from .mcp.mcp import McpManager
 from .providers import ProviderEntry, ProviderManager
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .changes import ChangeStore
@@ -1706,10 +1706,10 @@ def build_coworker_agent_graph(
     """
     from langchain.agents import create_agent
 
-    from .mcp_middleware import McpToolMiddleware
+    from .mcp.mcp_middleware import McpToolMiddleware
 
     if mcp_session_manager is None:
-        from .mcp_session import McpSessionManager
+        from .mcp.mcp_session import McpSessionManager
 
         _mcp_manager = McpManager(
             Path(data_dir if data_dir is not None else Path.cwd()) / "mcp_servers.json",

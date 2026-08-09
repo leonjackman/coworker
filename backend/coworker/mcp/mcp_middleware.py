@@ -257,7 +257,7 @@ class McpToolMiddleware(AgentMiddleware):
         if self.audit_path is None:
             return
         try:
-            from .workspace import append_tool_audit
+            from ..workspace import append_tool_audit
 
             tool_call = getattr(request, "tool_call", None)
             args = tool_call.get("args") if isinstance(tool_call, dict) else None
