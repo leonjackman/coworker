@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 class McpToolMiddleware(AgentMiddleware):
-    """Augments every model call with tools exposed by enabled MCP servers."""
 
     def __init__(self, mcp_manager: McpManager):
         self.mcp_manager = mcp_manager
@@ -99,30 +98,36 @@ class McpToolMiddleware(AgentMiddleware):
         taken = {getattr(tool, "name", None) for tool in existing}
 
         additions = []
-        for tool in self.mcp_tools:
-            name = getattr(tool, "name", None)
+        for t in self.mcp_tools:
+            name = getattr(t, "name", None)
             if name in taken:
                 logger.warning("Skipping MCP tool %r: name collides with a builtin tool", name)
                 continue
             taken.add(name)
-            additions.append(tool)
+            additions.append(t)
 
         if not additions:
             return {}
 
         overrides: dict[str, Any] = {"tools": existing + additions}
 
+        # Build an explicit attribution section and PREPEND it to the system prompt.
+        # Placing it first ensures the model sees it before other content, making
+        # the MCP attribution authoritative rather than just another block.
         summary = self._mcp_summary()
         if summary:
             current = getattr(request, "system_message", None)
             base_text = getattr(current, "text", "") or ""
+            # Put attribution BEFORE the rest of the prompt so the model uses it
+            # to correctly attribute all tools it sees.
             section = (
-                "\n\n## MCP 服务与工具 / MCP Services & Tools\n\n"
-                "以下工具来自已连接的 MCP 服务（按服务分组）。\n"
-                "The tools below are provided by connected MCP servers, grouped by server.\n\n"
-                f"{summary}"
+                f"## MCP 服务与工具归属 / MCP Server Attribution\n\n"
+                "以下工具来自已连接的 MCP 服务（按服务器分组）。"
+                "When identifying tools, tools listed below belong to the named MCP server.\n\n"
+                f"{summary}\n\n"
+                "If asked which tools belong to MCP servers, use this section as your reference.\n"
             )
-            overrides["system_message"] = SystemMessage(content=f"{base_text}{section}")
+            overrides["system_message"] = SystemMessage(content=f"{section}{base_text}" if base_text else section)
 
         return overrides
 
