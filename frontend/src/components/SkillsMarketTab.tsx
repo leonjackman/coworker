@@ -60,6 +60,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   // Pagination state
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const [isSearchMode, setIsSearchMode] = useState(false);
   
   // Refs to prevent stale closure issues and concurrent requests
   const isLoadingRef = useRef(false);
@@ -97,9 +98,42 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   // Load sources on mount
   useEffect(() => {
     void loadSources();
-    void loadHot();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reload when source changes
+  useEffect(() => {
+    if (activeSource) {
+      // Direct API call to avoid dependency on loadHot
+      const fetchHotSkills = async () => {
+        if (isLoadingRef.current) return;
+        isLoadingRef.current = true;
+        setLoading(true);
+        setHotSkills([]);
+        setPage(1);
+        try {
+          const response = await chatService.listHotSkills(activeSource, PAGE_SIZE, 0);
+          setHotSkills(response.skills || []);
+          setHasMore((response.skills || []).length >= PAGE_SIZE);
+          
+          // Calculate category counts
+          const counts: Record<string, number> = {};
+          (response.skills || []).forEach((skill) => {
+            const cat = (skill as any).category || 'all';
+            counts[cat] = (counts[cat] || 0) + 1;
+          });
+          setCategoryCounts(counts);
+        } catch {
+          setHotSkills([]);
+          setCategoryCounts({});
+        } finally {
+          setLoading(false);
+          isLoadingRef.current = false;
+        }
+      };
+      void fetchHotSkills();
+    }
+  }, [activeSource]);
 
   const loadSources = useCallback(async () => {
     try {
@@ -166,16 +200,68 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
     }
   }, [activeSource]);
 
+  const loadSearchResults = useCallback(async (resetPage = true) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+    
+    if (resetPage) {
+      setLoading(true);
+      setSearchResults([]);
+      setPage(1);
+    } else {
+      setLoadingMore(true);
+    }
+    
+    try {
+      const currentPage = resetPage ? 1 : pageRef.current;
+      const offset = (currentPage - 1) * PAGE_SIZE;
+      
+      const response = await chatService.searchMarketSkills(activeSource, search.trim());
+      const newSkills = response.skills || [];
+      
+      if (resetPage) {
+        setSearchResults(newSkills);
+      } else {
+        setSearchResults((prev) => [...prev, ...newSkills]);
+      }
+      
+      // 搜索结果超过20条才显示加载更多
+      setHasMore(newSkills.length >= PAGE_SIZE);
+    } catch {
+      if (resetPage) {
+        setSearchResults([]);
+      }
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+      isLoadingRef.current = false;
+    }
+  }, [activeSource, search]);
+
   const loadMore = useCallback(() => {
     if (loadingMore || loading || !hasMore) return;
     setPage((prev) => prev + 1);
   }, [loadingMore, loading, hasMore]);
+
+  // Trigger loadHot when page changes (for "Load More" button)
+  useEffect(() => {
+    if (page > 1) {
+      if (search.trim()) {
+        // 搜索状态：加载更多搜索结果
+        loadSearchResults(false);
+      } else {
+        // 初始列表：加载更多
+        loadHot(false);
+      }
+    }
+  }, [page, loadHot, loadSearchResults, search]);
 
   // Search with debounce - reset pagination on search
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (!search.trim()) {
         setSearchResults([]);
+        setIsSearchMode(false);
         setPage(1);
         // Directly call the API instead of loadHot to avoid dependency cycle
         try {
@@ -187,11 +273,15 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         }
         return;
       }
+      setIsSearchMode(true);
       try {
         const response = await chatService.searchMarketSkills(activeSource, search.trim());
-        setSearchResults(response.skills);
+        setSearchResults(response.skills || []);
+        // 搜索返回结果超过20条才显示加载更多
+        setHasMore((response.skills || []).length >= PAGE_SIZE);
       } catch {
         setSearchResults([]);
+        setHasMore(false);
       }
     }, 300);
     return () => clearTimeout(timer);
@@ -267,7 +357,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
               {showSourceDropdown && (
                 <div className="source-dropdown__menu">
                   {sourceItems.map((source) => (
-                    <button key={source.id}className={`source-dropdown__item ${activeSource === source.id ? 'active' : ''}`}onClick={() => {setActiveSource(source.id);setShowSourceDropdown(false);setSearch('');setPage(1);loadHot(true);}}>
+                    <button key={source.id}className={`source-dropdown__item ${activeSource === source.id ? 'active' : ''}`}onClick={() => {setActiveSource(source.id);setShowSourceDropdown(false);setSearch('');setPage(1);}}>
                       {source.label}
                       {activeSource === source.id && <Check size={14} />}
                     </button>
@@ -341,7 +431,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
           </div>
           
           {/* Load more button */}
-          {!search.trim() && hasMore && (
+          {hasMore && (
             <div style={{ textAlign: 'center', padding: '24px 0' }}>
               <Button variant="secondary" onClick={loadMore} disabled={loadingMore}>
                 {loadingMore ? (
