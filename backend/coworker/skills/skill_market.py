@@ -21,6 +21,7 @@ result set and makes "load more" return duplicates or nothing.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,57 @@ _MAX_PAGE_SIZE = 50
 
 # Safety guard when emulating offset paging on a cursor-only upstream
 _MAX_CURSOR_HOPS = 12
+
+# ---------------------------------------------------------------------------
+# Facets — what the left-hand filter bar offers for each source
+#
+# A "facet" is whatever dimension a source can actually slice on:
+#   * SkillHub publishes a curated ``category`` vocabulary (13 entries).
+#   * ClawHub has no categories at all (``/api/v1/topics`` is 404, ``?topic=``
+#     is silently ignored, and per-skill ``topics`` is a sparse free-form tag
+#     cloud). It does expose a real, server-side ``sort`` dimension, so that is
+#     surfaced instead of leaving the bar empty.
+# ---------------------------------------------------------------------------
+
+FACET_CATEGORY = "category"
+FACET_SORT = "sort"
+
+# ClawHub advertises ten ``sort`` values but only five produce distinct
+# orderings; the rest are aliases. Exposing all ten would show the user tabs
+# that silently return the same list, so only the distinct behaviours are kept.
+#   recommended == default == stars == rating
+#   downloads   == installs
+#   newest      == createdAt
+#   updated     == (no sort param)  ← the pre-facet default
+#   trending    — distinct, and the only one without cursor support
+CLAWHUB_SORTS: list[dict[str, Any]] = [
+    {"key": "recommended", "name": "推荐", "name_en": "Recommended", "sort_order": 0},
+    {"key": "downloads", "name": "下载最多", "name_en": "Most downloaded", "sort_order": 10},
+    {"key": "trending", "name": "上升最快", "name_en": "Trending", "sort_order": 20},
+    {"key": "newest", "name": "最新发布", "name_en": "Newest", "sort_order": 30},
+    {"key": "updated", "name": "最近更新", "name_en": "Recently updated", "sort_order": 40},
+]
+CLAWHUB_SORT_KEYS = frozenset(entry["key"] for entry in CLAWHUB_SORTS)
+CLAWHUB_DEFAULT_SORT = "recommended"
+
+# Each ClawHub cursor names the index it walks. Pairing a cursor with a
+# different ``sort`` makes the upstream seek into the wrong index and quietly
+# return rows the caller already has — the same silent-duplication failure mode
+# as the original pagination bug, so the pairing is validated rather than
+# trusted.
+CLAWHUB_CURSOR_INDEX = {
+    "recommended": "by_active_recommended_rank",
+    "downloads": "by_active_stats_downloads",
+    "newest": "by_active_created",
+    "updated": "by_active_updated",
+}
+CLAWHUB_INDEX_SORT = {v: k for k, v in CLAWHUB_CURSOR_INDEX.items()}
+
+# ``sort=trending`` is a bounded leaderboard (~164 rows) served without a
+# cursor. Because the set is small and finite, windowing it locally is correct
+# here — unlike the 111k-row main catalogue, where slicing was the original
+# fake-pagination bug.
+CLAWHUB_TRENDING_FETCH = 200
 
 
 @dataclass
@@ -117,6 +169,7 @@ class SkillMarketManager:
         offset: int = 0,
         cursor: str | None = None,
         category: str | None = None,
+        sort: str | None = None,
     ) -> MarketPage:
         """List popular/hot skills from a market source."""
         limit = _clamp_limit(limit)
@@ -126,22 +179,37 @@ class SkillMarketManager:
                 limit=limit, offset=offset, keyword=None, category=category
             )
         elif source == "clawhub":
-            return await self._list_clawhub_hot(limit, offset, cursor)
+            return await self._list_clawhub_hot(limit, offset, cursor, sort)
+        else:
+            raise ValueError(f"Unknown market source: {source}")
+
+    async def list_facets(self, source: str) -> dict[str, Any]:
+        """Describe the filter dimension a source can actually slice on.
+
+        Returns ``{"kind": ..., "items": [...], "default": ...}``. ``kind`` tells
+        the UI which query parameter the tabs drive: ``category`` (SkillHub) or
+        ``sort`` (ClawHub). An empty ``items`` list means "render no bar".
+        """
+        if source == "skillhub":
+            return {
+                "kind": FACET_CATEGORY,
+                "items": await self._list_skillhub_categories(),
+                "default": "all",
+            }
+        elif source == "clawhub":
+            return {
+                "kind": FACET_SORT,
+                "items": [dict(entry) for entry in CLAWHUB_SORTS],
+                "default": CLAWHUB_DEFAULT_SORT,
+            }
         else:
             raise ValueError(f"Unknown market source: {source}")
 
     async def list_categories(self, source: str) -> list[dict[str, Any]]:
-        """Return the category vocabulary advertised by a market source.
-
-        ClawHub does not expose categories, so it yields an empty list and the
-        UI should hide the category filter for it.
-        """
-        if source == "skillhub":
-            return await self._list_skillhub_categories()
-        elif source == "clawhub":
-            return []
-        else:
-            raise ValueError(f"Unknown market source: {source}")
+        """Backwards-compatible accessor returning only the facet items."""
+        facet = await self.list_facets(source)
+        items = facet.get("items")
+        return items if isinstance(items, list) else []
 
     async def install(
         self,
@@ -386,7 +454,9 @@ class SkillMarketManager:
     async def _search_clawhub(self, query: str, limit: int, offset: int) -> MarketPage:
         """ClawHub search has no upstream paging, so we window a single fetch."""
         fetch_n = _clamp_limit(offset + limit)
-        data = await _get_json(CLAWHUB_SEARCH, {"q": query, "limit": fetch_n})
+        data = await _get_json(
+            CLAWHUB_SEARCH, {"q": query, "limit": fetch_n}, retries=1
+        )
         if not isinstance(data, dict):
             return MarketPage()
 
@@ -408,14 +478,31 @@ class SkillMarketManager:
         )
 
     async def _list_clawhub_hot(
-        self, limit: int, offset: int, cursor: str | None
+        self, limit: int, offset: int, cursor: str | None, sort: str | None = None
     ) -> MarketPage:
+        sort = sort if sort in CLAWHUB_SORT_KEYS else CLAWHUB_DEFAULT_SORT
+
+        # A cursor is only ever minted by a previous page of one specific sort,
+        # and "load more" always means "continue this list", so when the two
+        # disagree the cursor is authoritative. Realigning here is what stops a
+        # stale/mismatched token from silently re-emitting rows.
+        if cursor:
+            cursor_sort = CLAWHUB_INDEX_SORT.get(_cursor_index(cursor) or "")
+            if cursor_sort and cursor_sort != sort:
+                sort = cursor_sort
+
+        # ``trending`` is the one sort ClawHub serves without a cursor.
+        if sort == "trending":
+            return await self._list_clawhub_trending(limit, offset)
+
         if not cursor and offset > 0:
-            cursor = await self._clawhub_seek(offset, limit)
+            cursor = await self._clawhub_seek(offset, limit, sort)
             if cursor is None:
                 return MarketPage()
 
-        data = await _get_json(CLAWHUB_SKILLS, {"limit": limit, "cursor": cursor})
+        data = await _get_json(
+            CLAWHUB_SKILLS, {"limit": limit, "cursor": cursor, "sort": sort}, retries=1
+        )
         if not isinstance(data, dict):
             return MarketPage()
 
@@ -435,7 +522,36 @@ class SkillMarketManager:
             next_cursor=next_cursor,
         )
 
-    async def _clawhub_seek(self, offset: int, step: int) -> str | None:
+    async def _list_clawhub_trending(self, limit: int, offset: int) -> MarketPage:
+        """Window the cursor-less trending leaderboard.
+
+        The board is finite (~164 rows) and returned whole in one call, so the
+        exact size is known and ``total`` / ``has_more`` are both exact.
+        """
+        data = await _get_json(
+            CLAWHUB_SKILLS,
+            {"limit": CLAWHUB_TRENDING_FETCH, "sort": "trending"},
+            retries=1,
+        )
+        if not isinstance(data, dict):
+            return MarketPage()
+
+        raw = data.get("items")
+        if not isinstance(raw, list):
+            return MarketPage()
+
+        items = [
+            normalised
+            for entry in raw
+            if (normalised := self._normalise_clawhub(entry)) is not None
+        ]
+        return MarketPage(
+            skills=items[offset : offset + limit],
+            total=len(items),
+            has_more=len(items) > offset + limit,
+        )
+
+    async def _clawhub_seek(self, offset: int, step: int, sort: str | None = None) -> str | None:
         """Walk cursors until ``offset`` items have been skipped.
 
         The walk **must** advance in the caller's page size: ClawHub's listing
@@ -453,7 +569,9 @@ class SkillMarketManager:
         step = max(1, min(step, _MAX_PAGE_SIZE))
         while skipped < offset and hops < _MAX_CURSOR_HOPS:
             take = min(step, offset - skipped)
-            data = await _get_json(CLAWHUB_SKILLS, {"limit": take, "cursor": cursor})
+            data = await _get_json(
+                CLAWHUB_SKILLS, {"limit": take, "cursor": cursor, "sort": sort}
+            )
             if not isinstance(data, dict):
                 return None
             batch = data.get("items")
@@ -636,20 +754,34 @@ async def _describe_clawhub_conflict(resp: aiohttp.ClientResponse, slug: str) ->
     return f"Skill slug '{slug}' is ambiguous on ClawHub"
 
 
-async def _get_json(url: str, params: dict[str, Any] | None = None) -> Any | None:
-    """GET a JSON document, returning ``None`` on any failure."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                params=_clean_params(params),
-                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                return await resp.json(content_type=None)
-    except Exception:
-        return None
+async def _get_json(
+    url: str, params: dict[str, Any] | None = None, retries: int = 0
+) -> Any | None:
+    """GET a JSON document, returning ``None`` on any failure.
+
+    ``retries`` shelters the client from ClawHub's aggressive rate limiting
+    (it intermittently answers a burst of requests with ``503``/empty). A
+    single short-delayed retry recovers the default view without faking any
+    data — this is resilience, not pagination.
+    """
+    attempt = 0
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    params=_clean_params(params),
+                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                ) as resp:
+                    data = await resp.json(content_type=None) if resp.status == 200 else None
+        except Exception:
+            data = None
+        if data is not None:
+            return data
+        if attempt >= retries:
+            return None
+        attempt += 1
+        await asyncio.sleep(0.5)
 
 
 def _clean_params(params: dict[str, Any] | None) -> dict[str, str] | None:
@@ -665,6 +797,17 @@ def _clamp_limit(limit: int) -> int:
     except (TypeError, ValueError):
         return 20
     return max(1, min(value, _MAX_PAGE_SIZE))
+
+
+def _cursor_index(cursor: str | None) -> str | None:
+    """Read the index name a ClawHub cursor walks, or ``None`` if unreadable."""
+    if not cursor:
+        return None
+    try:
+        payload = json.loads(cursor)
+    except (TypeError, ValueError):
+        return None
+    return payload.get("index") if isinstance(payload, dict) else None
 
 
 def _normalise_cursor(value: Any) -> str | None:

@@ -761,6 +761,8 @@ export interface MarketQuery {
   /** Opaque cursor (ClawHub). Takes precedence over `offset` when present. */
   cursor?: string | null;
   category?: string | null;
+  /** Ordering key, for sources whose facet is `sort` rather than `category`. */
+  sort?: string | null;
 }
 
 export interface MarketSourceResponse {
@@ -768,8 +770,17 @@ export interface MarketSourceResponse {
   sources: MarketSource[];
 }
 
+/** Which dimension a source can actually slice on.
+ *  SkillHub publishes a category vocabulary; ClawHub has none upstream but does
+ *  expose a real server-side ordering, so its bar drives `sort` instead. */
+export type MarketFacetKind = 'category' | 'sort';
+
 export interface MarketCategoriesResponse {
   status: string;
+  /** Absent on older backends — treat as 'category'. */
+  kind?: MarketFacetKind;
+  /** Tab selected on first paint ('all' for categories, a sort key otherwise). */
+  default?: string;
   categories: MarketCategory[];
   count: number;
 }

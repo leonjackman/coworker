@@ -2068,10 +2068,22 @@ def list_market_sources():
 
 @app.get("/skills/market/categories")
 async def list_market_categories(source: str):
-    """List the category vocabulary for a market source (may be empty)."""
+    """Describe the filter dimension a market source can slice on.
+
+    ``kind`` says which query parameter the tabs drive — ``category`` for
+    SkillHub, ``sort`` for ClawHub (which has no category vocabulary upstream).
+    The legacy ``categories`` key is kept so older clients keep working.
+    """
     try:
-        categories = await skill_market_manager.list_categories(source)
-        return {"status": "ok", "categories": categories, "count": len(categories)}
+        facet = await skill_market_manager.list_facets(source)
+        items = facet.get("items", [])
+        return {
+            "status": "ok",
+            "kind": facet.get("kind"),
+            "default": facet.get("default"),
+            "categories": items,
+            "count": len(items),
+        }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2103,11 +2115,12 @@ async def list_hot_market_skills(
     offset: int = 0,
     cursor: str | None = None,
     category: str | None = None,
+    sort: str | None = None,
 ):
     """List hot/popular skills in a market source."""
     try:
         page = await skill_market_manager.list_hot(
-            source, limit, offset, cursor, category
+            source, limit, offset, cursor, category, sort
         )
         return {"status": "ok", **page.to_dict()}
     except ValueError as exc:

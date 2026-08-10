@@ -8,6 +8,7 @@ import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type {
   MarketCategory,
+  MarketFacetKind,
   MarketQuery,
   MarketSkill,
   MarketSkillsResponse,
@@ -17,6 +18,29 @@ import type {
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
 const ALL_CATEGORY = 'all';
+
+// ── Facet: whatever dimension the active source can really slice on ──────────
+//
+// SkillHub publishes a category vocabulary. ClawHub publishes none (no topics
+// endpoint, `?topic=` ignored upstream), but it does support a real server-side
+// ordering — so its bar drives `sort` instead of leaving a blank toolbar.
+interface FacetState {
+  /** Source these belong to. Compared against `activeSource` to gate the feed
+   *  so a source switch cannot fire a query with the previous source's facet. */
+  source: string;
+  kind: MarketFacetKind;
+  items: MarketCategory[];
+  value: string;
+  ready: boolean;
+}
+
+const INITIAL_FACET: FacetState = {
+  source: '',
+  kind: 'category',
+  items: [],
+  value: ALL_CATEGORY,
+  ready: false,
+};
 
 interface SkillsMarketTabProps {
   onSkillsChange?: () => void;
@@ -171,8 +195,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   const [activeSource, setActiveSource] = useState('skillhub');
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
-  const [activeCategory, setActiveCategory] = useState(ALL_CATEGORY);
-  const [categories, setCategories] = useState<MarketCategory[]>([]);
+  const [facet, setFacet] = useState<FacetState>(INITIAL_FACET);
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const [installMessage, setInstallMessage] = useState<{ text: string; type: 'ok' | 'error' } | null>(null);
 
@@ -219,23 +242,36 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
     };
   }, []);
 
-  // ── Categories follow the source; sources without a vocabulary hide the bar ─
+  // ── The facet follows the source ───────────────────────────────────────────
+  // Resolving it also unblocks the feed (see `facetReady`), so a source switch
+  // costs exactly one list request instead of one wrong + one right.
   useEffect(() => {
     let cancelled = false;
-    setActiveCategory(ALL_CATEGORY);
-    setCategories([]);
+    const source = activeSource;
+    setFacet({ ...INITIAL_FACET, source });
     chatService
-      .listMarketCategories(activeSource)
+      .listMarketCategories(source)
       .then((response) => {
-        if (!cancelled) setCategories(response.categories ?? []);
+        if (cancelled) return;
+        const kind: MarketFacetKind = response.kind ?? 'category';
+        const items = response.categories ?? [];
+        const fallback = kind === 'sort' ? (items[0]?.key ?? ALL_CATEGORY) : ALL_CATEGORY;
+        setFacet({ source, kind, items, value: response.default || fallback, ready: true });
       })
       .catch(() => {
-        if (!cancelled) setCategories([]);
+        // Never strand the grid behind a failed facet lookup — fall back to an
+        // unfiltered listing with no bar.
+        if (!cancelled) setFacet({ ...INITIAL_FACET, source, ready: true });
       });
     return () => {
       cancelled = true;
     };
   }, [activeSource]);
+
+  // Gate: false during the window where `facet` still describes the previous
+  // source, which is exactly when a stray query would have fired.
+  const facetReady = facet.ready && facet.source === activeSource;
+  const { kind: facetKind, value: facetValue } = facet;
 
   // ── The single fetch path ──────────────────────────────────────────────────
   const runQuery = useCallback(
@@ -245,7 +281,11 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
       dispatch(append ? { type: 'append', requestId } : { type: 'load', requestId });
 
       const query: MarketQuery = { source: activeSource, limit: PAGE_SIZE };
-      if (activeCategory !== ALL_CATEGORY) query.category = activeCategory;
+      if (facetKind === 'sort') {
+        if (facetValue) query.sort = facetValue;
+      } else if (facetValue !== ALL_CATEGORY) {
+        query.category = facetValue;
+      }
       if (append) {
         // Cursor sources (ClawHub) must continue from the opaque token;
         // offset is only the fallback for sources that support it.
@@ -263,15 +303,16 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         dispatch({ type: 'failed', requestId, error: translateError(error) });
       }
     },
-    [activeSource, activeCategory, debouncedSearch],
+    [activeSource, facetKind, facetValue, debouncedSearch],
   );
 
   // One effect owns the feed. Its identity changes only when the query itself
-  // changes, so switching source / category / search term fires exactly one
+  // changes, so switching source / facet / search term fires exactly one
   // request — no duplicated initial load, no cross-mode leakage.
   useEffect(() => {
+    if (!facetReady) return;
     void runQuery(false);
-  }, [runQuery]);
+  }, [runQuery, facetReady]);
 
   const loadMore = useCallback(() => {
     const current = feedRef.current;
@@ -317,16 +358,29 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   // ── Derived view state ─────────────────────────────────────────────────────
   // Category filtering is executed upstream, so the list is rendered verbatim.
   const skills = feed.items;
-  const initialLoading = feed.phase === 'loading';
+  // Also covers the facet round-trip, so switching source shows a spinner
+  // rather than briefly keeping the previous source's cards on screen.
+  const initialLoading = feed.phase === 'loading' || !facetReady;
   const appending = feed.phase === 'appending';
 
-  const categoryTabs = useMemo<CategoryTabItem[]>(() => {
-    if (categories.length === 0) return [];
-    return [
-      { id: ALL_CATEGORY, label: t('skills.cat_all') },
-      ...categories.map((cat) => ({ id: cat.key, label: cat.name })),
-    ];
-  }, [categories]);
+  const searching = debouncedSearch.trim().length > 0;
+
+  const facetTabs = useMemo<CategoryTabItem[]>(() => {
+    if (facet.items.length === 0) return [];
+    // A search is already relevance-ordered and ClawHub's /search takes no
+    // sort, so showing ordering tabs there would be a control that does
+    // nothing. Category filters, by contrast, do apply to searches.
+    if (facet.kind === 'sort' && searching) return [];
+    const tabs = facet.items.map((item) => ({ id: item.key, label: item.name }));
+    // Each sort is a full ordering of the same catalogue — there is no "All".
+    return facet.kind === 'sort'
+      ? tabs
+      : [{ id: ALL_CATEGORY, label: t('skills.cat_all') }, ...tabs];
+  }, [facet.items, facet.kind, searching]);
+
+  const handleFacetChange = useCallback((id: string) => {
+    setFacet((prev) => (prev.value === id ? prev : { ...prev, value: id }));
+  }, []);
 
   const sourceItems = useMemo(() => sources.map((s) => ({ id: s.id, label: sourceLabel(s.id) })), [sources]);
 
@@ -379,9 +433,9 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
             </div>
           </div>
         }
-        categories={categoryTabs}
-        category={activeCategory}
-        onCategoryChange={setActiveCategory}
+        categories={facetTabs}
+        category={facet.value}
+        onCategoryChange={handleFacetChange}
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder={t('skills.market_search')}
