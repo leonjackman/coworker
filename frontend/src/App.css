@@ -7016,6 +7016,19 @@ body.bottom-panel-resizing {
   margin-top: 16px;
 }
 
+.skill-market-footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px 0 8px;
+  gap: 12px;
+}
+
+.skill-market-footer__end {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .grid-card {
   display: flex;
   flex-direction: column;
