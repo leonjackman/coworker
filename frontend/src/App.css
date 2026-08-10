@@ -1733,12 +1733,14 @@ body.bottom-panel-resizing {
   margin: 0 auto;
   padding: 28px 0 40px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 22px;
 }
 
 .stream-row {
   display: flex;
   gap: 12px;
+  min-width: 0;
 }
 
 .stream-row--user {
@@ -1999,6 +2001,7 @@ body.bottom-panel-resizing {
   border-radius: 8px;
   overflow: hidden;
   background: #0d1117;
+  min-width: 0;
 }
 
 .markdown-code__header {
@@ -2039,6 +2042,7 @@ body.bottom-panel-resizing {
 
 .markdown-code__body {
   overflow-x: auto;
+  min-width: 0;
 }
 
 .markdown-code__body pre {
