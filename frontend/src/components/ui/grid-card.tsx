@@ -8,7 +8,7 @@ interface GridCardProps {
   description?: ReactNode;
   trailing?: ReactNode;
   footer?: ReactNode;
-  onClick?: () => void;
+  onClick?: (() => void) | undefined;
   added?: boolean;
   disabled?: boolean;
   className?: string;

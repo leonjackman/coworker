@@ -858,3 +858,15 @@ ipcMain.handle('update-skill', (event, name, payload = {}) =>
 );
 ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));
+
+// Skill Market IPC handlers
+ipcMain.handle('list-market-sources', () => requestBackend('/skills/market', 'GET'));
+ipcMain.handle('search-market-skills', (event, source, q) =>
+  requestBackend(`/skills/market/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`, 'GET'),
+);
+ipcMain.handle('list-hot-skills', (event, source) =>
+  requestBackend(`/skills/market/hot?source=${encodeURIComponent(source)}`, 'GET'),
+);
+ipcMain.handle('install-market-skill', (event, source, slug) =>
+  requestBackend('/skills/market/install', 'POST', { source, slug }),
+);

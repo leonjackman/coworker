@@ -425,6 +425,7 @@ async def chat(request: ChatRequest):
 
 from fastapi.responses import StreamingResponse
 import json as _json
+from pydantic import BaseModel
 
 class ChatStreamRequest(ChatRequest):
     session_id: str = ""
@@ -2034,6 +2035,76 @@ def list_skills(enabled_only: bool = False):
         "diagnostics": [d.to_dict() for d in result.diagnostics],
         "count": len(skills),
     }
+
+
+# ---------------------------------------------------------------------------
+# Skill Market API
+# ---------------------------------------------------------------------------
+
+from coworker.skills.skill_market import SkillMarketManager
+
+# Initialize market manager (same user home as skill_manager)
+skill_market_manager = SkillMarketManager(Path.home())
+
+
+class MarketInstallRequest(BaseModel):
+    """Request body for skill installation from market."""
+    source: str  # "skillhub" | "clawhub"
+    slug: str    # skill identifier
+
+
+@app.get("/skills/market")
+def list_market_sources():
+    """List available skill market sources."""
+    return {
+        "status": "ok",
+        "sources": [
+            {"id": "skillhub", "name": "腾讯 SkillHub", "description": "中文技能市场，国内 CDN 加速"},
+            {"id": "clawhub", "name": "ClawHub", "description": "全球最大技能市场"},
+        ],
+    }
+
+
+@app.get("/skills/market/search")
+async def search_market_skills(
+    source: str,
+    q: str,
+    limit: int = 20,
+):
+    """Search skills in a market source."""
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Search query 'q' is required")
+    try:
+        skills = await skill_market_manager.search(source, q.strip(), limit)
+        return {"status": "ok", "skills": skills, "count": len(skills)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/skills/market/hot")
+async def list_hot_market_skills(
+    source: str,
+    limit: int = 20,
+):
+    """List hot/popular skills in a market source."""
+    try:
+        skills = await skill_market_manager.list_hot(source, limit)
+        return {"status": "ok", "skills": skills, "count": len(skills)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/skills/market/install")
+async def install_market_skill(request: MarketInstallRequest):
+    """Install a skill from a market source."""
+    try:
+        result = await skill_market_manager.install(request.source, request.slug)
+        if result.get("status") == "ok":
+            # Auto-trigger scan to pick up the newly installed skill
+            skill_manager.refresh()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/skills/{skill_name}")

@@ -718,3 +718,36 @@ export interface SkillValidateResponse {
   skill: SkillEntry | null;
   diagnostics: SkillDiagnostic[];
 }
+
+// -- Skill Market -------------------------------------------------------------
+
+export interface MarketSource {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface MarketSkill {
+  slug: string;
+  name: string;
+  description: string;
+  score?: number;
+  source: string;
+}
+
+export interface MarketSourceResponse {
+  status: string;
+  sources: MarketSource[];
+}
+
+export interface MarketSkillsResponse {
+  status: string;
+  skills: MarketSkill[];
+  count: number;
+}
+
+export interface MarketInstallResponse {
+  status: string;
+  skill: SkillEntry | null;
+  message?: string;
+}

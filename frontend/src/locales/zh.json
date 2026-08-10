@@ -555,5 +555,15 @@
   "skills.remove": "移除技能",
   "skills.toggle": "启用或禁用",
   "skills.open_file_hint": "在编辑器中打开 SKILL.md 以查看完整内容",
-  "skills.back": "返回"
+  "skills.back": "返回",
+  "skills.market": "技能市场",
+  "skills.market_tab": "技能市场",
+  "skills.market_install": "安装",
+  "skills.market_installing": "安装中…",
+  "skills.market_installed": "安装成功",
+  "skills.market_install_failed": "安装失败",
+  "skills.market_source_skillhub": "腾讯 SkillHub",
+  "skills.market_source_clawhub": "ClawHub",
+  "skills.market_hot": "热门技能",
+  "skills.market_search": "搜索市场技能…"
 }

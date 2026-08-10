@@ -12,6 +12,17 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  build: {
+    emptyOutDir: false,
+    rollupOptions: {
+      output: {
+        // Prevent hash collision between old and new builds
+        chunkFileNames: 'assets/[name]-[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]',
+      },
+    },
+  },
   server: {
     port: 3000,
   },

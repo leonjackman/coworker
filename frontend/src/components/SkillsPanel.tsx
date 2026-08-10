@@ -10,6 +10,7 @@ import { SearchInput } from './ui/search-input';
 import { GridCard } from './ui/grid-card';
 import { DetailModal } from './ui/detail-modal';
 import { SideDrawer } from './ui/side-drawer';
+import { SkillsMarketTab } from './SkillsMarketTab';
 import type { SkillDiagnostic, SkillEntry } from '../types';
 
 interface SkillsPanelProps {
@@ -55,6 +56,10 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
   // View mode: 'list' | 'add' (add skill secondary page)
   type ViewMode = 'list' | 'add';
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+
+  // Tab within list view: 'installed' | 'market'
+  type ListTab = 'installed' | 'market';
+  const [listTab, setListTab] = useState<ListTab>('installed');
 
   // Installed drawer
   const [installedDrawerOpen, setInstalledDrawerOpen] = useState(false);
@@ -190,67 +195,86 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
         {/* ── List view ── */}
         {viewMode === 'list' && (
           <>
-            {diagnostics.length > 0 && (
-              <div className="skill-diagnostics">
-                <div className="skill-diagnostics__title">
-                  ⚠ {t('skills.diagnostics')} ({diagnostics.length})
-                </div>
-                {diagnostics.map((diagnostic, index) => (
-                  <div key={index} className={`skill-diagnostics__item skill-diagnostics__item--${diagnostic.type}`}>
-                    <strong>{diagnostic.type}</strong> {diagnostic.name}
-                    <span className="skill-diagnostics__message">— {diagnostic.message}</span>
+            {/* ── Top tabs: Installed / Market ── */}
+            <CategoryTabs
+              categories={[
+                { id: 'installed', label: t('skills.installed_title'), count: installedCount },
+                { id: 'market', label: t('skills.market'), count: 0 },
+              ]}
+              value={listTab}
+              onChange={(id: string) => setListTab(id as ListTab)}
+              className="skill-toolbar"
+            />
+
+            {/* ── Installed tab ── */}
+            {listTab === 'installed' && (
+              <>
+                {diagnostics.length > 0 && (
+                  <div className="skill-diagnostics">
+                    <div className="skill-diagnostics__title">
+                      ⚠ {t('skills.diagnostics')} ({diagnostics.length})
+                    </div>
+                    {diagnostics.map((diagnostic, index) => (
+                      <div key={index} className={`skill-diagnostics__item skill-diagnostics__item--${diagnostic.type}`}>
+                        <strong>{diagnostic.type}</strong> {diagnostic.name}
+                        <span className="skill-diagnostics__message">— {diagnostic.message}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+
+                <div className="skill-toolbar">
+                  <CategoryTabs categories={categories} value={category} onChange={setCategory} className="skill-toolbar__cats" />
+                  <div className="skill-toolbar__right">
+                    <SearchInput
+                      value={search}
+                      onChange={setSearch}
+                      placeholder={t('skills.search_placeholder')}
+                      className="skill-toolbar__search"
+                    />
+                    <Button variant="ghost" size="icon" onClick={() => void rescan()} disabled={loading} aria-label={t('skills.refresh')}>
+                      {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* ── Installed grid ── */}
+                {visibleSkills.length === 0 ? (
+                  <div className="skill-empty">
+                    <p>{skills.length === 0 ? t('skills.empty') : t('skills.no_match')}</p>
+                  </div>
+                ) : (
+                  <div className="skills-grid">
+                    {visibleSkills.map((skill) => (
+                      <GridCard
+                        key={skill.name}
+                        icon={<span className="skill-emoji">{skillEmoji(skill.name)}</span>}
+                        title={skill.name}
+                        subtitle={`v${skill.version || '1.0.0'} · ${sourceLabel(skill.source)}`}
+                        description={skill.description}
+                        added={skill.enabled}
+                        onClick={() => void openDetail(skill)}
+                        trailing={
+                          <Button
+                            variant={skill.enabled ? 'secondary' : 'primary'}
+                            size="icon-xs"
+                            onClick={() => void handleToggle(skill)}
+                            aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
+                            title={skill.enabled ? t('skills.added') : t('skills.add')}
+                          >
+                            {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
+                          </Button>
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
-            {/* ── Market section ── */}
-
-            <div className="skill-toolbar">
-              <CategoryTabs categories={categories} value={category} onChange={setCategory} className="skill-toolbar__cats" />
-              <div className="skill-toolbar__right">
-                <SearchInput
-                  value={search}
-                  onChange={setSearch}
-                  placeholder={t('skills.search_placeholder')}
-                  className="skill-toolbar__search"
-                />
-                <Button variant="ghost" size="icon" onClick={() => void rescan()} disabled={loading} aria-label={t('skills.refresh')}>
-                  {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                </Button>
-              </div>
-            </div>
-
-            {/* ── Market grid ── */}
-            {visibleSkills.length === 0 ? (
-              <div className="skill-empty">
-                <p>{skills.length === 0 ? t('skills.empty') : t('skills.no_match')}</p>
-              </div>
-            ) : (
-              <div className="skills-grid">
-                {visibleSkills.map((skill) => (
-                  <GridCard
-                    key={skill.name}
-                    icon={<span className="skill-emoji">{skillEmoji(skill.name)}</span>}
-                    title={skill.name}
-                    subtitle={`v${skill.version || '1.0.0'} · ${sourceLabel(skill.source)}`}
-                    description={skill.description}
-                    added={skill.enabled}
-                    onClick={() => void openDetail(skill)}
-                    trailing={
-                      <Button
-                        variant={skill.enabled ? 'secondary' : 'primary'}
-                        size="icon-xs"
-                        onClick={() => void handleToggle(skill)}
-                        aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
-                        title={skill.enabled ? t('skills.added') : t('skills.add')}
-                      >
-                        {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
-                      </Button>
-                    }
-                  />
-                ))}
-              </div>
+            {/* ── Market tab ── */}
+            {listTab === 'market' && (
+              <SkillsMarketTab onSkillsChange={refresh} installedSlugs={skills.map((s) => s.name)} />
             )}
           </>
         )}

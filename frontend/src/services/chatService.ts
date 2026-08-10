@@ -8,6 +8,11 @@ import type {
   CreateProjectRequest,
   CreateSessionRequest,
   CurrentDiffResponse,
+  MarketInstallResponse,
+  MarketSkill,
+  MarketSource,
+  MarketSourceResponse,
+  MarketSkillsResponse,
   McpDiscoverPayload,
   McpServerCreateRequest,
   McpServerEntry,
@@ -144,6 +149,10 @@ export interface ChatService {
   updateSkill: (name: string, request: SkillUpdateRequest) => Promise<SkillDetailResponse>;
   scanSkills: () => Promise<SkillsListResponse>;
   validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
+  listMarketSources: () => Promise<MarketSourceResponse>;
+  searchMarketSkills: (source: string, q: string) => Promise<MarketSkillsResponse>;
+  listHotSkills: (source: string) => Promise<MarketSkillsResponse>;
+  installMarketSkill: (source: string, slug: string) => Promise<MarketInstallResponse>;
 }
 
 class ElectronChatService implements ChatService {
@@ -314,6 +323,26 @@ class ElectronChatService implements ChatService {
   async validateSkill(request: SkillValidateRequest): Promise<SkillValidateResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.validateSkill(request);
+  }
+
+  async listMarketSources(): Promise<MarketSourceResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listMarketSources();
+  }
+
+  async searchMarketSkills(source: string, q: string): Promise<MarketSkillsResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.searchMarketSkills(source, q);
+  }
+
+  async listHotSkills(source: string): Promise<MarketSkillsResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listHotSkills(source);
+  }
+
+  async installMarketSkill(source: string, slug: string): Promise<MarketInstallResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.installMarketSkill(source, slug);
   }
 
   async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
@@ -1046,6 +1075,26 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
+    });
+  }
+
+  async listMarketSources(): Promise<MarketSourceResponse> {
+    return this.request<MarketSourceResponse>('/skills/market');
+  }
+
+  async searchMarketSkills(source: string, q: string): Promise<MarketSkillsResponse> {
+    return this.request<MarketSkillsResponse>(`/skills/market/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`);
+  }
+
+  async listHotSkills(source: string): Promise<MarketSkillsResponse> {
+    return this.request<MarketSkillsResponse>(`/skills/market/hot?source=${encodeURIComponent(source)}`);
+  }
+
+  async installMarketSkill(source: string, slug: string): Promise<MarketInstallResponse> {
+    return this.request<MarketInstallResponse>('/skills/market/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, slug }),
     });
   }
 

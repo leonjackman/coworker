@@ -114,4 +114,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateSkill: (name, request) => ipcRenderer.invoke('update-skill', name, request),
   scanSkills: () => ipcRenderer.invoke('scan-skills'),
   validateSkill: (request) => ipcRenderer.invoke('validate-skill', request),
+  listMarketSources: () => ipcRenderer.invoke('list-market-sources'),
+  searchMarketSkills: (source, q) => ipcRenderer.invoke('search-market-skills', source, q),
+  listHotSkills: (source) => ipcRenderer.invoke('list-hot-skills', source),
+  installMarketSkill: (source, slug) => ipcRenderer.invoke('install-market-skill', source, slug),
 });

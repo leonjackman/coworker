@@ -555,5 +555,15 @@
   "skills.remove": "Remove skill",
   "skills.toggle": "Enable or disable",
   "skills.open_file_hint": "Open SKILL.md in the editor to view the full content",
-  "skills.back": "Back"
+  "skills.back": "Back",
+  "skills.market": "Skill Market",
+  "skills.market_tab": "Skill Market",
+  "skills.market_install": "Install",
+  "skills.market_installing": "Installing…",
+  "skills.market_installed": "Installed successfully",
+  "skills.market_install_failed": "Install failed",
+  "skills.market_source_skillhub": "Tencent SkillHub",
+  "skills.market_source_clawhub": "ClawHub",
+  "skills.market_hot": "Hot Skills",
+  "skills.market_search": "Search market skills…"
 }
