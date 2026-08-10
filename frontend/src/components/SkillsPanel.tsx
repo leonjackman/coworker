@@ -254,11 +254,6 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
           </>
         )}
 
-        {/* ── Market tab ── */}
-        {viewMode === 'list' && listTab === 'market' && (
-          <SkillsMarketTab onSkillsChange={refresh} installedSlugs={skills.map((s) => s.name)} />
-        )}
-
         {/* ── Add skill view (secondary page) ── */}
         {viewMode === 'add' && (
           <div className="add-skill-page">

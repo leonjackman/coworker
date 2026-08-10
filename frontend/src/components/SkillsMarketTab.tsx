@@ -195,27 +195,14 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
           <div className="skill-market-toolbar">
             {/* Source dropdown */}
             <div className="source-dropdown" ref={dropdownRef} style={{ position: 'relative' }}>
-              <Button
-                variant="secondary"
-                onClick={() => setShowSourceDropdown(!showSourceDropdown)}
-                className="source-dropdown__btn"
-              >
+              <Button variant="secondary"onClick={() => setShowSourceDropdown(!showSourceDropdown)}className="source-dropdown__btn">
                 {sourceLabel(activeSource)}
                 <ChevronDown size={14} />
               </Button>
               {showSourceDropdown && (
                 <div className="source-dropdown__menu">
                   {sourceItems.map((source) => (
-                    <button
-                      key={source.id}
-                      className={`source-dropdown__item ${activeSource === source.id ? 'active' : ''}`}
-                      onClick={() => {
-                        setActiveSource(source.id);
-                        setShowSourceDropdown(false);
-                        setSearch('');
-                        loadHot();
-                      }}
-                    >
+                    <button key={source.id}className={`source-dropdown__item ${activeSource === source.id ? 'active' : ''}`}onClick={() => {setActiveSource(source.id);setShowSourceDropdown(false);setSearch('');loadHot();}}>
                       {source.label}
                       {activeSource === source.id && <Check size={14} />}
                     </button>

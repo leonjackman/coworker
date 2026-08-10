@@ -790,7 +790,8 @@ body.sidebar-resizing {
 
 .workspace-shell--providers,
 .workspace-shell--mcp,
-.workspace-shell--settings {
+.workspace-shell--settings,
+.workspace-shell--skills {
   overflow-y: auto;
 }
 
@@ -2979,7 +2980,7 @@ body.bottom-panel-resizing {
 }
 
 .workspace-page {
-  min-height: 0;
+  min-height: 100%;
   box-sizing: border-box;
   width: min(1024px, calc(100% - 48px));
   margin: 0 auto;
