@@ -8,7 +8,9 @@ import type {
   CreateProjectRequest,
   CreateSessionRequest,
   CurrentDiffResponse,
+  MarketCategoriesResponse,
   MarketInstallResponse,
+  MarketQuery,
   MarketSkill,
   MarketSource,
   MarketSourceResponse,
@@ -150,9 +152,10 @@ export interface ChatService {
   scanSkills: () => Promise<SkillsListResponse>;
   validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
   listMarketSources: () => Promise<MarketSourceResponse>;
-  searchMarketSkills: (source: string, q: string) => Promise<MarketSkillsResponse>;
-  listHotSkills: (source: string, limit?: number, offset?: number) => Promise<MarketSkillsResponse>;
-  installMarketSkill: (source: string, slug: string) => Promise<MarketInstallResponse>;
+  listMarketCategories: (source: string) => Promise<MarketCategoriesResponse>;
+  searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
+  listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
+  installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
 }
 
 class ElectronChatService implements ChatService {
@@ -330,19 +333,24 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.listMarketSources();
   }
 
-  async searchMarketSkills(source: string, q: string): Promise<MarketSkillsResponse> {
+  async listMarketCategories(source: string): Promise<MarketCategoriesResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.searchMarketSkills(source, q);
+    return window.electronAPI.listMarketCategories(source);
   }
 
-  async listHotSkills(source: string, limit?: number, offset?: number): Promise<MarketSkillsResponse> {
+  async searchMarketSkills(query: MarketQuery): Promise<MarketSkillsResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.listHotSkills(source, limit, offset);
+    return window.electronAPI.searchMarketSkills(query);
   }
 
-  async installMarketSkill(source: string, slug: string): Promise<MarketInstallResponse> {
+  async listHotSkills(query: MarketQuery): Promise<MarketSkillsResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.installMarketSkill(source, slug);
+    return window.electronAPI.listHotSkills(query);
+  }
+
+  async installMarketSkill(source: string, slug: string, owner?: string | null): Promise<MarketInstallResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.installMarketSkill(source, slug, owner ?? null);
   }
 
   async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
@@ -547,6 +555,19 @@ class ElectronChatService implements ChatService {
 // 空闲超时：后端超过该时长未推任何数据（既不 delta 也不 done）则视为挂起，主动断开，
 // 避免前端「蓝条一直挂起不结束」。每次收到数据都会重置计时。
 const STREAM_IDLE_TIMEOUT_MS = 60_000;
+
+/** Serialise a market query, dropping only genuinely absent values.
+ *  `offset=0` must survive, so this tests for null/undefined/'' rather than
+ *  truthiness — the original `if (offset)` was one of the places the caller's
+ *  pagination silently vanished. */
+function marketQueryString(query: MarketQuery): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === '') continue;
+    params.set(key, String(value));
+  }
+  return params.toString();
+}
 
 class HttpChatService implements ChatService {
   async getRuntimeConfig(): Promise<RuntimeConfig> {
@@ -1082,22 +1103,29 @@ class HttpChatService implements ChatService {
     return this.request<MarketSourceResponse>('/skills/market');
   }
 
-  async searchMarketSkills(source: string, q: string): Promise<MarketSkillsResponse> {
-    return this.request<MarketSkillsResponse>(`/skills/market/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`);
+  async listMarketCategories(source: string): Promise<MarketCategoriesResponse> {
+    return this.request<MarketCategoriesResponse>(
+      `/skills/market/categories?source=${encodeURIComponent(source)}`,
+    );
   }
 
-  async listHotSkills(source: string, limit?: number, offset?: number): Promise<MarketSkillsResponse> {
-    const params = new URLSearchParams({ source });
-    if (limit) params.set('limit', String(limit));
-    if (offset) params.set('offset', String(offset));
-    return this.request<MarketSkillsResponse>(`/skills/market/hot?${params.toString()}`);
+  async searchMarketSkills(query: MarketQuery): Promise<MarketSkillsResponse> {
+    return this.request<MarketSkillsResponse>(
+      `/skills/market/search?${marketQueryString(query)}`,
+    );
   }
 
-  async installMarketSkill(source: string, slug: string): Promise<MarketInstallResponse> {
+  async listHotSkills(query: MarketQuery): Promise<MarketSkillsResponse> {
+    return this.request<MarketSkillsResponse>(
+      `/skills/market/hot?${marketQueryString(query)}`,
+    );
+  }
+
+  async installMarketSkill(source: string, slug: string, owner?: string | null): Promise<MarketInstallResponse> {
     return this.request<MarketInstallResponse>('/skills/market/install', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, slug }),
+      body: JSON.stringify({ source, slug, owner: owner ?? null }),
     });
   }
 

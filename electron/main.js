@@ -860,13 +860,27 @@ ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));
 
 // Skill Market IPC handlers
+// `offset` / `cursor` / `category` must survive this hop; serialise the whole
+// query object instead of cherry-picking positional arguments.
+function marketQueryString(query) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    params.set(key, String(value));
+  }
+  return params.toString();
+}
+
 ipcMain.handle('list-market-sources', () => requestBackend('/skills/market', 'GET'));
-ipcMain.handle('search-market-skills', (event, source, q) =>
-  requestBackend(`/skills/market/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`, 'GET'),
+ipcMain.handle('list-market-categories', (event, source) =>
+  requestBackend(`/skills/market/categories?source=${encodeURIComponent(source)}`, 'GET'),
 );
-ipcMain.handle('list-hot-skills', (event, source) =>
-  requestBackend(`/skills/market/hot?source=${encodeURIComponent(source)}`, 'GET'),
+ipcMain.handle('search-market-skills', (event, query) =>
+  requestBackend(`/skills/market/search?${marketQueryString(query)}`, 'GET'),
 );
-ipcMain.handle('install-market-skill', (event, source, slug) =>
-  requestBackend('/skills/market/install', 'POST', { source, slug }),
+ipcMain.handle('list-hot-skills', (event, query) =>
+  requestBackend(`/skills/market/hot?${marketQueryString(query)}`, 'GET'),
+);
+ipcMain.handle('install-market-skill', (event, source, slug, owner) =>
+  requestBackend('/skills/market/install', 'POST', { source, slug, owner: owner ?? null }),
 );

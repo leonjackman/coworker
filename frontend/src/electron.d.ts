@@ -38,6 +38,8 @@ import type {
   StreamEvent,
   ToolAuditResponse,  WorkspaceCommandRequest,
   MarketSourceResponse,
+  MarketCategoriesResponse,
+  MarketQuery,
   MarketSkillsResponse,
   MarketInstallResponse,
   WorkspaceCommandResponse,
@@ -124,9 +126,10 @@ declare global {
       scanSkills: () => Promise<SkillsListResponse>;
       validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
       listMarketSources: () => Promise<MarketSourceResponse>;
-      searchMarketSkills: (source: string, q: string) => Promise<MarketSkillsResponse>;
-      listHotSkills: (source: string) => Promise<MarketSkillsResponse>;
-      installMarketSkill: (source: string, slug: string) => Promise<MarketInstallResponse>;
+      listMarketCategories: (source: string) => Promise<MarketCategoriesResponse>;
+      searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
+      listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
+      installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
     };
   }
 }

@@ -5,11 +5,24 @@ Supports two external market sources:
 - ClawHub (https://clawhub.ai) — Global largest skill marketplace
 
 Skills are installed into the user-level directory so they apply to all projects.
+
+Pagination
+----------
+The two upstreams use *different* pagination protocols, so this module
+normalises them behind a single :class:`MarketPage` envelope:
+
+- SkillHub  → real offset paging via ``page`` / ``pageSize`` and reports ``total``.
+- ClawHub   → opaque cursor paging (``nextCursor``); ``offset`` is emulated by
+  walking cursors when the caller cannot supply one.
+
+Never slice a single upstream page to fake pagination — that silently caps the
+result set and makes "load more" return duplicates or nothing.
 """
 
 from __future__ import annotations
 
-import hashlib
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +30,6 @@ import aiohttp
 
 from coworker.skills.skills import (
     MAX_DESCRIPTION_LENGTH,
-    MAX_NAME_LENGTH,
     load_skill_from_file,
     parse_frontmatter,
     validate_description,
@@ -29,14 +41,37 @@ from coworker.skills.skills import (
 # ---------------------------------------------------------------------------
 
 SKILLHUB_API = "https://api.skillhub.cn/api/skills"
+SKILLHUB_V1 = "https://api.skillhub.cn/api/v1"
 CLAWHUB_SEARCH = "https://clawhub.ai/api/v1/search"
 CLAWHUB_SKILLS = "https://clawhub.ai/api/v1/skills"
 
 # Timeout for HTTP requests (seconds)
 _REQUEST_TIMEOUT = 15
 
-# Number of results to fetch from the external market (may be larger than what we return)
-_FETCH_LIMIT = 50
+# Upstream hard cap on page size
+_MAX_PAGE_SIZE = 50
+
+# Safety guard when emulating offset paging on a cursor-only upstream
+_MAX_CURSOR_HOPS = 12
+
+
+@dataclass
+class MarketPage:
+    """A normalised page of market results."""
+
+    skills: list[dict[str, Any]] = field(default_factory=list)
+    total: int | None = None
+    has_more: bool = False
+    next_cursor: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "skills": self.skills,
+            "count": len(self.skills),
+            "total": self.total,
+            "has_more": self.has_more,
+            "next_cursor": self.next_cursor,
+        }
 
 
 class SkillMarketManager:
@@ -60,15 +95,18 @@ class SkillMarketManager:
         source: str,
         query: str,
         limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Search a market source for matching skills.
-
-        Returns a list of skill dict entries suitable for display.
-        """
+        offset: int = 0,
+        category: str | None = None,
+    ) -> MarketPage:
+        """Search a market source for matching skills."""
+        limit = _clamp_limit(limit)
+        offset = max(0, offset)
         if source == "skillhub":
-            return await self._search_skillhub(query, limit)
+            return await self._skillhub_window(
+                limit=limit, offset=offset, keyword=query, category=category
+            )
         elif source == "clawhub":
-            return await self._search_clawhub(query, limit)
+            return await self._search_clawhub(query, limit, offset)
         else:
             raise ValueError(f"Unknown market source: {source}")
 
@@ -77,12 +115,31 @@ class SkillMarketManager:
         source: str,
         limit: int = 20,
         offset: int = 0,
-    ) -> list[dict[str, Any]]:
+        cursor: str | None = None,
+        category: str | None = None,
+    ) -> MarketPage:
         """List popular/hot skills from a market source."""
+        limit = _clamp_limit(limit)
+        offset = max(0, offset)
         if source == "skillhub":
-            return await self._list_skillhub_hot(limit, offset)
+            return await self._skillhub_window(
+                limit=limit, offset=offset, keyword=None, category=category
+            )
         elif source == "clawhub":
-            return await self._list_clawhub_hot(limit, offset)
+            return await self._list_clawhub_hot(limit, offset, cursor)
+        else:
+            raise ValueError(f"Unknown market source: {source}")
+
+    async def list_categories(self, source: str) -> list[dict[str, Any]]:
+        """Return the category vocabulary advertised by a market source.
+
+        ClawHub does not expose categories, so it yields an empty list and the
+        UI should hide the category filter for it.
+        """
+        if source == "skillhub":
+            return await self._list_skillhub_categories()
+        elif source == "clawhub":
+            return []
         else:
             raise ValueError(f"Unknown market source: {source}")
 
@@ -90,6 +147,7 @@ class SkillMarketManager:
         self,
         source: str,
         slug: str,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         """Install a skill from a market source.
 
@@ -101,9 +159,12 @@ class SkillMarketManager:
         """
         try:
             # Step 1: fetch SKILL.md content
-            content = await self._fetch_skill_content(source, slug)
+            content, error = await self._fetch_skill_content(source, slug, owner)
             if content is None:
-                return {"status": "error", "message": "Failed to fetch skill file (downloaded content is empty)"}
+                return {
+                    "status": "error",
+                    "message": error or "Failed to fetch skill file (downloaded content is empty)",
+                }
 
             # Step 2: validate
             install_dir = self.install_dir / slug
@@ -113,15 +174,20 @@ class SkillMarketManager:
             # Before writing, ensure the name matches the slug
             frontmatter, _body = parse_frontmatter(content)
             fallback_name = slug.strip()
-            name: str = (frontmatter.get("name") or fallback_name)
+            name: str = frontmatter.get("name") or fallback_name
             if isinstance(name, str):
                 name = name.strip() or fallback_name
             else:
                 name = fallback_name
 
             if name != slug:
-                # Create directory with the actual skill name
-                self.install_dir.rmdir() if not any(self.install_dir.iterdir()) else None
+                # The frontmatter name wins; drop the placeholder directory we
+                # just created (only when it is still empty).
+                try:
+                    if not any(install_dir.iterdir()):
+                        install_dir.rmdir()
+                except OSError:
+                    pass
                 install_dir = self.install_dir / name
                 install_dir.mkdir(parents=True, exist_ok=True)
                 skill_file = install_dir / "SKILL.md"
@@ -160,224 +226,456 @@ class SkillMarketManager:
             return {"status": "error", "message": str(exc)}
 
     # ------------------------------------------------------------------
-    # SkillHub (Tencent)
+    # SkillHub (Tencent) — real ``page``/``pageSize`` pagination
     # ------------------------------------------------------------------
 
-    async def _search_skillhub(
-        self, query: str, limit: int
-    ) -> list[dict[str, Any]]:
-        url = f"{SKILLHUB_API}?keyword={_urlencode(query)}&sortBy=score&pageSize={min(limit * 2, 50)}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)) as resp:
-                    if resp.status != 200:
-                        return []
-                    data = await resp.json()
-        except (aiohttp.ClientError, Exception):
+    async def _skillhub_window(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        keyword: str | None,
+        category: str | None,
+    ) -> MarketPage:
+        """Return exactly ``limit`` items starting at ``offset``.
+
+        Upstream pages are aligned to ``pageSize``; when ``offset`` is not a
+        multiple of ``limit`` we stitch two adjacent pages together instead of
+        returning a short window.
+        """
+        page = offset // limit + 1
+        skip = offset % limit
+
+        items, total = await self._skillhub_fetch_page(
+            page=page, page_size=limit, keyword=keyword, category=category
+        )
+        if skip and len(items) >= limit:
+            extra, _ = await self._skillhub_fetch_page(
+                page=page + 1, page_size=limit, keyword=keyword, category=category
+            )
+            items = items + extra
+
+        window = items[skip : skip + limit]
+
+        if isinstance(total, int) and total >= 0:
+            has_more = (offset + len(window)) < total
+        else:
+            has_more = len(window) >= limit
+
+        return MarketPage(skills=window, total=total, has_more=has_more)
+
+    async def _skillhub_fetch_page(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        keyword: str | None,
+        category: str | None,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        params: dict[str, Any] = {
+            "sortBy": "score",
+            "page": max(1, page),
+            "pageSize": _clamp_limit(page_size),
+        }
+        if keyword:
+            params["keyword"] = keyword
+        if category:
+            params["category"] = category
+
+        data = await _get_json(SKILLHUB_API, params)
+        if not isinstance(data, dict):
+            return [], None
+
+        inner = data.get("data")
+        if isinstance(inner, dict):
+            raw = inner.get("skills") or []
+            total = inner.get("total")
+        elif isinstance(inner, list):
+            raw, total = inner, None
+        else:
+            raw, total = [], None
+
+        if not isinstance(raw, list):
+            return [], None
+        if not isinstance(total, int):
+            total = None
+
+        items = [
+            normalised
+            for entry in raw
+            if (normalised := self._normalise_skillhub(entry)) is not None
+        ]
+        return items, total
+
+    async def _list_skillhub_categories(self) -> list[dict[str, Any]]:
+        data = await _get_json(f"{SKILLHUB_V1}/categories")
+        if not isinstance(data, dict):
+            return []
+        raw = data.get("items")
+        if not isinstance(raw, list):
             return []
 
-        return self._extract_skillhub_items(data, limit)
-
-    async def _list_skillhub_hot(
-        self, limit: int, offset: int = 0
-    ) -> list[dict[str, Any]]:
-        url = f"{SKILLHUB_API}?sortBy=score&pageSize={min(limit * 2, 50)}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)) as resp:
-                    if resp.status != 200:
-                        return []
-                    data = await resp.json()
-        except (aiohttp.ClientError, Exception):
-            return []
-
-        skills = self._extract_skillhub_items(data, limit + offset)
-        return skills[offset:]
+        cats: list[dict[str, Any]] = []
+        for entry in raw:
+            if not isinstance(entry, dict) or entry.get("active") is False:
+                continue
+            key = _str_or_none(entry.get("key"))
+            if not key:
+                continue
+            cats.append({
+                "key": key,
+                "name": _str_or_none(entry.get("name")) or key,
+                "name_en": _str_or_none(entry.get("nameEn")) or key,
+                "sort_order": entry.get("sortOrder") if isinstance(entry.get("sortOrder"), int) else 0,
+            })
+        cats.sort(key=lambda c: c["sort_order"])
+        return cats
 
     @staticmethod
-    def _extract_skillhub_items(data: dict, limit: int) -> list[dict[str, Any]]:
-        """Extract skill items from SkillHub API response.
+    def _normalise_skillhub(item: Any) -> dict[str, Any] | None:
+        """Normalise one SkillHub entry.
 
-        SkillHub returns: { "code": 0, "data": { "skills": [...], ... } }
+        Only ``slug`` is mandatory — dropping entries with an empty description
+        would desynchronise page sizes from the upstream offsets.
         """
-        items: list[dict[str, Any]] = []
-        inner = data.get("data", {})
-        if isinstance(inner, dict):
-            results = inner.get("skills", []) or []
-        elif isinstance(inner, list):
-            results = inner
-        else:
-            results = []
+        if not isinstance(item, dict):
+            return None
 
-        if not isinstance(results, list):
-            return items
+        slug = (_str_or_none(item.get("slug")) or _str_or_none(item.get("name")) or "").strip()
+        if not slug:
+            return None
 
-        for item in results[:limit]:
-            name = _str_or_none(item.get("name")) or _str_or_none(item.get("slug")) or ""
-            desc = _str_or_none(item.get("description")) or _str_or_none(item.get("description_zh")) or ""
-            slug = _str_or_none(item.get("slug")) or name
-            if slug and desc:
-                items.append({
-                    "slug": slug,
-                    "name": name,
-                    "description": desc[:MAX_DESCRIPTION_LENGTH],
-                    "score": item.get("installs", 0),
-                    "source": "skillhub",
-                })
-        return items
+        name = (_str_or_none(item.get("name")) or slug).strip() or slug
+        desc = (
+            _str_or_none(item.get("description"))
+            or _str_or_none(item.get("description_zh"))
+            or ""
+        ).strip()
+
+        namespace = item.get("namespace")
+        owner = None
+        if isinstance(namespace, dict):
+            owner = _str_or_none(namespace.get("handle"))
+        owner = owner or _str_or_none(item.get("ownerName"))
+
+        publisher = item.get("publisher")
+        verified = bool(publisher.get("verified")) if isinstance(publisher, dict) else False
+
+        score = item.get("installs")
+        if not isinstance(score, int):
+            score = item.get("downloads") if isinstance(item.get("downloads"), int) else 0
+
+        return {
+            "uid": f"skillhub:{owner}/{slug}" if owner else f"skillhub:{slug}",
+            "slug": slug,
+            "name": name,
+            "description": desc[:MAX_DESCRIPTION_LENGTH],
+            "score": score,
+            "source": "skillhub",
+            "category": _str_or_none(item.get("category")),
+            "owner": owner,
+            "icon_url": _str_or_none(item.get("iconUrl")),
+            "version": _str_or_none(item.get("version")),
+            "verified": verified,
+        }
 
     # ------------------------------------------------------------------
-    # ClawHub
+    # ClawHub — cursor pagination
     # ------------------------------------------------------------------
 
-    async def _search_clawhub(
-        self, query: str, limit: int
-    ) -> list[dict[str, Any]]:
-        url = f"{CLAWHUB_SEARCH}?q={_urlencode(query)}&limit={min(limit * 2, 50)}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)) as resp:
-                    if resp.status != 200:
-                        return []
-                    data = await resp.json()
-        except (aiohttp.ClientError, Exception):
-            return []
+    async def _search_clawhub(self, query: str, limit: int, offset: int) -> MarketPage:
+        """ClawHub search has no upstream paging, so we window a single fetch."""
+        fetch_n = _clamp_limit(offset + limit)
+        data = await _get_json(CLAWHUB_SEARCH, {"q": query, "limit": fetch_n})
+        if not isinstance(data, dict):
+            return MarketPage()
 
-        return SkillMarketManager._extract_clawhub_search(data, limit)
+        raw = data.get("results")
+        if not isinstance(raw, list):
+            return MarketPage()
+
+        items = [
+            normalised
+            for entry in raw
+            if (normalised := self._normalise_clawhub(entry)) is not None
+        ]
+        window = items[offset : offset + limit]
+        exhausted = len(raw) < fetch_n
+        return MarketPage(
+            skills=window,
+            total=len(items) if exhausted else None,
+            has_more=len(items) > offset + limit,
+        )
 
     async def _list_clawhub_hot(
-        self, limit: int, offset: int = 0
-    ) -> list[dict[str, Any]]:
-        url = f"{CLAWHUB_SKILLS}?limit={min(limit * 2, 50)}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)) as resp:
-                    if resp.status != 200:
-                        return []
-                    data = await resp.json()
-        except (aiohttp.ClientError, Exception):
-            return []
+        self, limit: int, offset: int, cursor: str | None
+    ) -> MarketPage:
+        if not cursor and offset > 0:
+            cursor = await self._clawhub_seek(offset, limit)
+            if cursor is None:
+                return MarketPage()
 
-        skills = SkillMarketManager._extract_clawhub_list(data, limit + offset)
-        return skills[offset:]
+        data = await _get_json(CLAWHUB_SKILLS, {"limit": limit, "cursor": cursor})
+        if not isinstance(data, dict):
+            return MarketPage()
+
+        raw = data.get("items")
+        if not isinstance(raw, list):
+            return MarketPage()
+
+        items = [
+            normalised
+            for entry in raw
+            if (normalised := self._normalise_clawhub(entry)) is not None
+        ]
+        next_cursor = _normalise_cursor(data.get("nextCursor"))
+        return MarketPage(
+            skills=items,
+            has_more=bool(next_cursor),
+            next_cursor=next_cursor,
+        )
+
+    async def _clawhub_seek(self, offset: int, step: int) -> str | None:
+        """Walk cursors until ``offset`` items have been skipped.
+
+        The walk **must** advance in the caller's page size: ClawHub's listing
+        is not stable across different ``limit`` values (the first 20 items of
+        a ``limit=40`` request differ from a ``limit=20`` request), so seeking
+        with one big page would land on a different boundary than the
+        cursor-driven path and re-emit rows the client already has.
+
+        Returns the cursor pointing at item #``offset``, or ``None`` when the
+        listing is exhausted before reaching it.
+        """
+        cursor: str | None = None
+        skipped = 0
+        hops = 0
+        step = max(1, min(step, _MAX_PAGE_SIZE))
+        while skipped < offset and hops < _MAX_CURSOR_HOPS:
+            take = min(step, offset - skipped)
+            data = await _get_json(CLAWHUB_SKILLS, {"limit": take, "cursor": cursor})
+            if not isinstance(data, dict):
+                return None
+            batch = data.get("items")
+            batch_len = len(batch) if isinstance(batch, list) else 0
+            cursor = _normalise_cursor(data.get("nextCursor"))
+            skipped += batch_len
+            hops += 1
+            if not cursor or batch_len == 0:
+                # Ran out of upstream results before reaching the offset.
+                return None if skipped < offset else cursor
+        return cursor
 
     @staticmethod
-    def _extract_clawhub_search(data: dict, limit: int) -> list[dict[str, Any]]:
-        """Extract skill items from ClawHub search response.
+    def _normalise_clawhub(item: Any) -> dict[str, Any] | None:
+        """Normalise one ClawHub entry (search or listing shape).
 
-        ClawHub returns: { "results": [ {...}, {...} ] }
-        Each item: { "displayName": "...", "slug": "...", "summary": "...", "canonicalUrl": "...", "install": {...}, ... }
+        ClawHub slugs are **not unique** — the same ``pdf`` slug exists under
+        several owners — so the owner handle is captured for disambiguation and
+        folded into the ``uid``.
         """
-        items: list[dict[str, Any]] = []
-        results = data.get("results", [])
-        if not isinstance(results, list):
-            return items
+        if not isinstance(item, dict):
+            return None
 
-        for item in results[:limit]:
-            name = _str_or_none(item.get("displayName")) or _str_or_none(item.get("name")) or ""
-            desc = _str_or_none(item.get("summary")) or _str_or_none(item.get("description")) or ""
-            slug = _str_or_none(item.get("slug")) or ""
-            if not slug:
-                canonical = _str_or_none(item.get("canonicalUrl", ""))
-                if canonical:
-                    slug = canonical.strip("/")
+        canonical = _str_or_none(item.get("canonicalUrl")) or ""
+        slug = (_str_or_none(item.get("slug")) or "").strip()
+        owner = None
 
-            # Score from metrics
-            score = 0
-            metrics = item.get("metrics")
-            if isinstance(metrics, dict):
-                score = metrics.get("rolling60DayInstalls", 0)
+        owner_obj = item.get("owner")
+        if isinstance(owner_obj, dict):
+            owner = _str_or_none(owner_obj.get("handle"))
+        elif isinstance(owner_obj, str):
+            owner = owner_obj
 
-            if name and desc:
-                items.append({
-                    "slug": slug or name,
-                    "name": name,
-                    "description": desc[:MAX_DESCRIPTION_LENGTH],
-                    "score": score,
-                    "source": "clawhub",
-                })
-        return items
+        if canonical:
+            parts = [p for p in canonical.strip("/").split("/") if p]
+            if not owner and parts:
+                owner = parts[0]
+            if not slug and parts:
+                slug = parts[-1]
 
-    @staticmethod
-    def _extract_clawhub_list(data: dict, limit: int) -> list[dict[str, Any]]:
-        """Extract skill items from ClawHub /skills list response.
+        name = (
+            _str_or_none(item.get("displayName")) or _str_or_none(item.get("name")) or slug or ""
+        ).strip()
+        if not slug:
+            slug = name
+        if not slug:
+            return None
 
-        ClawHub returns: { "items": [ {...} ], "nextCursor": "..." }
-        Each item: { "slug": "...", "displayName": "...", "summary": "..." }
-        """
-        items: list[dict[str, Any]] = []
-        results = data.get("items", [])
-        if not isinstance(results, list):
-            return items
+        desc = (
+            _str_or_none(item.get("summary")) or _str_or_none(item.get("description")) or ""
+        ).strip()
 
-        for item in results[:limit]:
-            name = _str_or_none(item.get("displayName")) or _str_or_none(item.get("name")) or ""
-            desc = _str_or_none(item.get("summary")) or _str_or_none(item.get("description")) or ""
-            slug = _str_or_none(item.get("slug")) or ""
-            score = item.get("installCount", 0)
+        score = 0
+        metrics = item.get("metrics")
+        if isinstance(metrics, dict) and isinstance(metrics.get("rolling60DayInstalls"), int):
+            score = metrics["rolling60DayInstalls"]
+        elif isinstance(item.get("installCount"), int):
+            score = item["installCount"]
 
-            if name and desc:
-                items.append({
-                    "slug": slug,
-                    "name": name,
-                    "description": desc[:MAX_DESCRIPTION_LENGTH],
-                    "score": score,
-                    "source": "clawhub",
-                })
-        return items
+        uid = _str_or_none(item.get("id"))
+        if not uid:
+            uid = f"clawhub:{owner}/{slug}" if owner else f"clawhub:{slug}"
+
+        return {
+            "uid": uid,
+            "slug": slug,
+            "name": name or slug,
+            "description": desc[:MAX_DESCRIPTION_LENGTH],
+            "score": score,
+            "source": "clawhub",
+            "category": None,
+            "owner": owner,
+            "icon_url": _str_or_none(item.get("iconUrl")) or _str_or_none(item.get("imageUrl")),
+            "version": _str_or_none(item.get("version")),
+            "verified": bool(item.get("verified")),
+        }
 
     # ------------------------------------------------------------------
-    # File fetching — ClawHub
+    # File fetching
     # ------------------------------------------------------------------
 
-    async def _fetch_skill_content(self, source: str, slug: str) -> str | None:
-        """Fetch the SKILL.md content from a market source."""
+    async def _fetch_skill_content(
+        self, source: str, slug: str, owner: str | None = None
+    ) -> tuple[str | None, str | None]:
+        """Fetch the SKILL.md content. Returns ``(content, error_message)``."""
         if source == "skillhub":
             return await self._fetch_skillhub_file(slug)
         elif source == "clawhub":
-            return await self._fetch_clawhub_file(slug)
+            return await self._fetch_clawhub_file(slug, owner)
         else:
             raise ValueError(f"Unknown market source: {source}")
 
-    async def _fetch_skillhub_file(self, slug: str) -> str | None:
+    async def _fetch_skillhub_file(self, slug: str) -> tuple[str | None, str | None]:
         """Fetch SKILL.md from SkillHub.
 
-        SkillHub doesn't have a public file download API yet.
-        We attempt to fetch via their v1 API's skill detail endpoint,
-        which may contain content in a future update. For now, this
-        returns None — users should use ClawHub or install via CLI.
-
-        TODO: Implement when SkillHub provides a public file API.
+        ``/api/v1/skills/{slug}/file?path=SKILL.md`` answers with a 302 to the
+        COS object; aiohttp follows it transparently.
         """
-        # Try the v1 skill detail endpoint as a fallback
-        url = f"https://api.skillhub.cn/api/v1/skills/{_urlencode(slug)}"
+        file_url = f"{SKILLHUB_V1}/skills/{_urlencode(slug)}/file"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)) as resp:
+                async with session.get(
+                    file_url,
+                    params={"path": "SKILL.md"},
+                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                    allow_redirects=True,
+                ) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        # Check if content is available in the response
-                        skill = data.get("skill", {})
-                        content = skill.get("content") or skill.get("rawContent")
-                        if content:
-                            return content
-        except (aiohttp.ClientError, Exception):
+                        text = await resp.text(encoding="utf-8")
+                        if text.strip():
+                            return text, None
+                    elif resp.status == 404:
+                        return None, f"SkillHub has no SKILL.md for '{slug}'"
+        except Exception:
             pass
+
+        # Fallback: some entries embed the body in the detail endpoint.
+        detail = await _get_json(f"{SKILLHUB_V1}/skills/{_urlencode(slug)}")
+        if isinstance(detail, dict):
+            skill = detail.get("skill")
+            if isinstance(skill, dict):
+                content = skill.get("content") or skill.get("rawContent")
+                if isinstance(content, str) and content.strip():
+                    return content, None
+        return None, f"Failed to download SKILL.md for '{slug}' from SkillHub"
+
+    async def _fetch_clawhub_file(
+        self, slug: str, owner: str | None = None
+    ) -> tuple[str | None, str | None]:
+        """Fetch SKILL.md from ClawHub.
+
+        Slugs collide across owners; ``?owner=`` disambiguates. Without it the
+        API answers 409 ``AMBIGUOUS_SKILL_SLUG``.
+        """
+        file_url = f"https://clawhub.ai/api/v1/skills/{_urlencode(slug)}/file"
+        params: dict[str, Any] = {"path": "SKILL.md"}
+        if owner:
+            params["owner"] = owner
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    file_url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                ) as resp:
+                    if resp.status == 200:
+                        text = await resp.text(encoding="utf-8")
+                        if text.strip():
+                            return text, None
+                    if resp.status == 409:
+                        return None, await _describe_clawhub_conflict(resp, slug)
+                    return None, f"ClawHub returned HTTP {resp.status} for '{slug}'"
+        except Exception as exc:
+            return None, f"Failed to reach ClawHub: {exc}"
+        return None, f"Downloaded SKILL.md for '{slug}' is empty"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _describe_clawhub_conflict(resp: aiohttp.ClientResponse, slug: str) -> str:
+    """Turn ClawHub's AMBIGUOUS_SKILL_SLUG payload into actionable guidance."""
+    try:
+        payload = await resp.json(content_type=None)
+    except Exception:
+        return f"Skill slug '{slug}' is ambiguous on ClawHub"
+
+    matches = payload.get("matches") if isinstance(payload, dict) else None
+    refs: list[str] = []
+    if isinstance(matches, list):
+        for m in matches:
+            if isinstance(m, dict):
+                ref = _str_or_none(m.get("ref")) or _str_or_none(m.get("ownerHandle"))
+                if ref:
+                    refs.append(ref)
+    if refs:
+        return f"Skill slug '{slug}' is ambiguous on ClawHub; candidates: {', '.join(refs)}"
+    return f"Skill slug '{slug}' is ambiguous on ClawHub"
+
+
+async def _get_json(url: str, params: dict[str, Any] | None = None) -> Any | None:
+    """GET a JSON document, returning ``None`` on any failure."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                params=_clean_params(params),
+                timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.json(content_type=None)
+    except Exception:
         return None
 
-    async def _fetch_clawhub_file(self, slug: str) -> str | None:
-        """Fetch SKILL.md from ClawHub via their file API.
 
-        ClawHub file API: GET /api/v1/skills/{slug}/file?path=SKILL.md
-        """
-        file_url = f"https://clawhub.ai/api/v1/skills/{_urlencode(slug)}/file?path=SKILL.md"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(file_url, timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)) as resp:
-                    if resp.status == 200:
-                        return await resp.text(encoding="utf-8")
-        except (aiohttp.ClientError, Exception):
-            pass
+def _clean_params(params: dict[str, Any] | None) -> dict[str, str] | None:
+    """aiohttp rejects ``None`` values — drop them and stringify the rest."""
+    if not params:
+        return None
+    return {k: str(v) for k, v in params.items() if v is not None and v != ""}
+
+
+def _clamp_limit(limit: int) -> int:
+    try:
+        value = int(limit)
+    except (TypeError, ValueError):
+        return 20
+    return max(1, min(value, _MAX_PAGE_SIZE))
+
+
+def _normalise_cursor(value: Any) -> str | None:
+    """ClawHub cursors are opaque; accept both string and object encodings."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    try:
+        return json.dumps(value, separators=(",", ":"))
+    except (TypeError, ValueError):
         return None
 
 

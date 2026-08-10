@@ -728,11 +728,39 @@ export interface MarketSource {
 }
 
 export interface MarketSkill {
+  /** Globally unique across sources. ClawHub slugs collide across owners, so
+   *  never use `slug` as a React key or dedupe key — use `uid`. */
+  uid: string;
   slug: string;
   name: string;
   description: string;
   score?: number;
   source: string;
+  category?: string | null;
+  /** Owner handle; required to disambiguate colliding ClawHub slugs on install. */
+  owner?: string | null;
+  icon_url?: string | null;
+  version?: string | null;
+  verified?: boolean;
+}
+
+export interface MarketCategory {
+  key: string;
+  name: string;
+  name_en: string;
+  sort_order?: number;
+}
+
+/** Single object carried unchanged through service → IPC → HTTP.
+ *  Positional args previously let `offset` get silently dropped mid-chain. */
+export interface MarketQuery {
+  source: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+  /** Opaque cursor (ClawHub). Takes precedence over `offset` when present. */
+  cursor?: string | null;
+  category?: string | null;
 }
 
 export interface MarketSourceResponse {
@@ -740,10 +768,21 @@ export interface MarketSourceResponse {
   sources: MarketSource[];
 }
 
+export interface MarketCategoriesResponse {
+  status: string;
+  categories: MarketCategory[];
+  count: number;
+}
+
 export interface MarketSkillsResponse {
   status: string;
   skills: MarketSkill[];
   count: number;
+  /** Total matching rows upstream; null when the source cannot report it. */
+  total?: number | null;
+  /** Authoritative "load more" signal — never infer it from page length. */
+  has_more?: boolean;
+  next_cursor?: string | null;
 }
 
 export interface MarketInstallResponse {

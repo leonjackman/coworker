@@ -115,7 +115,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   scanSkills: () => ipcRenderer.invoke('scan-skills'),
   validateSkill: (request) => ipcRenderer.invoke('validate-skill', request),
   listMarketSources: () => ipcRenderer.invoke('list-market-sources'),
-  searchMarketSkills: (source, q) => ipcRenderer.invoke('search-market-skills', source, q),
-  listHotSkills: (source) => ipcRenderer.invoke('list-hot-skills', source),
-  installMarketSkill: (source, slug) => ipcRenderer.invoke('install-market-skill', source, slug),
+  listMarketCategories: (source) => ipcRenderer.invoke('list-market-categories', source),
+  // Forward the whole query object — positional args used to drop `offset` here.
+  searchMarketSkills: (query) => ipcRenderer.invoke('search-market-skills', query),
+  listHotSkills: (query) => ipcRenderer.invoke('list-hot-skills', query),
+  installMarketSkill: (source, slug, owner) =>
+    ipcRenderer.invoke('install-market-skill', source, slug, owner ?? null),
 });

@@ -2051,6 +2051,7 @@ class MarketInstallRequest(BaseModel):
     """Request body for skill installation from market."""
     source: str  # "skillhub" | "clawhub"
     slug: str    # skill identifier
+    owner: str | None = None  # disambiguates colliding slugs (ClawHub)
 
 
 @app.get("/skills/market")
@@ -2065,18 +2066,32 @@ def list_market_sources():
     }
 
 
+@app.get("/skills/market/categories")
+async def list_market_categories(source: str):
+    """List the category vocabulary for a market source (may be empty)."""
+    try:
+        categories = await skill_market_manager.list_categories(source)
+        return {"status": "ok", "categories": categories, "count": len(categories)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/skills/market/search")
 async def search_market_skills(
     source: str,
     q: str,
     limit: int = 20,
+    offset: int = 0,
+    category: str | None = None,
 ):
     """Search skills in a market source."""
     if not q.strip():
         raise HTTPException(status_code=400, detail="Search query 'q' is required")
     try:
-        skills = await skill_market_manager.search(source, q.strip(), limit)
-        return {"status": "ok", "skills": skills, "count": len(skills)}
+        page = await skill_market_manager.search(
+            source, q.strip(), limit, offset, category
+        )
+        return {"status": "ok", **page.to_dict()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2086,11 +2101,15 @@ async def list_hot_market_skills(
     source: str,
     limit: int = 20,
     offset: int = 0,
+    cursor: str | None = None,
+    category: str | None = None,
 ):
     """List hot/popular skills in a market source."""
     try:
-        skills = await skill_market_manager.list_hot(source, limit, offset)
-        return {"status": "ok", "skills": skills, "count": len(skills)}
+        page = await skill_market_manager.list_hot(
+            source, limit, offset, cursor, category
+        )
+        return {"status": "ok", **page.to_dict()}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2099,7 +2118,9 @@ async def list_hot_market_skills(
 async def install_market_skill(request: MarketInstallRequest):
     """Install a skill from a market source."""
     try:
-        result = await skill_market_manager.install(request.source, request.slug)
+        result = await skill_market_manager.install(
+            request.source, request.slug, request.owner
+        )
         if result.get("status") == "ok":
             # Auto-trigger scan to pick up the newly installed skill
             skill_manager.refresh()

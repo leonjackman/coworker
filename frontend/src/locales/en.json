@@ -562,6 +562,11 @@
   "skills.market_source_clawhub": "ClawHub",
   "skills.market_hot": "Hot Skills",
   "skills.market_search": "Search market skills…",
+  "skills.market_no_more": "No more results",
+  "skills.market_showing": "Showing {shown} / {total}",
+  "skills.market_count": "{count} total",
+  "skills.market_load_failed": "Failed to load",
+  "skills.market_retry": "Retry",
   "skills.load_more": "Load More",
   "skills.loading_more": "Loading…",
   "skills.loading": "Loading…"
