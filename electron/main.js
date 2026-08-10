@@ -64,7 +64,7 @@ if (IS_DEV && process.env.COWORKER_REMOTE_DEBUG_PORT) {
 
 const BACKEND_HOST = process.env.COWORKER_BACKEND_HOST || 'localhost';
 const BACKEND_PORT = Number(process.env.COWORKER_BACKEND_PORT || 9527);
-const FRONTEND_URL = process.env.COWORKER_FRONTEND_URL || 'http://localhost:3000';
+const FRONTEND_URL = process.env.COWORKER_FRONTEND_URL || null;
 const FRONTEND_DIST_ENTRY = path.join(__dirname, '../frontend/dist/index.html');
 
 let mainWindow = null;
@@ -261,7 +261,8 @@ function createWindow() {
 
   applyAppIcon(mainWindow);
 
-  if (IS_DEV) {
+  if (FRONTEND_URL) {
+    // Load from dev server when COWORKER_FRONTEND_URL is set
     mainWindow.loadURL(FRONTEND_URL);
   } else {
     mainWindow.loadFile(FRONTEND_DIST_ENTRY).catch((error) => {

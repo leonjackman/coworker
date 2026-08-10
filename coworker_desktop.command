@@ -13,7 +13,7 @@ echo "[1/5] Preparing Python backend..."
 if [[ ! -d "$ROOT_DIR/backend/venv" ]]; then
   python3 -m venv "$ROOT_DIR/backend/venv"
 fi
-"$ROOT_DIR/backend/venv/bin/python" -m pip install -q -r "$ROOT_DIR/backend/requirements.txt"
+"$ROOT_DIR/backend/venv/bin/python" -m pip install -q -r "$ROOT_DIR/backend/requirements.txt" -i https://mirrors.aliyun.com/pypi/simple/
 
 echo "[2/5] Preparing Node dependencies..."
 if [[ ! -d "$ROOT_DIR/node_modules" ]]; then
@@ -98,7 +98,7 @@ if [[ "${COWORKER_SKIP_DESKTOP:-0}" == "1" ]]; then
   exit 0
 fi
 
-COWORKER_BACKEND_HOST=127.0.0.1 COWORKER_BACKEND_PORT="$BACKEND_PORT" npm run desktop &
+COWORKER_BACKEND_HOST=127.0.0.1 COWORKER_BACKEND_PORT="$BACKEND_PORT" COWORKER_DEV="1" npm run desktop &
 DESKTOP_PID="$!"
 monitor_backend &
 BACKEND_MONITOR_PID="$!"
