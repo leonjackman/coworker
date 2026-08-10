@@ -561,5 +561,8 @@
   "skills.market_source_skillhub": "Tencent SkillHub",
   "skills.market_source_clawhub": "ClawHub",
   "skills.market_hot": "Hot Skills",
-  "skills.market_search": "Search market skills…"
+  "skills.market_search": "Search market skills…",
+  "skills.load_more": "Load More",
+  "skills.loading_more": "Loading…",
+  "skills.loading": "Loading…"
 }

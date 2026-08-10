@@ -562,5 +562,8 @@
   "skills.market_source_skillhub": "腾讯 SkillHub",
   "skills.market_source_clawhub": "ClawHub",
   "skills.market_hot": "热门技能",
-  "skills.market_search": "搜索市场技能…"
+  "skills.market_search": "搜索市场技能…",
+  "skills.load_more": "加载更多",
+  "skills.loading_more": "加载中…",
+  "skills.loading": "加载中…"
 }

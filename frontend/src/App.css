@@ -7393,6 +7393,16 @@ body.bottom-panel-resizing {
     grid-template-columns: 1fr;
   }
 
+  /* Market loading overlay */
+  .skill-market-loading-overlay {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    min-height: 300px;
+  }
+
   .skill-toolbar {
     flex-direction: column;
     align-items: stretch;

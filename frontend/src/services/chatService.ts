@@ -151,7 +151,7 @@ export interface ChatService {
   validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
   listMarketSources: () => Promise<MarketSourceResponse>;
   searchMarketSkills: (source: string, q: string) => Promise<MarketSkillsResponse>;
-  listHotSkills: (source: string) => Promise<MarketSkillsResponse>;
+  listHotSkills: (source: string, limit?: number, offset?: number) => Promise<MarketSkillsResponse>;
   installMarketSkill: (source: string, slug: string) => Promise<MarketInstallResponse>;
 }
 
@@ -335,9 +335,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.searchMarketSkills(source, q);
   }
 
-  async listHotSkills(source: string): Promise<MarketSkillsResponse> {
+  async listHotSkills(source: string, limit?: number, offset?: number): Promise<MarketSkillsResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.listHotSkills(source);
+    return window.electronAPI.listHotSkills(source, limit, offset);
   }
 
   async installMarketSkill(source: string, slug: string): Promise<MarketInstallResponse> {
@@ -1086,8 +1086,11 @@ class HttpChatService implements ChatService {
     return this.request<MarketSkillsResponse>(`/skills/market/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`);
   }
 
-  async listHotSkills(source: string): Promise<MarketSkillsResponse> {
-    return this.request<MarketSkillsResponse>(`/skills/market/hot?source=${encodeURIComponent(source)}`);
+  async listHotSkills(source: string, limit?: number, offset?: number): Promise<MarketSkillsResponse> {
+    const params = new URLSearchParams({ source });
+    if (limit) params.set('limit', String(limit));
+    if (offset) params.set('offset', String(offset));
+    return this.request<MarketSkillsResponse>(`/skills/market/hot?${params.toString()}`);
   }
 
   async installMarketSkill(source: string, slug: string): Promise<MarketInstallResponse> {

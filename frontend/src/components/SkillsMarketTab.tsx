@@ -9,6 +9,8 @@ import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type { MarketSkill, MarketSource } from '../types';
 
+const PAGE_SIZE = 20;
+
 interface SkillsMarketTabProps {
   onSkillsChange?: () => void;
   installedSlugs?: string[];
@@ -51,8 +53,27 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   const [hotSkills, setHotSkills] = useState<MarketSkill[]>([]);
   const [searchResults, setSearchResults] = useState<MarketSkill[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const [installMessage, setInstallMessage] = useState<{ text: string; type: 'ok' | 'error' } | null>(null);
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  
+  // Refs to prevent stale closure issues and concurrent requests
+  const isLoadingRef = useRef(false);
+  const hotSkillsRef = useRef<MarketSkill[]>([]);
+  const pageRef = useRef(1);
+  
+  // Keep refs in sync
+  useEffect(() => {
+    hotSkillsRef.current = hotSkills;
+  }, [hotSkills]);
+  
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
 
   // Category state
   const [activeCategory, setActiveCategory] = useState('all');
@@ -95,31 +116,75 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
     }
   }, [activeSource]);
 
-  const loadHot = useCallback(async () => {
-    setLoading(true);
+  const loadHot = useCallback(async (resetPage = true) => {
+    // Prevent concurrent requests
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+    
+    if (resetPage) {
+      setLoading(true);
+      setHotSkills([]);
+      setPage(1);
+    } else {
+      setLoadingMore(true);
+    }
+    
     try {
-      const response = await chatService.listHotSkills(activeSource);
-      setHotSkills(response.skills);
-      // Calculate category counts
+      // Use ref to get current page without adding to dependency array
+      const currentPage = resetPage ? 1 : pageRef.current;
+      const offset = (currentPage - 1) * PAGE_SIZE;
+      
+      const response = await chatService.listHotSkills(activeSource, PAGE_SIZE, offset);
+      const newSkills = response.skills || [];
+      
+      if (resetPage) {
+        setHotSkills(newSkills);
+      } else {
+        setHotSkills((prev) => [...prev, ...newSkills]);
+      }
+      
+      // Check if there are more skills
+      setHasMore(newSkills.length >= PAGE_SIZE);
+      
+      // Calculate category counts using ref to avoid stale closure
       const counts: Record<string, number> = {};
-      response.skills.forEach((skill) => {
+      const allSkills = resetPage ? newSkills : [...hotSkillsRef.current, ...newSkills];
+      allSkills.forEach((skill) => {
         const cat = (skill as any).category || 'all';
         counts[cat] = (counts[cat] || 0) + 1;
       });
       setCategoryCounts(counts);
     } catch {
-      setHotSkills([]);
-      setCategoryCounts({});
+      if (resetPage) {
+        setHotSkills([]);
+        setCategoryCounts({});
+      }
     } finally {
       setLoading(false);
+      setLoadingMore(false);
+      isLoadingRef.current = false;
     }
   }, [activeSource]);
 
-  // Search with debounce
+  const loadMore = useCallback(() => {
+    if (loadingMore || loading || !hasMore) return;
+    setPage((prev) => prev + 1);
+  }, [loadingMore, loading, hasMore]);
+
+  // Search with debounce - reset pagination on search
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (!search.trim()) {
         setSearchResults([]);
+        setPage(1);
+        // Directly call the API instead of loadHot to avoid dependency cycle
+        try {
+          const response = await chatService.listHotSkills(activeSource, PAGE_SIZE, 0);
+          setHotSkills(response.skills || []);
+          setHasMore((response.skills || []).length >= PAGE_SIZE);
+        } catch {
+          setHotSkills([]);
+        }
         return;
       }
       try {
@@ -202,7 +267,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
               {showSourceDropdown && (
                 <div className="source-dropdown__menu">
                   {sourceItems.map((source) => (
-                    <button key={source.id}className={`source-dropdown__item ${activeSource === source.id ? 'active' : ''}`}onClick={() => {setActiveSource(source.id);setShowSourceDropdown(false);setSearch('');loadHot();}}>
+                    <button key={source.id}className={`source-dropdown__item ${activeSource === source.id ? 'active' : ''}`}onClick={() => {setActiveSource(source.id);setShowSourceDropdown(false);setSearch('');setPage(1);loadHot(true);}}>
                       {source.label}
                       {activeSource === source.id && <Check size={14} />}
                     </button>
@@ -225,53 +290,72 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
       />
 
       {/* Skills grid */}
-      {loading && displayedSkills.length === 0 ? (
-        <div className="skill-empty" style={{ textAlign: 'center', padding: '40px' }}>
-          <Loader2 size={24} className="animate-spin" style={{ margin: '0 auto' }} />
+      {loading ? (
+        <div className="skill-market-loading-overlay">
+          <Loader2 size={32} className="animate-spin" />
+          <p style={{ marginTop: '16px', color: '#666' }}>{t('skills.loading')}</p>
         </div>
       ) : displayedSkills.length === 0 ? (
         <div className="skill-empty">
           <p>{search ? t('skills.no_match') : t('skills.empty')}</p>
         </div>
       ) : (
-        <div className="skills-grid">
-          {displayedSkills.map((skill) => {
-            const installed = isInstalled(skill.slug);
-            const isInstalling = installing.has(skill.slug);
-            return (
-              <GridCard
-                key={skill.slug}
-                icon={<span className="skill-emoji">{marketEmoji(skill.slug)}</span>}
-                title={skill.name}
-                subtitle={sourceLabel(skill.source)}
-                description={skill.description}
-                added={installed}
-                disabled={installed || isInstalling}
-                trailing={
-                  installed ? (
-                    <Check size={14} />
-                  ) : isInstalling ? (
+        <>
+          <div className="skills-grid">
+            {displayedSkills.map((skill) => {
+              const installed = isInstalled(skill.slug);
+              const isInstalling = installing.has(skill.slug);
+              return (
+                <GridCard
+                  key={skill.slug}
+                  icon={<span className="skill-emoji">{marketEmoji(skill.slug)}</span>}
+                  title={skill.name}
+                  subtitle={sourceLabel(skill.source)}
+                  description={skill.description}
+                  added={installed}
+                  disabled={installed || isInstalling}
+                  trailing={
+                    installed ? (
+                      <Check size={14} />
+                    ) : isInstalling ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Button
+                        variant="primary"
+                        size="icon-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleInstall(skill);
+                        }}
+                        aria-label={t('skills.market_install')}
+                        title={t('skills.market_install')}
+                      >
+                        <Plus size={14} />
+                      </Button>
+                    )
+                  }
+                  onClick={installed ? undefined : (() => { handleInstall(skill); })}
+                />
+              );
+            })}
+          </div>
+          
+          {/* Load more button */}
+          {!search.trim() && hasMore && (
+            <div style={{ textAlign: 'center', padding: '24px 0' }}>
+              <Button variant="secondary" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? (
+                  <>
                     <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Button
-                      variant="primary"
-                      size="icon-xs"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleInstall(skill);
-                      }}
-                      aria-label={t('skills.market_install')}
-                      title={t('skills.market_install')}
-                    >
-                      <Plus size={14} />
-                    </Button>
-                  )
-                }
-                onClick={installed ? undefined : (() => { handleInstall(skill); })}
-              />
-            );
-          })}
-        </div>
+                    {t('skills.loading_more')}
+                  </>
+                ) : (
+                  t('skills.load_more')
+                )}
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

@@ -76,12 +76,13 @@ class SkillMarketManager:
         self,
         source: str,
         limit: int = 20,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """List popular/hot skills from a market source."""
         if source == "skillhub":
-            return await self._list_skillhub_hot(limit)
+            return await self._list_skillhub_hot(limit, offset)
         elif source == "clawhub":
-            return await self._list_clawhub_hot(limit)
+            return await self._list_clawhub_hot(limit, offset)
         else:
             raise ValueError(f"Unknown market source: {source}")
 
@@ -178,7 +179,7 @@ class SkillMarketManager:
         return self._extract_skillhub_items(data, limit)
 
     async def _list_skillhub_hot(
-        self, limit: int
+        self, limit: int, offset: int = 0
     ) -> list[dict[str, Any]]:
         url = f"{SKILLHUB_API}?sortBy=score&pageSize={min(limit * 2, 50)}"
         try:
@@ -190,7 +191,8 @@ class SkillMarketManager:
         except (aiohttp.ClientError, Exception):
             return []
 
-        return self._extract_skillhub_items(data, limit)
+        skills = self._extract_skillhub_items(data, limit + offset)
+        return skills[offset:]
 
     @staticmethod
     def _extract_skillhub_items(data: dict, limit: int) -> list[dict[str, Any]]:
@@ -244,7 +246,7 @@ class SkillMarketManager:
         return SkillMarketManager._extract_clawhub_search(data, limit)
 
     async def _list_clawhub_hot(
-        self, limit: int
+        self, limit: int, offset: int = 0
     ) -> list[dict[str, Any]]:
         url = f"{CLAWHUB_SKILLS}?limit={min(limit * 2, 50)}"
         try:
@@ -256,7 +258,8 @@ class SkillMarketManager:
         except (aiohttp.ClientError, Exception):
             return []
 
-        return SkillMarketManager._extract_clawhub_list(data, limit)
+        skills = SkillMarketManager._extract_clawhub_list(data, limit + offset)
+        return skills[offset:]
 
     @staticmethod
     def _extract_clawhub_search(data: dict, limit: int) -> list[dict[str, Any]]:

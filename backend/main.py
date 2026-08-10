@@ -2085,10 +2085,11 @@ async def search_market_skills(
 async def list_hot_market_skills(
     source: str,
     limit: int = 20,
+    offset: int = 0,
 ):
     """List hot/popular skills in a market source."""
     try:
-        skills = await skill_market_manager.list_hot(source, limit)
+        skills = await skill_market_manager.list_hot(source, limit, offset)
         return {"status": "ok", "skills": skills, "count": len(skills)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
