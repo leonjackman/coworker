@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { Button } from './ui/button';
 import { GridCard } from './ui/grid-card';
 import { TagBar } from './ui/tag-bar';
-import type { CategoryTabItem } from './ui/category-tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type {
@@ -365,21 +365,19 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
 
   const searching = debouncedSearch.trim().length > 0;
 
-  const facetTabs = useMemo<CategoryTabItem[]>(() => {
+  // Facet items for Select dropdown (category or sort)
+  const facetOptions = useMemo(() => {
     if (facet.items.length === 0) return [];
-    // A search is already relevance-ordered and ClawHub's /search takes no
-    // sort, so showing ordering tabs there would be a control that does
-    // nothing. Category filters, by contrast, do apply to searches.
     if (facet.kind === 'sort' && searching) return [];
-    const tabs = facet.items.map((item) => ({ id: item.key, label: item.name }));
-    // Each sort is a full ordering of the same catalogue — there is no "All".
-    return facet.kind === 'sort'
-      ? tabs
-      : [{ id: ALL_CATEGORY, label: t('skills.cat_all') }, ...tabs];
+    const items = facet.items.map((item) => ({ key: item.key, label: item.name }));
+    if (facet.kind === 'category') {
+      return [{ key: ALL_CATEGORY, label: t('skills.cat_all') }, ...items];
+    }
+    return items;
   }, [facet.items, facet.kind, searching]);
 
-  const handleFacetChange = useCallback((id: string) => {
-    setFacet((prev) => (prev.value === id ? prev : { ...prev, value: id }));
+  const handleFacetChange = useCallback((value: string) => {
+    setFacet((prev) => (prev.value === value ? prev : { ...prev, value }));
   }, []);
 
   const sourceItems = useMemo(() => sources.map((s) => ({ id: s.id, label: sourceLabel(s.id) })), [sources]);
@@ -403,6 +401,20 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
       <TagBar
         tagSlot={
           <div className="skill-market-toolbar">
+            {/* Facet Select — 分类/排序选择 */}
+            <Select value={facet.value} onValueChange={handleFacetChange} disabled={!facetReady}>
+              <SelectTrigger className="skill-market-facet-select" size="sm">
+                <SelectValue placeholder="全部" />
+              </SelectTrigger>
+              <SelectContent>
+                {facetOptions.map((opt) => (
+                  <SelectItem key={opt.key} value={opt.key}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* Source Dropdown */}
             <div className="source-dropdown" ref={dropdownRef} style={{ position: 'relative' }}>
               <Button
                 variant="secondary"
@@ -433,9 +445,6 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
             </div>
           </div>
         }
-        categories={facetTabs}
-        category={facet.value}
-        onCategoryChange={handleFacetChange}
         searchValue={search}
         onSearchChange={setSearch}
         searchPlaceholder={t('skills.market_search')}

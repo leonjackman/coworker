@@ -6832,6 +6832,12 @@ body.bottom-panel-resizing {
   gap: 8px;
 }
 
+/* Facet select (class/ sort dropdown) */
+.skill-market-facet-select {
+  width: 160px;
+  flex-shrink: 0;
+}
+
 /* ===== Source Dropdown ===== */
 .source-dropdown {
   position: relative;
