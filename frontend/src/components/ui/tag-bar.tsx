@@ -73,7 +73,19 @@ export function TagBar({
   return (
     <div className={`skill-toolbar ${className || ''}`}>
       <div className="skill-toolbar__left">
-        {leftSlot || (
+        {leftSlot ? (
+          <>
+            {leftSlot}
+            {categories && (
+              <CategoryTabs
+                categories={categories}
+                value={category ?? ''}
+                onChange={(id: string) => onCategoryChange?.(id)}
+                className="skill-toolbar__cats"
+              />
+            )}
+          </>
+        ) : (
           categories && (
             <CategoryTabs
               categories={categories}

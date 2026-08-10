@@ -6820,6 +6820,73 @@ body.bottom-panel-resizing {
   gap: 8px;
 }
 
+/* ===== Skill Market TagBar ===== */
+.skill-market-tagbar {
+  margin-bottom: 16px;
+}
+
+.skill-market-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ===== Source Dropdown ===== */
+.source-dropdown {
+  position: relative;
+}
+
+.source-dropdown__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.source-dropdown__menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  min-width: 180px;
+  background: var(--background);
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  padding: 4px;
+  margin-top: 4px;
+}
+
+.source-dropdown__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--foreground);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.source-dropdown__item:hover {
+  background: var(--panel-hover);
+}
+
+.source-dropdown__item.active {
+  background: color-mix(in srgb, var(--ring) 15%, transparent);
+  color: var(--ring);
+}
+
+.source-dropdown__item .lucide {
+  flex-shrink: 0;
+}
+
 /* ===== Add skill drawer (inside side-drawer) ===== */
 .add-skill-drawer {
   display: flex;
