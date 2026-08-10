@@ -1,7 +1,6 @@
-import { Check, ExternalLink, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from './ui/button';
-import { Switch } from './ui/switch';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import { WorkspacePage } from './ui/workspace-page';
@@ -9,7 +8,6 @@ import { CategoryTabs, type CategoryTabItem } from './ui/category-tabs';
 import { SearchInput } from './ui/search-input';
 import { GridCard } from './ui/grid-card';
 import { DetailModal } from './ui/detail-modal';
-import { SideDrawer } from './ui/side-drawer';
 import { SkillsMarketTab } from './SkillsMarketTab';
 import type { SkillDiagnostic, SkillEntry } from '../types';
 
@@ -59,10 +57,7 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
 
   // Tab within list view: 'installed' | 'market'
   type ListTab = 'installed' | 'market';
-  const [listTab, setListTab] = useState<ListTab>('installed');
-
-  // Installed drawer
-  const [installedDrawerOpen, setInstalledDrawerOpen] = useState(false);
+  const [listTab, setListTab] = useState<ListTab>('market');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -123,8 +118,6 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
     return list;
   }, [skills, category, search]);
 
-  const installedSkills = useMemo(() => skills.filter((s) => s.enabled), [skills]);
-
   const handleToggle = useCallback(
     async (skill: SkillEntry) => {
       try {
@@ -161,30 +154,24 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
       title={t('skills.title')}
       description={t('skills.subtitle')}
       action={
-        <div className="skills-header__actions">
-        {viewMode === 'list' ? (
-          <>
-            <button
-              type="button"
-              className="installed-badge"
-              onClick={() => setInstalledDrawerOpen(true)}
-              aria-label={t('skills.installed_aria')}
-            >
-              <span>{t('skills.installed')}</span>
-              <span className="installed-badge__count">{installedCount}</span>
-              <span className={`installed-badge__status ${installedCount > 0 ? 'is-on' : ''}`} />
-            </button>
+        viewMode === 'list' ? (
+          <div className="skills-header__actions">
+            <Button variant="secondary" onClick={() => setListTab('installed')} className="skills-header__tab-btn">
+              {t('skills.installed')}
+              {installedCount > 0 && (
+                <span className="skills-header__count">{installedCount}</span>
+              )}
+            </Button>
             <Button variant="primary" onClick={() => setViewMode('add')} disabled={loading}>
               <Plus size={14} />
               {t('skills.add_skill')}
             </Button>
-          </>
+          </div>
         ) : (
           <Button variant="ghost" onClick={() => setViewMode('list')}>
             {t('mcp.back')}
           </Button>
-        )}
-        </div>
+        )
       }
     >
       <div className="workspace-page__content">
@@ -193,90 +180,79 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
         )}
 
         {/* ── List view ── */}
-        {viewMode === 'list' && (
+        {viewMode === 'list' && listTab === 'market' && (
+          <SkillsMarketTab onSkillsChange={refresh} installedSlugs={skills.map((s) => s.name)} />
+        )}
+
+        {/* ── Installed tab ── */}
+        {viewMode === 'list' && listTab === 'installed' && (
           <>
-            {/* ── Top tabs: Installed / Market ── */}
-            <CategoryTabs
-              categories={[
-                { id: 'installed', label: t('skills.installed_title'), count: installedCount },
-                { id: 'market', label: t('skills.market'), count: 0 },
-              ]}
-              value={listTab}
-              onChange={(id: string) => setListTab(id as ListTab)}
-              className="skill-toolbar"
-            />
-
-            {/* ── Installed tab ── */}
-            {listTab === 'installed' && (
-              <>
-                {diagnostics.length > 0 && (
-                  <div className="skill-diagnostics">
-                    <div className="skill-diagnostics__title">
-                      ⚠ {t('skills.diagnostics')} ({diagnostics.length})
-                    </div>
-                    {diagnostics.map((diagnostic, index) => (
-                      <div key={index} className={`skill-diagnostics__item skill-diagnostics__item--${diagnostic.type}`}>
-                        <strong>{diagnostic.type}</strong> {diagnostic.name}
-                        <span className="skill-diagnostics__message">— {diagnostic.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="skill-toolbar">
-                  <CategoryTabs categories={categories} value={category} onChange={setCategory} className="skill-toolbar__cats" />
-                  <div className="skill-toolbar__right">
-                    <SearchInput
-                      value={search}
-                      onChange={setSearch}
-                      placeholder={t('skills.search_placeholder')}
-                      className="skill-toolbar__search"
-                    />
-                    <Button variant="ghost" size="icon" onClick={() => void rescan()} disabled={loading} aria-label={t('skills.refresh')}>
-                      {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                    </Button>
-                  </div>
+            {diagnostics.length > 0 && (
+              <div className="skill-diagnostics">
+                <div className="skill-diagnostics__title">
+                  ⚠ {t('skills.diagnostics')} ({diagnostics.length})
                 </div>
-
-                {/* ── Installed grid ── */}
-                {visibleSkills.length === 0 ? (
-                  <div className="skill-empty">
-                    <p>{skills.length === 0 ? t('skills.empty') : t('skills.no_match')}</p>
+                {diagnostics.map((diagnostic, index) => (
+                  <div key={index} className={`skill-diagnostics__item skill-diagnostics__item--${diagnostic.type}`}>
+                    <strong>{diagnostic.type}</strong> {diagnostic.name}
+                    <span className="skill-diagnostics__message">— {diagnostic.message}</span>
                   </div>
-                ) : (
-                  <div className="skills-grid">
-                    {visibleSkills.map((skill) => (
-                      <GridCard
-                        key={skill.name}
-                        icon={<span className="skill-emoji">{skillEmoji(skill.name)}</span>}
-                        title={skill.name}
-                        subtitle={`v${skill.version || '1.0.0'} · ${sourceLabel(skill.source)}`}
-                        description={skill.description}
-                        added={skill.enabled}
-                        onClick={() => void openDetail(skill)}
-                        trailing={
-                          <Button
-                            variant={skill.enabled ? 'secondary' : 'primary'}
-                            size="icon-xs"
-                            onClick={() => void handleToggle(skill)}
-                            aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
-                            title={skill.enabled ? t('skills.added') : t('skills.add')}
-                          >
-                            {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
-                          </Button>
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
-              </>
+                ))}
+              </div>
             )}
 
-            {/* ── Market tab ── */}
-            {listTab === 'market' && (
-              <SkillsMarketTab onSkillsChange={refresh} installedSlugs={skills.map((s) => s.name)} />
+            <div className="skill-toolbar">
+              <CategoryTabs categories={categories} value={category} onChange={setCategory} className="skill-toolbar__cats" />
+              <div className="skill-toolbar__right">
+                <SearchInput
+                  value={search}
+                  onChange={setSearch}
+                  placeholder={t('skills.search_placeholder')}
+                  className="skill-toolbar__search"
+                />
+                <Button variant="ghost" size="icon" onClick={() => void rescan()} disabled={loading} aria-label={t('skills.refresh')}>
+                  {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                </Button>
+              </div>
+            </div>
+
+            {/* ── Installed grid ── */}
+            {visibleSkills.length === 0 ? (
+              <div className="skill-empty">
+                <p>{skills.length === 0 ? t('skills.empty') : t('skills.no_match')}</p>
+              </div>
+            ) : (
+              <div className="skills-grid">
+                {visibleSkills.map((skill) => (
+                  <GridCard
+                    key={skill.name}
+                    icon={<span className="skill-emoji">{skillEmoji(skill.name)}</span>}
+                    title={skill.name}
+                    subtitle={`v${skill.version || '1.0.0'} · ${sourceLabel(skill.source)}`}
+                    description={skill.description}
+                    added={skill.enabled}
+                    onClick={() => void openDetail(skill)}
+                    trailing={
+                      <Button
+                        variant={skill.enabled ? 'secondary' : 'primary'}
+                        size="icon-xs"
+                        onClick={() => void handleToggle(skill)}
+                        aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
+                        title={skill.enabled ? t('skills.added') : t('skills.add')}
+                      >
+                        {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
+                      </Button>
+                    }
+                  />
+                ))}
+              </div>
             )}
           </>
+        )}
+
+        {/* ── Market tab ── */}
+        {viewMode === 'list' && listTab === 'market' && (
+          <SkillsMarketTab onSkillsChange={refresh} installedSlugs={skills.map((s) => s.name)} />
         )}
 
         {/* ── Add skill view (secondary page) ── */}
@@ -372,55 +348,6 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
             </div>
           ) : null}
         </DetailModal>
-
-        {/* ── Installed drawer ── */}
-        <SideDrawer
-          open={installedDrawerOpen}
-          onClose={() => setInstalledDrawerOpen(false)}
-          title={
-            <span>{t('skills.installed_title')} <span className="side-drawer__count">{installedSkills.length}</span></span>
-          }
-        >
-          {installedSkills.length === 0 ? (
-            <div className="skill-empty">
-              <p>{t('skills.installed_empty')}</p>
-            </div>
-          ) : (
-            <div className="installed-list">
-              {installedSkills.map((skill) => (
-                <div className="installed-row" key={skill.name}>
-                  <div className="installed-row__icon">{skillEmoji(skill.name)}</div>
-                  <div className="installed-row__meta">
-                    <div className="installed-row__name">{skill.name}</div>
-                    <div className="installed-row__sub">
-                      v{skill.version || '1.0.0'} · {sourceLabel(skill.source)}
-                    </div>
-                  </div>
-                  <Switch
-                    id={`installed-switch-${skill.name}`}
-                    checked={skill.enabled}
-                    onChange={() => void handleToggle(skill)}
-                    aria-label={t('skills.toggle')}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => void handleToggle(skill)}
-                    aria-label={t('skills.remove')}
-                    title={t('skills.remove')}
-                  >
-                    <Trash2 size={13} />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-          {installedSkills.length > 0 && (
-            <div className="side-drawer__footer-note">
-              <ExternalLink size={12} /> {t('skills.open_file_hint')}
-            </div>
-          )}
-        </SideDrawer>
       </div>
     </WorkspacePage>
   );
