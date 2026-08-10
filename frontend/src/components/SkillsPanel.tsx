@@ -5,10 +5,10 @@ import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import { WorkspacePage } from './ui/workspace-page';
 import { CategoryTabs, type CategoryTabItem } from './ui/category-tabs';
-import { SearchInput } from './ui/search-input';
 import { GridCard } from './ui/grid-card';
 import { DetailModal } from './ui/detail-modal';
 import { SkillsMarketTab } from './SkillsMarketTab';
+import { TagBar } from './ui/tag-bar';
 import type { SkillDiagnostic, SkillEntry } from '../types';
 
 interface SkillsPanelProps {
@@ -156,19 +156,26 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
       action={
         viewMode === 'list' ? (
           <div className="skills-header__actions">
-            <Button variant="secondary" onClick={() => setListTab('installed')} className="skills-header__tab-btn">
-              {t('skills.installed')}
-              {installedCount > 0 && (
-                <span className="skills-header__count">{installedCount}</span>
-              )}
-            </Button>
+            {listTab === 'installed' ? (
+                <Button variant="secondary" onClick={() => setListTab('market')} className="skills-header__tab-btn">
+                  返回{t('skills.market')}
+                </Button>
+              ) : (
+              <Button variant="secondary" onClick={() => setListTab('installed')} className="skills-header__tab-btn">
+                {t('skills.installed')}
+                {installedCount > 0 && (
+                  <span className="skills-header__count">{installedCount}</span>
+                )}
+              </Button>
+              )
+            }
             <Button variant="primary" onClick={() => setViewMode('add')} disabled={loading}>
               <Plus size={14} />
               {t('skills.add_skill')}
             </Button>
           </div>
         ) : (
-          <Button variant="ghost" onClick={() => setViewMode('list')}>
+          <Button variant="ghost" onClick={() => setListTab('market')}>
             {t('mcp.back')}
           </Button>
         )
@@ -201,20 +208,17 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
               </div>
             )}
 
-            <div className="skill-toolbar">
-              <CategoryTabs categories={categories} value={category} onChange={setCategory} className="skill-toolbar__cats" />
-              <div className="skill-toolbar__right">
-                <SearchInput
-                  value={search}
-                  onChange={setSearch}
-                  placeholder={t('skills.search_placeholder')}
-                  className="skill-toolbar__search"
-                />
-                <Button variant="ghost" size="icon" onClick={() => void rescan()} disabled={loading} aria-label={t('skills.refresh')}>
-                  {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-                </Button>
-              </div>
-            </div>
+            <TagBar
+              categories={categories}
+              category={category}
+              onCategoryChange={setCategory}
+              searchValue={search}
+              onSearchChange={setSearch}
+              searchPlaceholder={t('skills.search_placeholder')}
+              refreshLoading={loading}
+              onRefresh={() => void rescan()}
+              refreshAriaLabel={t('skills.refresh')}
+            />
 
             {/* ── Installed grid ── */}
             {visibleSkills.length === 0 ? (
