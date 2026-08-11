@@ -113,7 +113,8 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
   const hasMore = sortedSessions.length > LIMIT;
   const shownCount = listExpanded ? Math.min(MAX, sortedSessions.length) : LIMIT;
   const displaySessions = sortedSessions.slice(0, shownCount);
-  const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || activeProjectId === project.id;
+  const hasSessions = sessions.length > 0;
+  const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || (activeProjectId === project.id && hasSessions);
 
   const handleTitleClick = () => {
     setExpanded((v) => !v);

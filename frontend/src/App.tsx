@@ -1645,6 +1645,7 @@ function App() {
 
   const openProject = (projectId: string) => {
     startProjectDraft(projectId);
+    setDraftMode(false);
   };
 
   const pickWorkspaceDirectory = async () => {
@@ -1817,6 +1818,12 @@ function App() {
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
         setDraftMode(true);
       }
+      // 清理被删除会话所属项目的 activeProjectId
+      const deletedSessionProject = sessions.find((s) => s.id === sessionIdToDelete)?.project_id;
+      if (deletedSessionProject && activeProjectId === deletedSessionProject) {
+        setActiveProjectId(undefined);
+        pendingProjectIdRef.current = undefined;
+      }
       abortStreamFor(sessionIdToDelete);
       requestSeqRef.current += 1;
       setPendingRequests([]);
@@ -1824,6 +1831,7 @@ function App() {
       await refreshProjects();
     } catch (error) {
       console.error('Failed to delete session:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to delete session');
     }
   };
 
@@ -1883,6 +1891,7 @@ function App() {
       await refreshProjects();
     } catch (error) {
       console.error('Failed to delete project:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to delete project');
     }
   };
 
@@ -2162,7 +2171,7 @@ function App() {
   const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
   const showNewChatHero = activeView === 'chat' && !sessionId && messages.length === 0 && runtimeStatus === 'ready' && (!activeProject || draftMode);
   const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0 && !draftMode;
-  const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && messages.length === 0 && runtimeStatus === 'ready' && !draftMode;
+  const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && runtimeStatus === 'ready' && !draftMode;
   const workspaceOptions = projects.map((project) => ({
     id: project.id,
     name: project.name,

@@ -344,7 +344,13 @@ function requestBackend(pathname, method = 'GET', payload = undefined) {
   }
 
   return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      req.destroy();
+      reject(new Error(`Backend request timed out: ${method} ${pathname}`));
+    }, 10000);
+
     const req = http.request(options, (res) => {
+      clearTimeout(timeout);
       let responseData = '';
       res.on('data', (chunk) => {
         responseData += chunk;
@@ -368,7 +374,15 @@ function requestBackend(pathname, method = 'GET', payload = undefined) {
     });
 
     req.on('error', (e) => {
+      clearTimeout(timeout);
       reject(new Error(`Failed to connect to backend: ${e.message}`));
+    });
+
+    req.setTimeout(10000);
+    req.on('timeout', () => {
+      clearTimeout(timeout);
+      req.destroy();
+      reject(new Error(`Backend request timed out: ${method} ${pathname}`));
     });
 
     if (data) {
