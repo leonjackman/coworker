@@ -191,6 +191,22 @@ function App() {
   const [changesPanelResizing, setChangesPanelResizing] = useState(false);
   const [autonomy, setAutonomy] = useState<Autonomy>('guarded');
   const [goalMaxRounds, setGoalMaxRounds] = useState<number>(50);
+  const MAX_ATTACHMENT_MB_STORAGE_KEY = 'coworker-max-attachment-mb';
+  const DEFAULT_MAX_ATTACHMENT_MB = 25;
+  const MIN_MAX_ATTACHMENT_MB = 1;
+  const MAX_MAX_ATTACHMENT_MB = 1024;
+  const loadMaxAttachmentMb = (): number => {
+    try {
+      const raw = localStorage.getItem(MAX_ATTACHMENT_MB_STORAGE_KEY);
+      if (raw == null) return DEFAULT_MAX_ATTACHMENT_MB;
+      const parsed = parseInt(raw, 10);
+      if (!Number.isFinite(parsed)) return DEFAULT_MAX_ATTACHMENT_MB;
+      return Math.max(MIN_MAX_ATTACHMENT_MB, Math.min(MAX_MAX_ATTACHMENT_MB, parsed));
+    } catch {
+      return DEFAULT_MAX_ATTACHMENT_MB;
+    }
+  };
+  const [maxAttachmentMb, setMaxAttachmentMb] = useState<number>(loadMaxAttachmentMb);
   const [workMode, setWorkMode] = useState<WorkMode>('build');
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -325,6 +341,16 @@ function App() {
           const settings = await chatService.fetchSettings();
           if (typeof settings.goal_max_rounds === 'number') {
             setGoalMaxRounds(settings.goal_max_rounds);
+          }
+          if (typeof settings.max_attachment_mb === 'number') {
+            const fromBackend = Math.max(
+              MIN_MAX_ATTACHMENT_MB,
+              Math.min(MAX_MAX_ATTACHMENT_MB, Math.round(settings.max_attachment_mb)),
+            );
+            setMaxAttachmentMb(fromBackend);
+            try {
+              localStorage.setItem(MAX_ATTACHMENT_MB_STORAGE_KEY, String(fromBackend));
+            } catch { /* ignore */ }
           }
         } catch { /* ignore */ }
       } catch (error) {
@@ -502,6 +528,14 @@ function App() {
       }),
     ]);
     setInput('');
+    // 发送即清空输入框里的附件与引用：它们已被捕获进用户消息气泡（上方
+    // setMessages 的 attachments/references）和即将发出的请求体，无需再停留
+    // 在 composer。放在此处（而非等流式结束后）可彻底避免两类问题：
+    // 1) 长任务的整段流式期间附件 chip 一直挂在输入框，看起来像「没发出去」；
+    // 2) 流式出错/被中止时 catch/finally 不会清附件，导致 chip 永久残留，
+    //    且残留的附件会在下一次发送时被 requestAttachments 误带重发。
+    setAttachments([]);
+    setReferences([]);
     setIsThinking(true);
 
     setMessages((current) => [
@@ -763,6 +797,7 @@ function App() {
               }
             : {}),
           ...(requestAttachments.length > 0 ? { attachments: requestAttachments } : {}),
+          max_attachment_bytes: Math.max(1, maxAttachmentMb) * 1024 * 1024,
           ...(requestReferences.length > 0 ? { referenced_sessions: requestReferences.map((reference) => reference.id) } : {}),
           ...(requestSessionId ? { session_id: requestSessionId } : {}),
           ...(requestProjectId ? { project_id: requestProjectId } : {}),
@@ -774,8 +809,7 @@ function App() {
         controller.signal,
       );
       if (requestId !== requestSeqRef.current) return;
-      setAttachments([]);
-      setReferences([]);
+      // 附件/引用已在发送即清空（见上方），此处无需重复。
       setRuntimeStatus('ready');
       await refreshSessions();
       await refreshProjects();
@@ -1502,10 +1536,8 @@ function App() {
   const createProjectWithWorkspace = async (payload: CreateProjectRequest): Promise<ProjectEntry> => {
     const response = await chatService.createProject(payload);
     await refreshProjects();
-    setActiveProjectId(response.project.id);
-    if (!sessionIdRef.current) {
-      pendingProjectIdRef.current = response.project.id;
-    }
+    // 创建完成后直接进入该项目的新会话页（草稿态），而非停留在会话历史列表
+    startNewChat(response.project.id);
     return response.project;
   };
 
@@ -2018,6 +2050,20 @@ function App() {
     chatService.saveSettings({ goal_max_rounds: value }).catch(() => { /* ignore */ });
   };
 
+  const changeMaxAttachmentMb = (value: number) => {
+    const clamped = Math.max(
+      MIN_MAX_ATTACHMENT_MB,
+      Math.min(MAX_MAX_ATTACHMENT_MB, Number.isFinite(value) ? Math.round(value) : DEFAULT_MAX_ATTACHMENT_MB),
+    );
+    setMaxAttachmentMb(clamped);
+    try {
+      localStorage.setItem(MAX_ATTACHMENT_MB_STORAGE_KEY, String(clamped));
+    } catch {
+      /* localStorage unavailable — keep in-memory value */
+    }
+    chatService.saveSettings({ max_attachment_mb: clamped }).catch(() => { /* ignore */ });
+  };
+
     return (
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
@@ -2151,6 +2197,7 @@ function App() {
                         autonomy={autonomy}
                         selectedModel={selectedModel}
                         attachments={attachments}
+                        maxAttachmentMb={maxAttachmentMb}
                         references={references}
                         modelOptions={modelOptions}
                         editing={Boolean(editingMessage)}
@@ -2196,6 +2243,8 @@ function App() {
                   autonomy={autonomy}
                   goalMaxRounds={goalMaxRounds}
                   onGoalMaxRoundsChange={changeGoalMaxRounds}
+                  maxAttachmentMb={maxAttachmentMb}
+                  onMaxAttachmentMbChange={changeMaxAttachmentMb}
                   onThemeSettingsChange={changeThemeSettings}
                   onAutonomyChange={setAutonomy}
                   onClose={() => setActiveView('chat')}

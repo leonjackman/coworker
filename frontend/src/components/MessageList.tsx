@@ -1,4 +1,4 @@
-import { Bot, CheckIcon, Hammer, ListChecks, Shield, ShieldCheck } from 'lucide-react';
+import { Bot, CheckIcon, Hammer, ListChecks, Paperclip, Shield, ShieldCheck } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart, PartFileChange } from '../types';
@@ -31,6 +31,13 @@ function formatTime(timestamp: number): string {
   const h = d.getHours().toString().padStart(2, '0');
   const m = d.getMinutes().toString().padStart(2, '0');
   return `${h}:${m}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 function groupParts(parts: MessagePart[]) {
@@ -156,6 +163,21 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
           </div>
         )}
         <div className="stream-bubble stream-bubble--user">{message.content}</div>
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="user-bubble-attachments">
+            {message.attachments.map((attachment) => (
+              <span
+                className={`attachment-chip${attachment.tooLarge ? ' attachment-chip--warn' : ''}`}
+                key={attachment.id}
+                title={`${attachment.name} · ${formatBytes(attachment.size)}${attachment.tooLarge ? '（过大未内联字节）' : ''}`}
+              >
+                <Paperclip size={12} />
+                <span className="attachment-chip__name">{attachment.name}</span>
+                <span className="attachment-chip__size">{formatBytes(attachment.size)}</span>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="user-bubble-meta">
           <span className="user-bubble-meta__time">{formatTime(message.timestamp)}</span>
         </div>

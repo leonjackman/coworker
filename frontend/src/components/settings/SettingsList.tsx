@@ -39,6 +39,17 @@ export type SettingsItem =
       description?: ReactNode;
       value: number;
       onChange: (value: number) => void;
+    }
+  | {
+      id: string;
+      type: 'number_input';
+      label: ReactNode;
+      description?: ReactNode;
+      value: number;
+      min?: number;
+      max?: number;
+      unit?: ReactNode;
+      onChange: (value: number) => void;
     };
 
 export interface SettingsGroup {
@@ -67,6 +78,18 @@ function SettingControl({ item }: { item: SettingsItem }) {
     return <GoalRoundsControl value={item.value} onChange={item.onChange} />;
   }
 
+  if (item.type === 'number_input') {
+    return (
+      <NumberInputControl
+        value={item.value}
+        min={item.min ?? 1}
+        max={item.max ?? 1024}
+        unit={item.unit}
+        onChange={item.onChange}
+      />
+    );
+  }
+
   return (
     <ToggleGroup
       value={item.value}
@@ -74,6 +97,41 @@ function SettingControl({ item }: { item: SettingsItem }) {
       items={item.options}
       className="settings-toggle"
     />
+  );
+}
+
+function NumberInputControl({
+  value,
+  min = 1,
+  max = 1024,
+  unit,
+  onChange,
+}: {
+  value: number;
+  min?: number;
+  max?: number;
+  unit?: ReactNode;
+  onChange: (value: number) => void;
+}) {
+  const clamp = (raw: number) => {
+    if (!Number.isFinite(raw)) return min;
+    return Math.max(min, Math.min(max, Math.round(raw)));
+  };
+
+  return (
+    <div className="settings-number-input">
+      <input
+        type="number"
+        className="settings-number-input__field"
+        value={Number.isFinite(value) ? value : min}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(clamp(parseInt(e.target.value, 10)))}
+        onBlur={(e) => onChange(clamp(parseInt(e.target.value, 10)))}
+        aria-label={typeof unit === 'string' ? unit : 'value'}
+      />
+      {unit && <span className="settings-number-input__unit">{unit}</span>}
+    </div>
   );
 }
 

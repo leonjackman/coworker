@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
   Folder,
@@ -55,6 +56,8 @@ interface ChatInputProps {
   autonomy: Autonomy;
   selectedModel: string;
   attachments: ComposerAttachment[];
+  /** 文件体积上限（MB），来自设置页，控制二进制附件内联字节的阈值 */
+  maxAttachmentMb: number;
   references: SessionReference[];
   modelOptions: ModelOption[];
   onChange: (value: string) => void;
@@ -80,6 +83,19 @@ interface ChatInputProps {
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/settings"];
 const MAX_ATTACHMENT_CHARS = 120_000;
+// 二进制附件内联字节的体积上限由设置页的「文件体积上限」控制（默认 25MB），
+// 经 maxAttachmentMb prop 传入。超过则只保留元信息、不内联，由后端在提示词中
+// 如实说明「过大未内联」。文本附件不受此限（按字符截断）。
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
 
 const SESSION_ID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
@@ -94,31 +110,55 @@ function isTextAttachment(file: File) {
   );
 }
 
-async function buildAttachment(file: File): Promise<ComposerAttachment> {
+async function buildAttachment(file: File, maxBytes: number): Promise<ComposerAttachment> {
   const base = {
     id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     name: file.name,
     size: file.size,
     type: file.type || "file",
   };
-  if (!isTextAttachment(file)) {
-    return { ...base, binary: true };
-  }
-  try {
-    const content = await file.text();
-    const truncated = content.length > MAX_ATTACHMENT_CHARS;
+  // 超过体积上限：直接拒绝添加，不再读取字节（避免对大文件做无意义的 IO）。
+  if (file.size > maxBytes) {
     return {
       ...base,
-      content: truncated ? content.slice(0, MAX_ATTACHMENT_CHARS) : content,
-      truncated,
-      binary: false,
+      binary: true,
+      tooLarge: true,
+      rejected: true,
+      error: `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），超过 ${(maxBytes / 1024 / 1024).toFixed(0)} MB 上限`,
     };
+  }
+  // 文本附件：读取原始文本，直接内联进提示词。
+  if (isTextAttachment(file)) {
+    try {
+      const content = await file.text();
+      const truncated = content.length > MAX_ATTACHMENT_CHARS;
+      return {
+        ...base,
+        content: truncated ? content.slice(0, MAX_ATTACHMENT_CHARS) : content,
+        truncated,
+        binary: false,
+      };
+    } catch (error) {
+      return {
+        ...base,
+        binary: true,
+        rejected: true,
+        error: error instanceof Error ? error.message : "Unable to read attachment",
+      };
+    }
+  }
+  // 二进制附件（图片/PDF/压缩包等）：一律读成 base64 data URL 一并发出，
+  // 由后端原样转发给 LLM，LLM 自行决定是否受理。超限已在上方拦截。
+  try {
+    const buffer = await file.arrayBuffer();
+    const dataUrl = `data:${file.type || "application/octet-stream"};base64,${arrayBufferToBase64(buffer)}`;
+    return { ...base, content: dataUrl, binary: true };
   } catch (error) {
     return {
       ...base,
       binary: true,
-      error:
-        error instanceof Error ? error.message : "Unable to read attachment",
+      rejected: true,
+      error: error instanceof Error ? error.message : "Unable to read attachment",
     };
   }
 }
@@ -131,6 +171,7 @@ export function ChatInput({
   autonomy,
   selectedModel,
   attachments,
+  maxAttachmentMb,
   references,
   modelOptions,
   onChange,
@@ -159,6 +200,20 @@ export function ChatInput({
   const [showCommands, setShowCommands] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
   const [highlights, setHighlights] = useState<{ left: number; top: number; width: number; height: number }[]>([]);
+  const [addError, setAddError] = useState<string | null>(null);
+  const addErrorTimer = useRef<number | null>(null);
+
+  const showAddError = (message: string) => {
+    setAddError(message);
+    if (addErrorTimer.current) window.clearTimeout(addErrorTimer.current);
+    addErrorTimer.current = window.setTimeout(() => setAddError(null), 4000);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (addErrorTimer.current) window.clearTimeout(addErrorTimer.current);
+    };
+  }, []);
   const activeWorkspace = workspaceOptions.find(
     (option) => option.id === activeWorkspaceId,
   );
@@ -249,11 +304,36 @@ export function ChatInput({
   }, [value]);
 
   async function addFiles(files: FileList | null) {
-    if (!files) return;
-    const nextAttachments = await Promise.all(
-      Array.from(files).map((file) => buildAttachment(file)),
-    );
-    onAttachmentsChange([...attachments, ...nextAttachments]);
+    if (!files || files.length === 0) return;
+    const maxBytes = Math.max(1, maxAttachmentMb) * 1024 * 1024;
+    const fileList = Array.from(files);
+    const current = attachments;
+    // 乐观占位：先显示「读取中」，读完后替换，避免大文件读取时无任何反馈。
+    const placeholders: ComposerAttachment[] = fileList.map((file) => ({
+      id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: file.name,
+      size: file.size,
+      type: file.type || "file",
+      uploading: true,
+    }));
+    const placeholderIds = new Set(placeholders.map((placeholder) => placeholder.id));
+    onAttachmentsChange([...current, ...placeholders]);
+
+    const built = await Promise.all(fileList.map((file) => buildAttachment(file, maxBytes)));
+    const failures = built.filter((attachment) => attachment.rejected);
+    const successes = built.filter((attachment) => !attachment.rejected);
+    // 用解析结果替换占位 chip（失败的不会进入发送列表）
+    onAttachmentsChange([
+      ...current.filter((attachment) => !placeholderIds.has(attachment.id)),
+      ...successes,
+    ]);
+
+    if (failures.length > 0) {
+      const limitMb = (maxBytes / 1024 / 1024).toFixed(0);
+      const shown = failures.map((attachment) => attachment.name).slice(0, 3).join("、");
+      const extra = failures.length > 3 ? ` 等 ${failures.length} 个` : "";
+      showAddError(`附件添加失败：${shown}${extra} 超过 ${limitMb} MB 上限`);
+    }
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -519,11 +599,29 @@ export function ChatInput({
             </div>
           )}
 
+          {addError && (
+            <div className="composer__add-error" role="alert">
+              <AlertTriangle size={14} />
+              <span>{addError}</span>
+              <button type="button" onClick={() => setAddError(null)} aria-label={t("common.close")}>
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
           {attachments.length > 0 && (
             <div className="composer__attachments">
               {attachments.map((attachment) => (
-                <span className="attachment-chip" key={attachment.id}>
+                <span
+                  className={`attachment-chip${attachment.uploading ? " attachment-chip--uploading" : ""}${attachment.error ? " attachment-chip--error" : ""}`}
+                  key={attachment.id}
+                  title={attachment.error || undefined}
+                >
+                  {attachment.uploading && <span className="attachment-chip__spinner" aria-hidden />}
                   {attachment.name}
+                  {attachment.error && !attachment.uploading && (
+                    <span className="attachment-chip__error">· {attachment.error}</span>
+                  )}
                   <button
                     type="button"
                     onClick={() => removeAttachment(attachment.id)}

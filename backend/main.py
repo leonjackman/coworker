@@ -432,6 +432,9 @@ class ChatStreamRequest(ChatRequest):
     # 前端乐观渲染时生成的消息 id，回传以统一前后端 id（修复按 id 回退/重生成时 404）
     user_message_id: str = ""
     assistant_message_id: str = ""
+    # 前端「文件体积上限」设置换算成的字节数；后端按此上限如实处理附件
+    # （超过的附件不内联、在提示词中说明未转发）。None 时后端用默认 25MB。
+    max_attachment_bytes: Optional[int] = None
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatStreamRequest):
@@ -451,12 +454,13 @@ async def chat_stream(request: ChatStreamRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     session_id = request.session_id
+    max_attachment_bytes = request.max_attachment_bytes
     history = []
     if request.session_id:
         try:
             session = session_store.require(request.session_id)
             history = [
-                {"role": m.role, "content": format_user_message(m.content, m.attachments, m.references) if m.role == "user" else m.content}
+                {"role": m.role, "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes) if m.role == "user" else m.content}
                 for m in session.messages
                 if m.role in {"user", "assistant"} and m.content
             ]
@@ -466,7 +470,7 @@ async def chat_stream(request: ChatStreamRequest):
         session = session_store.create("", project_id=request.project_id or "")
         session_id = session.id
 
-    user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references)}
+    user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
     session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
     if runtime.owns_runtime_messages and agent_registry.has_runtime_checkpoint(session_id):
         messages = [user_message]
@@ -669,9 +673,14 @@ class GoalStopRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     goal_max_rounds: int = 50
+    max_attachment_mb: int = 25
 
 
 SETTING_FILE = os.path.join(os.path.dirname(__file__), '..', '.coworker_settings.json')
+
+DEFAULT_MAX_ATTACHMENT_MB = 25
+MIN_MAX_ATTACHMENT_MB = 1
+MAX_MAX_ATTACHMENT_MB = 1024
 
 
 def read_user_goal_max_rounds() -> int:
@@ -690,33 +699,52 @@ def read_user_goal_max_rounds() -> int:
     return 50
 
 
-@app.get("/settings")
-async def get_settings():
-    """Get user-level settings for the goal feature."""
+def read_user_max_attachment_mb() -> int:
+    """Read the user-level attachment size cap (MB) from .coworker_settings.json.
+
+    Falls back to 25 (the product default) when the file is missing or the key
+    is absent. Clamped to the supported 1–1024 MB range.
+    """
     try:
-        settings_path = Path(SETTING_FILE)
-        data = json.loads(settings_path.read_text() or "{}")
-        if "goal_max_rounds" in data:
-            return {"goal_max_rounds": int(data["goal_max_rounds"])}
+        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
+        if "max_attachment_mb" in data:
+            return max(MIN_MAX_ATTACHMENT_MB, min(MAX_MAX_ATTACHMENT_MB, int(data["max_attachment_mb"])))
     except Exception:
         pass
-    return {"goal_max_rounds": 50}
+    return DEFAULT_MAX_ATTACHMENT_MB
+
+
+@app.get("/settings")
+async def get_settings():
+    """Get user-level settings (goal cap + attachment size cap)."""
+    return {
+        "goal_max_rounds": read_user_goal_max_rounds(),
+        "max_attachment_mb": read_user_max_attachment_mb(),
+    }
 
 
 @app.post("/settings")
 async def set_settings(request: SettingsUpdate):
-    """Update user-level settings for the goal feature."""
+    """Update user-level settings (goal cap + attachment size cap)."""
     max_rounds = request.goal_max_rounds
     if max_rounds < 0 or max_rounds > 1000:
         max_rounds = max(0, min(1000, max_rounds))
+    max_attachment_mb = max(MIN_MAX_ATTACHMENT_MB, min(MAX_MAX_ATTACHMENT_MB, request.max_attachment_mb))
     try:
         path = Path(SETTING_FILE)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"goal_max_rounds": max_rounds}))
+        # Merge so the two keys don't clobber each other across saves.
+        existing: dict = {}
+        try:
+            existing = json.loads(path.read_text() or "{}")
+        except Exception:
+            existing = {}
+        existing.update({"goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb})
+        path.write_text(json.dumps(existing))
     except Exception as exc:
-        print(f"[settings] failed to persist goal_max_rounds={max_rounds}: {exc!r}", file=sys.stderr)
-        return {"status": "error", "goal_max_rounds": max_rounds, "detail": str(exc)}
-    return {"status": "ok", "goal_max_rounds": max_rounds}
+        print(f"[settings] failed to persist settings: {exc!r}", file=sys.stderr)
+        return {"status": "error", "goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb, "detail": str(exc)}
+    return {"status": "ok", "goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb}
 
 
 @app.post("/goal/stop")

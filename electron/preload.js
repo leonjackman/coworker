@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   getRuntimeConfig: () => ipcRenderer.invoke('get-runtime-config'),
   updateRuntimeConfig: (payload) => ipcRenderer.invoke('update-runtime-config', payload),
+  fetchSettings: () => ipcRenderer.invoke('fetchSettings'),
+  saveSettings: (payload) => ipcRenderer.invoke('saveSettings', payload),
   sendChatMessage: (payload) => ipcRenderer.invoke('send-chat-message', payload),
   streamChatMessage: (requestId, payload, onEvent) => {
     const listener = (_event, data) => {

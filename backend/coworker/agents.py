@@ -426,18 +426,22 @@ def build_workspace_tools(
             return _error_result(exc, "read_session")
         if session is None:
             return json.dumps({"error": "not_found", "message": f"Session {session_id} does not exist."}, ensure_ascii=False)
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
         for message in session.messages:
             if message.role not in {"user", "assistant"} or not message.content:
                 continue
-            messages.append({"role": message.role, "content": message.content})
+            if message.role == "user":
+                content = format_user_message(message.content, message.attachments, message.references)
+            else:
+                content = message.content
+            messages.append({"role": message.role, "content": content})
         if max_messages > 0:
             messages = messages[-max_messages:]
-        capped: list[dict[str, str]] = []
+        capped: list[dict[str, Any]] = []
         total = 0
         truncated = False
         for message in messages:
-            total += len(message["content"])
+            total += _content_chars(message["content"])
             if total > MAX_REFERENCE_SESSION_CHARS:
                 truncated = True
                 break
@@ -1150,44 +1154,123 @@ def _default_title_from_message(user_message: str) -> str:
     return text[:20].rstrip()[:20]
 
 
-def prepare_agent_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    prepared: list[dict[str, str]] = []
+def prepare_agent_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    prepared: list[dict[str, Any]] = []
     for message in messages:
         role = str(message.get("role", ""))
         content = message.get("content")
         if role not in {"user", "assistant", "system"} or content is None:
             continue
-        prepared.append({"role": role, "content": str(content)})
+        # 多模态内容（list[dict]）原样透传，交给 LangChain 的 message_from_dict
+        # 转成带 image_url 块的 HumanMessage；其余统一转字符串。
+        prepared.append(
+            {"role": role, "content": content if isinstance(content, list) else str(content)}
+        )
     if not prepared:
         prepared.append({"role": "user", "content": ""})
     return prepared
 
 
-def format_user_message(message: str, attachments: list[dict[str, Any]] | None = None, references: list[dict[str, Any]] | None = None) -> str:
-    parts = [message]
+def _content_chars(content: Any) -> int:
+    """多模态内容（list[dict]）按文本块长度计；其余按字符串长度计。"""
+    if isinstance(content, list):
+        return sum(len(part.get("text", "")) for part in content if isinstance(part, dict))
+    return len(content or "")
+
+
+def format_user_message(
+    message: str,
+    attachments: list[dict[str, Any]] | None = None,
+    references: list[dict[str, Any]] | None = None,
+    max_attachment_bytes: int = 25 * 1024 * 1024,
+) -> str | list[dict[str, Any]]:
+    """把用户文本、引用、附件拼成发给 LLM 的内容。
+
+    设计原则（产品决策）：**不网关、全部透传**——前端发来的所有附件都原样转发给
+    LLM，由模型自行决定是否受理；客户端如实呈现模型的回复即可。
+
+    ``max_attachment_bytes`` 来自设置页的「文件体积上限」（前端换算成字节后随请求
+    传入）。超过该体积的二进制附件不内联字节，仅在提示词中如实说明「未转发」，
+    作为防 OOM 的安全网；模型仍可在回复中说明自己无法处理该文件。
+
+    返回：
+    - ``str``：无附件且无引用时，保持纯文本（向后兼容历史消息）。
+    - ``list[dict]``（多模态）：含附件/引用时。文本进 ``text`` 块；图片进
+      ``image_url`` 块；其它二进制把 base64 data URL 一并带进 ``text`` 块，模型
+      自行决定是否解析。超体积的二进制不内联字节，仅在文本中如实说明。
+    """
+    blocks: list[dict[str, Any]] = []
+
     if references:
-        parts.append("\n\nReferenced sessions (readable via the read_session tool):")
+        ref_lines = ["Referenced sessions (readable via the read_session tool):"]
         for reference in references:
             ref_id = str(reference.get("id") or "")
             ref_title = str(reference.get("title") or ref_id)
-            parts.append(f"- {ref_title} (session id: {ref_id})")
+            ref_lines.append(f"- {ref_title} (session id: {ref_id})")
+        blocks.append({"type": "text", "text": "\n".join(ref_lines)})
+
+    text = (message or "").strip()
     if attachments:
-        parts.append("\n\nAttachments:")
-        for attachment in attachments:
-            name = str(attachment.get("name") or "attachment")
-            size = int(attachment.get("size") or 0)
-            kind = str(attachment.get("type") or "file")
-            content = attachment.get("content")
-            if isinstance(content, str) and content:
-                safe_content = content[:MAX_ATTACHMENT_CHARS]
-                was_truncated = attachment.get("truncated") or len(content) > MAX_ATTACHMENT_CHARS
-                truncated = "\n[Attachment truncated by Coworker.]" if was_truncated else ""
-                parts.append(f"\n--- {name} ({kind}, {size} bytes) ---\n{safe_content}{truncated}\n--- end {name} ---")
-            elif attachment.get("binary"):
-                parts.append(f"\n- {name} ({kind}, {size} bytes): binary or unsupported attachment; content not included.")
+        header = (
+            "The user attached the following files; forward all of them to the model "
+            "and let it decide whether to use each:"
+            if not text
+            else "Attached files (all forwarded; the model decides whether to use each):"
+        )
+        text = f"{text}\n\n{header}" if text else header
+
+    if text:
+        blocks.append({"type": "text", "text": text})
+
+    for attachment in attachments or []:
+        name = str(attachment.get("name") or "attachment")
+        size = int(attachment.get("size") or 0)
+        kind = str(attachment.get("type") or "file")
+        content = attachment.get("content")
+        # 超过体积上限的二进制附件：不内联字节，如实说明（前端已拦截添加，
+        # 这里作为后端兜底，覆盖 web/直接 API 等不经过前端拦截的路径）。
+        exceeds_limit = bool(attachment.get("tooLarge")) or size > max_attachment_bytes
+        if isinstance(content, str) and content and not exceeds_limit:
+            if kind.startswith("image/"):
+                blocks.append({"type": "image_url", "image_url": {"url": content}})
             else:
-                parts.append(f"\n- {name} ({kind}, {size} bytes): no readable content included.")
-    return "\n".join(parts)
+                safe = content[:MAX_ATTACHMENT_CHARS]
+                truncated = bool(attachment.get("truncated")) or len(content) > MAX_ATTACHMENT_CHARS
+                note = "\n[Attachment truncated by Coworker.]" if truncated else ""
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"\n--- {name} ({kind}, {size} bytes) ---\n{safe}{note}\n--- end {name} ---",
+                    }
+                )
+        elif attachment.get("binary"):
+            if exceeds_limit:
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"\n- {name} ({kind}, {size} bytes): binary attachment exceeds the size limit "
+                        f"({max_attachment_bytes // (1024 * 1024)} MB); bytes were NOT forwarded.",
+                    }
+                )
+            else:
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"\n- {name} ({kind}, {size} bytes): binary attachment; raw bytes were forwarded "
+                        "but this model may not be able to parse them.",
+                    }
+                )
+        else:
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": f"\n- {name} ({kind}, {size} bytes): no readable content included.",
+                }
+            )
+
+    if not blocks:
+        return message or ""
+    return blocks
 
 
 # ---------------------------------------------------------------------------
@@ -2514,6 +2597,12 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
     async def _stream(self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AsyncGenerator[dict[str, Any], None]:
         user_message = messages[-1]["content"] if messages else ""
+        if isinstance(user_message, list):
+            user_message = " ".join(
+                part.get("text", "")
+                for part in user_message
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
         if language == "zh":
             content = (
                 "Coworker 正在以模拟提供商模式运行。\n\n"

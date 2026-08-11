@@ -135,8 +135,8 @@ export interface ChatService {
   editGoal: (sessionId: string, goal: string) => Promise<{ status: string }>;
   deleteGoal: (sessionId: string) => Promise<{ status: string }>;
   resumeGoal: (sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
-  fetchSettings: () => Promise<{ goal_max_rounds: number }>;
-  saveSettings: (settings: { goal_max_rounds?: number }) => Promise<{ status: string; goal_max_rounds: number }>;
+  fetchSettings: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number }>;
+  saveSettings: (settings: { goal_max_rounds?: number; max_attachment_mb?: number }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>;
   listMcps: () => Promise<McpServerListPayload>;
   discoverMcps: () => Promise<McpDiscoverPayload>;
   createMcp: (request: McpServerCreateRequest) => Promise<McpServerEntry>;
@@ -498,14 +498,14 @@ class ElectronChatService implements ChatService {
     await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent);
   }
 
-  async fetchSettings(): Promise<{ goal_max_rounds: number }> {
+  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.fetchSettings?.() ?? { goal_max_rounds: 50 };
+    return window.electronAPI.fetchSettings?.() ?? { goal_max_rounds: 50, max_attachment_mb: 25 };
   }
 
-  async saveSettings(settings: { goal_max_rounds?: number }): Promise<{ status: string; goal_max_rounds: number }> {
+  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', goal_max_rounds: 50 };
+    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', goal_max_rounds: 50, max_attachment_mb: 25 };
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -991,12 +991,12 @@ class HttpChatService implements ChatService {
     return response.title;
   }
 
-  async fetchSettings(): Promise<{ goal_max_rounds: number }> {
-    return this.request<{ goal_max_rounds: number }>('/settings');
+  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number }> {
+    return this.request<{ goal_max_rounds: number; max_attachment_mb: number }>('/settings');
   }
 
-  async saveSettings(settings: { goal_max_rounds?: number }): Promise<{ status: string; goal_max_rounds: number }> {
-    return this.request<{ status: string; goal_max_rounds: number }>('/settings', {
+  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }> {
+    return this.request<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>('/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),

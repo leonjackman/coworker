@@ -15,6 +15,8 @@ interface SettingsViewProps {
   autonomy: Autonomy;
   goalMaxRounds: number;
   onGoalMaxRoundsChange: (value: number) => void;
+  maxAttachmentMb: number;
+  onMaxAttachmentMbChange: (value: number) => void;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAutonomyChange: (mode: Autonomy) => void;
   onLanguageChange?: () => void;
@@ -26,6 +28,8 @@ export function SettingsView({
   autonomy,
   goalMaxRounds,
   onGoalMaxRoundsChange,
+  maxAttachmentMb,
+  onMaxAttachmentMbChange,
   onThemeSettingsChange,
   onAutonomyChange,
   onLanguageChange,
@@ -125,6 +129,24 @@ export function SettingsView({
                 value: autonomy,
                 options: autonomyOptions(),
                 onChange: (value) => onAutonomyChange(value as Autonomy),
+              },
+            ],
+          },
+          {
+            id: 'attachments',
+            title: t('settings.attachment_group'),
+            description: t('settings.attachment_group_desc'),
+            items: [
+              {
+                id: 'max_attachment_mb',
+                type: 'number_input',
+                label: t('settings.max_attachment_mb'),
+                description: t('settings.max_attachment_mb_desc'),
+                value: maxAttachmentMb,
+                min: 1,
+                max: 1024,
+                unit: t('settings.max_attachment_mb_unit'),
+                onChange: onMaxAttachmentMbChange,
               },
             ],
           },

@@ -386,6 +386,22 @@ ipcMain.handle('update-runtime-config', async (event, payload) => {
   return requestBackend('/config', 'PATCH', payload);
 });
 
+ipcMain.handle('fetchSettings', async () => {
+  try {
+    return await requestBackend('/settings');
+  } catch (e) {
+    return { goal_max_rounds: 50, max_attachment_mb: 25 };
+  }
+});
+
+ipcMain.handle('saveSettings', async (event, payload) => {
+  try {
+    return await requestBackend('/settings', 'POST', payload);
+  } catch (e) {
+    return { status: 'error', goal_max_rounds: 50, max_attachment_mb: 25, detail: e.message };
+  }
+});
+
 ipcMain.handle('send-chat-message', async (event, payload) => {
   return requestBackend('/chat', 'POST', payload);
 });

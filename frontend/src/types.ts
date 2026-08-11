@@ -107,9 +107,16 @@ export interface ComposerAttachment {
   name: string;
   size: number;
   type: string;
+  /** 文本内容（文本附件）或 base64 data URL（二进制附件，可含图片） */
   content?: string;
   truncated?: boolean;
   binary?: boolean;
+  /** 文件过大，未能内联字节（仅保留元信息） */
+  tooLarge?: boolean;
+  /** 正在读取字节（乐观占位，用于「读取中」反馈） */
+  uploading?: boolean;
+  /** 添加失败（超限或读取错误），不会进入发送列表，仅用于错误提示 */
+  rejected?: boolean;
   error?: string;
 }
 
@@ -287,6 +294,8 @@ export interface ChatRequest {
   // 前端乐观渲染时生成的消息 id，回传后端以统一前后端 id（修复回退/重生成时 404）
   user_message_id?: string;
   assistant_message_id?: string;
+  // 「文件体积上限」设置换算成的字节数，后端按此如实处理附件
+  max_attachment_bytes?: number;
 }
 
 export interface ChatResponse {

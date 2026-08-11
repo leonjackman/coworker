@@ -99,7 +99,7 @@ class ProviderManager:
         return provider
 
     def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "") -> dict[str, Any]:
-        base_url = self.validate_base_url(base_url)
+        base_url = self.validate_base_url(base_url, provider_type)
         if not name.strip():
             raise ValueError("provider name is required")
         if not model.strip():
@@ -133,7 +133,7 @@ class ProviderManager:
                 raise ValueError("provider name is required")
             provider.name = name.strip()
         if base_url is not None:
-            provider.base_url = self.validate_base_url(base_url)
+            provider.base_url = self.validate_base_url(base_url, provider.provider_type)
         if api_key is not None:
             provider.api_key = api_key
         if model is not None:
@@ -214,7 +214,7 @@ class ProviderManager:
         return [str(model["id"]) for model in payload.get("data", []) if model.get("id")]
 
     @staticmethod
-    def validate_base_url(base_url: str) -> str:
+    def validate_base_url(base_url: str, provider_type: str = "") -> str:
         normalized = base_url.strip().rstrip("/")
         if not normalized:
             raise ValueError("base_url is required")
@@ -229,7 +229,11 @@ class ProviderManager:
             private_or_loopback = address.is_private or address.is_loopback
         except ValueError:
             private_or_loopback = False
-        if parsed.scheme == "http" and not (local_hostname or private_or_loopback):
+        # Custom providers are explicitly configured by the user and may legitimately
+        # run over plain http (e.g. internal/LAN OpenAI-compatible servers). The
+        # "public providers must use https" rule therefore only applies to non-custom
+        # provider types (localhost/private addresses are still always allowed).
+        if parsed.scheme == "http" and provider_type != "custom" and not (local_hostname or private_or_loopback):
             raise ValueError("public providers must use https")
         return normalized
 

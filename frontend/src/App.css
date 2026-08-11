@@ -2692,8 +2692,37 @@ body.bottom-panel-resizing {
   margin-bottom: 6px;
 }
 
+.user-bubble-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.user-bubble-attachments .attachment-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+.user-bubble-attachments .attachment-chip__size {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.attachment-chip--warn {
+  border-color: var(--warning, #d99100);
+  color: var(--warning, #d99100);
+}
+
+.attachment-chip--error {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+
 .attachment-chip {
-  max-width: 220px;
+  max-width: 260px;
   min-height: 28px;
   display: inline-flex;
   align-items: center;
@@ -2704,6 +2733,29 @@ body.bottom-panel-resizing {
   color: var(--foreground);
   background: var(--material-control);
   font-size: 12px;
+}
+
+.attachment-chip--uploading {
+  opacity: 0.7;
+}
+
+.attachment-chip__spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--muted-foreground);
+  border-top-color: transparent;
+  animation: attachment-chip-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes attachment-chip-spin {
+  to { transform: rotate(360deg); }
+}
+
+.attachment-chip__error {
+  color: var(--danger, #dc2626);
+  font-size: 11px;
 }
 
 .attachment-chip button {
@@ -2721,6 +2773,32 @@ body.bottom-panel-resizing {
 .attachment-chip button:hover {
   color: var(--foreground);
   background: var(--panel-hover);
+}
+
+.composer__add-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--danger, #dc2626);
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: var(--danger, #dc2626);
+  font-size: 12px;
+}
+
+.composer__add-error button {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .composer__editor {
@@ -3515,6 +3593,40 @@ body.bottom-panel-resizing {
 }
 
 .settings-goal-rounds__unit {
+  font-size: 13px;
+  color: var(--text-muted, #9ca3af);
+}
+
+.settings-number-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-number-input__field {
+  width: 84px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input);
+  color: var(--text-base, var(--foreground));
+  font-size: 13px;
+  outline: none;
+  -moz-appearance: textfield;
+}
+
+.settings-number-input__field::-webkit-outer-spin-button,
+.settings-number-input__field::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.settings-number-input__field:focus {
+  border-color: var(--accent, #6366f1);
+}
+
+.settings-number-input__unit {
   font-size: 13px;
   color: var(--text-muted, #9ca3af);
 }
