@@ -121,8 +121,9 @@ declare global {
       checkAllMcps: () => Promise<McpServerListPayload>;
       reauthorizeMcp: (serverId: string) => Promise<{ status: string; ok: boolean; error?: string; needs_auth?: boolean; server?: McpServerEntry }>;
       listSkills: (enabledOnly?: boolean) => Promise<SkillsListResponse>;
-      getSkill: (name: string) => Promise<SkillDetailResponse>;
+      getSkill: (name: string, command?: string) => Promise<SkillDetailResponse>;
       updateSkill: (name: string, request: SkillUpdateRequest) => Promise<SkillDetailResponse>;
+      deleteSkill: (name: string) => Promise<SkillDeleteResponse>;
       scanSkills: () => Promise<SkillsListResponse>;
       validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
       listMarketSources: () => Promise<MarketSourceResponse>;

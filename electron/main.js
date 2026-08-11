@@ -866,11 +866,17 @@ ipcMain.handle('reauthorize-mcp', (event, serverId) =>
 ipcMain.handle('list-skills', (event, enabledOnly) =>
   requestBackend(`/skills${enabledOnly ? '?enabled_only=true' : ''}`, 'GET'),
 );
-ipcMain.handle('get-skill', (event, name) =>
-  requestBackend(`/skills/${encodeURIComponent(name || '')}`, 'GET'),
+ipcMain.handle('get-skill', (event, name, command) =>
+  requestBackend(
+    `/skills/${encodeURIComponent(name || '')}${command ? `?command=${encodeURIComponent(command)}` : ''}`,
+    'GET',
+  ),
 );
 ipcMain.handle('update-skill', (event, name, payload = {}) =>
   requestBackend(`/skills/${encodeURIComponent(name || '')}`, 'PATCH', payload),
+);
+ipcMain.handle('delete-skill', (event, name) =>
+  requestBackend(`/skills/${encodeURIComponent(name || '')}`, 'DELETE'),
 );
 ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));

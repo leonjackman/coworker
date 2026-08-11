@@ -689,6 +689,7 @@ export interface SkillEntry {
   version: string;
   disable_model_invocation: boolean;
   enabled: boolean;
+  commands?: Array<{ name: string; description?: string }>;
   body?: string;
 }
 
@@ -709,6 +710,12 @@ export interface SkillsListResponse {
 export interface SkillDetailResponse {
   status: string;
   skill: SkillEntry;
+}
+
+export interface SkillDeleteResponse {
+  status: string;
+  name: string;
+  removed: boolean;
 }
 
 export interface SkillUpdateRequest {

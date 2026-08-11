@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput, extractSessionIds } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
@@ -216,6 +216,35 @@ function App() {
   const [mcpTemplates, setMcpTemplates] = useState<McpTemplateEntry[]>([]);
   const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
   const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnostic[]>([]);
+
+  // Keep the installed-skill catalog fresh at the app level (not just when the
+  // Settings → Skills panel mounts) so the chat-input "/" command card can list
+  // skills — including ones installed via chat in a previous turn.
+  const refreshSkills = useCallback(async () => {
+    try {
+      const response = await chatService.listSkills();
+      setSkillEntries(response.skills);
+      setSkillDiagnostics(response.diagnostics);
+    } catch {
+      // Non-fatal: the slash menu simply won't show skill commands.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSkills();
+  }, [refreshSkills]);
+
+  // Global index of sub-command name -> owning package name, used to dispatch
+  // the bare "/<command>" entries that the chat-input "/" card can insert.
+  const skillCommandIndex = useMemo<Record<string, string>>(() => {
+    const index: Record<string, string> = {};
+    for (const skill of skillEntries) {
+      for (const cmd of skill.commands ?? []) {
+        if (!index[cmd.name]) index[cmd.name] = skill.name;
+      }
+    }
+    return index;
+  }, [skillEntries]);
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
   const requestSeqRef = useRef(0);
@@ -1798,6 +1827,12 @@ function App() {
       void handleSkillSlash(message);
       return;
     }
+    // Bare sub-command: "/<cmd>" where <cmd> is a known skill sub-command.
+    const bareCmd = command ? (command.startsWith('/') ? command.slice(1) : command) : '';
+    if (bareCmd && skillCommandIndex[bareCmd]) {
+      void handleSubCommandSlash(skillCommandIndex[bareCmd], bareCmd, message);
+      return;
+    }
     setMessages((current) => [...current, createMessage('assistant', t('chat.command_help_text'), { status: 'done' })]);
   };
 
@@ -1822,6 +1857,30 @@ function App() {
       void sendMessage({ message: injected });
     } catch (error) {
       setMessages((current) => [...current, createMessage('assistant', t('skills.slash_not_found').replace('{name}', skillName), { status: 'done' })]);
+    }
+  };
+
+  /** /<command> [free-form prompt] -- load a skill sub-command body and send it. */
+  const handleSubCommandSlash = async (pkg: string, cmd: string, message: string) => {
+    const prompt = message.slice(`/${cmd}`.length).trim();
+    try {
+      const response = await chatService.getSkill(pkg, cmd);
+      const skill = response.skill;
+      if (!skill?.body || !skill.enabled) {
+        setMessages((current) => [
+          ...current,
+          createMessage('assistant', t('skills.slash_not_found').replace('{name}', `${pkg} / ${cmd}`), { status: 'done' }),
+        ]);
+        return;
+      }
+      const injected = `${t('skills.slash_loaded').replace('{name}', `${pkg} / ${cmd}`)}\n\n${skill.body}\n\n---\n${prompt}`;
+      setInput('');
+      void sendMessage({ message: injected });
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', t('skills.slash_not_found').replace('{name}', `${pkg} / ${cmd}`), { status: 'done' }),
+      ]);
     }
   };
 
@@ -2221,6 +2280,8 @@ function App() {
                         {...(currentProjectId ? { activeWorkspaceId: currentProjectId } : {})}
                         onSelectWorkspace={selectDraftWorkspace}
                         onCreateWorkspace={createProject}
+                        skills={skillEntries}
+                        onOpenCommands={refreshSkills}
                       />
                       )}
                     </div>

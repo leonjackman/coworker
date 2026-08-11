@@ -94,6 +94,17 @@ class WriteFileArgs(BaseModel):
     content: str = Field(description="Full UTF-8 file content to write.")
 
 
+class InstallSkillArgs(BaseModel):
+    name: str = Field(description="Skill slug/identifier (lowercase letters, digits, hyphens). Becomes the install directory name under ~/.agents/skills.")
+    content: str = Field(description="Full SKILL.md file content, including YAML frontmatter (name + description).")
+    commands: list[dict[str, str]] | None = Field(
+        default=None,
+        description="Optional sub-commands to expose as direct /<command> entries. Each item is "
+        "{name, description, body}. Each body is written to commands/<name>.md and listed in the "
+        "root SKILL.md frontmatter so the skill shows individual commands in the chat menu.",
+    )
+
+
 class ReplaceInFileArgs(BaseModel):
     file_path: str = Field(description="Workspace-relative UTF-8 text file path.")
     old_text: str = Field(description="Exact text to replace.")
@@ -321,8 +332,11 @@ def build_workspace_tools(
     turn_index: int = 1,
     session_store: SessionStore | None = None,
     referenced_sessions: set[str] | None = None,
+    skill_manager: Any | None = None,
+    skill_market_manager: Any | None = None,
 ) -> list[Any]:
     from langchain_core.tools import tool
+    from pathlib import Path as _Path
 
     def _error_result(error: Exception, operation: str) -> str:
         details = {"error": str(error)[:500], "operation": operation}
@@ -386,6 +400,38 @@ def build_workspace_tools(
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "run_command")
+
+    @tool(args_schema=InstallSkillArgs)
+    def install_skill(name: str, content: str, commands: list[dict[str, str]] | None = None) -> str:
+        """Install a NEW skill by writing its SKILL.md directly into the user skills
+        directory (~/.agents/skills/<name>/SKILL.md) and refreshing the catalog.
+
+        Use this (and ONLY this) to add a brand-new skill from chat — do NOT use
+        write_file or run_command for that, because the install path lives outside
+        the workspace sandbox and those tools will be denied. The provided ``content``
+        must be the complete SKILL.md text including a YAML frontmatter with ``name``
+        and ``description``. When ``commands`` is provided, each sub-command is written
+        to commands/<name>.md and listed in the root frontmatter, so the skill exposes
+        direct /<command> entries. On success the skill becomes available immediately:
+        it shows up in the settings "Installed Skills" list and as a ``/skill <name>``
+        command (or ``/<command>`` when it declares sub-commands).
+        """
+        try:
+            if skill_market_manager is None:
+                from .skills.skill_market import SkillMarketManager
+
+                mkt = SkillMarketManager(_Path.home())
+            else:
+                mkt = skill_market_manager
+            result = mkt.install_from_content(name, content, commands=commands)
+            if result.get("status") == "ok" and skill_manager is not None:
+                try:
+                    skill_manager.refresh()
+                except Exception:  # refresh must not mask the install result
+                    pass
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "install_skill")
 
     @tool(args_schema=AskUserArgs)
     def ask_user(question: str, options: list[dict[str, str]], multiple: bool = False, header: str = "") -> str:
@@ -457,7 +503,7 @@ def build_workspace_tools(
             ensure_ascii=False,
         )
 
-    tools = [search_files, read_file, ask_user, submit_plan, replace_in_file, apply_text_edits, write_file, run_command]
+    tools = [search_files, read_file, ask_user, submit_plan, replace_in_file, apply_text_edits, write_file, run_command, install_skill]
     if session_store is not None:
         tools.append(read_session)
     return tools
@@ -468,7 +514,7 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session"}
 _PLAN_TOOLS = {"ask_user", "submit_plan"}
-_EXEC_TOOLS = {"run_command"}
+_EXEC_TOOLS = {"run_command", "install_skill"}
 
 
 def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
@@ -1926,6 +1972,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             build_workspace_tools(
                 self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
                 session_store=self.session_store, referenced_sessions=self.referenced_sessions,
+                skill_manager=self.skill_manager,
             ),
             work_mode=work_mode,
             language=language,
@@ -2045,6 +2092,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 self.llm, build_workspace_tools(
                     self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
                     session_store=self.session_store, referenced_sessions=self.referenced_sessions,
+                    skill_manager=self.skill_manager,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -2531,6 +2579,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 self.llm, build_workspace_tools(
                         self.workspace, audit_context, change_store=self.change_store,
                         session_store=self.session_store, referenced_sessions=self.referenced_sessions,
+                        skill_manager=self.skill_manager,
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,

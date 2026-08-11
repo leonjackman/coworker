@@ -13,7 +13,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { t } from "../lib/i18n";
 import type { Autonomy, ComposerAttachment, SessionReference, WorkMode } from "../types";
 import { Button } from "./ui/button";
@@ -79,6 +79,16 @@ interface ChatInputProps {
   activeWorkspaceId?: string;
   onSelectWorkspace?: (projectId: string) => void;
   onCreateWorkspace?: () => void;
+  /** Installed skills, used to populate the "/" command card. Each skill may
+   *  declare sub-commands that show up as direct "/<command>" entries. */
+  skills?: Array<{
+    name: string;
+    description?: string;
+    enabled?: boolean;
+    commands?: Array<{ name: string; description?: string }>;
+  }>;
+  /** Called when the "/" command menu opens, so the parent can refresh the skill list. */
+  onOpenCommands?: () => void;
 }
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/settings"];
@@ -192,6 +202,8 @@ export function ChatInput({
   activeWorkspaceId,
   onSelectWorkspace,
   onCreateWorkspace,
+  skills = [],
+  onOpenCommands,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -274,15 +286,55 @@ export function ChatInput({
     }
   }, [value]);
 
+  // When the "/" menu opens, ask the parent to refresh the installed-skill
+  // catalog so a skill installed via chat in a previous turn shows up here.
+  useEffect(() => {
+    if (showCommands) onOpenCommands?.();
+  }, [showCommands, onOpenCommands]);
+
+  // Installed skills become "/skill <name>" entries in the command card.
+  const skillCommandItems = useMemo(
+    () =>
+      (skills ?? [])
+        .filter((skill) => skill.enabled !== false)
+        .map((skill) => ({ command: `/skill ${skill.name}`, description: skill.description ?? "" })),
+    [skills],
+  );
+  // Each skill's sub-commands become direct "/<command>" entries, tagged with
+  // the owning package name so the menu reads "command · package · description".
+  const skillSubCommandItems = useMemo(
+    () =>
+      (skills ?? [])
+        .filter((skill) => skill.enabled !== false)
+        .flatMap((skill) =>
+          (skill.commands ?? []).map((cmd) => ({
+            command: `/${cmd.name}`,
+            description: cmd.description ?? "",
+            packageName: skill.name,
+          })),
+        ),
+    [skills],
+  );
+  const staticCommandItems = SLASH_COMMANDS.map((command) => ({
+    command,
+    description: t(`chat.command_${command.slice(1)}`),
+  }));
+  const commandItems = useMemo<Array<{ command: string; description?: string; packageName?: string }>>(
+    () => [...staticCommandItems, ...skillSubCommandItems, ...skillCommandItems],
+    [staticCommandItems, skillSubCommandItems, skillCommandItems],
+  );
+  const isKnownCommand = (name: string) =>
+    commandItems.some((item) => item.command.slice(1).startsWith(name));
+
   // Leading slash token (text after the leading "/", up to whitespace) for
   // filtering — only the leading command is a real command. When the partial
   // matches nothing (e.g. "/" inserted at the head of existing text), fall back
   // to showing ALL commands so the card still pops.
   const nonWs = value.search(/\S/);
   const commandQuery = nonWs === 0 && value.charAt(0) === "/" ? value.slice(1).split(/\s/)[0] ?? "" : "";
-  const filteredCommands = SLASH_COMMANDS.filter((command) => command.slice(1).startsWith(commandQuery));
-  const displayedCommands = filteredCommands.length > 0 ? filteredCommands : SLASH_COMMANDS;
-  const activeCommandIndex = Math.min(commandIndex, Math.max(0, displayedCommands.length - 1));
+  const filteredItems = commandItems.filter((item) => item.command.slice(1).startsWith(commandQuery));
+  const displayedItems = filteredItems.length > 0 ? filteredItems : commandItems;
+  const activeCommandIndex = Math.min(commandIndex, Math.max(0, displayedItems.length - 1));
 
   useEffect(() => {
     if (!showCommands) return;
@@ -300,7 +352,7 @@ export function ChatInput({
     if (!match || match.index !== 0) return []; // slash token must be the FIRST token
     const token = match[0];
     const name = token.slice(1);
-    if (!SLASH_COMMANDS.some((command) => command.slice(1).startsWith(name))) return [];
+    if (!isKnownCommand(name)) return [];
     return [{ start: startIndex + match.index, end: startIndex + match.index + token.length }];
   }
 
@@ -454,7 +506,7 @@ export function ChatInput({
     let end = 1;
     while (end < current.length && !/\s/.test(current.charAt(end))) end += 1;
     const name = current.slice(1, end);
-    if (!SLASH_COMMANDS.some((command) => command.slice(1).startsWith(name))) return null;
+    if (!isKnownCommand(name)) return null;
     if (current.charAt(end) === " ") end += 1;
     // Only whole-delete when the caret is on/at the token (not past it).
     if (cursor > end) return null;
@@ -579,20 +631,20 @@ export function ChatInput({
                 updateHighlights();
               }}
               onKeyDown={(event) => {
-                if (showCommands && displayedCommands.length > 0) {
+                if (showCommands && displayedItems.length > 0) {
                   if (event.key === "ArrowDown") {
                     event.preventDefault();
-                    setCommandIndex((index) => (index + 1) % displayedCommands.length);
+                    setCommandIndex((index) => (index + 1) % displayedItems.length);
                     return;
                   }
                   if (event.key === "ArrowUp") {
                     event.preventDefault();
-                    setCommandIndex((index) => (index - 1 + displayedCommands.length) % displayedCommands.length);
+                    setCommandIndex((index) => (index - 1 + displayedItems.length) % displayedItems.length);
                     return;
                   }
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
-                    insertCommand(displayedCommands[activeCommandIndex] ?? displayedCommands[0] ?? "");
+                    insertCommand(displayedItems[activeCommandIndex]?.command ?? displayedItems[0]?.command ?? "");
                     return;
                   }
                 }
@@ -748,18 +800,21 @@ export function ChatInput({
         )}
       </CardSlot>
 
-      {showCommands && displayedCommands.length > 0 && (
+      {showCommands && displayedItems.length > 0 && (
         <div className="slash-menu" ref={menuRef}>
-          {displayedCommands.map((command, index) => (
+          {displayedItems.map((item, index) => (
             <button
               type="button"
-              key={command}
+              key={item.command}
               className={index === activeCommandIndex ? "slash-menu__item slash-menu__item--active" : "slash-menu__item"}
               onMouseEnter={() => setCommandIndex(index)}
-              onClick={() => insertCommand(command)}
+              onClick={() => insertCommand(item.command)}
             >
-              <span>{command}</span>
-              <small>{t(`chat.command_${command.slice(1)}`)}</small>
+              <span className="slash-menu__cmd">{item.command}</span>
+              <small>
+                {item.packageName && <span className="slash-menu__pkg">{item.packageName}</span>}
+                {item.description || "加载并运行此技能"}
+              </small>
             </button>
           ))}
         </div>

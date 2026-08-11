@@ -133,6 +133,25 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
     [setSkills, onSkillsChange],
   );
 
+  const handleDelete = useCallback(
+    async (skill: SkillEntry): Promise<boolean> => {
+      if (!window.confirm(t('skills.delete_confirm', { name: skill.name }))) return false;
+      try {
+        await chatService.deleteSkill(skill.name);
+        setMessageType('ok');
+        setMessage(t('skills.deleted', { name: skill.name }));
+        await refresh();
+        onSkillsChange?.();
+        return true;
+      } catch (error) {
+        setMessageType('error');
+        setMessage(translateError(error) || t('skills.delete_failed'));
+        return false;
+      }
+    },
+    [refresh, onSkillsChange],
+  );
+
   const openDetail = useCallback(async (skill: SkillEntry) => {
     setDetail(skill);
     setDetailLoading(true);
@@ -237,15 +256,26 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
                     added={skill.enabled}
                     onClick={() => void openDetail(skill)}
                     trailing={
-                      <Button
-                        variant={skill.enabled ? 'secondary' : 'primary'}
-                        size="icon-xs"
-                        onClick={() => void handleToggle(skill)}
-                        aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
-                        title={skill.enabled ? t('skills.added') : t('skills.add')}
-                      >
-                        {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
-                      </Button>
+                      <>
+                        <Button
+                          variant={skill.enabled ? 'secondary' : 'primary'}
+                          size="icon-xs"
+                          onClick={() => void handleToggle(skill)}
+                          aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
+                          title={skill.enabled ? t('skills.added') : t('skills.add')}
+                        >
+                          {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="icon-xs"
+                          onClick={() => void handleDelete(skill)}
+                          aria-label={t('skills.delete')}
+                          title={t('skills.delete')}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      </>
                     }
                   />
                 ))}
@@ -294,15 +324,13 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
                 <Button
                   variant="destructive"
                   onClick={() => {
-                    if (!detail.enabled) {
-                      void closeDetail();
-                      return;
-                    }
-                    void handleToggle(detail).then(() => closeDetail());
+                    void handleDelete(detail).then((deleted) => {
+                      if (deleted) closeDetail();
+                    });
                   }}
                 >
                   <Trash2 size={14} />
-                  {t('skills.remove')}
+                  {t('skills.delete')}
                 </Button>
               </>
             )

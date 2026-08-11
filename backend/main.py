@@ -2082,6 +2082,19 @@ class MarketInstallRequest(BaseModel):
     owner: str | None = None  # disambiguates colliding slugs (ClawHub)
 
 
+class SkillInstallRequest(BaseModel):
+    """Request body for installing a skill from raw SKILL.md content.
+
+    Used by chat-driven installs (agent ``install_skill`` tool) and any external
+    caller that already has the skill's SKILL.md text. ``commands`` optionally
+    declares sub-commands whose instruction bodies are written to
+    ``commands/<name>.md`` and listed in the root SKILL.md frontmatter.
+    """
+    name: str  # skill slug/identifier
+    content: str  # full SKILL.md content including YAML frontmatter
+    commands: list[dict[str, str]] | None = None  # [{name, description, body}]
+
+
 @app.get("/skills/market")
 def list_market_sources():
     """List available skill market sources."""
@@ -2170,17 +2183,47 @@ async def install_market_skill(request: MarketInstallRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/skills/install")
+def install_skill_from_content(request: SkillInstallRequest):
+    """Install a skill from raw SKILL.md content (chat-driven / agent installs)."""
+    try:
+        result = skill_market_manager.install_from_content(
+            request.name, request.content, commands=request.commands
+        )
+        if result.get("status") == "ok":
+            # Auto-trigger scan to pick up the newly installed skill
+            skill_manager.refresh()
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/skills/{skill_name}")
-def get_skill(skill_name: str):
-    """Return one skill's catalog entry plus its body (progressive disclosure)."""
+def get_skill(skill_name: str, command: str | None = None):
+    """Return one skill's catalog entry plus its body (progressive disclosure).
+
+    When ``command`` is provided, returns that sub-command's instructions
+    (read from the package's ``commands/<name>.md``) instead of the whole
+    skill body — this powers the ``/<command>`` chat menu entries.
+    """
     skill = skill_manager.get(skill_name)
     if skill is None:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
-    body = skill_manager.read_body(skill_name)
     payload = skill.to_dict()
-    if body is not None:
-        payload["body"] = body[0]
-        payload["base_dir"] = body[1]
+    if command:
+        cmd_body = skill_manager.read_command_body(skill_name, command)
+        if cmd_body is None:
+            raise HTTPException(
+                status_code=404, detail=f"Command '{command}' not found in skill '{skill_name}'"
+            )
+        payload["body"] = cmd_body[0]
+        payload["base_dir"] = cmd_body[1]
+        payload["command"] = command
+    else:
+        body = skill_manager.read_body(skill_name)
+        if body is not None:
+            payload["body"] = body[0]
+            payload["base_dir"] = body[1]
     return {"status": "ok", "skill": payload}
 
 
@@ -2198,6 +2241,18 @@ def update_skill(skill_name: str, request: SkillUpdatePayload):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "skill": skill.to_dict() if skill else None}
+
+
+@app.delete("/skills/{skill_name}")
+def delete_skill_route(skill_name: str):
+    """Uninstall a skill: remove its directory from disk and refresh the catalog."""
+    try:
+        removed = skill_manager.delete_skill(skill_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    return {"status": "ok", "name": skill_name, "removed": True}
 
 
 @app.post("/skills/scan")

@@ -37,6 +37,7 @@ import type {
   SessionMessageRecord,
   SessionResponse,
   SessionsListResponse,
+  SkillDeleteResponse,
   SkillDetailResponse,
   SkillsListResponse,
   SkillUpdateRequest,
@@ -147,8 +148,9 @@ export interface ChatService {
   checkAllMcps: () => Promise<McpServerListPayload>;
   reauthorizeMcp: (serverId: string) => Promise<McpServerEntry>;
   listSkills: (enabledOnly?: boolean) => Promise<SkillsListResponse>;
-  getSkill: (name: string) => Promise<SkillDetailResponse>;
+  getSkill: (name: string, command?: string) => Promise<SkillDetailResponse>;
   updateSkill: (name: string, request: SkillUpdateRequest) => Promise<SkillDetailResponse>;
+  deleteSkill: (name: string) => Promise<SkillDeleteResponse>;
   scanSkills: () => Promise<SkillsListResponse>;
   validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
   listMarketSources: () => Promise<MarketSourceResponse>;
@@ -308,14 +310,19 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.listSkills(enabledOnly);
   }
 
-  async getSkill(name: string): Promise<SkillDetailResponse> {
+  async getSkill(name: string, command?: string): Promise<SkillDetailResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getSkill(name);
+    return window.electronAPI.getSkill(name, command);
   }
 
   async updateSkill(name: string, request: SkillUpdateRequest): Promise<SkillDetailResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.updateSkill(name, request);
+  }
+
+  async deleteSkill(name: string): Promise<SkillDeleteResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.deleteSkill(name);
   }
 
   async scanSkills(): Promise<SkillsListResponse> {
@@ -1071,8 +1078,9 @@ class HttpChatService implements ChatService {
     return this.request<SkillsListResponse>(`/skills${query}`);
   }
 
-  async getSkill(name: string): Promise<SkillDetailResponse> {
-    return this.request<SkillDetailResponse>(`/skills/${encodeURIComponent(name)}`);
+  async getSkill(name: string, command?: string): Promise<SkillDetailResponse> {
+    const query = command ? `?command=${encodeURIComponent(command)}` : '';
+    return this.request<SkillDetailResponse>(`/skills/${encodeURIComponent(name)}${query}`);
   }
 
   async updateSkill(name: string, request: SkillUpdateRequest): Promise<SkillDetailResponse> {
@@ -1080,6 +1088,12 @@ class HttpChatService implements ChatService {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
+    });
+  }
+
+  async deleteSkill(name: string): Promise<SkillDeleteResponse> {
+    return this.request<SkillDeleteResponse>(`/skills/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
     });
   }
 

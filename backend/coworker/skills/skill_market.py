@@ -28,9 +28,11 @@ from pathlib import Path
 from typing import Any
 
 import aiohttp
+import yaml
 
 from coworker.skills.skills import (
     MAX_DESCRIPTION_LENGTH,
+    _NAME_RE,
     load_skill_from_file,
     parse_frontmatter,
     validate_description,
@@ -288,6 +290,102 @@ class SkillMarketManager:
                 "skill": entry.to_dict() if entry else None,
             }
 
+        except ValueError:
+            raise
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
+    def install_from_content(
+        self,
+        name: str,
+        content: str,
+        commands: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Install a skill from SKILL.md *content* supplied directly (e.g. by the
+        agent's ``install_skill`` tool), rather than fetched from a market source.
+
+        Writes ``~/.agents/skills/{name}/SKILL.md`` and validates it. The directory
+        name uses ``name`` (sanitised to the frontmatter ``name`` when present). This
+        is the trusted install path used by chat-driven installs — it bypasses the
+        workspace file sandbox so the agent does not need write_file/run_command.
+
+        When ``commands`` is provided (a list of ``{name, description, body}``), each
+        sub-command's body is written to ``commands/<name>.md`` and a ``commands:``
+        list is injected into the root SKILL.md frontmatter, so the skill exposes
+        direct ``/<command>`` entries in the chat menu.
+        """
+        try:
+            if not name or not name.strip():
+                return {"status": "error", "message": "Skill name is required"}
+            if not content or not content.strip():
+                return {"status": "error", "message": "Skill content (SKILL.md) is required"}
+
+            frontmatter, body = parse_frontmatter(content)
+            fallback_name = name.strip()
+            resolved = frontmatter.get("name") or fallback_name
+            if isinstance(resolved, str):
+                resolved = resolved.strip() or fallback_name
+            else:
+                resolved = fallback_name
+
+            problems = validate_name(resolved) + validate_description(
+                _str_or_none(frontmatter.get("description", "")) or ""
+            )
+            if problems:
+                return {"status": "error", "message": "; ".join(problems)}
+
+            install_dir = self.install_dir / resolved
+            install_dir.mkdir(parents=True, exist_ok=True)
+            skill_file = install_dir / "SKILL.md"
+
+            cmd_entries: list[dict[str, str]] = []
+            if commands:
+                commands_dir = install_dir / "commands"
+                for c in commands:
+                    if not isinstance(c, dict):
+                        continue
+                    cname = (c.get("name") or "").strip()
+                    if not cname or not _NAME_RE.match(cname):
+                        continue
+                    cdesc = (c.get("description") or "").strip()
+                    cfile = f"commands/{cname}.md"
+                    cmd_entries.append({"name": cname, "description": cdesc, "file": cfile})
+                    commands_dir.mkdir(parents=True, exist_ok=True)
+                    (install_dir / cfile).write_text(c.get("body") or "", encoding="utf-8")
+
+            if cmd_entries:
+                # Re-emit the root SKILL.md with a commands: frontmatter block so
+                # the catalog exposes the sub-commands. The original body becomes
+                # the package overview.
+                new_fm: dict[str, Any] = {
+                    "name": resolved,
+                    "description": frontmatter.get("description") or "",
+                    "commands": cmd_entries,
+                }
+                if frontmatter.get("version"):
+                    new_fm["version"] = frontmatter["version"]
+                fm_text = yaml.safe_dump(new_fm, allow_unicode=True, sort_keys=False)
+                root_content = f"---\n{fm_text}---\n{body}".strip() + "\n"
+                skill_file.write_text(root_content, encoding="utf-8")
+            else:
+                skill_file.write_text(content, encoding="utf-8")
+
+            entry, diagnostics = load_skill_from_file(skill_file, "coworker-user")
+            if diagnostics:
+                try:
+                    skill_file.unlink()
+                except OSError:
+                    pass
+                return {
+                    "status": "error",
+                    "message": "Validation failed after install: " + "; ".join(d.message for d in diagnostics),
+                }
+
+            return {
+                "status": "ok",
+                "message": f"Skill '{resolved}' installed to {skill_file}",
+                "skill": entry.to_dict() if entry else None,
+            }
         except ValueError:
             raise
         except Exception as exc:

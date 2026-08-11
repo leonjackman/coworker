@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import threading
 from pathlib import Path
 from typing import Any
@@ -102,6 +104,7 @@ class SkillManager:
                         version=skill.version,
                         disable_model_invocation=skill.disable_model_invocation,
                         enabled=skill.name not in disabled,
+                        commands=skill.commands,
                     )
                 )
             self._cached = ScanResult(skills=skills, diagnostics=result.diagnostics)
@@ -189,6 +192,7 @@ class SkillManager:
             version=skill.version,
             disable_model_invocation=skill.disable_model_invocation,
             enabled=skill.name not in disabled,
+            commands=skill.commands,
         )
 
     def injection_list(self) -> list[SkillEntry]:
@@ -222,3 +226,87 @@ class SkillManager:
 
         _, body = parse_frontmatter(content)
         return body, str(skill.base_dir)
+
+    def read_command_body(self, name: str, command: str) -> tuple[str, str] | None:
+        """Return ``(body_markdown, base_dir)`` for a sub-command of a skill.
+
+        The command's instructions are read from the file declared in its
+        ``commands`` entry (relative to the package ``base_dir``; default
+        ``commands/<name>.md``). Returns ``None`` if the skill or command is
+        unknown.
+        """
+        skill = self.get(name)
+        if skill is None:
+            return None
+        cmd = next((c for c in skill.commands if c.name == command), None)
+        if cmd is None:
+            return None
+        path = skill.base_dir / cmd.file
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        from .skills import parse_frontmatter
+
+        _, body = parse_frontmatter(content)
+        return (body or content), str(skill.base_dir)
+
+    # -- deletion -------------------------------------------------------
+
+    def delete_skill(self, name: str) -> bool:
+        """Uninstall a skill: remove its directory from disk and refresh.
+
+        Returns ``True`` if the skill existed and was removed, ``False`` if no
+        skill with that name is in the catalog. Refuses (``ValueError``) to
+        delete anything that is not a recognised skill package directory — a
+        defensive guard against path traversal / accidental deletion of
+        unrelated data. Removing a skill also cleans up any stale runtime
+        overrides (disabled / permission entries) that reference it.
+        """
+        skill = self.get(name)
+        if skill is None:
+            return False
+
+        base_dir = Path(skill.base_dir).resolve()
+        if not base_dir.is_dir():
+            raise ValueError(f"Skill '{name}' directory not found: {base_dir}")
+
+        # Only delete directories that live under a known scan root.
+        allowed_prefixes = {
+            str(r.resolve()) for r, _ in self.scanner.roots() if r is not None
+        }
+        inside_root = any(
+            str(base_dir) == prefix or str(base_dir).startswith(prefix + os.sep)
+            for prefix in allowed_prefixes
+        )
+        if not inside_root:
+            raise ValueError(
+                f"Refusing to delete '{base_dir}': not inside a known skill root"
+            )
+
+        # Require a SKILL.md to be present before nuking the directory.
+        if not Path(skill.file_path).is_file() and not (base_dir / "SKILL.md").is_file():
+            raise ValueError(f"Refusing to delete '{base_dir}': no SKILL.md present")
+
+        shutil.rmtree(base_dir)
+
+        # Drop stale overrides that reference the now-deleted skill.
+        with self._lock:
+            disabled = [n for n in self._config.get("disabled", []) if n != name]
+            permissions = {
+                k: v for k, v in self._config.get("permissions", {}).items() if k != name
+            }
+            changed = False
+            if disabled != self._config.get("disabled", []):
+                self._config["disabled"] = disabled
+                changed = True
+            if permissions != self._config.get("permissions", {}):
+                self._config["permissions"] = permissions
+                changed = True
+            if changed:
+                self._save_config()
+
+        self.refresh()
+        logger.info("Deleted skill '%s' from %s", name, base_dir)
+        return True
+

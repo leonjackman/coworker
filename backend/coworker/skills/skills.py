@@ -50,6 +50,23 @@ _KNOWN_KEYS = frozenset(
 
 
 @dataclass(frozen=True)
+class SkillCommand:
+    """A sub-command exposed by a skill package.
+
+    Rendered in the chat ``/`` menu as ``/<name>`` with the owning package
+    shown as a secondary label. Instructions live in a file relative to the
+    package directory (default ``commands/<name>.md``).
+    """
+
+    name: str
+    description: str
+    file: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "file": self.file}
+
+
+@dataclass(frozen=True)
 class SkillEntry:
     """A discovered skill (catalog view; body loaded on demand)."""
 
@@ -61,6 +78,7 @@ class SkillEntry:
     version: str = ""
     disable_model_invocation: bool = False
     enabled: bool = True
+    commands: list[SkillCommand] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +90,7 @@ class SkillEntry:
             "version": self.version,
             "disable_model_invocation": self.disable_model_invocation,
             "enabled": self.enabled,
+            "commands": [c.to_dict() for c in self.commands],
         }
 
 
@@ -123,6 +142,35 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 def _frontmatter_str(frontmatter: dict[str, Any], key: str) -> str:
     value = frontmatter.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _parse_commands(frontmatter: dict[str, Any]) -> list[SkillCommand]:
+    """Parse the ``commands`` frontmatter list into validated SkillCommand objects.
+
+    Unknown keys are ignored; entries without a valid ``name`` (lowercase
+    alphanumeric + hyphens) or with a duplicate name are skipped so a single
+    broken command never breaks the whole skill.
+    """
+    raw = frontmatter.get("commands")
+    if not isinstance(raw, list):
+        return []
+    commands: list[SkillCommand] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cname = _frontmatter_str(item, "name").strip()
+        cdesc = _frontmatter_str(item, "description").strip()
+        if not cname or not _NAME_RE.match(cname):
+            continue
+        if cname in seen:
+            continue
+        seen.add(cname)
+        cfile = _frontmatter_str(item, "file").strip()
+        if not cfile:
+            cfile = f"commands/{cname}.md"
+        commands.append(SkillCommand(name=cname, description=cdesc, file=cfile))
+    return commands
 
 
 def validate_name(name: str) -> list[str]:
@@ -195,6 +243,7 @@ def load_skill_from_file(
     disable_model_invocation = bool(frontmatter.get("disable-model-invocation", False))
     version_raw = _frontmatter_str(frontmatter, "version").strip()
     version = version_raw or content_version(content)
+    commands = _parse_commands(frontmatter)
 
     return (
         SkillEntry(
@@ -205,6 +254,7 @@ def load_skill_from_file(
             source=source,
             version=version,
             disable_model_invocation=disable_model_invocation,
+            commands=commands,
         ),
         diagnostics,
     )
@@ -227,6 +277,16 @@ def format_skills_prompt(skills: list[SkillEntry]) -> str:
         "",
         "<available_skills>",
     ]
+    install_note = (
+        "To CREATE or INSTALL a NEW skill from chat (for example when the user asks you to "
+        "build/install a skill), you MUST use the dedicated `install_skill` tool with the skill "
+        "name and its full SKILL.md content. Do NOT use write_file or run_command to write to the "
+        "`~/.agents/skills/...` paths listed in <location> above — those paths live outside the "
+        "workspace sandbox and the file tools will reject them. After install_skill succeeds the "
+        "skill is immediately available as a `/skill <name>` command (or a direct `/<command>` "
+        "sub-command when the skill declares `commands`) and in the Installed Skills list."
+    )
+    lines.append(install_note)
     for skill in skills:
         lines.append("  <skill>")
         lines.append(f"    <name>{_escape_xml(skill.name)}</name>")
@@ -234,6 +294,14 @@ def format_skills_prompt(skills: list[SkillEntry]) -> str:
         lines.append(f"    <location>{_escape_xml(str(skill.file_path))}</location>")
         if skill.version:
             lines.append(f"    <version>{_escape_xml(skill.version)}</version>")
+        if skill.commands:
+            lines.append("    <commands>")
+            for cmd in skill.commands:
+                lines.append(
+                    f'      <command name="{_escape_xml(cmd.name)}">'
+                    f"{_escape_xml(cmd.description)}</command>"
+                )
+            lines.append("    </commands>")
         lines.append("  </skill>")
     lines.append("</available_skills>")
     return "\n".join(lines)
