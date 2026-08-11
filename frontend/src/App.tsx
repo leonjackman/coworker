@@ -53,6 +53,13 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
       } else {
         merged.push(part);
       }
+    } else if (part.type === 'text') {
+      // 各次 resume 会重放同一轮执行（工具按 id 去重），文本同样按内容去重，
+      // 避免重放时 text part 重复叠加；goal 多轮文本内容各不相同，天然追加。
+      const exists = merged.some((p) => p.type === 'text' && p.content === part.content);
+      if (!exists && part.content) {
+        merged.push(part);
+      }
     } else {
       merged.push(part);
     }
@@ -658,6 +665,15 @@ function App() {
         }
       } else if (event.type === 'delta') {
         streamedContent += event.content;
+        // 文本增量追加到最后一个 text part；若最后不是 text part（例如工具/推理
+        // 之后重新开始说话），则新建 text part。这样 text 与 tool 在 parts 数组
+        // 中按流式到达顺序交错，渲染时按数组顺序即可还原 LLM 的真实输出顺序。
+        const last = localParts[localParts.length - 1];
+        if (last && last.type === 'text') {
+          last.content += event.content;
+        } else {
+          localParts.push({ type: 'text', content: event.content });
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -1075,6 +1091,12 @@ function App() {
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'delta') {
         streamedContent += event.content;
+        const last = localParts[localParts.length - 1];
+        if (last && last.type === 'text') {
+          last.content += event.content;
+        } else {
+          localParts.push({ type: 'text', content: event.content });
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -1254,6 +1276,12 @@ function App() {
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'delta') {
         streamedContent += event.content;
+        const last = localParts[localParts.length - 1];
+        if (last && last.type === 'text') {
+          last.content += event.content;
+        } else {
+          localParts.push({ type: 'text', content: event.content });
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -1521,6 +1549,12 @@ function App() {
             applyResume('done');
           } else if (event.type === 'delta') {
             resumeContent += event.content;
+            const last = resumeParts[resumeParts.length - 1];
+            if (last && last.type === 'text') {
+              last.content += event.content;
+            } else {
+              resumeParts.push({ type: 'text', content: event.content });
+            }
             applyResume('running');
           } else if (event.type === 'reasoning_delta') {
             const last = resumeParts[resumeParts.length - 1];

@@ -117,6 +117,40 @@ function ToolChain({ toolParts, running }: { toolParts: Extract<MessagePart, { t
   );
 }
 
+/** 把有序的 MessagePart[] 渲染成一组 JSX 节点，text/tool/reasoning/plan 按数组顺序交错。 */
+function OrderedParts({ parts, running, isError, isStopped }: { parts: MessagePart[]; running: boolean; isError: boolean; isStopped: boolean }) {
+  const nodes: ReactNode[] = [];
+  let toolRun: Extract<MessagePart, { type: 'tool' }>[] = [];
+  const flushTools = (key: string) => {
+    if (toolRun.length > 0) {
+      nodes.push(<ToolChain key={key} toolParts={toolRun} running={running} />);
+      toolRun = [];
+    }
+  };
+  parts.forEach((part, index) => {
+    if (part.type === 'tool') {
+      toolRun.push(part);
+      return;
+    }
+    flushTools(`tools-${index}`);
+    if (part.type === 'text') {
+      if (isError || isStopped) return;
+      nodes.push(
+        <Suspense key={`text-${index}`} fallback={<div className="markdown-body">{part.content}</div>}>
+          <MarkdownContent content={part.content} />
+        </Suspense>,
+      );
+    } else if (part.type === 'reasoning') {
+      nodes.push(<ThinkingBlock key={`reasoning-${index}`} reasoningParts={[part]} working={running} />);
+    } else if (part.type === 'plan') {
+      nodes.push(<PlanBlock key={`plan-${index}`} planParts={[part]} working={running} />);
+    }
+  });
+  flushTools(`tools-end`);
+  if (nodes.length === 0) return null;
+  return <>{nodes}</>;
+}
+
 function collectFileChanges(toolParts: Extract<MessagePart, { type: 'tool' }>[]): PartFileChange[] {
   const files: PartFileChange[] = [];
   for (const part of toolParts) {
@@ -210,6 +244,9 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
     }
   }, [isRunning, message.streamStartAt, message.streamEndAt]);
   const msgParts = message.parts ?? [];
+  // 新格式：parts 内包含 text part（text 与 tool 交错）。旧会话没有 text part，
+  // 走分组渲染 + content 兜底。
+  const hasTextParts = msgParts.some((p) => p.type === 'text');
   const { planParts, reasoningParts, toolParts } = groupParts(msgParts);
   const fileChanges = collectFileChanges(toolParts);
   const hasRunningTools = isRunning && toolParts.some((part) => part.status === 'running');
@@ -259,13 +296,19 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
           </div>
         )}
 
-        {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
-        {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
-        {toolParts.length > 0 && <ToolChain toolParts={toolParts} running={isRunning} />}
+        {hasTextParts ? (
+          <OrderedParts parts={msgParts} running={isRunning} isError={isError} isStopped={isStopped} />
+        ) : (
+          <>
+            {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
+            {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
+            {toolParts.length > 0 && <ToolChain toolParts={toolParts} running={isRunning} />}
+          </>
+        )}
 
         {isRunning && hasRunningTools && <AgentActivity working={isRunning} />}
 
-        {!isError && !isStopped && !isRunningEmpty && !isWaiting && (
+        {!hasTextParts && !isError && !isStopped && !isRunningEmpty && !isWaiting && (
           <Suspense fallback={<div className="markdown-body">{message.content}</div>}>
             <MarkdownContent content={message.content} />
           </Suspense>

@@ -1680,6 +1680,15 @@ def _merge_message_parts(existing: list[dict[str, Any]], incoming: list[dict[str
                 merged[index] = {**merged[index], **part}
             else:
                 merged.append(dict(part))
+        elif ptype == "text":
+            # 各次 resume 会重放同一轮执行（工具按 id 去重），文本同样按内容去重，
+            # 避免重放时 text part 重复叠加；goal 多轮文本内容各不相同，天然追加。
+            text_content = str(part.get("content") or "")
+            if not text_content:
+                continue
+            exists = any(p.get("type") == "text" and p.get("content") == text_content for p in merged)
+            if not exists:
+                merged.append(dict(part))
         else:
             merged.append(dict(part))
     return merged

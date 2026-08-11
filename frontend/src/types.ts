@@ -241,7 +241,12 @@ export interface PartPlan {
   content: string;
 }
 
-export type MessagePart = PartTool | PartReasoning | PartPlan;
+export interface PartText {
+  type: 'text';
+  content: string;
+}
+
+export type MessagePart = PartTool | PartReasoning | PartPlan | PartText;
 
 export interface ChatMessage {
   id: string;

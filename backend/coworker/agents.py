@@ -1115,7 +1115,20 @@ def _terminate_stray_tools(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
+    pending_text: list[str] = []
+
+    def _flush_text() -> None:
+        if pending_text:
+            merged.append({"type": "text", "content": "".join(pending_text)})
+            pending_text.clear()
+
     for part in parts:
+        if part.get("type") == "delta":
+            pending_text.append(str(part.get("content") or ""))
+            continue
+        # 到达非文本边界（工具/推理/计划）时，先把累积的文本拍成一个 text part，
+        # 让 text 与 tool 在数组中按流式到达顺序交错排列。
+        _flush_text()
         if part.get("type") == "reasoning_delta":
             if merged and merged[-1].get("type") == "reasoning":
                 merged[-1]["content"] += part["content"]
@@ -1171,6 +1184,7 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             merged.append(part)
 
+    _flush_text()
     for item in merged:
         if item.get("type") == "reasoning":
             item["heading"] = _reasoning_heading(item.get("content", ""))
@@ -2455,6 +2469,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             text = getattr(msg, "content", "") or ""
             if isinstance(text, str) and text:
                 content_parts.append(text)
+                # 文本 delta 也进入 parts 列表，_merge_event_parts 会把它按到达顺序
+                # 合并成交错排列的 text parts，从而在持久化/重载后保留 text 与 tool
+                # 的相对顺序（与 Anthropic content blocks 模型一致）。
+                parts.append({"type": "delta", "content": text})
                 events.append({"type": "delta", "content": text})
 
             tool_call_chunks = getattr(msg, "tool_call_chunks", None) or []
