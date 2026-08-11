@@ -63,6 +63,7 @@
   "chat.attachment_only_message": "Please review the attachment.",
   "chat.backend_unreachable": "CoWorker backend is not reachable. Please restart the desktop launcher.",
   "chat.attach_tooltip": "Attach files",
+  "chat.drop_files_here": "Drop files here to upload",
   "chat.mode_plan": "Plan",
   "chat.mode_build": "Build",
   "chat.mode_plan_tip": "Plan first without changing files",

@@ -63,6 +63,7 @@
   "chat.attachment_only_message": "请查看附件。",
   "chat.backend_unreachable": "无法连接 CoWorker 后端。请重新启动桌面启动器。",
   "chat.attach_tooltip": "添加附件",
+  "chat.drop_files_here": "拖拽文件到此处上传",
   "chat.mode_plan": "Plan",
   "chat.mode_build": "Build",
   "chat.mode_plan_tip": "先规划方案，不直接改动文件",

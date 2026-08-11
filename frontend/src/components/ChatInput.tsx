@@ -13,7 +13,7 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ClipboardEvent } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { t } from "../lib/i18n";
 import type { Autonomy, ComposerAttachment, SessionReference, WorkMode } from "../types";
 import { Button } from "./ui/button";
@@ -207,6 +207,43 @@ export function ChatInput({
     setAddError(message);
     if (addErrorTimer.current) window.clearTimeout(addErrorTimer.current);
     addErrorTimer.current = window.setTimeout(() => setAddError(null), 4000);
+  };
+
+  // 拖拽上传：只有真正携带文件时才激活高亮，避免文字拖拽被误拦截
+  const dragCounter = useRef(0);
+  const [dragActive, setDragActive] = useState(false);
+
+  const hasFiles = (event: DragEvent) =>
+    Boolean(event.dataTransfer && Array.from(event.dataTransfer.types).includes("Files"));
+
+  const handleDragEnter = (event: DragEvent) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragCounter.current += 1;
+    setDragActive(true);
+  };
+
+  const handleDragOver = (event: DragEvent) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDragLeave = (event: DragEvent) => {
+    if (!hasFiles(event)) return;
+    dragCounter.current -= 1;
+    if (dragCounter.current <= 0) {
+      dragCounter.current = 0;
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (event: DragEvent) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    dragCounter.current = 0;
+    setDragActive(false);
+    void addFiles(event.dataTransfer.files);
   };
 
   useEffect(() => {
@@ -443,7 +480,13 @@ export function ChatInput({
 
   return (
     <footer className="composer">
-      <CardSlot className="composer__card">
+      <CardSlot
+        className={`composer__card${dragActive ? " composer__card--drag-active" : ""}`}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         {editing && (
           <div className="composer__edit-bar">
             <span className="composer__edit-label">
@@ -695,6 +738,14 @@ export function ChatInput({
             )}
           </div>
         </div>
+        {dragActive && (
+          <div className="composer__drop-overlay" aria-hidden>
+            <div className="composer__drop-overlay-inner">
+              <Paperclip size={28} />
+              <span>{t("chat.drop_files_here")}</span>
+            </div>
+          </div>
+        )}
       </CardSlot>
 
       {showCommands && displayedCommands.length > 0 && (
