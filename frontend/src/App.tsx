@@ -245,6 +245,15 @@ function App() {
     }
     return index;
   }, [skillEntries]);
+
+  // Only show messages that belong to the currently active session so that
+  // running messages preserved from other sessions (after a session switch)
+  // don't bleed into the current conversation.
+  const displayedMessages = useMemo(() => {
+    if (!sessionId) return messages;
+    return messages.filter((m) => !m.sessionId || m.sessionId === sessionId);
+  }, [messages, sessionId]);
+
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
   const requestSeqRef = useRef(0);
@@ -917,9 +926,11 @@ function App() {
         );
       }
     } finally {
-      // 安全网：无论如何强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
-      // 仅当该流仍属当前请求、或消息仍属于当前会话时才收尾，避免把已切走的其它会话消息误改。
-      const belongsToCurrent = requestId === requestSeqRef.current || sessionIdRef.current === requestSessionId;
+      // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
+      // 仅当该流仍属当前请求 且 消息属于当前会话时才收尾。
+      // 切换会话后 requestSeqRef 已递增 → belongsToCurrent 为 false，消息保留 running，
+      // 由 openSession 的 setMessages 合并逻辑跨会话保留该消息，切回时能继续看到半截回复。
+      const belongsToCurrent = requestId === requestSeqRef.current && sessionIdRef.current === requestSessionId;
       if (belongsToCurrent) {
         setMessages((current) =>
           current.map((item) =>
@@ -1694,15 +1705,21 @@ function App() {
         }, delay);
       }
       setActiveProjectId(response.session.project_id || undefined);
-      // 归而非覆盖：保留本地 status === 'running' 的消息（半截回复可能由 AbortError 兜底已写入）。
-      // 关键：只合并「属于目标会话」的 running 消息，避免把其它会话正在回复的半截内容串入当前会话。
+      // 检查目标会话在当前 messages 中是否已有 running 消息（切走后由安全网保留）。
+      // 这些消息不会被 loaded 覆盖，在合并后仍需保持 isThinking，以显示蓝条。
+      const targetHasRunning = messages.some(
+        (m) => m.status === 'running' && m.sessionId === sessionIdToOpen,
+      );
+      // 归而非覆盖：保留本地 status === 'running' 的消息 — 包括从其它会话切走后
+      // 由安全网保留的半截回复，以便切回时继续看到流式内容。
       setMessages((current) => {
         const running = current.filter((m) => m.status === 'running');
         if (running.length === 0) return loaded;
         const loadedIds = new Set(loaded.map((m) => m.id));
-        const merged = running.filter((m) => m.sessionId === sessionIdToOpen && !loadedIds.has(m.id));
-        return [...loaded, ...merged];
+        const preserved = running.filter((m) => !loadedIds.has(m.id));
+        return [...loaded, ...preserved];
       });
+      setIsThinking(targetHasRunning);
       setAttachments([]);
     } catch (error) {
       console.error('Failed to open session:', error);
@@ -2214,7 +2231,7 @@ function App() {
                   ) : (
                     <>
                       <MessageList
-                        messages={messages}
+                        messages={displayedMessages}
                         isThinking={isThinking}
                         onEditMessage={(messageId, content) => beginEditMessage(messageId, content)}
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
@@ -2297,6 +2314,7 @@ function App() {
                   diagnostics={skillDiagnostics}
                   setSkills={setSkillEntries}
                   setDiagnostics={setSkillDiagnostics}
+                  onSkillsChange={refreshSkills}
                 />
               ) : (
                 <SettingsView

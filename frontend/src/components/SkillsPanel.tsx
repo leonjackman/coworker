@@ -136,6 +136,9 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
   const handleDelete = useCallback(
     async (skill: SkillEntry): Promise<boolean> => {
       if (!window.confirm(t('skills.delete_confirm', { name: skill.name }))) return false;
+      // Optimistically drop the card from the local list immediately so the
+      // installed-skills page reflects the deletion without a round-trip.
+      setSkills((current) => current.filter((item) => item.name !== skill.name));
       try {
         await chatService.deleteSkill(skill.name);
         setMessageType('ok');
@@ -146,10 +149,12 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
       } catch (error) {
         setMessageType('error');
         setMessage(translateError(error) || t('skills.delete_failed'));
+        // Roll back: re-sync from the authoritative backend list.
+        await refresh();
         return false;
       }
     },
-    [refresh, onSkillsChange],
+    [refresh, setSkills, onSkillsChange],
   );
 
   const openDetail = useCallback(async (skill: SkillEntry) => {

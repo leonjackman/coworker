@@ -1986,6 +1986,26 @@ body.bottom-panel-resizing {
   border-top: 1px solid var(--material-border);
 }
 
+:root {
+  --code-surface: #f6f8fa;
+  --code-surface-header: #eaeef2;
+  --code-border: #d0d7de;
+  --code-header-fg: #57606a;
+  --code-copy-fg: #57606a;
+  --code-copy-fg-hover: #1f2328;
+  --code-fallback-fg: #1f2328;
+}
+
+.dark {
+  --code-surface: #0d1117;
+  --code-surface-header: #161b22;
+  --code-border: #30363d;
+  --code-header-fg: #8b949e;
+  --code-copy-fg: #8b949e;
+  --code-copy-fg-hover: #e6edf3;
+  --code-fallback-fg: #e6edf3;
+}
+
 .markdown-inline-code {
   border: 1px solid var(--material-border);
   border-radius: 4px;
@@ -1997,10 +2017,10 @@ body.bottom-panel-resizing {
 
 .markdown-code {
   margin: 10px 0;
-  border: 1px solid var(--material-border);
+  border: 1px solid var(--code-border);
   border-radius: 8px;
   overflow: hidden;
-  background: #0d1117;
+  background: var(--code-surface);
   min-width: 0;
 }
 
@@ -2011,12 +2031,12 @@ body.bottom-panel-resizing {
   justify-content: space-between;
   gap: 10px;
   padding: 0 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--code-border);
+  background: var(--code-surface-header);
 }
 
 .markdown-code__lang {
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--code-header-fg);
   font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
   font-size: 12px;
 }
@@ -2028,7 +2048,7 @@ body.bottom-panel-resizing {
   border: 0;
   padding: 3px 6px;
   border-radius: 5px;
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--code-copy-fg);
   background: transparent;
   cursor: pointer;
   font-size: 12px;
@@ -2036,8 +2056,8 @@ body.bottom-panel-resizing {
 }
 
 .markdown-code__copy:hover {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
+  color: var(--code-copy-fg-hover);
+  background: var(--material-control);
 }
 
 .markdown-code__body {
@@ -2061,7 +2081,7 @@ body.bottom-panel-resizing {
   margin: 0;
   padding: 12px 14px;
   overflow-x: auto;
-  color: #e6edf3;
+  color: var(--code-fallback-fg);
   font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
   font-size: 13px;
   line-height: 1.6;
@@ -2071,6 +2091,15 @@ body.bottom-panel-resizing {
 
 .markdown-code__body .shiki {
   background: transparent !important;
+}
+
+/* Keep shiki syntax-highlight colors in sync with the app theme.
+   shiki dual-theme emits the default (light) color inline and exposes the
+   dark color via the `--shiki-dark` CSS variable, so we only need to flip to
+   it when the dark theme is active. */
+.dark .markdown-code__body .shiki,
+.dark .markdown-code__body .shiki span {
+  color: var(--shiki-dark) !important;
 }
 
 /* File tree */
