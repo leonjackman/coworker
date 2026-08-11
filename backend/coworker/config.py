@@ -10,6 +10,9 @@ class BackendSettings:
     workspace_dir: Path
     agent_provider: str
     openai_model: str
+    checkpoint_cap_per_session: int
+    checkpoint_max_bytes_per_thread: int
+    checkpoint_sweep_interval_seconds: int
 
 
 def load_settings() -> BackendSettings:
@@ -21,6 +24,15 @@ def load_settings() -> BackendSettings:
     agent_provider = os.getenv("COWORKER_AGENT_PROVIDER", "simulated").strip().lower()
     openai_model = os.getenv("COWORKER_OPENAI_MODEL", "gpt-4.1-mini").strip()
 
+    # Checkpoint lifecycle tuning (see coworker.checkpoints).
+    checkpoint_cap_per_session = int(os.getenv("COWORKER_CHECKPOINT_CAP", "500").strip() or "500")
+    checkpoint_max_bytes_per_thread = int(
+        os.getenv("COWORKER_CHECKPOINT_MAX_MB_PER_THREAD", "32").strip() or "32"
+    ) * 1024 * 1024
+    checkpoint_sweep_interval_seconds = int(
+        os.getenv("COWORKER_CHECKPOINT_SWEEP_INTERVAL_SECONDS", "21600").strip() or "21600"
+    )
+
     data_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -30,4 +42,7 @@ def load_settings() -> BackendSettings:
         workspace_dir=workspace_dir,
         agent_provider=agent_provider,
         openai_model=openai_model,
+        checkpoint_cap_per_session=checkpoint_cap_per_session,
+        checkpoint_max_bytes_per_thread=checkpoint_max_bytes_per_thread,
+        checkpoint_sweep_interval_seconds=checkpoint_sweep_interval_seconds,
     )

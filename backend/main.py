@@ -1,6 +1,7 @@
 import asyncio
 import atexit
 import json
+import logging
 import os
 from pathlib import Path
 import shlex
@@ -45,6 +46,7 @@ from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, 
 from coworker.workspace_controller import WorkspaceController
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -81,6 +83,58 @@ atexit.register(mcp_sessions.shutdown)
 command_approval_store.prune()
 trim_jsonl_file(tool_audit_path, MAX_TOOL_AUDIT_LINES)
 trim_jsonl_file(settings.data_dir / AGENT_TRACE_FILENAME, MAX_TRACE_LINES)
+
+# ---- Checkpoint lifecycle maintenance ----------------------------------- #
+# The LangGraph runtime checkpoint DB grows unboundedly; a background sweep
+# (startup + periodic) keeps it bounded via orphan cleanup, per-thread caps and
+# incremental vacuum. Threads with an in-flight stream are skipped.
+
+_checkpoint_sweep_task: asyncio.Task | None = None
+
+
+async def _checkpoint_sweep_loop() -> None:
+    while True:
+        await asyncio.sleep(settings.checkpoint_sweep_interval_seconds)
+        try:
+            stats = await asyncio.to_thread(agent_registry.checkpoint_manager.sweep)
+            logger.info("checkpoint sweep: %s", stats)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("checkpoint sweep failed: %s", exc)
+
+
+async def _tracked_stream(stream_iter: Any, session_id: str):
+    """Mark a session active while its stream is consumed so the periodic
+    sweep never trims a thread that is currently being written to."""
+    agent_registry.checkpoint_manager.mark_active(session_id)
+    try:
+        async for event in stream_iter:
+            yield event
+    finally:
+        agent_registry.checkpoint_manager.mark_idle(session_id)
+
+
+@app.on_event("startup")
+async def _startup_checkpoint_maintenance() -> None:
+    global _checkpoint_sweep_task
+    try:
+        stats = await asyncio.to_thread(agent_registry.checkpoint_manager.sweep)
+        logger.info("checkpoint sweep (startup): %s", stats)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("checkpoint sweep (startup) failed: %s", exc)
+    _checkpoint_sweep_task = asyncio.create_task(_checkpoint_sweep_loop())
+
+
+@app.on_event("shutdown")
+async def _stop_checkpoint_maintenance() -> None:
+    global _checkpoint_sweep_task
+    task = _checkpoint_sweep_task
+    _checkpoint_sweep_task = None
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 class ApprovalEventBus:
@@ -434,7 +488,11 @@ async def chat(request: ChatRequest):
             created_session = session_store.new_session("", project_id=request.project_id or "")
             session_id = created_session.id
         runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
-        reply = runtime.run(format_user_message(request.message, request.attachments, references), session_id, request.language, work_mode, autonomy)
+        agent_registry.checkpoint_manager.mark_active(session_id)
+        try:
+            reply = runtime.run(format_user_message(request.message, request.attachments, references), session_id, request.language, work_mode, autonomy)
+        finally:
+            agent_registry.checkpoint_manager.mark_idle(session_id)
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -725,7 +783,7 @@ async def chat_stream(request: ChatStreamRequest):
             terminal_sent = True
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
-        async for kind, payload in _sse_events(stream_iter, on_event=_on_event, on_end=_on_end, on_error=_on_error):
+        async for kind, payload in _sse_events(_tracked_stream(stream_iter, session_id), on_event=_on_event, on_end=_on_end, on_error=_on_error):
             if kind == "heartbeat":
                 # SSE comment line: keep the connection (and the client's idle
                 # watchdog) alive while the agent is busy thinking/working.
@@ -1053,7 +1111,7 @@ async def goal_resume(request: GoalResumeRequest):
                 return {"type": "error", "session_id": request.session_id, "error": str(exc)[:400]}
 
             try:
-                async for kind, payload in _sse_events(_goal_iter(), on_error=_on_error):
+                async for kind, payload in _sse_events(_tracked_stream(_goal_iter(), request.session_id), on_error=_on_error):
                     if kind == "heartbeat":
                         yield ": ping\n\n"
                     else:
@@ -1335,8 +1393,11 @@ async def regenerate_message(session_id: str, message_id: str):
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
         async for kind, payload in _sse_events(
-            agent_registry.rerun_stream(
-                history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+            _tracked_stream(
+                agent_registry.rerun_stream(
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+                ),
+                session_id,
             ),
             on_event=_on_event,
             on_error=_on_error,
@@ -1412,8 +1473,11 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
         async for kind, payload in _sse_events(
-            agent_registry.rerun_stream(
-                history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+            _tracked_stream(
+                agent_registry.rerun_stream(
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+                ),
+                session_id,
             ),
             on_event=_on_event,
             on_error=_on_error,

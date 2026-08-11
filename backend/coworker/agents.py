@@ -35,6 +35,7 @@ from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .changes import ChangeStore
 from .sessions import SessionStore
 from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace
+from .checkpoints import CheckpointManager
 
 AgentMode = Literal["single"]
 Language = Literal["zh", "en"]
@@ -327,6 +328,7 @@ def _open_checkpointer(checkpoint_path: Any):
             await conn.execute("PRAGMA journal_mode=WAL")
             await conn.execute("PRAGMA busy_timeout=30000")
             await conn.execute("PRAGMA synchronous=NORMAL")
+            await conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
             yield AsyncSqliteSaver(conn)
         finally:
             await conn.close()
@@ -2725,7 +2727,14 @@ class AgentRuntimeRegistry:
         self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
         self.checkpoint_conn.execute("PRAGMA busy_timeout=30000")
         self.checkpoint_conn.execute("PRAGMA synchronous=NORMAL")
+        self.checkpoint_conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         self.checkpointer = SqliteSaver(self.checkpoint_conn)
+        self.checkpoint_manager = CheckpointManager(
+            self.checkpoint_path,
+            sessions_dir=settings.data_dir / "sessions",
+            cap_per_session=settings.checkpoint_cap_per_session,
+            max_bytes_per_thread=settings.checkpoint_max_bytes_per_thread,
+        )
 
     def _open_sync_checkpointer(self):
         # A fresh synchronous connection per call, committed and closed, so it
@@ -2736,6 +2745,7 @@ class AgentRuntimeRegistry:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         return SqliteSaver(conn), conn
 
     def has_runtime_checkpoint(self, session_id: str) -> bool:
@@ -2747,12 +2757,8 @@ class AgentRuntimeRegistry:
             conn.close()
 
     def forget_runtime_checkpoint(self, session_id: str) -> None:
-        saver, conn = self._open_sync_checkpointer()
-        try:
-            saver.delete_thread(session_id)
-        finally:
-            conn.commit()
-            conn.close()
+        # Delegate to the manager so the delete also reclaims disk space.
+        self.checkpoint_manager.delete_thread(session_id)
 
     def _provider_for_request(self, provider_id: str | None, model: str | None) -> ProviderEntry | None:
         if provider_id:
