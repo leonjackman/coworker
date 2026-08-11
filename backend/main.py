@@ -142,6 +142,73 @@ _goal_active_streams: dict[str, str] = {}  # stream_id -> session_id
 
 SSE_TIMEOUT = int(os.environ.get("COWORKER_SSE_TIMEOUT", str(30 * 60)))
 
+# Keep-alive cadence for SSE streams. The agent may sit in "thinking" / tool /
+# LLM-wait phases with no events for a long time; a periodic comment line
+# (`: ping`) tells proxies and the client that the stream is alive, so a long
+# thinking phase never looks like a dead connection (and the frontend's idle
+# timeout never fires for a genuinely-running task).
+SSE_HEARTBEAT_SECONDS = float(os.environ.get("COWORKER_SSE_HEARTBEAT_SECONDS", "15.0"))
+
+
+async def _sse_events(
+    stream_iter: Any,
+    on_event: Any = None,
+    on_end: Any = None,
+    on_error: Any = None,
+):
+    """Consume ``stream_iter`` and yield ``(kind, payload)`` tuples.
+
+    kind is one of:
+      * ``"event"``    — payload is a real event dict (``on_event`` already ran)
+      * ``"heartbeat"``— no event for ``SSE_HEARTBEAT_SECONDS``; caller should
+                         emit an SSE comment line to keep the connection alive
+      * ``"error"``    — payload is the error event dict (stream raised, incl.
+                         client-disconnect cancellation)
+      * ``"end"``      — payload ``None``; the underlying stream finished
+
+    ``on_event(event)`` runs for each real event (accumulate/persist side
+    effects). ``on_end()`` runs once on normal completion and may return a final
+    dict to emit (e.g. a synthetic ``done``) or ``None``. ``on_error(exc)`` runs
+    when the stream raises and must return the error event dict.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    _SENTINEL = object()
+
+    async def _producer():
+        try:
+            async for event in stream_iter:
+                if on_event is not None:
+                    on_event(event)
+                await queue.put(("event", event))
+            final = on_end() if on_end is not None else None
+            if final is not None:
+                await queue.put(("event", final))
+        except BaseException as exc:  # incl. GeneratorExit / CancelledError
+            err = on_error(exc) if on_error is not None else {"type": "error", "error": str(exc)[:400]}
+            await queue.put(("error", err))
+        finally:
+            await queue.put(("end", None))
+
+    task = asyncio.ensure_future(_producer())
+    try:
+        while True:
+            try:
+                kind, payload = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+            except asyncio.TimeoutError:
+                yield "heartbeat", None
+                continue
+            yield kind, payload
+            if kind == "end":
+                break
+    finally:
+        if not task.done():
+            task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=5.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
@@ -303,7 +370,11 @@ class CommandApprovalAction(BaseModel):
 
 
 class ApprovalDecisionPayload(BaseModel):
-    approval_id: str
+    # The resolve endpoint keys off the TOP-LEVEL `request.approval_id`;
+    # this nested copy is legacy/optional and must not fail validation when the
+    # frontend sends a decision without duplicating the id (fixes dead buttons
+    # on question/approval/plan cards → HTTP 422).
+    approval_id: str = ""
     type: str = ""
     decision: str = ""
     reason: str = ""
@@ -622,13 +693,23 @@ async def chat_stream(request: ChatStreamRequest):
 
         stream_iter = _locked_stream_iterator(_raw_stream_iter, goal_lock)
 
-        try:
-            async for event in stream_iter:
-                event["session_id"] = session_id
-                _handle_event(event)
-                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-        except BaseException as exc:
+        def _on_event(event):
+            event["session_id"] = session_id
+            _handle_event(event)
+
+        def _on_end():
+            if not terminal_sent:
+                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+                try:
+                    session_store.update_modes(session_id, work_mode, autonomy)
+                except KeyError:
+                    pass
+                return {"type": "done", "session_id": session_id, "content": accumulated_content, "stream_end": True}
+            return None
+
+        def _on_error(exc):
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
+            nonlocal terminal_sent
             if accumulated_content:
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
             if cancel_event is not None:
@@ -642,15 +723,17 @@ async def chat_stream(request: ChatStreamRequest):
             except KeyError:
                 pass
             terminal_sent = True
-            yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
-        else:
-            if not terminal_sent:
-                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
-                try:
-                    session_store.update_modes(session_id, work_mode, autonomy)
-                except KeyError:
-                    pass
-                yield f"data: {_json.dumps({'type': 'done', 'session_id': session_id, 'content': accumulated_content, 'stream_end': True}, ensure_ascii=False)}\n\n"
+            return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
+
+        async for kind, payload in _sse_events(stream_iter, on_event=_on_event, on_end=_on_end, on_error=_on_error):
+            if kind == "heartbeat":
+                # SSE comment line: keep the connection (and the client's idle
+                # watchdog) alive while the agent is busy thinking/working.
+                yield ": ping\n\n"
+            elif kind == "end":
+                break
+            else:
+                yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -922,7 +1005,8 @@ async def goal_resume(request: GoalResumeRequest):
         # /goal/resume (or a resume racing a /chat/stream goal) could run in
         # parallel and corrupt the shared LangGraph checkpoint.
         async with lock:
-            try:
+            async def _goal_iter():
+                nonlocal terminal_sent
                 async with asyncio.timeout(SSE_TIMEOUT):
                     async for event in runtime.goal_stream(
                         [], request.session_id, language, work_mode, autonomy,
@@ -951,24 +1035,31 @@ async def goal_resume(request: GoalResumeRequest):
                             terminal_sent = True
                         elif etype == "goal_paused":
                             terminal_sent = True
-                        yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-            except asyncio.TimeoutError:
-                try:
-                    session_store.update_goal(request.session_id, goal_interrupted=True)
-                except KeyError:
-                    pass
-                yield f"data: {_json.dumps({'type': 'goal_done', 'session_id': request.session_id, 'content': '', 'reason': 'timeout'}, ensure_ascii=False)}\n\n"
-                return
-            except BaseException as exc:
+                        yield event
+
+            def _on_error(exc):
                 _goal_cancel_events.pop(request.session_id, None)
-                if isinstance(exc, (asyncio.CancelledError, GeneratorExit, asyncio.TimeoutError)):
+                if isinstance(exc, asyncio.TimeoutError):
                     try:
                         session_store.update_goal(request.session_id, goal_interrupted=True)
                     except KeyError:
                         pass
-                _goal_cancel_events.pop(request.session_id, None)
-                yield f"data: {_json.dumps({'type': 'error', 'session_id': request.session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
-                return
+                    return {"type": "goal_done", "session_id": request.session_id, "content": "", "reason": "timeout"}
+                if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                    try:
+                        session_store.update_goal(request.session_id, goal_interrupted=True)
+                    except KeyError:
+                        pass
+                return {"type": "error", "session_id": request.session_id, "error": str(exc)[:400]}
+
+            try:
+                async for kind, payload in _sse_events(_goal_iter(), on_error=_on_error):
+                    if kind == "heartbeat":
+                        yield ": ping\n\n"
+                    else:
+                        yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+                        if kind == "end":
+                            break
             finally:
                 _goal_cancel_events.pop(request.session_id, None)
                 _goal_active_streams.pop(stream_id, None)
@@ -1219,32 +1310,43 @@ async def regenerate_message(session_id: str, message_id: str):
     provider_id = _provider_id_for_model(provider_name, model)
 
     async def event_stream():
-        try:
-            async for event in agent_registry.rerun_stream(
+        def _on_event(event):
+            event["session_id"] = session_id
+            if event.get("type") == "done":
+                try:
+                    session = session_store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=event["content"],
+                        mode="single",
+                        provider=event.get("provider") or provider_name,
+                        model=event.get("model") or model,
+                        work_mode=work_mode,
+                        autonomy=autonomy,
+                        parts=event.get("parts") or [],
+                    )
+                    last = session.messages[-1] if session.messages else None
+                    if last is not None:
+                        agent_registry.change_store.assign_message(session_id, last.id)
+                except KeyError:
+                    pass
+
+        def _on_error(exc):
+            return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
+
+        async for kind, payload in _sse_events(
+            agent_registry.rerun_stream(
                 history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
-            ):
-                event["session_id"] = session_id
-                if event.get("type") == "done":
-                    try:
-                        session = session_store.append_message(
-                            session_id,
-                            role="assistant",
-                            content=event["content"],
-                            mode="single",
-                            provider=event.get("provider") or provider_name,
-                            model=event.get("model") or model,
-                            work_mode=work_mode,
-                            autonomy=autonomy,
-                            parts=event.get("parts") or [],
-                        )
-                        last = session.messages[-1] if session.messages else None
-                        if last is not None:
-                            agent_registry.change_store.assign_message(session_id, last.id)
-                    except KeyError:
-                        pass
-                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
+            ),
+            on_event=_on_event,
+            on_error=_on_error,
+        ):
+            if kind == "heartbeat":
+                yield ": ping\n\n"
+            elif kind == "end":
+                break
+            else:
+                yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -1285,32 +1387,43 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     provider_id = _provider_id_for_model(provider_name, model)
 
     async def event_stream():
-        try:
-            async for event in agent_registry.rerun_stream(
+        def _on_event(event):
+            event["session_id"] = session_id
+            if event.get("type") == "done":
+                try:
+                    session = session_store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=event["content"],
+                        mode="single",
+                        provider=event.get("provider") or provider_name,
+                        model=event.get("model") or model,
+                        work_mode=work_mode,
+                        autonomy=autonomy,
+                        parts=event.get("parts") or [],
+                    )
+                    last = session.messages[-1] if session.messages else None
+                    if last is not None:
+                        agent_registry.change_store.assign_message(session_id, last.id)
+                except KeyError:
+                    pass
+
+        def _on_error(exc):
+            return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
+
+        async for kind, payload in _sse_events(
+            agent_registry.rerun_stream(
                 history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
-            ):
-                event["session_id"] = session_id
-                if event.get("type") == "done":
-                    try:
-                        session = session_store.append_message(
-                            session_id,
-                            role="assistant",
-                            content=event["content"],
-                            mode="single",
-                            provider=event.get("provider") or provider_name,
-                            model=event.get("model") or model,
-                            work_mode=work_mode,
-                            autonomy=autonomy,
-                            parts=event.get("parts") or [],
-                        )
-                        last = session.messages[-1] if session.messages else None
-                        if last is not None:
-                            agent_registry.change_store.assign_message(session_id, last.id)
-                    except KeyError:
-                        pass
-                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            yield f"data: {_json.dumps({'type': 'error', 'session_id': session_id, 'error': str(exc)[:400]}, ensure_ascii=False)}\n\n"
+            ),
+            on_event=_on_event,
+            on_error=_on_error,
+        ):
+            if kind == "heartbeat":
+                yield ": ping\n\n"
+            elif kind == "end":
+                break
+            else:
+                yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -1643,7 +1756,11 @@ async def stream_approval_events(resume_id: str):
         queue = approval_event_bus.subscribe(resume_id)
         try:
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
                 if event.get("type") == "stream_end":
                     break
                 yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"

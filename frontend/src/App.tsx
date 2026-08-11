@@ -157,7 +157,6 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [goal, setGoal] = useState<GoalState>({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
-  const [isThinking, setIsThinking] = useState(false);
   const [editingGoalDraft, setEditingGoalDraft] = useState(false);
   const goalDraftRef = useRef('');
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
@@ -248,21 +247,62 @@ function App() {
 
   // Only show messages that belong to the currently active session so that
   // running messages preserved from other sessions (after a session switch)
-  // don't bleed into the current conversation.
+  // don't bleed into the current conversation. With no active session (hero /
+  // new-chat draft) only ambient messages (no sessionId) are shown — background
+  // running messages from other sessions stay hidden but keep their stream.
   const displayedMessages = useMemo(() => {
-    if (!sessionId) return messages;
+    if (!sessionId) return messages.filter((m) => !m.sessionId);
     return messages.filter((m) => !m.sessionId || m.sessionId === sessionId);
   }, [messages, sessionId]);
 
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
   const requestSeqRef = useRef(0);
-  const abortRef = useRef<AbortController | null>(null);
+  const goalSessionIdRef = useRef<string | undefined>(undefined);
+  // Per-session generation counters for stream staleness. A stream is "stale"
+  // only when a NEWER stream started in the SAME session (or it was stopped).
+  // A stream belonging to another session must keep processing its events so a
+  // session switch does not freeze that conversation's in-progress reply.
+  const sessionSeqRef = useRef<Record<string, number>>({});
+  const bumpSessionSeq = (sessionId?: string | null) => {
+    if (!sessionId) return;
+    sessionSeqRef.current[sessionId] = (sessionSeqRef.current[sessionId] ?? 0) + 1;
+  };
+  const getSessionSeq = (sessionId?: string | null) =>
+    sessionId ? sessionSeqRef.current[sessionId] ?? 0 : requestSeqRef.current;
+  const isStreamStale = (sessionId: string | undefined, requestSeq: number) =>
+    requestSeq !== getSessionSeq(sessionId);
+  // Per-session stream bookkeeping so multiple sessions can stream in parallel:
+  // starting/stopping one task must never touch a task running in another
+  // session (previously a single global abortRef meant 新对话/暂停 killed the
+  // wrong stream once more than one session was busy).
+  const streamKey = (sessionId?: string | null) => sessionId || '__none__';
+  const streamControllersRef = useRef<Record<string, AbortController>>({});
+  const activeAssistantMessageIdsRef = useRef<Record<string, string>>({});
+  const streamStartAtsRef = useRef<Record<string, number>>({});
+  const abortStreamFor = (sessionId?: string | null) => {
+    const key = streamKey(sessionId);
+    streamControllersRef.current[key]?.abort();
+    delete streamControllersRef.current[key];
+    delete activeAssistantMessageIdsRef.current[key];
+    delete streamStartAtsRef.current[key];
+  };
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
-  const activeAssistantMessageIdRef = useRef<string | undefined>(undefined);
-  const streamStartAtRef = useRef<number | null>(null);
   const goalStreamIdRef = useRef<string | undefined>(undefined);
+
+  // Whether the CURRENT session is busy. Derived (not a hand-maintained flag)
+  // so that a stream left running in another session (we keep it alive across
+  // session switches instead of aborting it) never locks the composer here,
+  // and a background stream completing never spuriously unlocks this session.
+  const isThinking = useMemo(
+    () =>
+      (goal.running && goalSessionIdRef.current === sessionId) ||
+      messages.some(
+        (m) => m.status === 'running' && (!m.sessionId || m.sessionId === sessionId),
+      ),
+    [goal.running, goalSessionIdRef.current, messages, sessionId],
+  );
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -535,6 +575,11 @@ function App() {
     const requestModel = selectedProvider?.model ?? runtimeConfig?.selected_model ?? '';
     const requestProvider = selectedProvider?.name ?? runtimeConfig?.agent_provider ?? '';
     const requestSessionId = sessionIdRef.current;
+    // New generation for this session: any older stream of the SAME session is
+    // now stale, but streams of OTHER sessions (kept alive after a switch)
+    // stay valid and keep updating their own message in the background.
+    bumpSessionSeq(requestSessionId);
+    const myRequestSeq = getSessionSeq(requestSessionId);
 
     // 引用会话：先采用 composer 中已确认的 chips，再兜底扫描消息文本里出现的会话 id
     const requestReferences = [...references];
@@ -574,7 +619,6 @@ function App() {
     //    且残留的附件会在下一次发送时被 requestAttachments 误带重发。
     setAttachments([]);
     setReferences([]);
-    setIsThinking(true);
 
     setMessages((current) => [
       ...current,
@@ -590,16 +634,19 @@ function App() {
     ]);
 
     const controller = new AbortController();
-    abortRef.current = controller;
-    activeAssistantMessageIdRef.current = assistantMessageId;
+    streamControllersRef.current[streamKey(requestSessionId)] = controller;
+    activeAssistantMessageIdsRef.current[streamKey(requestSessionId)] = assistantMessageId;
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let streamStartAt = Date.now();
-    streamStartAtRef.current = streamStartAt;
+    streamStartAtsRef.current[streamKey(requestSessionId)] = streamStartAt;
     let inGoal = false;
 
     const handleEvent = (event: StreamEvent) => {
-      if (requestId !== requestSeqRef.current) return;
+      // Stale guard: only superseded streams of the SAME session are ignored.
+      // A stream belonging to another session (kept alive across a switch)
+      // continues updating its own message in the background.
+      if (isStreamStale(requestSessionId, myRequestSeq)) return;
       if (event.session_id && sessionIdRef.current && event.session_id !== sessionIdRef.current) {
         if (event.type !== 'start') return;
       }
@@ -701,7 +748,9 @@ function App() {
           ),
         );
       } else if (event.type === 'done') {
-        if (event.session_id) {
+        // Only confirm the session for the currently-viewed session's stream;
+        // a background stream from another session must never hijack the view.
+        if (event.session_id && event.session_id === sessionIdRef.current) {
           setSessionId(event.session_id);
           sessionIdRef.current = event.session_id;
         }
@@ -739,6 +788,7 @@ function App() {
         );
       } else if (event.type === 'goal_start') {
         inGoal = true;
+        if (event.session_id) goalSessionIdRef.current = event.session_id;
         setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
       } else if (event.type === 'goal_round') {
         setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
@@ -846,7 +896,7 @@ function App() {
         handleEvent,
         controller.signal,
       );
-      if (requestId !== requestSeqRef.current) return;
+      if (isStreamStale(requestSessionId, myRequestSeq)) return;
       // 附件/引用已在发送即清空（见上方），此处无需重复。
       setRuntimeStatus('ready');
       await refreshSessions();
@@ -877,9 +927,9 @@ function App() {
           } catch { /* ignore */ }
         })();
       }
-      _generateSessionTitleIfNeeded(message, streamedContent, sessionIdRef.current);
+      _generateSessionTitleIfNeeded(message, streamedContent, requestSessionId);
     } catch (error) {
-      if (requestId !== requestSeqRef.current) return;
+      if (isStreamStale(requestSessionId, myRequestSeq)) return;
       console.error('Failed to stream message:', error);
       if ((error as Error).name === 'AbortError') {
         // For goal mode, abort on disconnect — check session status to let backend finalize
@@ -927,9 +977,9 @@ function App() {
       }
     } finally {
       // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
-      // 仅当该流仍属当前请求 且 消息属于当前会话时才收尾。
-      // 切换会话后 requestSeqRef 已递增 → belongsToCurrent 为 false，消息保留 running，
-      // 由 openSession 的 setMessages 合并逻辑跨会话保留该消息，切回时能继续看到半截回复。
+      // 仅当该流仍属当前请求 且 消息属于当前会话时才收尾。切走会话时不再中止流，
+      // 该流在后台继续更新自己的消息（displayedMessages 会按 sessionId 过滤），
+      // 切回时仍能看到半截回复并在原地续流，直到收到 done 自然收尾。
       const belongsToCurrent = requestId === requestSeqRef.current && sessionIdRef.current === requestSessionId;
       if (belongsToCurrent) {
         setMessages((current) =>
@@ -940,30 +990,30 @@ function App() {
           ),
         );
       }
-      if (requestId === requestSeqRef.current) {
-        setIsThinking(false);
-        abortRef.current = null;
-        activeAssistantMessageIdRef.current = undefined;
+      if (streamControllersRef.current[streamKey(requestSessionId)] === controller) {
+        delete streamControllersRef.current[streamKey(requestSessionId)];
+        delete activeAssistantMessageIdsRef.current[streamKey(requestSessionId)];
+        delete streamStartAtsRef.current[streamKey(requestSessionId)];
       }
     }
   };
 
   const stopMessage = () => {
-    const assistantMessageId = activeAssistantMessageIdRef.current;
-    abortRef.current?.abort();
-    setIsThinking(false);
+    const key = streamKey(sessionIdRef.current);
+    const assistantMessageId = activeAssistantMessageIdsRef.current[key];
+    const streamStartAt = streamStartAtsRef.current[key];
+    abortStreamFor(sessionIdRef.current);
     if (assistantMessageId) {
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped', streamStartAt: streamStartAtRef.current ?? Date.now(), streamEndAt: Date.now() }
+            ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped', streamStartAt: streamStartAt ?? Date.now(), streamEndAt: Date.now() }
             : item,
         ),
       );
     }
     requestSeqRef.current += 1;
-    abortRef.current = null;
-    activeAssistantMessageIdRef.current = undefined;
+    bumpSessionSeq(sessionIdRef.current);
   };
 
   const [editingMessage, setEditingMessage] = useState<{ id: string; content: string } | null>(null);
@@ -988,32 +1038,41 @@ function App() {
       return;
     }
 
-    setIsThinking(true);
+    bumpSessionSeq(currentSessionId);
+    const myRequestSeq = getSessionSeq(currentSessionId);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setMessages((current) => {
-      const index = current.findIndex((m) => m.id === messageId);
+      // 只截断「当前会话」的消息历史，保留其它会话仍在后台运行的消息，
+      // 否则一次编辑会把其它会话并行中的任务从前端状态里整体抹掉。
+      const others = current.filter((m) => m.sessionId && m.sessionId !== currentSessionId);
+      const thisSession = current.filter((m) => !m.sessionId || m.sessionId === currentSessionId);
+      const index = thisSession.findIndex((m) => m.id === messageId);
       if (index < 0) return current;
-      const truncated = current.slice(0, index + 1);
+      const truncated = thisSession.slice(0, index + 1).map((m) =>
+        m.id === messageId ? { ...m, content: trimmed, status: 'done' as const } : m,
+      );
       return [
-        ...truncated.map((m) => (m.id === messageId ? { ...m, content: trimmed, status: 'done' as const } : m)),
+        ...others,
+        ...truncated,
         createMessage('assistant', '', {
         streamStartAt: Date.now(),
           id: assistantMessageId,
           status: 'running',
             autonomy,
+            ...(currentSessionId ? { sessionId: currentSessionId } : {}),
         }),
       ];
     });
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let streamStartAt = Date.now();
-    streamStartAtRef.current = streamStartAt;
+    streamStartAtsRef.current[streamKey(currentSessionId)] = streamStartAt;
     const controller = new AbortController();
-    abortRef.current = controller;
-    const requestId = requestSeqRef.current;
+    streamControllersRef.current[streamKey(currentSessionId)] = controller;
+    activeAssistantMessageIdsRef.current[streamKey(currentSessionId)] = assistantMessageId;
     const handleEvent = (event: StreamEvent) => {
-      // P1 陈旧守卫
-      if (requestId !== requestSeqRef.current) return;
+      // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
+      if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'delta') {
         streamedContent += event.content;
         setMessages((current) =>
@@ -1139,8 +1198,11 @@ function App() {
         );
       }
     } finally {
-      setIsThinking(false);
-      abortRef.current = null;
+      if (streamControllersRef.current[streamKey(currentSessionId)] === controller) {
+        delete streamControllersRef.current[streamKey(currentSessionId)];
+        delete activeAssistantMessageIdsRef.current[streamKey(currentSessionId)];
+        delete streamStartAtsRef.current[streamKey(currentSessionId)];
+      }
       // Safety net: ensure the assistant message leaves the "running" state
       // even if the terminal event was dropped by the backend.
       setMessages((current) =>
@@ -1151,38 +1213,45 @@ function App() {
         ),
       );
       requestSeqRef.current += 1;
+      bumpSessionSeq(currentSessionId);
     }
   };
 
   const handleRegenerateMessage = async (messageId: string) => {
     const currentSessionId = sessionIdRef.current;
     if (!currentSessionId || isThinking) return;
-    setIsThinking(true);
+    bumpSessionSeq(currentSessionId);
+    const myRequestSeq = getSessionSeq(currentSessionId);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setMessages((current) => {
-      const index = current.findIndex((m) => m.id === messageId);
+      // 只截断「当前会话」的消息历史，保留其它会话仍在后台运行的消息。
+      const others = current.filter((m) => m.sessionId && m.sessionId !== currentSessionId);
+      const thisSession = current.filter((m) => !m.sessionId || m.sessionId === currentSessionId);
+      const index = thisSession.findIndex((m) => m.id === messageId);
       if (index < 0) return current;
-      const truncated = current.slice(0, index);
+      const truncated = thisSession.slice(0, index);
       return [
+        ...others,
         ...truncated,
         createMessage('assistant', '', {
         streamStartAt: Date.now(),
           id: assistantMessageId,
           status: 'running',
             autonomy,
+            ...(currentSessionId ? { sessionId: currentSessionId } : {}),
         }),
       ];
     });
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let streamStartAt = Date.now();
-    streamStartAtRef.current = streamStartAt;
+    streamStartAtsRef.current[streamKey(currentSessionId)] = streamStartAt;
     const controller = new AbortController();
-    abortRef.current = controller;
-    const requestId = requestSeqRef.current;
+    streamControllersRef.current[streamKey(currentSessionId)] = controller;
+    activeAssistantMessageIdsRef.current[streamKey(currentSessionId)] = assistantMessageId;
     const handleEvent = (event: StreamEvent) => {
-      // P1 陈旧守卫
-      if (requestId !== requestSeqRef.current) return;
+      // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
+      if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'delta') {
         streamedContent += event.content;
         setMessages((current) =>
@@ -1304,8 +1373,11 @@ function App() {
         );
       }
     } finally {
-      setIsThinking(false);
-      abortRef.current = null;
+      if (streamControllersRef.current[streamKey(currentSessionId)] === controller) {
+        delete streamControllersRef.current[streamKey(currentSessionId)];
+        delete activeAssistantMessageIdsRef.current[streamKey(currentSessionId)];
+        delete streamStartAtsRef.current[streamKey(currentSessionId)];
+      }
       // Safety net: ensure the assistant message leaves the "running" state
       // even if the terminal event was dropped by the backend.
       setMessages((current) =>
@@ -1316,6 +1388,7 @@ function App() {
         ),
       );
       requestSeqRef.current += 1;
+      bumpSessionSeq(currentSessionId);
     }
   };
 
@@ -1335,6 +1408,7 @@ function App() {
         createMessage(m.role as 'user' | 'assistant', m.content, {
           id: m.id,
           status: 'done',
+          sessionId: rollbackTarget.sessionId,
           parts: (m.parts as MessagePart[]) ?? [],
         }),
       );
@@ -1377,8 +1451,6 @@ function App() {
 
   const resolvePendingRequest = async (request: PendingRequest, decision: ApprovalDecisionPayload) => {
     if (resolvingRef.current) return;
-    // 记录当前 requestId，使 handleEvent 中的陈旧检查生效（P1 守卫）
-    const requestId = requestSeqRef.current;
     const targetMessageId = request.messageId || [...messages].reverse().find((m) => m.role === 'assistant')?.id || '';
     resolvingRef.current = true;
     setPendingRequests((current) =>
@@ -1416,10 +1488,13 @@ function App() {
     }
 
     if (!resumeId) return;
-    // 将 resume 流的 controller 写入 abortRef，使会话切换能正确中断它（幽灵流修复）
-    const resumeController = new AbortController();
-    abortRef.current = resumeController;
+    // 将 resume 流的 controller 按会话登记，使会话切换能正确中断它（幽灵流修复）
     const resumeSessionId = request.session_id || sessionIdRef.current || '';
+    const resumeController = new AbortController();
+    streamControllersRef.current[streamKey(resumeSessionId)] = resumeController;
+    activeAssistantMessageIdsRef.current[streamKey(resumeSessionId)] = targetMessageId;
+    bumpSessionSeq(resumeSessionId);
+    const resumeRequestSeq = getSessionSeq(resumeSessionId);
     let resumeContent = '';
     let resumeParts: MessagePart[] = [];
     const applyResume = (status: 'running' | 'done') => {
@@ -1435,8 +1510,8 @@ function App() {
       await chatService.subscribeApprovalEvents(
         resumeId,
         (event) => {
-          // P1 陈旧请求守卫（P1 修复）
-          if (requestId !== requestSeqRef.current) return;
+          // P1 陈旧请求守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
+          if (isStreamStale(resumeSessionId, resumeRequestSeq)) return;
           if (event.type === 'done') {
             resumeContent = event.content || resumeContent;
             if (event.parts && event.parts.length > 0) {
@@ -1519,10 +1594,11 @@ function App() {
         console.error('Approval event stream failed:', error);
       }
     } finally {
-      // P0 并发双流修复：resume 流结束后清除 isThinking 和 abortRef
-      setIsThinking(false);
-      if (abortRef.current === resumeController) {
-        abortRef.current = null;
+      // P0 并发双流修复：resume 流结束后清除该会话的 controller
+      if (streamControllersRef.current[streamKey(resumeSessionId)] === resumeController) {
+        delete streamControllersRef.current[streamKey(resumeSessionId)];
+        delete activeAssistantMessageIdsRef.current[streamKey(resumeSessionId)];
+        delete streamStartAtsRef.current[streamKey(resumeSessionId)];
       }
     }
   };
@@ -1534,10 +1610,10 @@ function App() {
   const isResolving = () => resolvingRef.current;
 
   const startProjectDraft = (projectId?: string, firstMessage = '') => {
-    abortRef.current?.abort();
+    // 新开对话不中止任何会话的流：并行任务各自在后台继续跑（真·多进程互不干扰）。
+    // 消息数组保留所有会话的消息，hero/草稿视图按 sessionId 过滤隐藏，切回即可见。
     requestSeqRef.current += 1;
-    activeAssistantMessageIdRef.current = undefined;
-    setMessages([]);
+    setMessages((current) => current.filter((m) => m.sessionId));
     setInput(firstMessage);
     setAttachments([]);
     setPendingRequests([]);
@@ -1545,7 +1621,9 @@ function App() {
     sessionIdRef.current = undefined;
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
-    setIsThinking(false);
+    // 新开对话属于新的空会话：清掉上一会话残留的 goal 卡片，避免它串到新会话显示。
+    setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
+    goalSessionIdRef.current = undefined;
     setActiveView('chat');
   };
 
@@ -1639,11 +1717,9 @@ function App() {
       setActiveView('chat');
       return;
     }
-    // 若已有正在运行的流，先正常中断（保留 AbortError 兜底让 finally 将已收到的内容落盘）
-    abortRef.current?.abort();
-    requestSeqRef.current += 1;
-    activeAssistantMessageIdRef.current = undefined;
-    setIsThinking(false);
+    // 不要中止正在运行的流：它属于另一个会话，让它在后台继续更新自己的消息，
+    // 切回时仍能看到半截回复并原地续流（displayedMessages 会按 sessionId 过滤）。
+    // 只切换当前视图，各会话的流由 per-session 的 controller 独立管理。
     setActiveView('chat');
     setDraftMode(false);
     try {
@@ -1653,6 +1729,10 @@ function App() {
         createMessage(record.role as ChatMessage['role'], record.content, {
           id: record.id || `${record.role}-${index}-${record.id}`,
           status: 'done',
+          // Loaded messages belong to this session — tag them so the
+          // displayedMessages filter never treats them as ambient (which would
+          // make them bleed into every other session's view).
+          sessionId: sessionIdToOpen,
           ...(record.work_mode ? { work_mode: record.work_mode as WorkMode } : {}),
           ...(record.autonomy ? { autonomy: record.autonomy as Autonomy } : {}),
           ...(record.provider ? { provider: record.provider } : {}),
@@ -1693,6 +1773,7 @@ function App() {
           stalled: false,
           editingDraft: false,
         });
+        goalSessionIdRef.current = sessionIdToOpen;
       } else {
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
       }
@@ -1705,13 +1786,11 @@ function App() {
         }, delay);
       }
       setActiveProjectId(response.session.project_id || undefined);
-      // 检查目标会话在当前 messages 中是否已有 running 消息（切走后由安全网保留）。
-      // 这些消息不会被 loaded 覆盖，在合并后仍需保持 isThinking，以显示蓝条。
-      const targetHasRunning = messages.some(
-        (m) => m.status === 'running' && m.sessionId === sessionIdToOpen,
-      );
       // 归而非覆盖：保留本地 status === 'running' 的消息 — 包括从其它会话切走后
-      // 由安全网保留的半截回复，以便切回时继续看到流式内容。
+      // 仍在后台续流的半截回复，以便切回时继续看到流式内容。
+      // 注意：后端仅在流终结时（done/error/断开）才持久化 assistant 消息，因此
+      // 切回时若目标会话仍在前台或后台流式中，loaded 不含该消息，running 会被保留；
+      // 若后端已完成并持久化（同 id），则用持久化版本（内容完整），这是正确收尾。
       setMessages((current) => {
         const running = current.filter((m) => m.status === 'running');
         if (running.length === 0) return loaded;
@@ -1719,7 +1798,6 @@ function App() {
         const preserved = running.filter((m) => !loadedIds.has(m.id));
         return [...loaded, ...preserved];
       });
-      setIsThinking(targetHasRunning);
       setAttachments([]);
     } catch (error) {
       console.error('Failed to open session:', error);
@@ -1732,15 +1810,15 @@ function App() {
       if (sessionIdRef.current === sessionIdToDelete) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
-        setMessages([]);
+        // 保留其它会话仍在后台运行的消息
+        setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionIdToDelete));
         setInput('');
         setAttachments([]);
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
         setDraftMode(true);
       }
-      abortRef.current?.abort();
+      abortStreamFor(sessionIdToDelete);
       requestSeqRef.current += 1;
-      activeAssistantMessageIdRef.current = undefined;
       setPendingRequests([]);
       await refreshSessions();
       await refreshProjects();
@@ -1791,9 +1869,11 @@ function App() {
       if (sessionInProject && sessionIdRef.current === sessionInProject.id) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
-        setMessages([]);
+        // 保留其它会话仍在后台运行的消息
+        setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionInProject.id));
         setInput('');
         setAttachments([]);
+        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
       }
       if (activeProjectId === projectId) {
         setActiveProjectId(undefined);
@@ -1916,14 +1996,14 @@ function App() {
     if (!targetSessionId) return;
     // Lock the composer for the duration of the resumed loop so the user
     // cannot spin up a concurrent stream that would race the running goal.
-    setIsThinking(true);
+    // isThinking is derived from goal.running scoped to this session.
+    goalSessionIdRef.current = targetSessionId;
+    setGoal((current) => ({ ...current, running: true, paused: false }));
     try {
       await chatService.resumeGoal(targetSessionId, handleGoalResumeEventWithChat);
     } catch (error) {
       console.error('Failed to resume goal:', error);
       setGoal((current) => ({ ...current, running: false }));
-    } finally {
-      setIsThinking(false);
     }
   };
 
@@ -2004,6 +2084,7 @@ function App() {
   const handleGoalResumeEventWithChat = (event: StreamEvent) => {
     if (event.session_id && event.session_id !== sessionIdRef.current) return;
     if (event.type === 'goal_start' || event.type === 'goal_round') {
+      if (event.session_id) goalSessionIdRef.current = event.session_id;
       setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));

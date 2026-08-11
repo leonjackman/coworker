@@ -8,6 +8,17 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+
+def _llm_stream_chunk_timeout() -> float:
+    """Timeout (seconds) for how long the LLM stream may pause between chunks.
+
+    LangChain's default is 120s; slow / concurrent local providers can exceed
+    that and get their reply truncated. Configurable via env; default 300s.
+    """
+    try:
+        return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "300.0"))
+    except (TypeError, ValueError):
+        return 300.0
 from pathlib import Path
 from typing import Any, AsyncGenerator, Iterable, Literal, TypedDict
 from typing_extensions import NotRequired
@@ -294,19 +305,16 @@ def agent_run_config(
     }
 
 
-_ASYNC_SAVER: "Any" = None
-_ASYNC_SAVER_PATH: "Any" = None
-
-
 def _open_checkpointer(checkpoint_path: Any):
-    """Return a process-wide AsyncSqliteSaver connection for the checkpoint.
+    """Return a per-stream AsyncSqliteSaver connection for the checkpoint.
 
-    LangGraph's ``AsyncSqliteSaver.from_conn_string`` opens a fresh sqlite
-    connection per access. Concurrent connections on the same checkpoint file
-    contend on the SQLite write lock and intermittently raise ``database is
-    locked`` (even with a busy timeout). Reusing one long-lived connection for
-    the whole process serializes all checkpoint reads/writes and eliminates the
-    lock contention. The connection lives for the process lifetime.
+    Every stream (agent run) gets its OWN sqlite connection for the duration of
+    the run, so concurrent sessions never serialize on a single process-wide
+    connection. WAL mode allows concurrent readers plus brief writer locks, and
+    ``busy_timeout`` makes a writer wait (up to 30s) instead of failing with
+    ``database is locked``. The checkpoint DB is tiny (pruned) so write
+    contention is negligible; this keeps different sessions' agent runs isolated
+    from one another.
     """
     import aiosqlite
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -314,14 +322,17 @@ def _open_checkpointer(checkpoint_path: Any):
 
     @asynccontextmanager
     async def _open():
-        global _ASYNC_SAVER, _ASYNC_SAVER_PATH
-        if _ASYNC_SAVER is None or _ASYNC_SAVER_PATH != str(checkpoint_path):
-            conn = await aiosqlite.connect(str(checkpoint_path), timeout=30.0)
-            _ASYNC_SAVER = AsyncSqliteSaver(conn)
-            _ASYNC_SAVER_PATH = str(checkpoint_path)
-        yield _ASYNC_SAVER
+        conn = await aiosqlite.connect(str(checkpoint_path), timeout=30.0)
+        try:
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=30000")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            yield AsyncSqliteSaver(conn)
+        finally:
+            await conn.close()
 
     return _open()
+
 
 
 def build_workspace_tools(
@@ -1359,6 +1370,12 @@ class ReasonPreservingChatOpenAI:
 
         return ChatOpenAI(
             model=model, temperature=temperature, api_key=api_key, base_url=base_url,
+            # Long-thinking / slow local providers (vLLM, Ollama) can pause
+            # between chunks for well over langchain's 120s default; a fired
+            # stream_chunk_timeout truncates the reply mid-generation. Use a
+            # generous, configurable timeout so concurrent or slow tasks are not
+            # killed just because the next token took a while.
+            stream_chunk_timeout=_llm_stream_chunk_timeout(),
         )
 
 
@@ -2687,6 +2704,9 @@ class AgentRuntimeRegistry:
         self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
+        self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
+        self.checkpoint_conn.execute("PRAGMA busy_timeout=30000")
+        self.checkpoint_conn.execute("PRAGMA synchronous=NORMAL")
         self.checkpointer = SqliteSaver(self.checkpoint_conn)
 
     def _open_sync_checkpointer(self):
@@ -2695,6 +2715,9 @@ class AgentRuntimeRegistry:
         # during streaming/resume.
         from langgraph.checkpoint.sqlite import SqliteSaver
         conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         return SqliteSaver(conn), conn
 
     def has_runtime_checkpoint(self, session_id: str) -> bool:

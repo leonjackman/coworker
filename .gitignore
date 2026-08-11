@@ -33,6 +33,7 @@ workspace/
 
 # Tool caches
 .pytest_cache/
+.playwright-mcp/
 .mypy_cache/
 .ruff_cache/
 .vite/

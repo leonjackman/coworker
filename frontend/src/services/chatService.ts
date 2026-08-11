@@ -561,7 +561,10 @@ class ElectronChatService implements ChatService {
 
 // 空闲超时：后端超过该时长未推任何数据（既不 delta 也不 done）则视为挂起，主动断开，
 // 避免前端「蓝条一直挂起不结束」。每次收到数据都会重置计时。
-const STREAM_IDLE_TIMEOUT_MS = 60_000;
+// Safety-net idle timeout: the backend now sends a keep-alive comment every
+// ~15s while a task is alive, so a genuinely-running task never times out here.
+// This is only a last-resort guard for a truly dead connection, hence 5 min.
+const STREAM_IDLE_TIMEOUT_MS = 300_000;
 
 /** Serialise a market query, dropping only genuinely absent values.
  *  `offset=0` must survive, so this tests for null/undefined/'' rather than
