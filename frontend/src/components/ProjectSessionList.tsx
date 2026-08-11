@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronUp, Copy, MessageSquare, MoreHorizontal, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Copy, Loader2, MessageSquare, MoreHorizontal, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { WorkspacePage } from './ui/workspace-page';
@@ -9,12 +9,13 @@ import type { ProjectEntry, SessionSummary } from '../types';
 interface ProjectSessionListProps {
   project: ProjectEntry;
   sessions: SessionSummary[];
+  runningSessionIds?: Set<string>;
   onNewChat: (projectId?: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
 }
 
-export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession, onDeleteSession }: ProjectSessionListProps) {
+export function ProjectSessionList({ project, sessions, runningSessionIds, onNewChat, onOpenSession, onDeleteSession }: ProjectSessionListProps) {
   const [expanded, setExpanded] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const LIMIT = 10;
@@ -59,6 +60,7 @@ export function ProjectSessionList({ project, sessions, onNewChat, onOpenSession
                     type="button"
                     onClick={() => onOpenSession(session.id)}
                   >
+                    {runningSessionIds?.has(session.id) && <Loader2 size={15} className="project-session-list__running-icon" aria-label="Running" />}
                     <MessageSquare size={15} className="project-session-list__item-icon" />
                     <span className="project-session-list__item-title">{session.title}</span>
                     <span className="project-session-list__item-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>

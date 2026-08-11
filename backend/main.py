@@ -1153,6 +1153,12 @@ class ProjectRenameRequest(BaseModel):
 async def list_sessions(project_id: str | None = None):
     return {"status": "ok", "sessions": session_store.list_sessions(project_id)}
 
+
+@app.get("/sessions/active")
+async def list_active_sessions():
+    """Return session ids that currently have an in-flight stream (running/active)."""
+    return {"status": "ok", "session_ids": sorted(agent_registry.checkpoint_manager.active_sessions())}
+
 @app.post("/sessions")
 async def create_session(request: SessionCreateRequest):
     if not request.project_id:

@@ -565,6 +565,10 @@ ipcMain.handle('list-sessions', async () => {
   return requestBackend('/sessions');
 });
 
+ipcMain.handle('list-active-sessions', async () => {
+  return requestBackend('/sessions/active');
+});
+
 ipcMain.handle('create-session', async (event, payload) => {
   return requestBackend('/sessions', 'POST', {
     title: payload?.title || '',

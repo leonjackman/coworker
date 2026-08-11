@@ -311,6 +311,52 @@ function App() {
     [goal.running, goalSessionIdRef.current, messages, sessionId],
   );
 
+  // 后端轮询到的活跃会话 id 集合（Phase 2 兜底：前端刷新/重启后不知道哪些
+  // 会话仍在后台运行）。只作为 runningSessionIds 的补充来源。
+  const [backendActiveSessionIds, setBackendActiveSessionIds] = useState<Set<string>>(new Set());
+
+  // 侧栏会话"运行中"指示器：来自前台消息流状态（实时）、当前 goal 会话
+  // （goal.running）与后端轮询结果（兜底）的并集。
+  const runningSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of messages) {
+      if (m.status === 'running' && m.sessionId) ids.add(m.sessionId);
+    }
+    if (goal.running && goalSessionIdRef.current) ids.add(goalSessionIdRef.current);
+    for (const id of backendActiveSessionIds) ids.add(id);
+    return ids;
+  }, [messages, goal.running, goalSessionIdRef.current, backendActiveSessionIds]);
+
+  // 轮询后端活跃会话（仅当前端判断可能遗漏时才持续；集合为空即停止以省资源）。
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const active = await chatService.listActiveSessions();
+        if (cancelled) return;
+        setBackendActiveSessionIds(new Set(active));
+        if (active.length > 0) {
+          timer = setTimeout(poll, 5000);
+        }
+      } catch {
+        if (!cancelled) {
+          timer = setTimeout(poll, 5000);
+        }
+      }
+    };
+    void poll();
+    const onFocus = () => {
+      if (!cancelled) void poll();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      if (timer) clearTimeout(timer);
+    };
+  }, [chatService]);
+
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
@@ -640,6 +686,18 @@ function App() {
       }),
     ]);
 
+    // 发送瞬间即把会话提前到列表顶部：对本地产出的新会话乐观置顶；
+    // 已存在会话则更新其 updated_at 并重排，无需等 agent 回复结束。
+    if (requestSessionId) {
+      const now = new Date().toISOString();
+      setSessions((current) => {
+        const target = current.find((s) => s.id === requestSessionId);
+        if (!target) return current;
+        const rest = current.filter((s) => s.id !== requestSessionId);
+        return [{ ...target, updated_at: now }, ...rest];
+      });
+    }
+
     const controller = new AbortController();
     streamControllersRef.current[streamKey(requestSessionId)] = controller;
     activeAssistantMessageIdsRef.current[streamKey(requestSessionId)] = assistantMessageId;
@@ -663,6 +721,9 @@ function App() {
           setSessionId(event.session_id);
           sessionIdRef.current = event.session_id;
         }
+        // 发送瞬间即把会话提前到列表顶部：后端在收到请求时已追加 user 消息并
+        // 刷新 updated_at，此处立刻拉取让排序立即生效（无需等 agent 回复结束）。
+        void refreshSessions();
       } else if (event.type === 'delta') {
         streamedContent += event.content;
         // 文本增量追加到最后一个 text part；若最后不是 text part（例如工具/推理
@@ -2324,6 +2385,7 @@ function App() {
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
           {...(goal.goalText && !goal.done ? { goalIndicatorSessionId: sessionId } : {})}
+          runningSessionIds={runningSessionIds}
         />
         <section className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
@@ -2348,6 +2410,7 @@ function App() {
                     <ProjectSessionList
                       project={activeProject}
                       sessions={activeProjectSessions}
+                      runningSessionIds={runningSessionIds}
                       onNewChat={startNewChat}
                       onOpenSession={openSession}
                       onDeleteSession={deleteSession}

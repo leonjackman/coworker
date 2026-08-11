@@ -2150,6 +2150,13 @@ body.bottom-panel-resizing {
   display: inline-flex;
 }
 
+.sidebar-session__running-icon {
+  flex: 0 0 auto;
+  color: var(--ring);
+  display: inline-flex;
+  animation: spin 900ms linear infinite;
+}
+
 .sidebar-session__time {
   flex: 0 0 auto;
   font-size: 11.5px;
@@ -5155,6 +5162,12 @@ body.bottom-panel-resizing {
   flex: 0 0 auto;
   color: var(--muted-foreground);
   transition: color 120ms ease;
+}
+
+.project-session-list__running-icon {
+  flex: 0 0 auto;
+  color: var(--ring);
+  animation: spin 900ms linear infinite;
 }
 
 .project-session-list__item-content:hover .project-session-list__item-icon {

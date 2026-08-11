@@ -99,6 +99,7 @@ export interface ChatService {
   fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string }) => Promise<{ models: string[]; error?: string }>;
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;
+  listActiveSessions: () => Promise<string[]>;
   createSession: (request: CreateSessionRequest) => Promise<SessionResponse>;
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
@@ -212,6 +213,11 @@ class ElectronChatService implements ChatService {
   async listSessions(): Promise<SessionsListResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listSessions();
+  }
+
+  async listActiveSessions(): Promise<string[]> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listActiveSessions();
   }
 
   async createSession(request: CreateSessionRequest): Promise<SessionResponse> {
@@ -684,6 +690,11 @@ class HttpChatService implements ChatService {
 
   async listSessions(): Promise<SessionsListResponse> {
     return this.request<SessionsListResponse>('/sessions');
+  }
+
+  async listActiveSessions(): Promise<string[]> {
+    const response = await this.request<{ status: string; session_ids: string[] }>('/sessions/active');
+    return response.session_ids ?? [];
   }
 
   async createSession(request: CreateSessionRequest): Promise<SessionResponse> {

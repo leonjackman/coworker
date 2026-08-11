@@ -105,6 +105,10 @@ class CheckpointManager:
         with self._lock:
             return set(self._active)
 
+    def active_sessions(self) -> set[str]:
+        """Public snapshot of session ids with an in-flight stream."""
+        return self._active_set()
+
     def _has_checkpoints_table(self, conn: sqlite3.Connection) -> bool:
         """The LangGraph schema tables are created lazily by the first
         SqliteSaver write, so a fresh DB may not have them yet. Treat absence

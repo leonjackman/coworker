@@ -364,6 +364,13 @@ export interface SessionSummary {
   goal_done?: boolean;
   goal_paused?: boolean;
   goal_text?: string;
+  goal_todos?: GoalTodo[];
+  goal_max_rounds?: number;
+  goal_force_count?: number;
+  goal_stopped?: boolean;
+  goal_just_edited?: boolean;
+  goal_stream_id?: string;
+  goal_interrupted?: boolean;
 }
 
 export interface ProjectEntry {

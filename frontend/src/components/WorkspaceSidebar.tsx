@@ -1,4 +1,4 @@
-import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -17,6 +17,7 @@ interface WorkspaceSidebarProps {
   activeView: AppView;
   activeSessionId?: string;
   activeProjectId?: string;
+  runningSessionIds?: Set<string>;
   collapsed: boolean;
   onResizeStart: () => void;
   onResizeEnd: () => void;
@@ -34,12 +35,13 @@ interface WorkspaceSidebarProps {
 interface SessionRowProps {
   session: SessionSummary;
   active: boolean;
+  running: boolean;
   onOpen: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   goalIndicatorSessionId?: string;
 }
 
-function SessionRow({ session, active, onOpen, onDelete, goalIndicatorSessionId }: SessionRowProps) {
+function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorSessionId }: SessionRowProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopyId = async () => {
@@ -55,6 +57,7 @@ function SessionRow({ session, active, onOpen, onDelete, goalIndicatorSessionId 
   return (
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
+        {running && <Loader2 size={13} className="sidebar-session__running-icon" aria-label="Running" />}
         {goalIndicatorSessionId === session.id && <Target size={13} className="sidebar-session__goal-icon" />}
         <span className="sidebar-session__title">{session.title}</span>
         <span className="sidebar-session__time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
@@ -87,6 +90,7 @@ interface ProjectRowProps {
   sessions: SessionSummary[];
   activeSessionId?: string;
   activeProjectId?: string;
+  runningSessionIds?: Set<string>;
   defaultExpanded?: boolean;
   onNewChat: (projectId?: string) => void;
   onOpenProject: (projectId: string) => void;
@@ -96,7 +100,7 @@ interface ProjectRowProps {
   onDeleteProject: (projectId: string) => void;
 }
 
-function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject }: ProjectRowProps) {
+function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const [listExpanded, setListExpanded] = useState(false);
   const sortedSessions = useMemo(
@@ -168,6 +172,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, defau
                   key={session.id}
                   session={session}
                   active={session.id === activeSessionId}
+                  running={Boolean(runningSessionIds?.has(session.id))}
                   onOpen={onOpenSession}
                   onDelete={onDeleteSession}
                 />
@@ -215,6 +220,7 @@ export function WorkspaceSidebar({
   activeView,
   activeSessionId,
   activeProjectId,
+  runningSessionIds,
   collapsed,
   onResizeStart,
   onResizeEnd,
@@ -348,6 +354,7 @@ export function WorkspaceSidebar({
                 sessions={sessions.filter((session) => session.project_id === project.id)}
                 {...(activeSessionId ? { activeSessionId } : {})}
                 {...(activeProjectId ? { activeProjectId } : {})}
+                {...(runningSessionIds ? { runningSessionIds } : {})}
                 defaultExpanded={expandedProjectIds.has(project.id)}
                 onNewChat={onNewChat}
                 onOpenProject={onOpenProject}
