@@ -108,6 +108,11 @@ CLAWHUB_INDEX_SORT = {v: k for k, v in CLAWHUB_CURSOR_INDEX.items()}
 # fake-pagination bug.
 CLAWHUB_TRENDING_FETCH = 200
 
+# Stable error code returned to the UI when an upstream market source cannot be
+# reached (404 / network / malformed payload). The frontend maps it to a localised
+# "source unavailable — retry" message instead of a silent empty grid.
+_UPSTREAM_UNAVAILABLE = "source_unavailable"
+
 
 @dataclass
 class MarketPage:
@@ -117,6 +122,10 @@ class MarketPage:
     total: int | None = None
     has_more: bool = False
     next_cursor: str | None = None
+    # Set when the upstream source could not be reached (404 / network / malformed
+    # payload) so the UI can show "source unavailable" instead of a misleading
+    # empty grid that looks like the source genuinely has no skills.
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +134,7 @@ class MarketPage:
             "total": self.total,
             "has_more": self.has_more,
             "next_cursor": self.next_cursor,
+            "error": self.error,
         }
 
 
@@ -608,11 +618,11 @@ class SkillMarketManager:
             CLAWHUB_SEARCH, {"q": query, "limit": fetch_n}, retries=1
         )
         if not isinstance(data, dict):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         raw = data.get("results")
         if not isinstance(raw, list):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         items = [
             normalised
@@ -654,11 +664,11 @@ class SkillMarketManager:
             CLAWHUB_SKILLS, {"limit": limit, "cursor": cursor, "sort": sort}, retries=1
         )
         if not isinstance(data, dict):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         raw = data.get("items")
         if not isinstance(raw, list):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         items = [
             normalised
@@ -684,11 +694,11 @@ class SkillMarketManager:
             retries=1,
         )
         if not isinstance(data, dict):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         raw = data.get("items")
         if not isinstance(raw, list):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         items = [
             normalised

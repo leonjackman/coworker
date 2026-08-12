@@ -298,6 +298,18 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         const page = term
           ? await chatService.searchMarketSkills({ ...query, q: term })
           : await chatService.listHotSkills(query);
+        // The backend returns status:"error" (HTTP 200) when the upstream source
+        // (e.g. ClawHub) is unreachable, instead of a silent empty list that
+        // would look like the source has no skills. Surface it as a retryable
+        // error so the user is not misled.
+        if (page.status === 'error' || page.error) {
+          dispatch({
+            type: 'failed',
+            requestId,
+            error: t('skills.market_source_unavailable', { source: sourceLabel(activeSource) }),
+          });
+          return;
+        }
         dispatch({ type: 'resolved', requestId, append, page });
       } catch (error) {
         dispatch({ type: 'failed', requestId, error: translateError(error) });

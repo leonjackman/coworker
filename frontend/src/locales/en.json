@@ -584,6 +584,7 @@
   "skills.market_showing": "Showing {shown} / {total}",
   "skills.market_count": "{count} total",
   "skills.market_load_failed": "Failed to load",
+  "skills.market_source_unavailable": "Skill source \"{source}\" is temporarily unavailable. Please retry later.",
   "skills.market_retry": "Retry",
   "skills.load_more": "Load More",
   "skills.loading_more": "Loading…",

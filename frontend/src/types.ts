@@ -824,6 +824,8 @@ export interface MarketSkillsResponse {
   /** Authoritative "load more" signal — never infer it from page length. */
   has_more?: boolean;
   next_cursor?: string | null;
+  /** Set when the upstream source could not be reached (e.g. ClawHub API down). */
+  error?: string | null;
 }
 
 export interface MarketInstallResponse {

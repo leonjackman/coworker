@@ -2432,7 +2432,7 @@ async def search_market_skills(
         installed_names = {s["name"] for s in list_skills()["skills"]}
         installed_ids = skill_market_manager.installed_identifiers()
         _mark_market_installed(result, installed_names, installed_ids)
-        return {"status": "ok", **result}
+        return {"status": "error" if page.error else "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2455,7 +2455,7 @@ async def list_hot_market_skills(
         installed_names = {s["name"] for s in list_skills()["skills"]}
         installed_ids = skill_market_manager.installed_identifiers()
         _mark_market_installed(result, installed_names, installed_ids)
-        return {"status": "ok", **result}
+        return {"status": "error" if page.error else "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

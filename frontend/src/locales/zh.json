@@ -584,6 +584,7 @@
   "skills.market_showing": "已显示 {shown} / {total}",
   "skills.market_count": "共 {count} 个",
   "skills.market_load_failed": "加载失败",
+  "skills.market_source_unavailable": "技能源「{source}」暂时无法访问，请稍后重试",
   "skills.market_retry": "重试",
   "skills.load_more": "加载更多",
   "skills.loading_more": "加载中…",
