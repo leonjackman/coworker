@@ -33,10 +33,16 @@ export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }
 
   const pickWorkspace = async () => {
     setError('');
-    const selected = await onPickWorkspace();
-    if (!selected) return;
-    setWorkspacePath(selected);
-    setName((current) => current || folderName(selected));
+    try {
+      const selected = await onPickWorkspace();
+      if (!selected) return;
+      setWorkspacePath(selected);
+      setName((current) => current || folderName(selected));
+    } catch (err) {
+      // Directory picker is desktop-only; in the browser show a hint instead of
+      // an unhandled rejection.
+      setError(err instanceof Error ? err.message : 'Unable to pick a workspace directory');
+    }
   };
 
   const submit = async () => {

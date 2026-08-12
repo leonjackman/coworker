@@ -10,9 +10,10 @@ export interface MessageActionsProps {
   onEdit?: (content: string) => void;
   onRegenerate?: () => void;
   onRollback?: () => void;
+  disabled?: boolean;
 }
 
-export function MessageActions({ role, content, onEdit, onRegenerate, onRollback }: MessageActionsProps) {
+export function MessageActions({ role, content, onEdit, onRegenerate, onRollback, disabled = false }: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -66,6 +67,7 @@ export function MessageActions({ role, content, onEdit, onRegenerate, onRollback
             size="icon-xs"
             className="message-actions__btn"
             onClick={() => onRegenerate()}
+            disabled={disabled}
             aria-label={t('message.regenerate')}
           >
             <RefreshCw size={13} />

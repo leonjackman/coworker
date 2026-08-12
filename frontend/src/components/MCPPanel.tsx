@@ -390,10 +390,6 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     }
   }
 
-  function hasStdioFields(f: FormState | McpServerEntry) {
-    return f.transport === 'stdio' && !!f.command;
-  }
-
   function isRemoteTransport(f: FormState) {
     return f.transport === 'http' || f.transport === 'sse' || f.transport === 'websocket';
   }
@@ -765,26 +761,6 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
               <Badge className={editingServer.status === 'connected' ? 'mcp-status-badge--ok' : ''}>
                 {formatStatus(editingServer.status || 'unknown')}
               </Badge>
-              <Button
-                variant="secondary"
-                onClick={handleTest}
-                disabled={testing || (hasStdioFields({ ...emptyForm(), ...form }) && !form.command.trim()) || (isRemoteTransport(form) && !form.url.trim())}
-                className="mcp-test-btn"
-              >
-                {testing ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <Network size={14} />
-                )}
-                {t('mcp.test_connection')}
-              </Button>
-              {testResult && (
-                <span className={`mcp-test-result ${testResult.ok ? 'mcp-test-result--ok' : 'mcp-test-result--error'}`}>
-                  {testResult.ok
-                    ? t('mcp.test_success').replace('{latency_ms}', String(testResult.latency_ms)).replace('{tool_count}', String(testResult.tool_count || 0))
-                    : `${t('mcp.test_failed')}: ${testResult.error || ''}`}
-                </span>
-              )}
               {editingServer?.status === 'needs_auth' && (
                 <Button variant="secondary" onClick={() => void handleReauthorize(form.id!)} disabled={reauthorizing} className="mcp-reauth-btn">
                   {reauthorizing ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
@@ -793,6 +769,32 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
               )}
             </div>
           )}
+
+          {/* Test connection — available while adding OR editing a server, so a
+              broken config is caught before saving. Disabled until the fields the
+              transport needs are filled. */}
+          <div className="mcp-status-row">
+            <Button
+              variant="secondary"
+              onClick={handleTest}
+              disabled={testing || (form.transport === 'stdio' ? !form.command.trim() : isRemoteTransport(form) ? !form.url.trim() : false)}
+              className="mcp-test-btn"
+            >
+              {testing ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Network size={14} />
+              )}
+              {t('mcp.test_connection')}
+            </Button>
+            {testResult && (
+              <span className={`mcp-test-result ${testResult.ok ? 'mcp-test-result--ok' : 'mcp-test-result--error'}`}>
+                {testResult.ok
+                  ? t('mcp.test_success').replace('{latency_ms}', String(testResult.latency_ms)).replace('{tool_count}', String(testResult.tool_count || 0))
+                  : `${t('mcp.test_failed')}: ${testResult.error || ''}`}
+              </span>
+            )}
+          </div>
 
           {/* ── Connection config ── */}
           <div className="mcp-detail-section">{t('mcp.connection_config')}</div>
@@ -926,7 +928,16 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
               <div className="mcp-tool-name">{t('mcp.trust_server')}</div>
               <div className="mcp-tool-desc">{t('mcp.trust_desc')}</div>
             </div>
-            <Switch id="mcp-trust" checked={Boolean(editingServer?.trusted)} onChange={() => editingServer && void handleTrustToggle(editingServer, !editingServer.trusted)} />
+            <Switch
+              id="mcp-trust"
+              checked={Boolean(editingServer?.trusted)}
+              onChange={() => {
+                // Trust is a runtime toggle for an existing server; when adding a
+                // new server there is nothing to trust yet, so the switch is
+                // intentionally inert (kept visible but not misleadingly active).
+                if (editingServer) void handleTrustToggle(editingServer, !editingServer.trusted);
+              }}
+            />
           </div>
 
           {/* Connection timeout */}

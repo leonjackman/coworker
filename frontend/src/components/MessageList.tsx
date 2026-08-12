@@ -228,7 +228,7 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
   );
 }
 
-function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onRegenerate?: () => void }) {
+function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { message: ChatMessage; onRegenerate?: () => void; actionsDisabled?: boolean }) {
   const isError = message.status === 'error';
   const isStopped = message.status === 'stopped' || message.status === 'interrupted';
   const isInterrupted = message.status === 'interrupted';
@@ -357,10 +357,10 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
         {/* interrupted messages keep the regenerate action so the user can act on
             the "connection interrupted; you can regenerate" hint. */}
         {!isError && !isStopped && !isRunning && !isRunningEmpty && !isWaiting && (
-          <MessageActions role="assistant" content={message.content} {...(onRegenerate ? { onRegenerate } : {})} />
+          <MessageActions role="assistant" content={message.content} disabled={actionsDisabled} {...(onRegenerate ? { onRegenerate } : {})} />
         )}
         {isInterrupted && (
-          <MessageActions role="assistant" content={message.content} {...(onRegenerate ? { onRegenerate } : {})} />
+          <MessageActions role="assistant" content={message.content} disabled={actionsDisabled} {...(onRegenerate ? { onRegenerate } : {})} />
         )}
       </div>
     </div>
@@ -429,6 +429,7 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
               key={message.id}
               message={message}
               {...(onRegenerateMessage ? { onRegenerate: () => onRegenerateMessage(message.id) } : {})}
+              actionsDisabled={isThinking}
             />
           ),
         )}

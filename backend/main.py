@@ -526,6 +526,10 @@ class ApprovalDecisionPayload(BaseModel):
     always_allow: bool = False
     respond_text: str = ""
     plan_text: str = ""
+    # The plan card's "approve with autonomy" buttons send the autonomy they
+    # should approve under; must be declared or pydantic silently drops it and
+    # main.py:2416 reads .autonomy -> AttributeError -> 500.
+    autonomy: str = ""
 
 
 class CommandApprovalResolve(BaseModel):

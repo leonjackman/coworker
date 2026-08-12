@@ -42,7 +42,9 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onTog
               {t('chat.goal_resume')}
             </Button>
           )}
-          {!goal.done && !goal.stalled && (
+          {/* Editing the goal only works while paused (running the composer is
+              locked by isThinking, so the edit would be a dead end). */}
+          {!goal.done && !goal.stalled && goal.paused && (
             <Button type="button" variant="icon" size="icon-sm" onClick={onDraftEdit} aria-label={t('chat.goal_edit')}>
               <Pencil size={14} />
             </Button>

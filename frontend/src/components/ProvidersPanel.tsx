@@ -67,12 +67,16 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   function selectTemplate(key: string) {
     const template = providerTemplate(key);
     if (!template) return;
-    setForm({
+    // Preserve the current editing state (id + existing api_key/model) when a
+    // template pill is clicked while editing; wiping the whole form would turn
+    // an update into a new-provider creation.
+    setForm((current) => ({
       ...emptyForm(),
+      ...(current?.id ? { id: current.id, api_key: current.api_key, model: current.model } : {}),
       provider_type: key,
       name: key === 'custom' ? '' : template.name,
       base_url: template.base_url,
-    });
+    }));
   }
 
   function startAdd() {
@@ -301,7 +305,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
               )}
               <div className="provider-form-footer__actions">
                 <Button variant="secondary" onClick={cancelForm} disabled={saving}>{t('providers.cancel')}</Button>
-                <Button variant="primary" onClick={handleSave} disabled={saving || !form.name || !form.base_url || !form.model}>
+                <Button variant="primary" onClick={handleSave} disabled={saving || !form.name.trim() || !form.base_url.trim() || !form.model.trim()}>
                   {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                   {t('providers.save')}
                 </Button>

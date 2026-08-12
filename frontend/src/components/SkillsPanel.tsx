@@ -203,7 +203,7 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
             </Button>
           </div>
         ) : (
-          <Button variant="ghost" onClick={() => setListTab('market')}>
+          <Button variant="ghost" onClick={() => { setViewMode('list'); setListTab('market'); }}>
             {t('mcp.back')}
           </Button>
         )
