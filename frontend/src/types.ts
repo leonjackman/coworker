@@ -770,6 +770,8 @@ export interface MarketSkill {
   icon_url?: string | null;
   version?: string | null;
   verified?: boolean;
+  /** Set by the backend: true when this skill is already installed locally. */
+  installed?: boolean;
 }
 
 export interface MarketCategory {
@@ -822,6 +824,8 @@ export interface MarketSkillsResponse {
   /** Authoritative "load more" signal — never infer it from page length. */
   has_more?: boolean;
   next_cursor?: string | null;
+  /** Set when the upstream source could not be reached (e.g. ClawHub API down). */
+  error?: string | null;
 }
 
 export interface MarketInstallResponse {

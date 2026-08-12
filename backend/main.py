@@ -136,6 +136,63 @@ async def _startup_checkpoint_maintenance() -> None:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("checkpoint sweep (startup) failed: %s", exc)
     _checkpoint_sweep_task = asyncio.create_task(_checkpoint_sweep_loop())
+    # Best-effort: tag already-installed skills (from before the provenance
+    # feature) so their market cards show as "already installed". Retries until
+    # the upstream market is reachable, then stops.
+    asyncio.create_task(_backfill_market_provenance_loop())
+
+
+# ---------------------------------------------------------------------------
+# Market-provenance backfill
+# ---------------------------------------------------------------------------
+# Skills installed *before* the install-provenance feature exist on disk but
+# carry no provenance record, so the market UI cannot tell they are installed
+# (their market slug often differs from the local frontmatter name). This
+# one-shot backfill searches the market for each installed skill and records the
+# provenance when a confident (normalised) match is found. It is conservative:
+# only exact normalised slug/name matches are accepted, to avoid false positives.
+_market_backfill_task: "asyncio.Task | None" = None
+
+
+def _norm_market_key(value: str | None) -> str:
+    return "".join(c for c in (value or "").lower() if c.isalnum())
+
+
+async def _backfill_market_provenance_once() -> None:
+    installed = list_skills()["skills"]
+    provenance = skill_market_manager._load_provenance()
+    for s in installed:
+        name = s.get("name")
+        if not name or name in provenance:
+            continue
+        target = _norm_market_key(name)
+        if not target:
+            continue
+        hit: tuple[str, str | None, str | None] | None = None
+        for source in ("skillhub", "clawhub"):
+            try:
+                page = await skill_market_manager.search(source, name, limit=5)
+            except Exception:
+                continue
+            for sk in page.skills:
+                if _norm_market_key(sk.get("slug")) == target or _norm_market_key(sk.get("name")) == target:
+                    hit = (source, sk.get("slug"), sk.get("owner"))
+                    break
+            if hit:
+                break
+        if hit:
+            skill_market_manager.record_install(hit[0], hit[1], hit[2], name)
+
+
+async def _backfill_market_provenance_loop() -> None:
+    while True:
+        try:
+            await _backfill_market_provenance_once()
+            return
+        except Exception as exc:  # network / upstream transient failures
+            logger.warning("market provenance backfill deferred: %s", exc)
+            await asyncio.sleep(120)
+
 
 
 @app.on_event("shutdown")
@@ -2465,6 +2522,37 @@ async def list_market_categories(source: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _mark_market_installed(
+    result: dict, installed_names: set, installed_ids: set
+) -> dict:
+    """Annotate each market skill dict with ``installed``.
+
+    Matching is exact-first: a skill is marked installed when its ``(source,
+    slug)`` matches a record persisted at install time (see
+    ``SkillMarketManager.record_install``). This is reliable because the market
+    slug is the stable identity — the local SKILL.md ``name`` can differ from
+    the market slug / display name, which previously caused already-installed
+    cards to look installable.
+
+    A name/slug fallback is kept so skills installed *before* this feature also
+    get flagged when their frontmatter ``name`` happens to match.
+    """
+    skills = result.get("skills") if isinstance(result, dict) else None
+    if isinstance(skills, list):
+        for skill in skills:
+            if not isinstance(skill, dict):
+                continue
+            slug = skill.get("slug") or ""
+            name = skill.get("name") or ""
+            src = skill.get("source") or ""
+            skill["installed"] = (
+                (src, slug) in installed_ids
+                or slug in installed_names
+                or name in installed_names
+            )
+    return result
+
+
 @app.get("/skills/market/search")
 async def search_market_skills(
     source: str,
@@ -2480,7 +2568,11 @@ async def search_market_skills(
         page = await skill_market_manager.search(
             source, q.strip(), limit, offset, category
         )
-        return {"status": "ok", **page.to_dict()}
+        result = page.to_dict()
+        installed_names = {s["name"] for s in list_skills()["skills"]}
+        installed_ids = skill_market_manager.installed_identifiers()
+        _mark_market_installed(result, installed_names, installed_ids)
+        return {"status": "error" if page.error else "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2499,7 +2591,11 @@ async def list_hot_market_skills(
         page = await skill_market_manager.list_hot(
             source, limit, offset, cursor, category, sort
         )
-        return {"status": "ok", **page.to_dict()}
+        result = page.to_dict()
+        installed_names = {s["name"] for s in list_skills()["skills"]}
+        installed_ids = skill_market_manager.installed_identifiers()
+        _mark_market_installed(result, installed_names, installed_ids)
+        return {"status": "error" if page.error else "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2588,6 +2684,8 @@ def delete_skill_route(skill_name: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    # Drop the market provenance record so the card becomes installable again.
+    skill_market_manager.forget_install(skill_name)
     return {"status": "ok", "name": skill_name, "removed": True}
 
 

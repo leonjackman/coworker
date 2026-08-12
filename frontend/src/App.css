@@ -7268,6 +7268,21 @@ body.bottom-panel-resizing {
   opacity: 0.6;
 }
 
+/* "Already installed" badge shown on market cards whose skill is local. */
+.installed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--muted-foreground) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
 .grid-card__header {
   display: flex;
   align-items: flex-start;

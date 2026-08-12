@@ -298,6 +298,18 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         const page = term
           ? await chatService.searchMarketSkills({ ...query, q: term })
           : await chatService.listHotSkills(query);
+        // The backend returns status:"error" (HTTP 200) when the upstream source
+        // (e.g. ClawHub) is unreachable, instead of a silent empty list that
+        // would look like the source has no skills. Surface it as a retryable
+        // error so the user is not misled.
+        if (page.status === 'error' || page.error) {
+          dispatch({
+            type: 'failed',
+            requestId,
+            error: t('skills.market_source_unavailable', { source: sourceLabel(activeSource) }),
+          });
+          return;
+        }
         dispatch({ type: 'resolved', requestId, append, page });
       } catch (error) {
         dispatch({ type: 'failed', requestId, error: translateError(error) });
@@ -328,7 +340,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   // ── Install ────────────────────────────────────────────────────────────────
   const handleInstall = useCallback(
     async (skill: MarketSkill) => {
-      if (installedSlugs.includes(skill.slug)) return;
+      if (skill.installed || installedSlugs.includes(skill.slug)) return;
       const uid = skillUid(skill);
       setInstalling((prev) => new Set(prev).add(uid));
       try {
@@ -336,6 +348,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         const response = await chatService.installMarketSkill(skill.source, skill.slug, skill.owner ?? null);
         if (response.status === 'ok') {
           setInstallMessage({ text: response.message || t('skills.market_installed'), type: 'ok' });
+          refresh();
           onSkillsChange?.();
         } else {
           setInstallMessage({ text: response.message || t('skills.market_install_failed'), type: 'error' });
@@ -350,10 +363,8 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         });
       }
     },
-    [installedSlugs, onSkillsChange],
+    [installedSlugs, onSkillsChange, refresh],
   );
-
-  const isInstalled = useCallback((slug: string) => installedSlugs.includes(slug), [installedSlugs]);
 
   // ── Derived view state ─────────────────────────────────────────────────────
   // Category filtering is executed upstream, so the list is rendered verbatim.
@@ -481,7 +492,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
           <div className="skills-grid">
             {skills.map((skill) => {
               const uid = skillUid(skill);
-              const installed = isInstalled(skill.slug);
+              const installed = skill.installed === true;
               const busy = installing.has(uid);
               return (
                 <GridCard
@@ -490,8 +501,16 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
                   title={skill.name}
                   subtitle={sourceLabel(skill.source)}
                   description={skill.description}
-                  added={installed}
+                  added={false}
                   disabled={installed || busy}
+                  footer={
+                    installed ? (
+                      <span className="installed-badge">
+                        <Check size={12} />
+                        {t('skills.installed_badge')}
+                      </span>
+                    ) : undefined
+                  }
                   trailing={
                     installed ? (
                       <Check size={14} />

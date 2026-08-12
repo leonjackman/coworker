@@ -108,6 +108,11 @@ CLAWHUB_INDEX_SORT = {v: k for k, v in CLAWHUB_CURSOR_INDEX.items()}
 # fake-pagination bug.
 CLAWHUB_TRENDING_FETCH = 200
 
+# Stable error code returned to the UI when an upstream market source cannot be
+# reached (404 / network / malformed payload). The frontend maps it to a localised
+# "source unavailable — retry" message instead of a silent empty grid.
+_UPSTREAM_UNAVAILABLE = "source_unavailable"
+
 
 @dataclass
 class MarketPage:
@@ -117,6 +122,10 @@ class MarketPage:
     total: int | None = None
     has_more: bool = False
     next_cursor: str | None = None
+    # Set when the upstream source could not be reached (404 / network / malformed
+    # payload) so the UI can show "source unavailable" instead of a misleading
+    # empty grid that looks like the source genuinely has no skills.
+    error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -125,6 +134,7 @@ class MarketPage:
             "total": self.total,
             "has_more": self.has_more,
             "next_cursor": self.next_cursor,
+            "error": self.error,
         }
 
 
@@ -139,6 +149,57 @@ class SkillMarketManager:
         """
         self.user_home = user_home
         self.install_dir = user_home / ".agents" / "skills"
+        self._provenance_path = self.install_dir / ".market_provenance.json"
+
+    # ------------------------------------------------------------------
+    # Install provenance — lets the market UI reliably mark "already installed"
+    # cards. The market slug is the stable identity; matching by the local
+    # frontmatter name alone is unreliable (SkillHub display names / canonical
+    # slugs often differ from the SKILL.md `name`, so the fuzzy match misses
+    # already-installed skills). We therefore persist (source, slug) at install
+    # time and match the market list against that exact identifier.
+    # ------------------------------------------------------------------
+
+    def _load_provenance(self) -> dict[str, Any]:
+        try:
+            raw = self._provenance_path.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            return {}
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_provenance(self, data: dict[str, Any]) -> None:
+        self.install_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self._provenance_path.with_name(self._provenance_path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(self._provenance_path)
+        except OSError:
+            pass
+
+    def record_install(self, source: str, slug: str, owner: str | None, name: str) -> None:
+        """Persist the market origin of an installed skill, keyed by local name."""
+        data = self._load_provenance()
+        data[name] = {"source": source, "slug": slug, "owner": owner}
+        self._save_provenance(data)
+
+    def forget_install(self, name: str) -> None:
+        """Drop the provenance record for an uninstalled skill."""
+        data = self._load_provenance()
+        if name in data:
+            del data[name]
+            self._save_provenance(data)
+
+    def installed_identifiers(self) -> set[tuple[str, str]]:
+        """Return ``{(source, slug)}`` for every market-installed skill."""
+        return {
+            (info.get("source", ""), info.get("slug", ""))
+            for info in self._load_provenance().values()
+            if isinstance(info, dict)
+        }
 
     # ------------------------------------------------------------------
     # Public API
@@ -284,6 +345,7 @@ class SkillMarketManager:
                     "message": "Validation failed after install: " + "; ".join(d.message for d in diagnostics),
                 }
 
+            self.record_install(source, slug, owner, name)
             return {
                 "status": "ok",
                 "message": f"Skill '{name}' installed to {skill_file}",
@@ -556,11 +618,11 @@ class SkillMarketManager:
             CLAWHUB_SEARCH, {"q": query, "limit": fetch_n}, retries=1
         )
         if not isinstance(data, dict):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         raw = data.get("results")
         if not isinstance(raw, list):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         items = [
             normalised
@@ -602,11 +664,11 @@ class SkillMarketManager:
             CLAWHUB_SKILLS, {"limit": limit, "cursor": cursor, "sort": sort}, retries=1
         )
         if not isinstance(data, dict):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         raw = data.get("items")
         if not isinstance(raw, list):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         items = [
             normalised
@@ -632,11 +694,11 @@ class SkillMarketManager:
             retries=1,
         )
         if not isinstance(data, dict):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         raw = data.get("items")
         if not isinstance(raw, list):
-            return MarketPage()
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         items = [
             normalised
