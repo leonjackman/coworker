@@ -21,7 +21,7 @@ import { RollbackDialog } from './components/RollbackDialog';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -198,6 +198,7 @@ function App() {
   const [changesPanelResizing, setChangesPanelResizing] = useState(false);
   const [autonomy, setAutonomy] = useState<Autonomy>('guarded');
   const [goalMaxRounds, setGoalMaxRounds] = useState<number>(50);
+  const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
   const MAX_ATTACHMENT_MB_STORAGE_KEY = 'coworker-max-attachment-mb';
   const DEFAULT_MAX_ATTACHMENT_MB = 25;
   const MIN_MAX_ATTACHMENT_MB = 1;
@@ -484,6 +485,10 @@ function App() {
               localStorage.setItem(MAX_ATTACHMENT_MB_STORAGE_KEY, String(fromBackend));
             } catch { /* ignore */ }
           }
+        } catch { /* ignore */ }
+        try {
+          const memSettings = await chatService.getMemorySettings();
+          if (mounted) setMemorySettings(memSettings);
         } catch { /* ignore */ }
       } catch (error) {
         console.error('Failed to load runtime config:', error);
@@ -2330,6 +2335,21 @@ function App() {
     chatService.saveSettings({ max_attachment_mb: clamped }).catch(() => { /* ignore */ });
   };
 
+  const changeMemorySettings = (patch: MemorySettingsPatch) => {
+    setMemorySettings((cur) => {
+      const base: MemorySettings = cur ?? {
+        enabled: true,
+        char_limit: 2000,
+        auto_extract: false,
+        nudge_interval: 10,
+        extract_model: '',
+        proposals_pending: 0,
+      };
+      return { ...base, ...patch };
+    });
+    chatService.saveMemorySettings(patch).catch(() => { /* ignore */ });
+  };
+
     return (
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
@@ -2520,6 +2540,8 @@ function App() {
                   onMaxAttachmentMbChange={changeMaxAttachmentMb}
                   onThemeSettingsChange={changeThemeSettings}
                   onAutonomyChange={setAutonomy}
+                  memorySettings={memorySettings}
+                  onMemorySettingsChange={changeMemorySettings}
                   onClose={() => setActiveView('chat')}
                 />
               )}

@@ -58,6 +58,11 @@ import type {
   MemoryStatusResponse,
   MemoryWriteRequest,
   MemoryWriteResponse,
+  MemoryFileContentResponse,
+  MemoryFileListResponse,
+  MemoryFileSaveResponse,
+  MemorySettings,
+  MemorySettingsPatch,
 } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_COWORKER_BACKEND_URL || 'http://localhost:9527';
@@ -171,6 +176,12 @@ export interface ChatService {
   clearMemoryScope: (scope: MemoryScope) => Promise<MemoryWriteResponse>;
   listMemoryProposals: () => Promise<MemoryProposalsResponse>;
   resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
+  getMemoryFiles: () => Promise<MemoryFileListResponse>;
+  getMemoryFileContent: (scope: MemoryScope) => Promise<MemoryFileContentResponse>;
+  saveMemoryFile: (scope: MemoryScope, content: string) => Promise<MemoryFileSaveResponse>;
+  getMemorySettings: () => Promise<MemorySettings>;
+  saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
+  revealInFolder: (path: string) => Promise<{ status: string }>;
 }
 
 class ElectronChatService implements ChatService {
@@ -406,6 +417,36 @@ class ElectronChatService implements ChatService {
   async resolveMemoryProposal(request: MemoryProposalResolveRequest): Promise<{ status: string; record?: MemoryProposalRecord }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.resolveMemoryProposal(request);
+  }
+
+  async getMemoryFiles(): Promise<MemoryFileListResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getMemoryFiles();
+  }
+
+  async getMemoryFileContent(scope: MemoryScope): Promise<MemoryFileContentResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getMemoryFile(scope);
+  }
+
+  async saveMemoryFile(scope: MemoryScope, content: string): Promise<MemoryFileSaveResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveMemoryFile({ scope, content });
+  }
+
+  async getMemorySettings(): Promise<MemorySettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getMemorySettings();
+  }
+
+  async saveMemorySettings(settings: MemorySettingsPatch): Promise<MemorySettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveMemorySettings(settings);
+  }
+
+  async revealInFolder(path: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.revealInFolder(path);
   }
 
   async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
@@ -1237,6 +1278,39 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
+  }
+
+  async getMemoryFiles(): Promise<MemoryFileListResponse> {
+    return this.request<MemoryFileListResponse>('/api/memory');
+  }
+
+  async getMemoryFileContent(scope: MemoryScope): Promise<MemoryFileContentResponse> {
+    return this.request<MemoryFileContentResponse>(`/api/memory/file?scope=${encodeURIComponent(scope)}`);
+  }
+
+  async saveMemoryFile(scope: MemoryScope, content: string): Promise<MemoryFileSaveResponse> {
+    return this.request<MemoryFileSaveResponse>('/api/memory/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, content }),
+    });
+  }
+
+  async getMemorySettings(): Promise<MemorySettings> {
+    return this.request<MemorySettings>('/api/memory/settings');
+  }
+
+  async saveMemorySettings(settings: MemorySettingsPatch): Promise<MemorySettings> {
+    return this.request<MemorySettings>('/api/memory/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+  }
+
+  async revealInFolder(path: string): Promise<{ status: string }> {
+    // No local file manager in the web build — caller hides the action.
+    return { status: 'unsupported' };
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

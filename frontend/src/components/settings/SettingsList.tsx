@@ -50,6 +50,15 @@ export type SettingsItem =
       max?: number;
       unit?: ReactNode;
       onChange: (value: number) => void;
+    }
+  | {
+      id: string;
+      type: 'text_input';
+      label: ReactNode;
+      description?: ReactNode;
+      value: string;
+      placeholder?: string;
+      onChange: (value: string) => void;
     };
 
 export interface SettingsGroup {
@@ -88,6 +97,10 @@ function SettingControl({ item }: { item: SettingsItem }) {
         onChange={item.onChange}
       />
     );
+  }
+
+  if (item.type === 'text_input') {
+    return <TextInputControl value={item.value} placeholder={item.placeholder} onChange={item.onChange} />;
   }
 
   return (
@@ -132,6 +145,27 @@ function NumberInputControl({
       />
       {unit && <span className="settings-number-input__unit">{unit}</span>}
     </div>
+  );
+}
+
+function TextInputControl({
+  value,
+  placeholder,
+  onChange,
+}: {
+  value: string;
+  placeholder: string | undefined;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <input
+      type="text"
+      className="settings-number-input__field"
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={placeholder ?? 'value'}
+    />
   );
 }
 

@@ -55,6 +55,12 @@ import type {
   MemoryStatusResponse,
   MemoryWriteRequest,
   MemoryWriteResponse,
+  MemoryFileInfo,
+  MemoryFileListResponse,
+  MemoryFileContentResponse,
+  MemoryFileSaveResponse,
+  MemorySettings,
+  MemorySettingsPatch,
 } from './types';
 
 export type StreamEventCallback = (event: StreamEvent) => void;
@@ -145,6 +151,12 @@ declare global {
       clearMemoryScope: (payload: { scope: MemoryScope }) => Promise<MemoryWriteResponse>;
       listMemoryProposals: () => Promise<MemoryProposalsResponse>;
       resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
+      getMemoryFiles: () => Promise<MemoryFileListResponse>;
+      getMemoryFile: (scope: MemoryScope) => Promise<MemoryFileContentResponse>;
+      saveMemoryFile: (payload: { scope: MemoryScope; content: string }) => Promise<MemoryFileSaveResponse>;
+      getMemorySettings: () => Promise<MemorySettings>;
+      saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
+      revealInFolder: (path: string) => Promise<{ status: string }>;
     };
   }
 }

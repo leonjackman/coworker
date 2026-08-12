@@ -886,3 +886,38 @@ export interface MemoryProposalResolveRequest {
   proposal_id: string;
   status: 'approved' | 'rejected';
 }
+
+export interface MemoryFileInfo {
+  scope: MemoryScope;
+  path: string;
+  mtime: number;
+  entries: string[];
+  char_count: number;
+  entry_count: number;
+}
+
+export interface MemoryFileListResponse {
+  files: MemoryFileInfo[];
+}
+
+export interface MemoryFileContentResponse {
+  scope: MemoryScope;
+  path: string;
+  content: string;
+}
+
+export interface MemoryFileSaveResponse {
+  scope: MemoryScope;
+  entries: string[];
+}
+
+export interface MemorySettings {
+  enabled: boolean;
+  char_limit: number;
+  auto_extract: boolean;
+  nudge_interval: number;
+  extract_model: string;
+  proposals_pending: number;
+}
+
+export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'char_limit' | 'auto_extract' | 'nudge_interval' | 'extract_model'>>;

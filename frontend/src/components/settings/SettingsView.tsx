@@ -2,9 +2,10 @@ import { ArrowLeft, X } from 'lucide-react';
 import { useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
-import type { Autonomy } from '../../types';
+import type { Autonomy, MemorySettings, MemorySettingsPatch } from '../../types';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
+import { MemoryProposalsPanel } from './MemoryProposalsPanel';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
@@ -19,6 +20,8 @@ interface SettingsViewProps {
   onMaxAttachmentMbChange: (value: number) => void;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAutonomyChange: (mode: Autonomy) => void;
+  memorySettings: MemorySettings | null;
+  onMemorySettingsChange: (patch: MemorySettingsPatch) => void;
   onLanguageChange?: () => void;
   onClose: () => void;
 }
@@ -32,10 +35,12 @@ export function SettingsView({
   onMaxAttachmentMbChange,
   onThemeSettingsChange,
   onAutonomyChange,
+  memorySettings,
+  onMemorySettingsChange,
   onLanguageChange,
   onClose,
 }: SettingsViewProps) {
-  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit'>('main');
+  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit' | 'memory_proposals'>('main');
 
   async function selectLanguage(language: string) {
     if (language !== 'zh' && language !== 'en') return;
@@ -64,6 +69,24 @@ export function SettingsView({
         )}
       >
         <ToolAuditPanel embedded />
+      </WorkspacePage>
+    );
+  }
+
+  if (settingsPage === 'memory_proposals') {
+    return (
+      <WorkspacePage
+        eyebrow={t('settings.title')}
+        title={t('settings.memory_proposals_title')}
+        description={t('settings.memory_proposals_desc')}
+        action={(
+          <Button variant="ghost" onClick={() => setSettingsPage('main')}>
+            <ArrowLeft size={15} />
+            {t('settings.back')}
+          </Button>
+        )}
+      >
+        <MemoryProposalsPanel embedded />
       </WorkspacePage>
     );
   }
@@ -147,6 +170,76 @@ export function SettingsView({
                 max: 1024,
                 unit: t('settings.max_attachment_mb_unit'),
                 onChange: onMaxAttachmentMbChange,
+              },
+            ],
+          },
+          {
+            id: 'memory',
+            title: t('settings.memory_group'),
+            description: t('settings.memory_group_desc'),
+            items: [
+              {
+                id: 'memory_enabled',
+                type: 'toggle',
+                label: t('settings.memory_enabled'),
+                description: t('settings.memory_enabled_desc'),
+                value: memorySettings?.enabled ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onMemorySettingsChange({ enabled: value === 'true' }),
+              },
+              {
+                id: 'memory_auto_extract',
+                type: 'toggle',
+                label: t('settings.memory_auto_extract'),
+                description: t('settings.memory_auto_extract_desc'),
+                value: memorySettings?.auto_extract ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onMemorySettingsChange({ auto_extract: value === 'true' }),
+              },
+              {
+                id: 'memory_nudge_interval',
+                type: 'number_input',
+                label: t('settings.memory_nudge_interval'),
+                description: t('settings.memory_nudge_interval_desc'),
+                value: memorySettings?.nudge_interval ?? 10,
+                min: 1,
+                max: 100,
+                unit: t('settings.memory_nudge_interval_unit'),
+                onChange: (value) => onMemorySettingsChange({ nudge_interval: value }),
+              },
+              {
+                id: 'memory_char_limit',
+                type: 'number_input',
+                label: t('settings.memory_char_limit'),
+                description: t('settings.memory_char_limit_desc'),
+                value: memorySettings?.char_limit ?? 2000,
+                min: 100,
+                max: 100000,
+                unit: t('settings.memory_char_limit_unit'),
+                onChange: (value) => onMemorySettingsChange({ char_limit: value }),
+              },
+              {
+                id: 'memory_extract_model',
+                type: 'text_input',
+                label: t('settings.memory_extract_model'),
+                description: t('settings.memory_extract_model_desc'),
+                value: memorySettings?.extract_model ?? '',
+                placeholder: t('settings.memory_extract_model_placeholder'),
+                onChange: (value) => onMemorySettingsChange({ extract_model: value }),
+              },
+              {
+                id: 'memory_proposals',
+                type: 'action',
+                label: t('settings.memory_proposals_entry'),
+                description: t('settings.memory_proposals_entry_desc'),
+                actionLabel: t('settings.memory_proposals_open'),
+                onAction: () => setSettingsPage('memory_proposals'),
               },
             ],
           },

@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 
 from .memory_discovery import MemoryScanner
-from .memory_file import MemoryFile, render_file, split_entries
+from .memory_file import HEADER, MemoryFile, render_file, split_entries
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,23 @@ class MemoryStore:
         return readback
 
     # -- read API ----------------------------------------------------------
+
+    def read_file_text(self, scope: str) -> str:
+        """Return the raw on-disk body of a memory file (editable surface)."""
+        path = self.path_for(scope)
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return f"{HEADER}\n"
+
+    def write_file_text(self, scope: str, text: str) -> MemoryFile:
+        """Replace a whole memory file from raw markdown.
+
+        The body is re-parsed into entries (``§``-delimited) and written with
+        the same lock + round-trip verification as every other write path.
+        """
+        with self._lock:
+            return self._write_locked(scope, split_entries(text))
 
     def list_scope(self, scope: str) -> MemoryFile:
         with self._lock:

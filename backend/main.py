@@ -749,6 +749,90 @@ async def resolve_memory_proposal(request: MemoryProposalResolveRequest):
             logger.info("approve proposal %s: %s", request.proposal_id, exc)
     return {"status": "ok", "record": record}
 
+
+class MemoryFileRequest(BaseModel):
+    scope: str = "project"
+    content: str = ""
+
+
+class MemorySettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    char_limit: int | None = None
+    auto_extract: bool | None = None
+    nudge_interval: int | None = None
+    extract_model: str | None = None
+
+
+@app.get("/api/memory")
+async def list_memory_files():
+    """Memory library: every memory file (project + user) with parsed metadata."""
+    scan = memory_manager.scanner.scan(include_missing=True)
+    return {"files": [memory.to_dict() for memory in scan.files()]}
+
+
+@app.get("/api/memory/file")
+async def get_memory_file(scope: str = "project"):
+    """Full raw body of one memory file for editing."""
+    if scope not in ("project", "user"):
+        raise HTTPException(status_code=400, detail=f"unknown memory scope: {scope}")
+    store = _memory_scope_store(scope)
+    memory = store.list_scope(scope)
+    return {"scope": scope, "path": str(memory.path), "content": store.read_file_text(scope)}
+
+
+@app.post("/api/memory/file")
+async def save_memory_file(request: MemoryFileRequest):
+    """Replace one memory file's full content (re-parsed into entries)."""
+    if not memory_manager.enabled:
+        raise HTTPException(status_code=400, detail="memory is disabled")
+    store = _memory_scope_store(request.scope)
+    memory = store.write_file_text(request.scope, request.content)
+    return {"scope": request.scope, "entries": memory.entries}
+
+
+@app.get("/api/memory/settings")
+async def get_memory_settings():
+    """Runtime memory settings (the Settings page surface)."""
+    return {
+        "enabled": memory_manager.enabled,
+        "char_limit": memory_manager.char_limit,
+        "auto_extract": memory_manager.auto_extract,
+        "nudge_interval": memory_manager.config.nudge_interval,
+        "extract_model": memory_manager.config.extract_model,
+        "proposals_pending": len(memory_proposal_store.list_pending()),
+    }
+
+
+@app.post("/api/memory/settings")
+async def save_memory_settings(request: MemorySettingsUpdate):
+    """Persist memory settings to .coworker_settings.json and apply at runtime."""
+    current = memory_manager.config
+    updated = MemoryConfig(
+        enabled=request.enabled if request.enabled is not None else current.enabled,
+        char_limit=request.char_limit if request.char_limit is not None else current.char_limit,
+        auto_extract=request.auto_extract if request.auto_extract is not None else current.auto_extract,
+        nudge_interval=request.nudge_interval if request.nudge_interval is not None else current.nudge_interval,
+        extract_model=request.extract_model if request.extract_model is not None else current.extract_model,
+    )
+    if updated.char_limit < 100:
+        raise HTTPException(status_code=400, detail="char_limit must be at least 100")
+    if updated.nudge_interval < 1:
+        raise HTTPException(status_code=400, detail="nudge_interval must be at least 1")
+    memory_manager.config = updated
+    try:
+        save_user_memory_settings(
+            {
+                "enabled": updated.enabled,
+                "char_limit": updated.char_limit,
+                "auto_extract": updated.auto_extract,
+                "nudge_interval": updated.nudge_interval,
+                "extract_model": updated.extract_model,
+            }
+        )
+    except Exception as exc:
+        logger.warning("memory settings persisted but not saved: %s", exc)
+    return await get_memory_settings()
+
 from fastapi.responses import StreamingResponse
 import json as _json
 from pydantic import BaseModel
@@ -1050,6 +1134,54 @@ def read_user_max_attachment_mb() -> int:
     except Exception:
         pass
     return DEFAULT_MAX_ATTACHMENT_MB
+
+
+def _load_user_settings_file() -> dict:
+    try:
+        return json.loads(Path(SETTING_FILE).read_text() or "{}")
+    except Exception:
+        return {}
+
+
+def read_user_memory_settings() -> dict:
+    """Read the user-level memory settings from .coworker_settings.json.
+
+    Returns only the overrides a user has saved (absent keys fall back to the
+    env-var-driven MemoryConfig defaults).
+    """
+    data = _load_user_settings_file()
+    stored = data.get("memory")
+    if not isinstance(stored, dict):
+        return {}
+    known = {"enabled", "char_limit", "auto_extract", "nudge_interval", "extract_model"}
+    return {k: v for k, v in stored.items() if k in known}
+
+
+def save_user_memory_settings(settings: dict) -> None:
+    """Merge memory settings into .coworker_settings.json without clobbering others."""
+    path = Path(SETTING_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _load_user_settings_file()
+    existing["memory"] = {k: v for k, v in settings.items() if v is not None}
+    path.write_text(json.dumps(existing, ensure_ascii=False))
+
+
+def apply_stored_memory_settings() -> None:
+    """Overlay user-saved memory settings onto the runtime MemoryConfig."""
+    overrides = read_user_memory_settings()
+    if not overrides:
+        return
+    current = memory_manager.config
+    memory_manager.config = MemoryConfig(
+        enabled=overrides.get("enabled", current.enabled),
+        char_limit=overrides.get("char_limit", current.char_limit),
+        auto_extract=overrides.get("auto_extract", current.auto_extract),
+        nudge_interval=overrides.get("nudge_interval", current.nudge_interval),
+        extract_model=overrides.get("extract_model", current.extract_model),
+    )
+
+
+apply_stored_memory_settings()
 
 
 @app.get("/settings")

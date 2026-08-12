@@ -124,6 +124,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearMemoryScope: (payload) => ipcRenderer.invoke('clear-memory-scope', payload),
   listMemoryProposals: () => ipcRenderer.invoke('list-memory-proposals'),
   resolveMemoryProposal: (payload) => ipcRenderer.invoke('resolve-memory-proposal', payload),
+  getMemoryFiles: () => ipcRenderer.invoke('get-memory-files'),
+  getMemoryFile: (scope) => ipcRenderer.invoke('get-memory-file', scope),
+  saveMemoryFile: (payload) => ipcRenderer.invoke('save-memory-file', payload),
+  getMemorySettings: () => ipcRenderer.invoke('get-memory-settings'),
+  saveMemorySettings: (payload) => ipcRenderer.invoke('save-memory-settings', payload),
+  revealInFolder: (path) => ipcRenderer.invoke('reveal-in-folder', path),
   listMarketSources: () => ipcRenderer.invoke('list-market-sources'),
   listMarketCategories: (source) => ipcRenderer.invoke('list-market-categories', source),
   // Forward the whole query object — positional args used to drop `offset` here.
