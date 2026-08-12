@@ -253,6 +253,9 @@ class ApprovalEventBus:
         queues = self._subscribers.pop(resume_id, [])
         for queue in queues:
             queue.put_nowait({"type": "stream_end"})
+        # Drop the ring buffer too — otherwise every HITL resume leaks up to
+        # buffer_size event dicts for the lifetime of the process.
+        self._buffer.pop(resume_id, None)
 
 
 approval_event_bus = ApprovalEventBus()
@@ -956,6 +959,11 @@ async def chat_stream(request: ChatStreamRequest):
         session = session_store.create("", project_id=request.project_id or "")
         session_id = session.id
 
+    # A session may only have ONE in-flight stream writing its checkpoint; a
+    # second concurrent /chat/stream (e.g. a misbehaving client or a double
+    # submit) would race the graph's SQLite writes on the same thread_id.
+    _guard_session_not_streaming(session_id)
+
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
     session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
     if runtime.owns_runtime_messages and agent_registry.has_runtime_checkpoint(session_id):
@@ -1157,9 +1165,14 @@ async def chat_stream(request: ChatStreamRequest):
                 break
             else:
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        # Goal stream ended (normal, error, or disconnect): drop the active marker.
+        # Goal stream ended (normal, error, or disconnect): drop the active marker
+        # and release the per-session goal lock/cancel state so long-running use
+        # does not leak (goal_resume cleans up the same way).
         if in_goal_flag:
             _goal_active_streams.pop(f"chat-goal:{session_id}", None)
+            _goal_cancel_events.pop(session_id, None)
+            if not any(v == session_id for v in _goal_active_streams.values()):
+                _goal_locks.pop(session_id, None)
 
     return StreamingResponse(
         event_stream(),
@@ -1881,6 +1894,10 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
     autonomy = normalize_autonomy(session.autonomy)
     language = request.language
     provider_id = _provider_id_for_model(provider_name, model)
+    try:
+        workspace_path = workspace_controller.workspace_for_session(session_id).root
+    except Exception:  # noqa: BLE001 - fall back to the default workspace
+        workspace_path = None
 
     async def event_stream():
         accumulated_content = ""
@@ -1944,7 +1961,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         async for kind, payload in _sse_events(
             _tracked_stream(
                 agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path,
                 ),
                 session_id,
             ),
@@ -1964,6 +1981,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
 @app.post("/sessions/{session_id}/messages/{message_id}/edit")
 async def edit_message(session_id: str, message_id: str, request: EditMessageRequest):
     """Edit a user message and re-run the conversation from that point."""
+    _guard_session_not_streaming(session_id)
     try:
         session = session_store.require(session_id)
         index = session_store.find_message_index(session_id, message_id)
@@ -1995,6 +2013,10 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             pass
     language = request.language
     provider_id = _provider_id_for_model(provider_name, model)
+    try:
+        workspace_path = workspace_controller.workspace_for_session(session_id).root
+    except Exception:  # noqa: BLE001 - fall back to the default workspace
+        workspace_path = None
 
     async def event_stream():
         accumulated_content = ""
@@ -2058,7 +2080,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         async for kind, payload in _sse_events(
             _tracked_stream(
                 agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids,
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path,
                 ),
                 session_id,
             ),

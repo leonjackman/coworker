@@ -124,7 +124,14 @@ class ProviderManager:
                 self._store_secret(provider)
                 migrated = True
         if migrated:
-            self.save(config)
+            # Write directly (NOT via save()): save() would see the just-emptied
+            # api_key + key_in_secrets and _clear_secret() the brand-new Keychain
+            # entry, silently losing the legacy plaintext key.
+            self._write_config(config)
+            # Repopulate the in-memory key for the callers of this load() so the
+            # very first request after the upgrade still sees the provider's key.
+            for provider in config.providers:
+                self._resolve_secret(provider)
         return config
 
     def save(self, config: ProviderConfig) -> None:
@@ -137,6 +144,9 @@ class ProviderManager:
             elif provider.key_in_secrets:
                 self._clear_secret(provider)
         self._key_cache.clear()
+        self._write_config(config)
+
+    def _write_config(self, config: ProviderConfig) -> None:
         atomic_write_text(
             self.config_path,
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",

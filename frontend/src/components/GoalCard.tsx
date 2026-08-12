@@ -25,9 +25,9 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onTog
         <div className="goal-card__header-left">
           <span className="goal-card__status">
             <Target size={15} />
-            {goal.done ? t('chat.goal_status_done') : goal.paused ? t('chat.goal_status_paused') : goal.stalled ? 'Stalled' : t('chat.goal_status_active')}
+            {goal.done ? t('chat.goal_status_done') : goal.paused ? t('chat.goal_status_paused') : goal.stalled ? t('chat.goal_status_stalled') : t('chat.goal_status_active')}
           </span>
-          <span className="goal-card__round">Round {goal.round}</span>
+          <span className="goal-card__round">{t('chat.goal_round', { round: goal.round })}</span>
         </div>
         <div className="goal-card__actions">
           {!goal.done && !goal.stalled && !goal.paused && (
@@ -57,13 +57,13 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onTog
         <p className="goal-card__text">{goal.goalText}</p>
             {goal.verification && (
           <div className="goal-card__verification">
-            <span className="goal-card__verification-label">Verification</span>
+            <span className="goal-card__verification-label">{t('chat.goal_verification')}</span>
             <span>{goal.verification}</span>
           </div>
         )}
         {goal.stalled && (
           <p className="goal-card__stalled">
-            Agent stalled after multiple attempts. Consider pausing or editing the goal.
+            {t('chat.goal_stalled_hint')}
           </p>
         )}
         {goal.done && goal.reason && (
@@ -71,7 +71,7 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onTog
         )}
         {recentToolNames && recentToolNames.length > 0 && (
           <div className="goal-card__tools">
-            <span className="goal-card__tools-label">Tools:</span>
+            <span className="goal-card__tools-label">{t('chat.goal_tools')}:</span>
             <ul className="goal-card__tools-list">
               {recentToolNames.map((name, i) => (
                 <li key={i} className="goal-card__tool-item"><span className="goal-card__tool-name">{name}</span></li>

@@ -177,7 +177,7 @@ function getTurnSummaryData(toolParts: Extract<MessagePart, { type: 'tool' }>[],
 function formatDuration(ms: number): string {
   if (ms < 1000) return '<1s';
   const totalSeconds = Math.floor(ms / 1000);
-  if (totalSeconds < 10) return `${(totalSeconds / 10).toFixed(1)}s`;
+  if (totalSeconds < 10) return `${(ms / 1000).toFixed(1)}s`;
   if (totalSeconds < 60) return `${totalSeconds}s`;
   return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
@@ -230,7 +230,7 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
 
 function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onRegenerate?: () => void }) {
   const isError = message.status === 'error';
-  const isStopped = message.status === 'stopped';
+  const isStopped = message.status === 'stopped' || message.status === 'interrupted';
   const isRunning = message.status === 'running';
   const isRunningEmpty = isRunning && !message.content;
   const isWaiting = message.content.includes(t('chat.waiting_resolution'));

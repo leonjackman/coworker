@@ -39,6 +39,7 @@ class MemoryProposalStore:
         self.path = Path(data_dir) / PROPOSALS_FILENAME
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._resolved_history = 200
 
     def _read(self) -> list[dict[str, Any]]:
         if not self.path.exists():
@@ -91,10 +92,17 @@ class MemoryProposalStore:
         return added
 
     def _write(self, records: list[dict[str, Any]]) -> None:
+        # Bounded retention: keep every pending proposal plus the most recent
+        # RESOLVED_HISTORY resolved/approved/rejected ones, so the file cannot
+        # grow unboundedly across the app's lifetime.
+        pending = [r for r in records if r.get("status") == "pending"]
+        resolved = [r for r in records if r.get("status") != "pending"]
+        if len(resolved) > self._resolved_history:
+            resolved = resolved[-self._resolved_history:]
         try:
             atomic_write_text(
                 self.path,
-                "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
+                "\n".join(json.dumps(r, ensure_ascii=False) for r in (pending + resolved)) + "\n",
             )
         except OSError as exc:  # pragma: no cover - defensive
             logger.warning("Failed to persist memory proposals: %s", exc)

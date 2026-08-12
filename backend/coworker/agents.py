@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -8,6 +9,8 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+
+logger = logging.getLogger(__name__)
 
 def _llm_stream_chunk_timeout() -> float:
     """Timeout (seconds) for how long the LLM stream may pause between chunks.
@@ -34,7 +37,7 @@ from .providers import ProviderEntry, ProviderManager
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .changes import ChangeStore
 from .sessions import SessionStore
-from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace, fingerprint_path_for
+from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace, fingerprint_path_for, workspace_git_branch, workspace_git_diff
 from .checkpoints import CheckpointManager
 
 AgentMode = Literal["single"]
@@ -118,6 +121,16 @@ class InstallSkillArgs(BaseModel):
         "{name, description, body}. Each body is written to commands/<name>.md and listed in the "
         "root SKILL.md frontmatter so the skill shows individual commands in the chat menu.",
     )
+
+
+class LoadSkillArgs(BaseModel):
+    name: str = Field(
+        description="The exact skill <name> shown in <available_skills> whose SKILL.md body you want to load."
+    )
+
+
+class GitStatusArgs(BaseModel):
+    """No arguments — inspects the workspace git repository."""
 
 
 class ReplaceInFileArgs(BaseModel):
@@ -466,6 +479,72 @@ def build_workspace_tools(
         except Exception as exc:
             return _error_result(exc, "install_skill")
 
+    @tool(args_schema=LoadSkillArgs)
+    def load_skill(name: str) -> str:
+        """Load a skill's SKILL.md body so you can follow its instructions.
+
+        Only the skill catalog (name + description) is in context by default;
+        skill bodies live outside the workspace sandbox, so read_file cannot
+        load them. Use this tool with the exact skill <name> from <available_skills>.
+        """
+        try:
+            if skill_manager is None:
+                return _error_result(ValueError("skill system unavailable"), "load_skill")
+            loaded = skill_manager.read_body(name)
+            if loaded is None:
+                return json.dumps({"status": "error", "error": f"skill not found: {name}"}, ensure_ascii=False)
+            body, base_dir = loaded
+            if body and len(body) > 120_000:
+                body = body[:120_000] + "\n[truncated]"
+            cmds = []
+            skill = skill_manager.get(name)
+            if skill is not None:
+                cmds = [c.name for c in skill.commands]
+            return json.dumps(
+                {"status": "ok", "name": name, "base_dir": base_dir, "commands": cmds, "body": body},
+                ensure_ascii=False,
+            )
+        except Exception as exc:
+            return _error_result(exc, "load_skill")
+
+    @tool(args_schema=GitStatusArgs)
+    def git_status() -> str:
+        """Inspect the workspace git repository: current branch, working-tree
+        status (modified/untracked files) and a diff summary. Returns
+        ``{"git": false}`` when the workspace is not a git repository. Use this
+        before making changes so you know what has already been modified, and
+        after changes to verify what you touched."""
+        try:
+            import subprocess as _subprocess
+            from pathlib import Path as _Path
+
+            root = _Path(str(workspace.root))
+            branch = workspace_git_branch(root)
+            diff = workspace_git_diff(root)
+            result: dict[str, Any] = {
+                "git": bool(branch.get("is_git", False) or diff.get("git", False)),
+                "workspace": str(workspace.root),
+                "branch": branch.get("branch"),
+            }
+            if not result["git"]:
+                return json.dumps({**result, "note": "not a git repository"}, ensure_ascii=False)
+            # git status --short --branch, bounded
+            try:
+                proc = _subprocess.run(
+                    ["git", "-C", str(root), "status", "--short", "--branch", "--untracked-files=normal"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                lines = [l for l in (proc.stdout or "").splitlines() if l.strip()]
+                result["status"] = lines[:80]
+                result["status_truncated"] = len(lines) > 80
+            except Exception:  # noqa: BLE001
+                result["status"] = []
+            result["diff_files"] = diff.get("files", [])
+            result["untracked"] = diff.get("untracked", [])
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "git_status")
+
     @tool(args_schema=MemoryArgs)
     def memory(action: str, content: str = "", target: str = "") -> str:
         """Write a long-term memory entry for the current project.
@@ -502,10 +581,7 @@ def build_workspace_tools(
                 memory = memory_store.remove("project", target)
             else:
                 return f"Unsupported memory action: {action}"
-            return (
-                f"Memory updated. {len(memory.entries)} entries now; "
-                f"file: {memory.path}"
-            )
+            return f"Memory updated. {len(memory.entries)} entries now."
         except Exception as exc:
             return _error_result(exc, "memory")
 
@@ -579,7 +655,7 @@ def build_workspace_tools(
             ensure_ascii=False,
         )
 
-    tools = [search_files, read_file, ask_user, submit_plan, replace_in_file, apply_text_edits, write_file, run_command, install_skill]
+    tools = [search_files, read_file, ask_user, submit_plan, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
     if memory_store is not None:
         tools.append(memory)
     if session_store is not None:
@@ -590,7 +666,7 @@ def build_workspace_tools(
 _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "load_skill", "git_status"}
 _PLAN_TOOLS = {"ask_user", "submit_plan"}
 _EXEC_TOOLS = {"run_command", "install_skill", "memory"}
 
@@ -752,6 +828,15 @@ def command_approval_middleware(
             return False
         return normalize_autonomy(state.get("autonomy")) == "supervised"
 
+    def needs_install_skill_approval(req: Any) -> bool:
+        # Installing a skill writes OUTSIDE the workspace (~/.agents/skills) and
+        # persists across sessions. Ask in supervised AND guarded modes (an
+        # out-of-workspace write is a boundary crossing); autonomous never asks.
+        state = req.state
+        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+            return False
+        return normalize_autonomy(state.get("autonomy")) in ("supervised", "guarded")
+
     def needs_memory_approval(req: Any) -> bool:
         # Long-term memory writes persist across sessions, so in supervised
         # mode the user must confirm each write; guarded/autonomous allow it.
@@ -840,6 +925,12 @@ def command_approval_middleware(
             "when": needs_memory_approval,
         },
         **write_configs,
+        "install_skill": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to install a new skill. Installing persists across "
+            "sessions and injects the skill's instructions into future conversations.",
+            "when": needs_install_skill_approval,
+        },
         "ask_user": {
             "allowed_decisions": ["respond", "reject"],
             "description": "Coworker asks the user a question that needs an answer.",
@@ -1465,6 +1556,10 @@ class ReasonPreservingChatOpenAI:
 
         return ChatOpenAI(
             model=model, temperature=temperature, api_key=api_key, base_url=base_url,
+            # LangChain's built-in retry covers transient 5xx / connection
+            # resets (default max_retries=2 with exponential backoff); a local
+            # provider blip no longer fails the whole turn.
+            max_retries=2,
             # Long-thinking / slow local providers (vLLM, Ollama) can pause
             # between chunks for well over langchain's 120s default; a fired
             # stream_chunk_timeout truncates the reply mid-generation. Use a
@@ -1523,8 +1618,81 @@ class NormalizeMessagesMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any])
 
 
 # ---------------------------------------------------------------------------
+# ContextWindowMiddleware – bounds the model context for very long sessions.
+# ---------------------------------------------------------------------------
+
+# Rolling char budget for the message list fed to the model on each call. Oldest
+# messages are dropped first (the first system message is always kept). The
+# checkpoint still holds full history; this only bounds what the model sees and
+# what gets replayed into the checkpoint.
+CONTEXT_WINDOW_CHARS = 120_000
+
+
+def _msg_chars(msg: Any) -> int:
+    try:
+        content = msg.content
+    except Exception:  # noqa: BLE001
+        return 0
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(len(part.get("text") or "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+    return 0
+
+
+class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Trim the model-bound message list to ``CONTEXT_WINDOW_CHARS``.
+
+    Long sessions otherwise replay the entire history on every model call (and
+    grow the checkpoint), eventually exceeding the provider's context window and
+    failing the turn with a 400. Dropping the OLDEST messages (keeping the first
+    system message + the most recent exchanges) is a safe rolling window.
+    """
+
+    def _trim(self, state: CoworkerAgentState) -> list[Any] | None:
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+        total = sum(_msg_chars(m) for m in messages)
+        if total <= CONTEXT_WINDOW_CHARS:
+            return None
+        # Keep the first message (system prompt) and then the most recent tail
+        # (oldest-first drop), so ordering is preserved.
+        head = list(messages[:1])
+        tail = list(messages[1:])
+        total = _msg_chars(head[0]) if head else 0
+        kept_tail: list[Any] = []
+        for msg in reversed(tail):
+            chars = _msg_chars(msg)
+            if chars >= CONTEXT_WINDOW_CHARS:
+                continue
+            if total + chars > CONTEXT_WINDOW_CHARS:
+                break
+            kept_tail.append(msg)
+            total += chars
+        kept_tail.reverse()
+        kept = head + kept_tail
+        if len(kept) == len(messages):
+            return None
+        return kept
+
+    def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        trimmed = self._trim(state)
+        if trimmed is None:
+            return None
+        return {"messages": trimmed}
+
+    async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        trimmed = self._trim(state)
+        if trimmed is None:
+            return None
+        return {"messages": trimmed}
+
+
+# ---------------------------------------------------------------------------
 # ToolCallCleanerMiddleware – drops empty/invalid tool calls before execution.
 # ---------------------------------------------------------------------------
+
 
 class ToolCallCleanerMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     """Removes tool calls that the provider emitted without a tool name.
@@ -1972,6 +2140,7 @@ def build_coworker_agent_graph(
     phase_gate = PhaseToolGateMiddleware()
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
+        ContextWindowMiddleware(),
         ToolCallCleanerMiddleware(),
         phase_gate,
         GoalModeMiddleware(language),
@@ -2300,7 +2469,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         except GeneratorExit:
                             raise
                         except Exception:
-                            pass
+                            # The stream must keep going (the chunk is non-fatal),
+                            # but never swallow it silently — a missing tool card /
+                            # text segment would otherwise be undiagnosable.
+                            logger.exception("Failed to emit message-chunk event")
                     elif stream_mode == "custom":
                         if isinstance(chunk, dict):
                             event_type = chunk.get("type", "")
@@ -2512,13 +2684,17 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     try:
                         async with asyncio.timeout(5 * 60):  # 5 min per turn
                             async for event in self._stream(
-                                messages if (is_first and not goal_continue_first) else [],
+                                # Force retry always CONTINUES the existing thread:
+                                # the round's user message was already added by its
+                                # first _stream attempt, so re-adding it here would
+                                # duplicate the user message in the checkpoint.
+                                [],
                                 # A goal is an autonomous "do the work" loop: always run in
                         # the execute phase so write/run tools are available,
                         # regardless of the session's plan/build toggle.
                         session_id, language, "build", autonomy, rerun=False,
                                 goal_mode=True, goal_text=goal_text,
-                                goal_continue=(not is_first or goal_continue_first),
+                                goal_continue=True,
                                 _nudge=nudge,
                                 _cancel_event=_cancel_event,
                             ):
@@ -2560,13 +2736,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         try:
                             async with asyncio.timeout(600):  # 5 min per turn
                                 async for event in self._stream(
-                                    messages if (is_first and not goal_continue_first) else [],
+                                    # Force retry continues the existing thread (see above).
+                                    [],
                                     # A goal is an autonomous "do the work" loop: always run in
                         # the execute phase so write/run tools are available,
                         # regardless of the session's plan/build toggle.
                         session_id, language, "build", autonomy, rerun=False,
                                     goal_mode=True, goal_text=goal_text,
-                                    goal_continue=(not is_first or goal_continue_first),
+                                    goal_continue=True,
                                     _nudge=nudge,
                                     _cancel_event=_cancel_event,
                                 ):
@@ -2776,7 +2953,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         except GeneratorExit:
                             raise
                         except Exception:
-                            pass
+                            # The stream must keep going (the chunk is non-fatal),
+                            # but never swallow it silently — a missing tool card /
+                            # text segment would otherwise be undiagnosable.
+                            logger.exception("Failed to emit message-chunk event")
                     elif stream_mode == "custom":
                         if isinstance(chunk, dict):
                             event_type = chunk.get("type", "")
@@ -2898,13 +3078,15 @@ class AgentRuntimeRegistry:
         try:
             saver, conn = self._open_sync_checkpointer()
         except sqlite3.OperationalError:
-            # Concurrent async saver write: treat as "no checkpoint yet" rather
-            # than crashing the stream the UI is waiting on.
-            return False
+            # The async saver holds the write lock (a stream just ended). Be
+            # conservative and assume a checkpoint exists: chat_stream then keeps
+            # just the new user message and continues from the checkpoint instead
+            # of re-adding the FULL history (which would duplicate context).
+            return True
         try:
             return saver.get({"configurable": {"thread_id": session_id}}) is not None
         except sqlite3.OperationalError:
-            return False
+            return True
         finally:
             try:
                 conn.commit()
@@ -2997,10 +3179,19 @@ class AgentRuntimeRegistry:
     async def rerun_stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
         provider_id: str | None = None, model: str | None = None, referenced_sessions: set[str] | None = None,
+        workspace_path: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Reset the session checkpoint and re-run the agent from full history."""
         self.forget_runtime_checkpoint(session_id)
-        context = {"provider_id": provider_id or "", "model": model or "", "referenced_sessions": list(referenced_sessions or [])}
+        context = {
+            "provider_id": provider_id or "",
+            "model": model or "",
+            "referenced_sessions": list(referenced_sessions or []),
+            # The project workspace must be threaded through or regenerate/edit
+            # would run against the DEFAULT workspace and write files in the
+            # wrong place (compare resume_interrupt, which passes it).
+            "workspace_path": workspace_path,
+        }
         runtime = self._stream_runtime_from_context(context)
         async for event in runtime.stream_rerun(messages, session_id, language, work_mode, autonomy):
             yield event

@@ -27,7 +27,7 @@ Coworker uses shadcn/ui generated components for general UI primitives and chat 
 
 assistant-ui was evaluated as a possible runtime migration target. Its `LocalRuntime` owns messages, threads, branching, editing, regeneration, cancellation, and run lifecycle; `ExternalStoreRuntime` is for apps that intentionally keep their own store. Coworker currently has a product-specific local chat surface with session/project ownership, attachments, slash commands, model/provider controls, HITL approval projection, and custom theme primitives.
 
-Decision for the current single-agent phase: do not install assistant-ui as a passive dependency and do not wrap the existing chat with an `AssistantRuntimeProvider`. That would create a second chat runtime owner while `App.tsx` still owns messages and streaming. If adopted later, assistant-ui must replace the current `App.tsx` message/run owner and the visible `MessageList`/`ChatInput` surface together, not layer over them.
+Decision for the current single-agent phase: assistant-ui is used only as a component library for a few presentational pieces (message lists, tool cards, reasoning blocks); it is NOT adopted as the chat runtime owner. `App.tsx` still owns messages, streaming, session/project state, HITL approval projection, and the run lifecycle, so `AssistantRuntimeProvider` is not mounted. If adopted later, assistant-ui must replace the current `App.tsx` message/run owner and the visible `MessageList`/`ChatInput` surface together, not layer over them.
 
 Required migration shape if adopted:
 

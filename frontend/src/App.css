@@ -8166,3 +8166,125 @@ body.bottom-panel-resizing {
   display: flex;
   justify-content: flex-end;
 }
+
+.text-success {
+  color: var(--success-foreground, #22c55e);
+}
+
+.text-warning {
+  color: var(--warning, #d99100);
+}
+
+.add-skill-page__form {
+  display: grid;
+  gap: 12px;
+  padding: 8px 2px;
+}
+
+.add-skill-page__field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.add-skill-page__field input,
+.add-skill-page__field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(120, 140, 180, 0.16));
+  background: var(--input-bg, transparent);
+  color: var(--foreground);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.add-skill-page__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.add-skill-page__msg {
+  font-size: 12px;
+}
+
+.add-skill-page__msg--ok {
+  color: var(--success-foreground, #22c55e);
+}
+
+.add-skill-page__msg--error {
+  color: var(--destructive, #ef4444);
+}
+
+.add-skill-page__spin {
+  animation: spin 1s linear infinite;
+  margin-right: 4px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.bottom-panel__logs {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  font-size: 12px;
+}
+
+.bottom-panel__logs-meta {
+  display: flex;
+  gap: 16px;
+  padding: 6px 12px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border, rgba(120, 140, 180, 0.16));
+}
+
+.bottom-panel__logs-list {
+  overflow: auto;
+  padding: 6px 12px;
+}
+
+.bottom-panel__logs-empty {
+  color: var(--muted-foreground);
+  padding: 8px 0;
+}
+
+.bottom-panel__log-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(120, 140, 180, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.bottom-panel__log-status {
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.bottom-panel__log-status--success { color: var(--success-foreground, #22c55e); }
+.bottom-panel__log-status--error { color: var(--destructive, #ef4444); }
+.bottom-panel__log-status--pending { color: var(--warning, #d99100); }
+
+.bottom-panel__log-op {
+  width: 110px;
+  flex-shrink: 0;
+  color: var(--foreground);
+}
+
+.bottom-panel__log-time {
+  color: var(--muted-foreground);
+  flex-shrink: 0;
+}
+
+.bottom-panel__log-detail {
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

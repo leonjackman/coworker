@@ -197,7 +197,10 @@ function App() {
   const [inspectorResizing, setInspectorResizing] = useState(false);
   const [changesPanelWidth, setChangesPanelWidth] = useState(380);
   const [changesPanelResizing, setChangesPanelResizing] = useState(false);
-  const [autonomy, setAutonomy] = useState<Autonomy>('guarded');
+  const [autonomy, setAutonomy] = useState<Autonomy>(() => {
+    const stored = localStorage.getItem('cw.autonomy') as Autonomy | null;
+    return stored === 'supervised' || stored === 'guarded' || stored === 'autonomous' ? stored : 'guarded';
+  });
   const [goalMaxRounds, setGoalMaxRounds] = useState<number>(50);
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
   const MAX_ATTACHMENT_MB_STORAGE_KEY = 'coworker-max-attachment-mb';
@@ -216,7 +219,16 @@ function App() {
     }
   };
   const [maxAttachmentMb, setMaxAttachmentMb] = useState<number>(loadMaxAttachmentMb);
-  const [workMode, setWorkMode] = useState<WorkMode>('build');
+  const [workMode, setWorkMode] = useState<WorkMode>(() => {
+    const stored = localStorage.getItem('cw.workMode') as WorkMode | null;
+    return stored === 'plan' || stored === 'build' ? stored : 'build';
+  });
+  useEffect(() => {
+    localStorage.setItem('cw.autonomy', autonomy);
+  }, [autonomy]);
+  useEffect(() => {
+    localStorage.setItem('cw.workMode', workMode);
+  }, [workMode]);
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [references, setReferences] = useState<SessionReference[]>([]);
@@ -539,7 +551,10 @@ function App() {
   const sendMessage = async (override?: { message: string; projectId?: string; goalMode?: boolean; goalText?: string }) => {
     // 目标编辑模式：从 DOM 读取 textarea 值，更新目标卡
     if (editingGoalDraft) {
-      const textarea = document.querySelector('textarea');
+      // Scope to the composer's own textarea — the goal-edit draft lives in the
+      // composer. A bare document.querySelector would grab any other textarea
+      // (e.g. a memory editor panel) on the page.
+      const textarea = document.querySelector<HTMLTextAreaElement>('.composer textarea');
       let newGoal: string;
       if (override?.message) {
         newGoal = override.message;
@@ -710,6 +725,7 @@ function App() {
     activeAssistantMessageIdsRef.current[streamKey(requestSessionId)] = assistantMessageId;
     let streamedContent = '';
     let localParts: MessagePart[] = [];
+    let receivedDone = false;
     let streamStartAt = Date.now();
     streamStartAtsRef.current[streamKey(requestSessionId)] = streamStartAt;
     let inGoal = false;
@@ -841,6 +857,7 @@ function App() {
           ),
         );
       } else if (event.type === 'done') {
+        receivedDone = true;
         // Only confirm the session for the currently-viewed session's stream;
         // a background stream from another session must never hijack the view.
         if (event.session_id && event.session_id === sessionIdRef.current) {
@@ -903,6 +920,7 @@ function App() {
         // Force-loop nudge: agent didn't use tools, system will retry.
         if (goalMatchesView) setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
       } else if (event.type === 'goal_done') {
+        receivedDone = true;
         const failed =
           Boolean(event.stalled) ||
           ['timeout', 'stopped', 'interrupted', 'max_rounds_exceeded'].includes(event.reason || '');
@@ -1083,10 +1101,17 @@ function App() {
       // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
       // 按消息 id 收尾（每个流持有独立 id），因此切走会话后后台流结束时也会被正确收尾，
       // 侧栏 running 指示随之清除；不会误伤其它流的消息。
+      // 若流结束却从未收到 done/goal_done（断线、后端重启），标记为 interrupted
+      // 而非 done —— 半截回复不能被伪装成「已完成」。
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
+            ? {
+                ...item,
+                content: streamedContent || (receivedDone ? item.content : t('chat.stream_interrupted')),
+                status: receivedDone ? 'done' : 'interrupted',
+                streamEndAt: Date.now(),
+              }
             : item,
         ),
       );
@@ -2145,6 +2170,24 @@ function App() {
       if (streamControllersRef.current[key] === controller) {
         delete streamControllersRef.current[key];
       }
+      // Reconcile with the backend: if the stream ended WITHOUT a terminal
+      // goal_done/goal_paused (e.g. the backend restarted mid-loop), the goal
+      // card would stay "running" forever and lock the composer. Ask the
+      // backend for the real status and settle it.
+      void (async () => {
+        try {
+          const status = await chatService.getGoalStatus(targetSessionId);
+          if (status.status === 'done' && status.goal?.progress) {
+            setGoal((current) => (current.running ? { ...current, done: true, running: false, progress: status.goal?.progress || current.progress } : current));
+          } else if (status.status === 'paused') {
+            setGoal((current) => (current.running ? { ...current, paused: true, running: false } : current));
+          } else if (!status.status || status.status === 'none') {
+            setGoal((current) => ({ ...current, running: false }));
+          }
+        } catch {
+          // keep whatever the card shows; polling covers it later
+        }
+      })();
     }
   };
 
@@ -2606,7 +2649,6 @@ function App() {
               runtimeConfig={runtimeConfig}
               sessionCount={sessions.length}
               projectCount={projects.length}
-              messageCount={messages.length}
               {...(currentProjectId ? { projectId: currentProjectId } : {})}
               onViewChange={setBottomPanelView}
               onResizeStart={() => setBottomPanelResizing(true)}

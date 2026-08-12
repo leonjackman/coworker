@@ -378,7 +378,7 @@ app.on('before-quit', () => {
   isQuitting = true;
 });
 
-function requestBackend(pathname, method = 'GET', payload = undefined) {
+function requestBackend(pathname, method = 'GET', payload = undefined, timeoutMs = 10000) {
   const data = payload ? JSON.stringify(payload) : undefined;
   const options = {
     hostname: BACKEND_HOST,
@@ -398,7 +398,7 @@ function requestBackend(pathname, method = 'GET', payload = undefined) {
     const timeout = setTimeout(() => {
       req.destroy();
       reject(new Error(`Backend request timed out: ${method} ${pathname}`));
-    }, 10000);
+    }, timeoutMs);
 
     const req = http.request(options, (res) => {
       clearTimeout(timeout);
@@ -429,7 +429,7 @@ function requestBackend(pathname, method = 'GET', payload = undefined) {
       reject(new Error(`Failed to connect to backend: ${e.message}`));
     });
 
-    req.setTimeout(10000);
+    req.setTimeout(timeoutMs);
     req.on('timeout', () => {
       clearTimeout(timeout);
       req.destroy();
@@ -626,19 +626,19 @@ ipcMain.handle('create-session', async (event, payload) => {
 });
 
 ipcMain.handle('delete-session', async (event, sessionId) => {
-  return requestBackend(`/sessions/${sessionId}`, 'DELETE');
+  return requestBackend(`/sessions/${encodeURIComponent(sessionId)}`, 'DELETE');
 });
 
 ipcMain.handle('rename-session', async (event, payload) => {
-  return requestBackend(`/sessions/${payload.session_id}/rename`, 'POST', { title: payload.title });
+  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/rename`, 'POST', { title: payload.title });
 });
 
 ipcMain.handle('get-session', async (event, sessionId) => {
-  return requestBackend(`/sessions/${sessionId}`);
+  return requestBackend(`/sessions/${encodeURIComponent(sessionId)}`);
 });
 
 ipcMain.handle('generate-title', async (event, payload) => {
-  return requestBackend(`/sessions/${payload.session_id}/generateTitle`, 'POST', {
+  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/generateTitle`, 'POST', {
     first_user_message: payload.first_user_message,
     assistant_response: payload.assistant_response || '',
     language: payload.language || 'zh',
@@ -713,13 +713,13 @@ function startStreamingRequest(requestId, path, payload, sender, eventName = 'ch
 }
 
 ipcMain.handle('rollback-message', async (event, payload) => {
-  return requestBackend(`/sessions/${payload.session_id}/messages/${payload.message_id}/rollback`, 'POST', {
+  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/rollback`, 'POST', {
     with_code: !!payload?.with_code,
-  });
+  }, 60000);
 });
 
 ipcMain.handle('get-revert-preview', async (event, payload) => {
-  return requestBackend(`/sessions/${payload.session_id}/messages/${payload.message_id}/revert-preview`);
+  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/revert-preview`);
 });
 
 ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language }) => {
@@ -755,11 +755,11 @@ ipcMain.handle('open-directory-picker', async (event, options = {}) => {
 });
 
 ipcMain.handle('rename-project', async (event, payload) => {
-  return requestBackend(`/projects/${payload.project_id}/rename`, 'POST', { name: payload.name });
+  return requestBackend(`/projects/${encodeURIComponent(payload.project_id)}/rename`, 'POST', { name: payload.name });
 });
 
 ipcMain.handle('delete-project', async (event, projectId) => {
-  return requestBackend(`/projects/${projectId}`, 'DELETE');
+  return requestBackend(`/projects/${encodeURIComponent(projectId)}`, 'DELETE');
 });
 
 ipcMain.handle('list-tool-audit', async (event, limit) => {
@@ -880,11 +880,11 @@ ipcMain.handle('create-provider', async (event, payload) => {
 });
 
 ipcMain.handle('update-provider', async (event, payload) => {
-  return requestBackend(`/providers/${payload.provider_id}`, 'PUT', payload.params);
+  return requestBackend(`/providers/${encodeURIComponent(payload.provider_id)}`, 'PUT', payload.params);
 });
 
 ipcMain.handle('delete-provider', async (event, providerId) => {
-  return requestBackend(`/providers/${providerId}`, 'DELETE');
+  return requestBackend(`/providers/${encodeURIComponent(providerId)}`, 'DELETE');
 });
 
 ipcMain.handle('set-default-provider', async (event, payload) => {

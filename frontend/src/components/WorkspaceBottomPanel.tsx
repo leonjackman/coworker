@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { RuntimeConfig } from '../types';
+import type { RuntimeConfig, ToolAuditEvent } from '../types';
 import { t } from '../lib/i18n';
 import { TerminalView } from './TerminalView';
+import { chatService } from '../services/chatService';
 
 export type BottomPanelView = 'terminal' | 'logs';
 
@@ -11,7 +12,6 @@ interface WorkspaceBottomPanelProps {
   runtimeConfig?: RuntimeConfig | null;
   sessionCount: number;
   projectCount: number;
-  messageCount: number;
   projectId?: string;
   onViewChange: (view: BottomPanelView) => void;
   onResizeStart?: () => void;
@@ -24,9 +24,10 @@ const MAX_HEIGHT_RATIO = 0.8;
 
 export function WorkspaceBottomPanel({
   view,
+  runtimeStatus,
+  runtimeConfig,
   sessionCount,
   projectCount,
-  messageCount,
   projectId,
   onViewChange,
   onResizeStart,
@@ -34,6 +35,27 @@ export function WorkspaceBottomPanel({
   onResizeHeight,
 }: WorkspaceBottomPanelProps) {
   const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const [auditEvents, setAuditEvents] = useState<ToolAuditEvent[]>([]);
+
+  // Load real tool-audit events when the logs view is active (not a placeholder).
+  useEffect(() => {
+    if (view !== 'logs') return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await chatService.listToolAudit(40);
+        if (!cancelled) setAuditEvents(res.events || []);
+      } catch {
+        // backend unreachable — keep whatever we have
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [view]);
 
   const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -99,7 +121,30 @@ export function WorkspaceBottomPanel({
         {view === 'terminal' ? (
           <TerminalView {...(projectId ? { projectId } : {})} />
         ) : (
-          <pre>{`runtime: ready\nsessions: ${sessionCount}\nprojects: ${projectCount}\nmessages: ${messageCount}`}</pre>
+          <div className="bottom-panel__logs">
+            <div className="bottom-panel__logs-meta">
+              <span>{t('bottom_panel.runtime_status', { status: runtimeStatus })}</span>
+              <span>{t('bottom_panel.runtime_mode', { mode: runtimeConfig?.default_mode ?? '-' })}</span>
+              <span>{t('bottom_panel.sessions', { count: sessionCount })}</span>
+              <span>{t('bottom_panel.projects', { count: projectCount })}</span>
+            </div>
+            <div className="bottom-panel__logs-list">
+              {auditEvents.length === 0 ? (
+                <p className="bottom-panel__logs-empty">{t('bottom_panel.logs_empty')}</p>
+              ) : (
+                auditEvents.slice().reverse().map((event, index) => (
+                  <div className="bottom-panel__log-row" key={`${event.timestamp}-${index}`}>
+                    <span className={`bottom-panel__log-status bottom-panel__log-status--${event.status}`}>{event.status}</span>
+                    <span className="bottom-panel__log-op">{event.operation}</span>
+                    <span className="bottom-panel__log-time">{new Date(event.timestamp).toLocaleTimeString()}</span>
+                    <span className="bottom-panel__log-detail">
+                      {[event.details?.path, Array.isArray(event.details?.command) ? event.details.command.join(' ') : ''].filter(Boolean).join(' · ')}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         )}
       </div>
     </section>

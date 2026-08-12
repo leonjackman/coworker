@@ -130,6 +130,7 @@ export interface ChatService {
   clearCheckpoints: () => Promise<{ status: string }>;
   getRetentionSettings: () => Promise<{ trace_lines: number; audit_lines: number }>;
   saveRetentionSettings: (patch: { trace_lines?: number; audit_lines?: number }) => Promise<{ trace_lines: number; audit_lines: number }>;
+  installSkill: (name: string, content: string, commands?: { name: string; description: string; body: string }[]) => Promise<{ status: string; message?: string }>;
   getTerminalUrl: (projectId?: string) => string;
   streamRegenerateMessage: (sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   streamEditMessage: (
@@ -203,9 +204,23 @@ class ElectronChatService implements ChatService {
     const requestId = `stream-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const abortStream = () => window.electronAPI?.abortChatStream(requestId);
     const detachAbortListener = attachAbortListener(signal, abortStream);
+    // Idle watchdog mirrors the HTTP path: if the backend stops pushing events
+    // (a hung provider/tool) abort the stream so the "running" bar cannot hang
+    // forever in Electron either.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => abortStream(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
+    const wrappedEvent: StreamEventCallback = (event) => {
+      resetIdle();
+      onEvent(event);
+    };
     try {
-      await window.electronAPI.streamChatMessage(requestId, request, onEvent);
+      await window.electronAPI.streamChatMessage(requestId, request, wrappedEvent);
     } finally {
+      if (idleTimer) clearTimeout(idleTimer);
       detachAbortListener();
     }
   }
@@ -319,6 +334,17 @@ class ElectronChatService implements ChatService {
   async listSkills(enabledOnly = false): Promise<SkillsListResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listSkills(enabledOnly);
+  }
+
+  async installSkill(name: string, content: string, commands?: { name: string; description: string; body: string }[]): Promise<{ status: string; message?: string }> {
+    const res = await fetch(`${BACKEND_URL}/skills/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, content, commands: commands || [] }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.detail || `Failed to install skill (${res.status})`);
+    return data;
   }
 
   async getSkill(name: string, command?: string): Promise<SkillDetailResponse> {
@@ -677,14 +703,6 @@ class HttpChatService implements ChatService {
   async updateRuntimeConfig(request: RuntimeConfigUpdate): Promise<RuntimeConfig> {
     return this.request<RuntimeConfig>('/config', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-  }
-
-  async startGoal(request: { session_id: string; goal: string; language: string }): Promise<void> {
-    return this.request('/goal/start', {
-      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
@@ -1177,8 +1195,16 @@ class HttpChatService implements ChatService {
   }
 
   async listSkills(enabledOnly = false): Promise<SkillsListResponse> {
-    const query = enabledOnly ? '?enabled_only=true' : '';
+    const query = enabledOnly ? '?enabled_only=1' : '';
     return this.request<SkillsListResponse>(`/skills${query}`);
+  }
+
+  async installSkill(name: string, content: string, commands?: { name: string; description: string; body: string }[]): Promise<{ status: string; message?: string }> {
+    return this.request<{ status: string; message?: string }>('/skills/install', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, content, commands: commands || [] }),
+    });
   }
 
   async getSkill(name: string, command?: string): Promise<SkillDetailResponse> {

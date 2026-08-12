@@ -254,7 +254,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   sessionId?: string;
-  status?: 'queued' | 'running' | 'done' | 'stopped' | 'error';
+  status?: 'queued' | 'running' | 'done' | 'stopped' | 'error' | 'interrupted';
   streamStartAt?: number;
   streamEndAt?: number;
   work_mode?: WorkMode;

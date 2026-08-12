@@ -274,8 +274,10 @@ def format_skills_prompt(skills: list[SkillEntry]) -> str:
         return ""
     lines = [
         "\n\nThe following skills provide specialized instructions for specific tasks.",
-        "Use the read_file tool to load a skill's file when the task matches its description.",
-        "If a skill's <version> differs from a previous turn, re-read its SKILL.md before using it.",
+        "Only each skill's name + description are shown below; its full SKILL.md body lives "
+        "outside the workspace sandbox, so use the dedicated `load_skill` tool (not read_file) "
+        "to load a skill's file when the task matches its description.",
+        "If a skill's <version> differs from a previous turn, re-load its SKILL.md before using it.",
         "When a skill file references a relative path, resolve it against the skill directory "
         "(parent of SKILL.md) and use that absolute path in tool calls.",
         "",

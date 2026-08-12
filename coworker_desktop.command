@@ -28,17 +28,21 @@ echo "[3/5] Building frontend..."
 
 echo "[4/5] Starting backend..."
 # Kill any stale backend holding the port, then wait for the port to free up.
+# Only kill pids whose command line actually looks like the Coworker backend, so
+# an unrelated process that happens to use the port is never killed.
 STALE_PIDS="$(lsof -ti :"$BACKEND_PORT" 2>/dev/null || true)"
-if [[ -n "$STALE_PIDS" ]]; then
-  echo "  Releasing port $BACKEND_PORT held by: $STALE_PIDS"
-  kill $STALE_PIDS 2>/dev/null || true
-  for _ in {1..20}; do
-    if ! lsof -ti :"$BACKEND_PORT" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 0.25
-  done
-fi
+for pid in $STALE_PIDS; do
+  if ps -p "$pid" -o command= 2>/dev/null | grep -q "uvicorn.*main:app\|coworker.*main"; then
+    echo "  Releasing port $BACKEND_PORT held by Coworker backend (pid $pid)"
+    kill "$pid" 2>/dev/null || true
+  fi
+done
+for _ in {1..20}; do
+  if ! lsof -ti :"$BACKEND_PORT" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.25
+done
 
 "$ROOT_DIR/backend/venv/bin/python" -m uvicorn main:app --host 127.0.0.1 --port "$BACKEND_PORT" --app-dir "$ROOT_DIR/backend" &
 BACKEND_PID="$!"
@@ -94,7 +98,13 @@ fi
 
 echo "[5/5] Launching desktop window..."
 if [[ "${COWORKER_SKIP_DESKTOP:-0}" == "1" ]]; then
-  echo "Desktop launch skipped by COWORKER_SKIP_DESKTOP=1"
+  echo "Desktop launch skipped by COWORKER_SKIP_DESKTOP=1 — backend stays up on 127.0.0.1:$BACKEND_PORT for testing."
+  echo "Press Ctrl+C to stop the backend."
+  # Keep the backend alive instead of exiting (exit would trigger the cleanup
+  # trap and kill it). Wait for Ctrl+C.
+  while kill -0 "$BACKEND_PID" 2>/dev/null; do
+    sleep 1
+  done
   exit 0
 fi
 

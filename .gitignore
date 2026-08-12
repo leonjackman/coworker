@@ -49,3 +49,6 @@ out/
 
 # Project-level long-term memory (app data, per-project)
 .coworker/
+
+# User runtime settings (persisted by the app; per-machine, must not ship)
+.coworker_settings.json

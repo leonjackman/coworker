@@ -313,6 +313,10 @@ class McpSessionManager:
         self.mcp_manager = mcp_manager
         self._oauth_dir = self.data_dir / "mcp_oauth"
         self._oauth_dir.mkdir(parents=True, exist_ok=True)
+        # How long to skip re-probing a server after its last failed connect.
+        # Without this, every model call retries a dead server and stalls the
+        # whole chat by the full connect timeout.
+        self.connect_fail_cooldown_seconds = 60.0
         self.open_browser = open_browser
         self._connect_timeout = connect_timeout
         self._call_timeout = call_timeout
@@ -321,6 +325,10 @@ class McpSessionManager:
         self._thread: threading.Thread | None = None
         self._servers: dict[str, _ServerRuntime] = {}
         self._connecting: dict[str, asyncio.Future] = {}
+        # server_id -> monotonic() timestamp of its last failed connect, so a dead
+        # server is not re-probed on every model call (which stalls each call by
+        # the full connect timeout). See :attr:`CONNECT_FAIL_COOLDOWN_SECONDS`.
+        self._connect_failures: dict[str, float] = {}
         # exposed tool name -> policy record (see :meth:`tool_policy`)
         self._policies: dict[str, dict[str, Any]] = {}
         # bare tool name -> server ids that all advertise it
@@ -504,7 +512,11 @@ class McpSessionManager:
         if not servers:
             return
 
-        pending = [s for s in servers if s["id"] not in self._servers]
+        pending = [
+            s
+            for s in servers
+            if s["id"] not in self._servers and not self._in_fail_cooldown(s["id"])
+        ]
         if not pending:
             return
 
@@ -522,11 +534,26 @@ class McpSessionManager:
             )
             self._connecting[server_id] = task
             try:
-                await task
+                # Bound the whole connect attempt so a server that opens but
+                # never completes the handshake cannot stall every model call by
+                # the sync bridge's full timeout AND leave no failure record.
+                # On timeout we mark the server for cooldown so the next call
+                # skips it (see _in_fail_cooldown).
+                await asyncio.wait_for(asyncio.shield(task), timeout=self._connect_timeout + 10)
+            except (TimeoutError, asyncio.TimeoutError):
+                logger.warning("MCP connect to %s exceeded its budget; cooling down", server_id)
+                self._connect_failures[server_id] = time.monotonic()
             finally:
                 self._connecting.pop(server_id, None)
 
         await asyncio.gather(*(connect_one(s) for s in pending), return_exceptions=True)
+
+    def _in_fail_cooldown(self, server_id: str) -> bool:
+        """Whether a failed connect happened recently enough to skip retrying."""
+        last = self._connect_failures.get(server_id)
+        if last is None:
+            return False
+        return time.monotonic() - last < self.connect_fail_cooldown_seconds
 
     async def _connect_safely(
         self,
@@ -572,9 +599,9 @@ class McpSessionManager:
         except BaseException as exc:  # noqa: BLE001 - one bad server must not affect others
             if _classify_auth_error(exc):
                 status, error = STATUS_NEEDS_AUTH, _friendly_error(exc, server.get("transport", ""))
-            else:
-                status, error = STATUS_ERROR, _friendly_error(exc, server.get("transport", ""))
+            else:                status, error = STATUS_ERROR, _friendly_error(exc, server.get("transport", ""))
             logger.info("MCP server %s not available: %s", server_id, error)
+            self._connect_failures[server_id] = time.monotonic()
             await asyncio.to_thread(
                 self.mcp_manager.update_server_status,
                 server_id,
@@ -584,6 +611,7 @@ class McpSessionManager:
                 [],
             )
             return None
+        self._connect_failures.pop(server_id, None)
         await self._refresh_statuses({server_id})
         return rt
 

@@ -327,3 +327,4 @@
 | 2026-08-12 | 阶段 3 | 完成：R1-R6（真后台流、前后端死代码清理、运行记录导出/清空/保留、provider 密钥入 Keychain、README）；R1 先复现再修复，R4 面板经 ego-browser 验证 |
 | 2026-08-12 | 补做 | 完成：文件陈旧守卫跨轮持久化（决策②→A）、记忆并发检测+合并（决策①→A）；均先验证后实现 |
 | 2026-08-12 | 验收 | 全面验收已完成修复点，修复 20 项 bug 隐患（4 高 / 12 中 / 4 低），详见"全面验收"节 |
+| 2026-08-12 | 二轮全局审计 | 全新审计发现的 P0/P1/P2/二梯队/三梯队问题全部处理：provider 密钥迁移丢 key、MCP 死 server 冷却、load_skill 工具、rerun_stream 工作区、install_skill 审批、goal force 去重、chat_stream/edit 流中防护、各类泄漏、SSE 断线标记 interrupted、Electron 空闲超时/IPC 编码、LLM 内置重试、ContextWindow 长上下文滚动、git_status 工具、技能创建 UI、autonomy/workMode 持久化、日志面板真数据、README 修正、launcher 安全杀进程、.coworker_settings.json 移出版本控制 |

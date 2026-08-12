@@ -46,6 +46,10 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageType, setMessageType] = useState<'ok' | 'error'>('ok');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createContent, setCreateContent] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
 
   // Detail modal
   const [detail, setDetail] = useState<SkillEntry | null>(null);
@@ -292,22 +296,82 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
         {/* ── Add skill view (secondary page) ── */}
         {viewMode === 'add' && (
           <div className="add-skill-page">
-            <div className="add-skill-page__custom">
-              <div className="add-skill-page__grid">
-                <GridCard
-                  icon={<span className="skill-custom__icon">📄</span>}
-                  title={t('skills.custom_create')}
-                  description={t('skills.custom_create_desc')}
-                  onClick={() => {/* TODO: open create-skill flow */}}
-                />
-                <GridCard
-                  icon={<span className="skill-custom__icon">📁</span>}
-                  title={t('skills.custom_import')}
-                  description={t('skills.custom_import_desc')}
-                  onClick={() => {/* TODO: open import-skill (file picker) flow */}}
-                />
+            {!createOpen ? (
+              <div className="add-skill-page__custom">
+                <div className="add-skill-page__grid">
+                  <GridCard
+                    icon={<span className="skill-custom__icon">📄</span>}
+                    title={t('skills.custom_create')}
+                    description={t('skills.custom_create_desc')}
+                    onClick={() => setCreateOpen(true)}
+                  />
+                  <GridCard
+                    icon={<span className="skill-custom__icon">📁</span>}
+                    title={t('skills.custom_import')}
+                    description={t('skills.custom_import_desc')}
+                    onClick={() => setCreateOpen(true)}
+                  />
+                </div>
               </div>
-            </div>
+            ) : (
+              <form
+                className="add-skill-page__form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!createName.trim() || !createContent.trim()) return;
+                  setCreateBusy(true);
+                  setMessage(null);
+                  void chatService
+                    .installSkill(createName.trim(), createContent)
+                    .then(async (result) => {
+                      if (result.status !== 'ok') throw new Error(result.message || t('skills.install_failed'));
+                      setMessageType('ok');
+                      setMessage(t('skills.install_success'));
+                      setCreateOpen(false);
+                      setCreateName('');
+                      setCreateContent('');
+                      onSkillsChange?.();
+                    })
+                    .catch((err) => {
+                      setMessageType('error');
+                      setMessage(translateError(err));
+                    })
+                    .finally(() => setCreateBusy(false));
+                }}
+              >
+                <label className="add-skill-page__field">
+                  <span>{t('skills.custom_name')}</span>
+                  <input
+                    value={createName}
+                    onChange={(e) => setCreateName(e.target.value)}
+                    placeholder="my-skill"
+                    disabled={createBusy}
+                  />
+                </label>
+                <label className="add-skill-page__field">
+                  <span>{t('skills.custom_content')}</span>
+                  <textarea
+                    value={createContent}
+                    onChange={(e) => setCreateContent(e.target.value)}
+                    placeholder={'---\nname: my-skill\ndescription: ...\n---\n...'}
+                    rows={12}
+                    disabled={createBusy}
+                  />
+                </label>
+                {message && (
+                  <p className={messageType === 'ok' ? 'add-skill-page__msg add-skill-page__msg--ok' : 'add-skill-page__msg add-skill-page__msg--error'}>{message}</p>
+                )}
+                <div className="add-skill-page__actions">
+                  <Button variant="secondary" type="button" onClick={() => { setCreateOpen(false); setMessage(null); }} disabled={createBusy}>
+                    {t('common.cancel')}
+                  </Button>
+                  <Button type="submit" disabled={createBusy || !createName.trim() || !createContent.trim()}>
+                    {createBusy ? <Loader2 size={14} className="add-skill-page__spin" /> : null}
+                    {t('skills.custom_create_submit')}
+                  </Button>
+                </div>
+              </form>
+            )}
           </div>
         )}
 

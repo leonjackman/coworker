@@ -36,7 +36,7 @@ coworker/
 │           ├── memory_scanner.py  # Memory file discovery + scan
 │           ├── memory_middleware.py # Session read injection into the prompt
 │           ├── auto_extract.py    # Phase 2: LLM extraction + proposals
-│           └── selftest.py        # 18-check offline test suite
+│           └── selftest.py        # Offline test suite (21+ checks)
 ├── electron/
 │   ├── main.js                    # Window, tray, IPC, backend process lifecycle
 │   └── preload.js                 # Renderer-safe API bridge
@@ -113,7 +113,7 @@ NODE_ENV=development npx electron . --no-sandbox
 ## Implemented Features
 
 - Streaming chat through FastAPI SSE and Electron IPC.
-- LangGraph-backed multi-stage single-agent runtime: planner -> executor -> verifier -> summarizer. The executor stage uses LangChain `create_agent` with Pydantic-schema tools: `search_files`, `read_file`, and gated `replace_in_file` / `apply_text_edits` / `write_file` / `run_command`.
+- LangGraph-backed single-agent runtime built with LangChain `create_agent`, gated by phase/autonomy middleware (Plan/Build, goal loop, plan approval, HITL approval, MCP tool policy, skills catalog, long-term memory). Tools: `search_files`, `read_file`, `git_status`, gated `replace_in_file` / `apply_text_edits` / `write_file` / `run_command`, and `install_skill` / `load_skill` / `memory`.
 - LangGraph SQLite checkpointing owns durable runtime message state for real provider sessions; persisted `SessionStore` remains the UI transcript owner and only bootstraps runtime state when no checkpoint exists.
 - LangChain/LangGraph invocations carry standard Runnable `run_name`, `tags`, `metadata`, and `thread_id` config so LangSmith/LangChain tracing can observe the agent run when tracing environment variables are enabled.
 - Local Agent trace records for run start/done/error, stage completion, and HITL interrupt state, exposed through the Runtime Observability settings panel.
@@ -125,13 +125,12 @@ NODE_ENV=development npx electron . --no-sandbox
 - Standalone sessions plus project sessions in the sidebar.
 - Markdown rendering, code highlighting, code copy button, and lazy-loaded Shiki highlighter.
 - Text attachment ingestion, attachment-only sending, attachment persistence in session history.
-- Slash commands: `/help`, `/new`, `/clear`, `/providers`, `/settings`, `/skills`, `/memory`, `/plan`, `/build`.
+- Slash commands: `/help`, `/new`, `/clear`, `/providers`, `/settings`, `/skills`, `/memory`, `/goal` (Plan/Build are composer buttons, not slash commands).
 - Long-term memory: project/user scopes stored as markdown files, injected into every chat prompt; editable in a Memory panel (`/memory` or sidebar); optional Phase 2 LLM auto-extract proposes memory entries from recent turns, reviewable in the same panel.
 - Chinese/English i18n.
 - Theme settings with presets, user color customization, light/dark mode, and translucent glass effect.
 - Electron tray behavior: close window keeps app running; quit exits frontend and backend.
 - Startup diagnostics instead of silent white screen.
-- Workspace tree, directory listing, and file preview APIs.
 - True background streams: switching sessions keeps the original session's reply streaming to completion; per-session `/clear` never wipes other sessions' in-progress messages.
 - Runtime observability retention/export: Agent trace and tool audit logs can be exported, cleared, and their retention (line caps) configured from Settings.
 - Provider API keys stored in the macOS Keychain (0600-file fallback), keeping secrets out of plaintext JSON.
