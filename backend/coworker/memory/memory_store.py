@@ -69,6 +69,11 @@ class MemoryStore:
         Concurrent agent turns and the auto-extract worker therefore cannot lose
         each other's entries. A crash mid-write can never leave a truncated file
         (atomic rename).
+
+        A post-write verification then detects the one writer that never takes
+        the lock — the user editing ``MEMORY.md`` directly in an editor — and
+        MERGES both sides instead of silently dropping either (decision ①=A:
+        conflict detection + merge, not last-write-wins).
         """
         path = self.path_for(scope)
         if path.parent and not path.parent.exists():
@@ -81,13 +86,29 @@ class MemoryStore:
                 )
                 new_entries = updater(current.entries)
                 payload = render_file(new_entries)
-                tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-                tmp.write_text(payload, encoding="utf-8")
-                tmp.replace(path)
-                path.touch(exist_ok=True)
+                self._write_payload_atomic(path, payload)
+                # Detect a non-cooperating writer (no lock held) that interleaved
+                # between our read and our write, and merge rather than overwrite.
+                try:
+                    disk_raw = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    disk_raw = ""
+                if disk_raw != payload:
+                    disk = _read_file_with_retry(path, scope)
+                    merged = _merge_entries(disk.entries, new_entries)
+                    merged_payload = render_file(merged)
+                    if merged_payload != payload:
+                        self._write_payload_atomic(path, merged_payload)
         finally:
             _release_lock(lock_fd)
         return _read_file_with_retry(path, scope)
+
+    @staticmethod
+    def _write_payload_atomic(path: Path, payload: str) -> None:
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(path)
+        path.touch(exist_ok=True)
 
     # -- read API ----------------------------------------------------------
 
@@ -232,6 +253,22 @@ except ImportError:  # pragma: no cover - Windows branch
         finally:
             fd.seek(0)
             msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _merge_entries(disk_entries: list[str], ours: list[str]) -> list[str]:
+    """Merge a disk state with our just-written entries (exact-dedup).
+
+    Disk entries keep their order (they may be newer); our additions that are not
+    already present are appended. Used when a non-cooperating writer changed the
+    file between our read and our write — neither side is dropped.
+    """
+    seen = set(disk_entries)
+    merged = list(disk_entries)
+    for entry in ours:
+        if entry not in seen:
+            merged.append(entry)
+            seen.add(entry)
+    return merged
 
 
 def _open_locked(path: Path):

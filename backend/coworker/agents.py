@@ -34,7 +34,7 @@ from .providers import ProviderEntry, ProviderManager
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .changes import ChangeStore
 from .sessions import SessionStore
-from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace
+from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace, fingerprint_path_for
 from .checkpoints import CheckpointManager
 
 AgentMode = Literal["single"]
@@ -2854,7 +2854,11 @@ class AgentRuntimeRegistry:
         self.session_store = session_store
         self.skill_manager = skill_manager
         self.memory_manager = memory_manager
-        self.default_workspace = Workspace(settings.workspace_dir, settings.data_dir / TOOL_AUDIT_FILENAME)
+        self.default_workspace = Workspace(
+            settings.workspace_dir,
+            settings.data_dir / TOOL_AUDIT_FILENAME,
+            fingerprint_path_for(settings.data_dir, settings.workspace_dir),
+        )
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
         self.change_store = ChangeStore(settings.data_dir)
@@ -2973,7 +2977,7 @@ class AgentRuntimeRegistry:
         workspace = None
         if workspace_path:
             from pathlib import Path
-            workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
+            workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
         runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions)
         async for event in runtime.resume_interrupt(approval, decisions):
@@ -2986,7 +2990,7 @@ class AgentRuntimeRegistry:
         workspace = None
         if workspace_path:
             from pathlib import Path
-            workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME)
+            workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
         return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions)
 

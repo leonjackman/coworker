@@ -37,6 +37,17 @@ MAX_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_OUTPUT_CHARS = 12_000
 TOOL_AUDIT_FILENAME = "tool_audit.jsonl"
 COMMAND_APPROVAL_FILENAME = "command_approvals.json"
+
+
+def fingerprint_path_for(data_dir: Path, workspace_root: Path) -> Path:
+    """Stable per-workspace path for the persisted staleness fingerprints.
+
+    Keyed by the resolved workspace root so different projects keep separate
+    fingerprint files even when they live under the same parent directory."""
+    root_key = hashlib.sha256(str(Path(workspace_root).resolve()).encode("utf-8")).hexdigest()[:24]
+    return Path(data_dir) / "fingerprints" / f"{root_key}.json"
+
+
 # Retention policy for the run-observation stores: these grow unboundedly if
 # never pruned, so terminal-state approvals and the rolling JSONL logs are
 # capped at the most recent N entries.
@@ -262,12 +273,19 @@ class CommandApprovalStore:
 
 
 class Workspace:
-    def __init__(self, root: Path, audit_path: Path | None = None):
+    def __init__(self, root: Path, audit_path: Path | None = None, fingerprint_path: Path | None = None):
         self.root = root.resolve()
         self.audit_path = audit_path
         if self.audit_path:
             self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+        # Persisted staleness fingerprints: loading them at construction time makes
+        # the "File changed since it was last read" guard work ACROSS turns and
+        # sessions (each request builds a fresh Workspace, so an in-memory dict
+        # alone only protected a single turn).
         self._fingerprints: dict[str, tuple[int, int, str]] = {}
+        self._fingerprint_path = fingerprint_path
+        if fingerprint_path is not None:
+            self._load_fingerprints()
 
     def resolve_path(self, file_path: str) -> Path:
         candidate = (self.root / file_path).resolve()
@@ -297,11 +315,46 @@ class Workspace:
         stat = path.stat()
         return stat.st_mtime_ns, stat.st_size, self._sha256(path)
 
+    def _load_fingerprints(self) -> None:
+        """Load the persisted staleness fingerprints for this workspace."""
+        if self._fingerprint_path is None or not self._fingerprint_path.exists():
+            return
+        try:
+            raw = json.loads(self._fingerprint_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            return
+        loaded: dict[str, tuple[int, int, str]] = {}
+        for key, value in raw.items() if isinstance(raw, dict) else []:
+            if isinstance(value, list) and len(value) == 3:
+                try:
+                    loaded[str(key)] = (int(value[0]), int(value[1]), str(value[2]))
+                except (TypeError, ValueError):
+                    continue
+        self._fingerprints = loaded
+
+    def _persist_fingerprints(self) -> None:
+        """Write the staleness fingerprints to disk so future turns/sessions reuse
+        them. Atomic replace; read-captured fingerprints survive a restart."""
+        if self._fingerprint_path is None:
+            return
+        try:
+            from .atomicio import atomic_write_text
+
+            payload = json.dumps(
+                {k: list(v) for k, v in self._fingerprints.items()},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            atomic_write_text(self._fingerprint_path, payload)
+        except OSError:
+            pass
+
     def _record_fingerprint(self, target: Path) -> None:
         try:
             self._fingerprints[self.rel_path(target)] = self._fingerprint(target)
         except (OSError, ValueError):
-            pass
+            return
+        self._persist_fingerprints()
 
     def _ensure_fresh(self, target: Path) -> None:
         """Reject edits to files that changed since the agent last read them.
@@ -740,7 +793,7 @@ class Workspace:
         if not file_existed:
             if after is not None and current == after:
                 target.unlink(missing_ok=True)
-                self._fingerprints.pop(self.rel_path(target), None)
+                self._fingerprints.pop(self.rel_path(target), None); self._persist_fingerprints()
                 return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), "deleted": True, **({"id": change_id} if change_id else {})}
             result["reason"] = "file changed after it was created; refusing to delete"
             return result
@@ -755,7 +808,7 @@ class Workspace:
             except OSError as exc:
                 result["reason"] = str(exc)[:200]
                 return result
-            self._fingerprints.pop(self.rel_path(target), None)
+            self._fingerprints.pop(self.rel_path(target), None); self._persist_fingerprints()
             return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), "deleted": before == "", **({"id": change_id} if change_id else {})}
 
         # File diverged (another session/user edited it): try hunk-level inverse
@@ -774,7 +827,7 @@ class Workspace:
         except OSError as exc:
             result["reason"] = str(exc)[:200]
             return result
-        self._fingerprints.pop(self.rel_path(target), None)
+        self._fingerprints.pop(self.rel_path(target), None); self._persist_fingerprints()
         return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), **({"id": change_id} if change_id else {})}
 
     @staticmethod

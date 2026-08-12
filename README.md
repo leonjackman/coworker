@@ -144,7 +144,7 @@ NODE_ENV=development npx electron . --no-sandbox
 - Default provider remains simulated until a real provider is configured.
 - Provider API keys are stored in the macOS Keychain (falling back to a 0600 file when Keychain is unavailable); MCP env/header secrets stay in the (0600-protected) local config.
 - Agent trace and tool audit logs are rolling JSONL with user-configurable retention (Settings → Runtime Observability), exportable and clearable from the same panel.
-- The file-staleness guard ("File changed since it was last read") only applies within a single agent turn; cross-turn/cross-session edits rely on git + the change rollback panel rather than a persistent fingerprint.
+- The file-staleness guard ("File changed since it was last read") persists per workspace across turns, sessions and restarts: writing over content the agent has not seen (because the file changed since its last read) is rejected until it re-reads the file.
 - Packaging/distribution is not complete.
 - Plan/Build and Default/Full Access gating is still Coworker-owned runtime policy.
 

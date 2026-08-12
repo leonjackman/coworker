@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from .projects import ProjectStore
 from .sessions import SessionStore
-from .workspace import TOOL_AUDIT_FILENAME, Workspace
+from .workspace import TOOL_AUDIT_FILENAME, Workspace, fingerprint_path_for
 
 
 class WorkspaceController:
@@ -13,6 +13,7 @@ class WorkspaceController:
         self.session_store = session_store
         self.default_workspace = default_workspace
         self.audit_path = data_dir / TOOL_AUDIT_FILENAME
+        self.data_dir = data_dir
 
     def validate_workspace_path(self, workspace_path: str) -> str:
         cleaned = workspace_path.strip()
@@ -32,7 +33,11 @@ class WorkspaceController:
         return str(path)
 
     def create_workspace(self, workspace_path: str) -> Workspace:
-        return Workspace(Path(workspace_path), self.audit_path)
+        return Workspace(
+            Path(workspace_path),
+            self.audit_path,
+            fingerprint_path_for(self.data_dir, Path(workspace_path)),
+        )
 
     def default(self) -> Workspace:
         return self.create_workspace(str(self.default_workspace))
