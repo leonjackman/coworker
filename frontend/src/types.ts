@@ -613,7 +613,6 @@ export interface PendingRequest {
     | { type: 'plan_start'; session_id?: string }
     | { type: 'plan_delta'; content: string; session_id?: string }
     | { type: 'plan_end'; content: string; session_id?: string }
-    | { type: 'agent_activity'; name: string; status: string; session_id?: string }
     | {
         type: 'approval_required';
         approval_id: string;
@@ -653,6 +652,7 @@ export interface PendingRequest {
     | { type: 'error'; error: string; session_id?: string }
     | { type: 'goal_start'; goal: string; session_id?: string }
     | { type: 'goal_round'; round: number; goal: string; status?: string; session_id?: string }
+    | { type: 'goal_edited'; goal: string; round?: number; stream_id?: string; session_id?: string }
     | { type: 'goal_checkpoint'; achieved: boolean; progress?: string; verification?: string; session_id?: string }
     | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number; session_id?: string; stalled?: boolean; reason?: string; already?: boolean }
     | { type: 'goal_paused'; goal?: string; round?: number; session_id?: string }

@@ -86,7 +86,11 @@ class MemoryManager:
         sections: list[tuple[str, str, list[str]]] = []
         for memory in scan.files():
             label = memory.scope
-            source = f"{memory.path} (updated {_format_mtime(memory.mtime)})"
+            # Do NOT expose the on-disk path to the model: handing it the exact
+            # file path invites direct read/write edits that bypass the store's
+            # protections (duplicate rejection, scope whitelist). Use an
+            # anonymous label that still carries freshness.
+            source = f"{'project' if label == 'project' else 'user'} memory (updated {_format_mtime(memory.mtime)})"
             sections.append((label, source, memory.entries))
         return format_memory_prompt(sections, self.config.char_limit)
 
@@ -129,35 +133,34 @@ class MemoryManager:
 
     # -- Phase 2 nudge ------------------------------------------------------
 
-    def record_turn(self, session_id: str) -> None:
-        """Count a settled turn for a session (Phase 2 trigger bookkeeping)."""
-        if not self.config.auto_extract:
-            return
-        with self._lock:
-            self._turn_counters[session_id] = self._turn_counters.get(session_id, 0) + 1
-
-    def should_extract(self, session_id: str) -> bool:
-        """Whether the nudge threshold has been crossed for this session."""
-        with self._lock:
-            count = self._turn_counters.get(session_id, 0)
-            return self.config.auto_extract and count >= max(1, self.config.nudge_interval)
-
-    def reset_turns(self, session_id: str) -> None:
-        with self._lock:
-            self._turn_counters.pop(session_id, None)
+    # Hard cap on tracked sessions so abandoned counters (sessions that never
+    # reach the nudge interval) cannot grow memory without bound.
+    _MAX_TRACKED_SESSIONS = 500
 
     def after_turn(self, session_id: str, workspace_root: Path | None = None) -> None:
         """Called once per settled turn by the agent runtimes.
 
-        Records the turn; when the nudge threshold is crossed, dispatches an
-        async extraction task. Never blocks and never raises.
+        Records the turn and, when the nudge threshold is crossed, dispatches an
+        async extraction task. The record+check+reset cycle happens under a
+        single lock so two concurrent turns for the same session can never both
+        schedule an extraction. Never blocks and never raises.
+
+        Note: the extraction task reads the transcript asynchronously, so it may
+        run before the current turn's messages are persisted; that is an accepted
+        best-effort race (the next nudge will re-cover the turn).
         """
         if not self.config.enabled or not self.config.auto_extract:
             return
-        self.record_turn(session_id)
-        if not self.should_extract(session_id):
-            return
-        self.reset_turns(session_id)
+        threshold = max(1, self.config.nudge_interval)
+        with self._lock:
+            count = self._turn_counters.get(session_id, 0) + 1
+            if len(self._turn_counters) >= self._MAX_TRACKED_SESSIONS and session_id not in self._turn_counters:
+                # Evict the oldest tracked session to keep the dict bounded.
+                self._turn_counters.pop(next(iter(self._turn_counters)), None)
+            self._turn_counters[session_id] = count
+            if count < threshold:
+                return
+            self._turn_counters.pop(session_id, None)
         try:
             import asyncio
 

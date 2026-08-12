@@ -522,9 +522,21 @@ class CommandApprovalResolve(BaseModel):
 # Long-term memory helpers (read injection; Phase 2 auto-extract dispatch)
 # --------------------------------------------------------------------------- #
 
-def _memory_scope_store(scope: str) -> Any:
-    """Return a MemoryStore for the given scope using the default workspace."""
-    manager = memory_manager.for_workspace(settings.workspace_dir)
+def _memory_scope_store(scope: str, project_id: str = "") -> Any:
+    """Return a MemoryStore for the given scope.
+
+    Resolves the project's workspace when ``project_id`` is given so the memory
+    UI targets the *active* project (agents already write to the session's
+    project workspace). Falls back to the default workspace otherwise.
+    """
+    workspace_dir = settings.workspace_dir
+    if project_id:
+        try:
+            workspace = workspace_controller.workspace_for_project(project_id)
+            workspace_dir = workspace.root
+        except Exception:  # noqa: BLE001 - unknown project -> default workspace
+            pass
+    manager = memory_manager.for_workspace(workspace_dir)
     if scope in ("project", "user"):
         return manager.store
     raise HTTPException(status_code=400, detail=f"unknown memory scope: {scope}")
@@ -700,6 +712,7 @@ class MemoryWriteRequest(BaseModel):
     scope: str = "project"
     content: str = ""
     target: str = ""
+    project_id: str = ""
 
 
 class MemoryProposalResolveRequest(BaseModel):
@@ -708,9 +721,17 @@ class MemoryProposalResolveRequest(BaseModel):
 
 
 @app.get("/api/memory/status")
-async def memory_status():
+async def memory_status(project_id: str = ""):
     """Full memory overview: entries per scope, sizes, budget, enabled flags."""
-    scan = memory_manager.scanner.scan(include_missing=True)
+    workspace_dir = settings.workspace_dir
+    if project_id:
+        try:
+            workspace = workspace_controller.workspace_for_project(project_id)
+            workspace_dir = workspace.root
+        except Exception:  # noqa: BLE001 - unknown project -> default workspace
+            pass
+    manager = memory_manager.for_workspace(workspace_dir)
+    scan = manager.scanner.scan(include_missing=True)
     payload: dict[str, Any] = {
         "enabled": memory_manager.enabled,
         "auto_extract": memory_manager.auto_extract,
@@ -728,7 +749,7 @@ async def memory_status():
             "entry_count": len(memory.entries),
         }
     payload["scopes"].setdefault("project", {"path": "", "mtime": 0.0, "entries": [], "char_count": 0, "entry_count": 0})
-    payload["scopes"].setdefault("user", {"path": str(memory_manager.scanner.user_path()), "mtime": 0.0, "entries": [], "char_count": 0, "entry_count": 0})
+    payload["scopes"].setdefault("user", {"path": str(manager.scanner.user_path()), "mtime": 0.0, "entries": [], "char_count": 0, "entry_count": 0})
     return payload
 
 
@@ -740,7 +761,7 @@ async def memory_write(request: MemoryWriteRequest):
     """
     if not memory_manager.enabled:
         raise HTTPException(status_code=400, detail="memory is disabled")
-    store = _memory_scope_store(request.scope)
+    store = _memory_scope_store(request.scope, request.project_id)
     try:
         if request.target:
             if not request.content:
@@ -760,7 +781,7 @@ async def memory_remove(request: MemoryWriteRequest):
     """Remove a memory entry identified by ``target`` (substring match)."""
     if not memory_manager.enabled:
         raise HTTPException(status_code=400, detail="memory is disabled")
-    store = _memory_scope_store(request.scope)
+    store = _memory_scope_store(request.scope, request.project_id)
     if not request.target:
         raise HTTPException(status_code=400, detail="target is required for remove")
     try:
@@ -772,7 +793,7 @@ async def memory_remove(request: MemoryWriteRequest):
 
 @app.post("/api/memory/clear")
 async def memory_clear(request: MemoryWriteRequest):
-    store = _memory_scope_store(request.scope)
+    store = _memory_scope_store(request.scope, request.project_id)
     memory = store.clear(request.scope)
     return {"scope": request.scope, "entries": memory.entries}
 
@@ -801,6 +822,7 @@ async def resolve_memory_proposal(request: MemoryProposalResolveRequest):
 class MemoryFileRequest(BaseModel):
     scope: str = "project"
     content: str = ""
+    project_id: str = ""
 
 
 class MemorySettingsUpdate(BaseModel):
@@ -812,18 +834,26 @@ class MemorySettingsUpdate(BaseModel):
 
 
 @app.get("/api/memory")
-async def list_memory_files():
+async def list_memory_files(project_id: str = ""):
     """Memory library: every memory file (project + user) with parsed metadata."""
-    scan = memory_manager.scanner.scan(include_missing=True)
+    workspace_dir = settings.workspace_dir
+    if project_id:
+        try:
+            workspace = workspace_controller.workspace_for_project(project_id)
+            workspace_dir = workspace.root
+        except Exception:  # noqa: BLE001 - unknown project -> default workspace
+            pass
+    manager = memory_manager.for_workspace(workspace_dir)
+    scan = manager.scanner.scan(include_missing=True)
     return {"files": [memory.to_dict() for memory in scan.files()]}
 
 
 @app.get("/api/memory/file")
-async def get_memory_file(scope: str = "project"):
+async def get_memory_file(scope: str = "project", project_id: str = ""):
     """Full raw body of one memory file for editing."""
     if scope not in ("project", "user"):
         raise HTTPException(status_code=400, detail=f"unknown memory scope: {scope}")
-    store = _memory_scope_store(scope)
+    store = _memory_scope_store(scope, project_id)
     memory = store.list_scope(scope)
     return {"scope": scope, "path": str(memory.path), "content": store.read_file_text(scope)}
 
@@ -833,7 +863,7 @@ async def save_memory_file(request: MemoryFileRequest):
     """Replace one memory file's full content (re-parsed into entries)."""
     if not memory_manager.enabled:
         raise HTTPException(status_code=400, detail="memory is disabled")
-    store = _memory_scope_store(request.scope)
+    store = _memory_scope_store(request.scope, request.project_id)
     memory = store.write_file_text(request.scope, request.content)
     return {"scope": request.scope, "entries": memory.entries}
 
@@ -1603,6 +1633,7 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
 class GenerateTitleRequest(BaseModel):
     first_user_message: str = ""
     assistant_response: str = ""
+    language: Language = "zh"
 
 
 @app.post("/sessions/{session_id}/generateTitle")
@@ -1626,7 +1657,10 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
         return {"status": "ok", "title": session.title}
     from coworker.agents import generate_title
     new_title = await asyncio.to_thread(
-        generate_title, user_message, assistant_message or request.assistant_response or ""
+        generate_title,
+        user_message,
+        assistant_message or request.assistant_response or "",
+        request.language,
     )
     final_title = new_title or session.title
     session_store.rename(session_id, final_title)
@@ -1638,6 +1672,11 @@ class EditMessageRequest(BaseModel):
     work_mode: Optional[str] = None
     access_mode: Optional[str] = None
     autonomy: Optional[str] = None
+    language: Language = "zh"
+
+
+class RegenerateRequest(BaseModel):
+    language: Language = "zh"
 
 
 class RollbackRequest(BaseModel):
@@ -1656,10 +1695,6 @@ def _guard_session_not_streaming(session_id: str) -> None:
             status_code=409,
             detail="session is still generating; wait for the current response to finish",
         )
-
-
-def request_language_for_session(session) -> str:
-    return "en" if getattr(session, "_language", "zh") == "en" else "zh"
 
 
 def _provider_id_for_model(provider_name: str, model: str) -> str:
@@ -1764,7 +1799,7 @@ async def revert_preview(session_id: str, message_id: str):
 
 
 @app.post("/sessions/{session_id}/messages/{message_id}/regenerate")
-async def regenerate_message(session_id: str, message_id: str):
+async def regenerate_message(session_id: str, message_id: str, request: RegenerateRequest):
     """Re-run the assistant reply for the user message that precedes the given
     assistant message (or, if given a user message, for that user message).
     Truncates after that user message and streams a fresh reply."""
@@ -1793,12 +1828,39 @@ async def regenerate_message(session_id: str, message_id: str):
 
     work_mode = normalize_work_mode(session.work_mode)
     autonomy = normalize_autonomy(session.autonomy)
-    language = request_language_for_session(session)
+    language = request.language
     provider_id = _provider_id_for_model(provider_name, model)
 
     async def event_stream():
+        accumulated_content = ""
+
+        def _persist_partial():
+            nonlocal accumulated_content
+            if not accumulated_content:
+                return
+            try:
+                session = session_store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=accumulated_content,
+                    mode="single",
+                    provider=provider_name,
+                    model=model,
+                    work_mode=work_mode,
+                    autonomy=autonomy,
+                    parts=[],
+                )
+                last = session.messages[-1] if session.messages else None
+                if last is not None:
+                    agent_registry.change_store.assign_message(session_id, last.id)
+            except KeyError:
+                pass
+
         def _on_event(event):
+            nonlocal accumulated_content
             event["session_id"] = session_id
+            if event.get("type") == "delta" and event.get("content"):
+                accumulated_content += event.get("content", "")
             if event.get("type") == "done":
                 try:
                     session = session_store.append_message(
@@ -1819,6 +1881,10 @@ async def regenerate_message(session_id: str, message_id: str):
                     pass
 
         def _on_error(exc):
+            # Persist whatever was produced before the failure so tool-change
+            # records from this stream stay bound to a message (rollback needs
+            # the binding).
+            _persist_partial()
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
         async for kind, payload in _sse_events(
@@ -1873,12 +1939,39 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             session_store.update_modes(session_id, work_mode, autonomy)
         except KeyError:
             pass
-    language = request_language_for_session(session)
+    language = request.language
     provider_id = _provider_id_for_model(provider_name, model)
 
     async def event_stream():
+        accumulated_content = ""
+
+        def _persist_partial():
+            nonlocal accumulated_content
+            if not accumulated_content:
+                return
+            try:
+                session = session_store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=accumulated_content,
+                    mode="single",
+                    provider=provider_name,
+                    model=model,
+                    work_mode=work_mode,
+                    autonomy=autonomy,
+                    parts=[],
+                )
+                last = session.messages[-1] if session.messages else None
+                if last is not None:
+                    agent_registry.change_store.assign_message(session_id, last.id)
+            except KeyError:
+                pass
+
         def _on_event(event):
+            nonlocal accumulated_content
             event["session_id"] = session_id
+            if event.get("type") == "delta" and event.get("content"):
+                accumulated_content += event.get("content", "")
             if event.get("type") == "done":
                 try:
                     session = session_store.append_message(
@@ -1899,6 +1992,10 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                     pass
 
         def _on_error(exc):
+            # Persist whatever was produced before the failure so tool-change
+            # records from this stream stay bound to a message (rollback needs
+            # the binding).
+            _persist_partial()
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
         async for kind, payload in _sse_events(
@@ -2773,11 +2870,9 @@ def _mark_market_installed(
     """Annotate each market skill dict with ``installed``.
 
     Matching is exact-first: a skill is marked installed when its ``(source,
-    slug)`` matches a record persisted at install time (see
-    ``SkillMarketManager.record_install``). This is reliable because the market
-    slug is the stable identity — the local SKILL.md ``name`` can differ from
-    the market slug / display name, which previously caused already-installed
-    cards to look installable.
+    slug, owner)`` matches a record persisted at install time (see
+    ``SkillMarketManager.record_install``). Owner is part of the identity because
+    ClawHub slugs are not unique across owners.
 
     A name/slug fallback is kept so skills installed *before* this feature also
     get flagged when their frontmatter ``name`` happens to match.
@@ -2790,8 +2885,9 @@ def _mark_market_installed(
             slug = skill.get("slug") or ""
             name = skill.get("name") or ""
             src = skill.get("source") or ""
+            owner = skill.get("owner") or ""
             skill["installed"] = (
-                (src, slug) in installed_ids
+                (src, slug, owner) in installed_ids
                 or slug in installed_names
                 or name in installed_names
             )

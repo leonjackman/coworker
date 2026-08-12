@@ -637,7 +637,17 @@ class Workspace:
 
     @staticmethod
     def command_digest(command: list[str], cwd: str) -> str:
-        payload = json.dumps({"command": command, "cwd": cwd}, ensure_ascii=False, sort_keys=True)
+        # Canonicalize the cwd so "always allow" given for "." / "./" / "" matches
+        # the digest computed at run time (which normalizes the resolved cwd to ""
+        # at the workspace root). Without this, the middleware's pre-check (raw
+        # tool-call cwd) never matches the allowlist entry recorded with a
+        # normalized cwd, so always-allow silently fails.
+        normalized_cwd = str(cwd or "").strip()
+        if normalized_cwd in ("", ".", "./"):
+            normalized_cwd = ""
+        payload = json.dumps(
+            {"command": command, "cwd": normalized_cwd}, ensure_ascii=False, sort_keys=True
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def resolve_executable(self, executable: str, cwd: Path) -> str:

@@ -130,7 +130,7 @@
 
 ## 阶段 2｜记忆体验 + 语言规则 + 对话正确性
 
-- [ ] **L1 语言规则（LLM 默认跟随系统 UI 语言）**
+- [x] **L1 语言规则（LLM 默认跟随系统 UI 语言）**
   - 预期：用户设置的系统语言是唯一权威；无论用户发什么语言，LLM 都默认用系统语言回复；用户消息里明确要求"用英文回答"时临时切换；编辑/重新生成/恢复 goal/自动标题全部一致跟随系统语言
   - 改法：
     - `backend/main.py:1596-1600` `EditMessageRequest` 加 `language: Language = "zh"`
@@ -139,65 +139,71 @@
     - `backend/coworker/agents.py:58` TITLE_SYSTEM_PROMPT 的 "Use the same language as the user's first message" 改为 `Reply in {language_name}`；`generate_title`（agents.py:1271-1294）增加 `language` 参数；`main.py:1589-1590` 调用处传请求语言
     - 前端：编辑（`commitEditMessage`）与重新生成（`handleRegenerateMessage`）请求体加 `language: getLanguage()`；`goalResume` 链（`chatService.ts:594` → `preload.js:38` → `main.js:794-835` → `/goal/resume`）加传 `getLanguage()`
 
-- [ ] **L2 记忆 scope 对齐（UI 跟随当前会话项目）**
+- [x] **L2 记忆 scope 对齐（UI 跟随当前会话项目）**
   - 预期：多项目下记忆面板显示/编辑的是当前会话所属项目的记忆，不再永远指向默认工作区
   - 改法：`backend/main.py:525-530` 的 `/api/memory/*` 请求模型加 `project_id`（可选）；`workspace_controller` 用 `workspace_for_project(project_id)` 解析存储；前端 `MemoryPanel.tsx` 打开时传当前 `session.project_id`
 
-- [ ] **L3 `_recent_transcript` 超大消息不再清空**
+- [x] **L3 `_recent_transcript` 超大消息不再清空**
   - 预期：单条超长消息不再导致自动提取静默跳过
   - 改法：`backend/coworker/memory/auto_extract.py:167-185` 调整顺序：先 `lines.append(line)` 再累加并判断超限 break（保证至少保留尾部最新消息）
 
-- [ ] **L4 自动提取调度与计数健壮性**
+- [x] **L4 自动提取调度与计数健壮性**
   - 预期：重复/重跑不再双倍计数、不再并发双调度提取；`_turn_counters` 不再无限增长
   - 改法：`backend/coworker/memory/memory_manager.py:132-147` 把 `record_turn`/`should_extract`/`reset_turns` 合并进同一把锁临界区；`:55` 的 `_turn_counters` 加容量上限（如超过 N 清空最旧）或按会话关闭清理；`after_turn`（149-170）改为在调用方持久化消息之后再调度（或至少对异步竞态加注释容错）
 
-- [ ] **L5 记忆注入不再暴露绝对路径**
+- [x] **L5 记忆注入不再暴露绝对路径**
   - 预期：prompt 中不再给模型绝对文件路径，避免诱导模型用文件工具直接改记忆文件（绕开 store 保护）；与文档"agent 无法直接碰记忆"一致
   - 改法：`backend/coworker/memory/memory_manager.py:89` 的 `source=f"{memory.path}..."` 改为相对/匿名标签（如 `source="project memory"`）；`memory_prompt.py:26` 的 `source="..."` 属性同步处理
 
-- [ ] **L6 自动标题判断改为目标会话**
+- [x] **L6 自动标题判断改为目标会话**
   - 预期：每个新会话首次有回复后都能自动生成标题，不再永远 "New chat"
   - 改法：`frontend/src/App.tsx:1534-1545` 用目标会话的消息条数判断（而不是全局 `messages`）；可把当前会话消息传入判断
 
-- [ ] **L7 `goal_edited`/`agent_activity` SSE 事件处理或清理**
+- [x] **L7 `goal_edited`/`agent_activity` SSE 事件处理或清理**
   - 预期：后端发出的 `goal_edited` 不再被前端静默丢弃；`agent_activity` 有明确处理或从类型删除
   - 改法：`frontend/src/types.ts:605-663` 补齐 union 分支；`App.tsx:716-954` 加对应 handler（如 goal_edited 更新 goal 状态；agent_activity 若是未实现功能则从类型中删除并同步后端或标注 TODO）
 
-- [ ] **L8 错误路径补 `assign_message`**
+- [x] **L8 错误路径补 `assign_message`**
   - 预期：流错误/断连后该轮改动仍能按消息回滚
   - 改法：`backend/main.py:1087-1103` 与 `:1765-1766` 的 `_on_error` 持久化路径，补上与成功路径一致的 `changes.assign_message(session_id, message_id)` 调用
 
-- [ ] **L9 always-allow digest 的 cwd 归一化统一**
+- [x] **L9 always-allow digest 的 cwd 归一化统一**
   - 预期："对 cwd=`.` 的某个命令允许始终执行"不再因 digest 不一致而失效
   - 改法：`backend/main.py:2023` 存储 digest 前与 `backend/coworker/workspace.py:536,542`、`agents.py:620-626` 统一用同一 cwd 归一化函数（相对根则归为 `""`）
 
-- [ ] **L10 SSE 解析兼容 CRLF / 跨 chunk 拆帧**
+- [x] **L10 SSE 解析兼容 CRLF / 跨 chunk 拆帧**
   - 预期：后端若改发 `\r\n\r\n` 或第三方源，不再整帧丢失
   - 改法：`electron/main.js:443-531,618-633` 与 `frontend/src/services/chatService.ts:739-751` 的按 `\n\n` split 改为按 `\r?\n\r?\n` 匹配并缓存未完成片段（buffer 累积直到遇到空行）
 
-- [ ] **L11 SkillHub 上游不可达如实上抛**
+- [x] **L11 SkillHub 上游不可达如实上抛**
   - 预期：SkillHub 源挂时市场页显示错误（与 ClawHub 修复 b1c935d1 对齐），不再显示空网格误导用户
   - 改法：`backend/coworker/skills/skill_market.py:513-515`（`_skillhub_fetch_page`）与 `:538-540`（`_list_skillhub_categories`）返回 `MarketPage(error=...)`/上抛，而非 `([], None)` 静默空
 
-- [ ] **L12 聊天安装技能保留全部 frontmatter 键**
+- [x] **L12 聊天安装技能保留全部 frontmatter 键**
   - 预期：从聊天安装的技能不再丢失 `disable-model-invocation`、`allowed-tools`、`paths`、`license` 等键，行为与原始一致
   - 改法：`backend/coworker/skills/skill_market.py:418-431` `install_from_content` 有 `commands` 时不再只重写 `name/description/commands/version`，改为保留原 frontmatter 全部键（仅更新需改动的）
 
-- [ ] **L13 市场溯源带 owner**
+- [x] **L13 市场溯源带 owner**
   - 预期：ClawHub 跨 owner 撞 slug 时，"已安装"徽章只标真正的来源
   - 改法：`backend/coworker/skills/skill_market.py:196-202` `installed_identifiers` 返回 `(source, slug, owner)`；`backend/main.py:2715-2722` `_mark_market_installed` 匹配时用三元组（对旧记录保留 `(source, slug)` 回退）
 
-- [ ] **L14 install_skill 装完可见（决策③=A）**
+- [x] **L14 install_skill 装完可见（决策③=A）**
   - 预期：agent 安装/删除技能后，消息流与侧栏即时可见，用户随时能查看/卸载，不打断 agent 流程
   - 改法：前端在安装/删除 tool 完成后触发技能列表刷新（`App.tsx:237` 的 `refreshSkills` 复用），`SkillsPanel.tsx` 自动刷新；agent 消息中工具调用卡片已展示 install 结果则无需额外提示
 
 ### 阶段 2 验证清单
 
-- [ ] `backend/venv/bin/python -m coworker.memory.selftest` 通过
-- [ ] 中/英文 UI 下各验证：发消息、编辑消息、重新生成、恢复 goal —— LLM 全部按系统语言回复；消息里说"用英文回答"能临时切换
-- [ ] 记忆面板在项目会话下打开，确认指向该项目记忆（新建项目 + 写记忆验证）
-- [ ] 故意让 SkillHub 不可达（改 hosts 或断网），市场页显示错误而非空网格
-- [ ] `cd frontend && npx tsc --noEmit` 通过
+- [x] `backend/venv/bin/python -m coworker.memory.selftest` 通过
+- [x] 中/英文 UI 下验证：发消息 / 编辑 / 重新生成 / 恢复 goal / 自动标题全部跟随系统语言；curl 实测 regenerate `language=en`→英文、`zh`→中文、generateTitle `en`→"Quick introduction"；浏览器实测英文提问在中文 UI 下回复中文、会话自动标题"操作系统信号量详解"
+- [x] 记忆面板在项目会话下打开，确认指向该项目记忆（local 项目显示 `/Users/leon/Documents/CodeProjects/local/.coworker/MEMORY.md`；用前端相同调用 `POST /api/memory/file?project_id` 写入/读回验证项目隔离）
+- [x] 故意让 SkillHub 不可达（mock `_get_json=None`），`search('skillhub',...)` 返回 `error: source_unavailable` 而非空网格
+- [x] `cd frontend && npx tsc --noEmit` 通过
+
+### 阶段 2 额外说明（经真机验证）
+
+- L1 语言链路实测无回退：主流 / 编辑 / 重新生成 / goal resume / 自动标题全部走 `request.language`（前端 `getLanguage()`），`request_language_for_session` 死函数已删除。
+- L8 仅 chat_stream 错误路径原本已含 assign_message；编辑/重新生成错误路径此前完全不持久化部分内容，本次补上"累积 + 错误持久化 + assign_message"，使该轮工具变更可被消息级回滚命中。
+- L10 SSE 兼容 CRLF：electron 与 chatService 的 4+3 处 `buffer += chunk` 均加 `\r\n`→`\n` 归一化，跨 chunk 拆帧原有 buffer 累积已覆盖。
 
 ---
 
@@ -282,3 +288,4 @@
 |---|---|---|
 | 2026-08-12 | - | 初始版本：基于全局审计 + 决策 B/B/A/A/A、⑥ 做、打包不做 |
 | 2026-08-12 | 阶段 1 | 完成并提交：S1-S8、D1-D8、U1-U2；D9 实测后判定为误判/有界泄漏未改动；真机测试额外修复 chat_stream 的 sqlite database is locked 崩溃 |
+| 2026-08-12 | 阶段 2 | 完成：L1-L14（语言跟随系统、记忆 scope 对齐、自动标题、SkillHub 错误上抛、溯源带 owner、install 保留 frontmatter 等）；全部先验证后修复，前端经 ego-browser 真机验证 |

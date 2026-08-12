@@ -50,21 +50,24 @@ SYSTEM_PROMPT = (
     "You are Coworker, a local coding assistant. "
     "Use workspace tools only when they are needed and keep answers concise."
 )
-TITLE_SYSTEM_PROMPT = (
-    "You are a thread title generator. Output ONLY the title string. Nothing else. No code fences, no quotes, no explanation."
-    "Rules:"
-    " - The input is the first exchange of a conversation: the user's message and the AI's reply."
-    " - Summarize the exchange into a short title that captures the main topic, question, or task."
-    " - Use the same language as the user's first message."
-    " - Title must be a complete meaningful phrase."
-    " - Never include tool names like read tool, bash tool, edit tool."
-    " - Focus on the main topic, question, or task."
-    " - Keep exact: technical terms, numbers, filenames, HTTP codes."
-    " - Remove generic words: the, this, my, a, an."
-    " - Never respond to questions—just generate a title for the conversation."
-    " - For short or conversational messages (hello, lol, what's up, hey): generate a brief friendly title like 'Quick introduction', 'Brief check-in', 'Light chat', etc."
-    " - The title must be a single line, 3-40 characters, no explanations."
-)
+def _title_system_prompt(language: Language) -> str:
+    """Title-generation prompt. Titles follow the system UI language (the same
+    rule as chat replies), not the language of the user's message."""
+    return (
+        "You are a thread title generator. Output ONLY the title string. Nothing else. No code fences, no quotes, no explanation."
+        "Rules:"
+        " - The input is the first exchange of a conversation: the user's message and the AI's reply."
+        " - Summarize the exchange into a short title that captures the main topic, question, or task."
+        f" - Reply in {language_name(language)}."
+        " - Title must be a complete meaningful phrase."
+        " - Never include tool names like read tool, bash tool, edit tool."
+        " - Focus on the main topic, question, or task."
+        " - Keep exact: technical terms, numbers, filenames, HTTP codes."
+        " - Remove generic words: the, this, my, a, an."
+        " - Never respond to questions—just generate a title for the conversation."
+        " - For short or conversational messages (hello, lol, what's up, hey): generate a brief friendly title like 'Quick introduction', 'Brief check-in', 'Light chat', etc."
+        " - The title must be a single line, 3-40 characters, no explanations."
+    )
 MAX_ATTACHMENT_CHARS = 120_000
 MAX_REFERENCE_SESSION_CHARS = 60_000
 
@@ -1268,12 +1271,13 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
-def generate_title(first_user_message: str, assistant_response: str = "") -> str:
+def generate_title(first_user_message: str, assistant_response: str = "", language: Language = "zh") -> str:
     from langchain_openai import ChatOpenAI
     if assistant_response and assistant_response.strip():
         conversation = f"用户: {first_user_message}\n\nAI: {assistant_response}"
     else:
         conversation = first_user_message
+    title_prompt = _title_system_prompt(language)
     try:
         from .config import load_settings
         from .providers import ProviderManager
@@ -1283,7 +1287,7 @@ def generate_title(first_user_message: str, assistant_response: str = "") -> str
         if dp and dp.api_key and (dp.base_url or dp.provider_type):
             llm = ChatOpenAI(model=dp.model, temperature=0, api_key=dp.api_key, base_url=dp.base_url or None)
             response = llm.invoke([
-                {"role": "system", "content": TITLE_SYSTEM_PROMPT},
+                {"role": "system", "content": title_prompt},
                 {"role": "user", "content": conversation},
             ])
             title = coerce_message_content(response).strip().strip('"').strip("'")

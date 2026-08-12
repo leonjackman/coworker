@@ -783,6 +783,8 @@ function App() {
           if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
           if (event.files !== undefined) toolPart.files = event.files;
         }
+        // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
+        if (toolPart?.name === 'install_skill') void refreshSkills();
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -875,6 +877,8 @@ function App() {
         setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
       } else if (event.type === 'goal_round') {
         setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
+      } else if (event.type === 'goal_edited') {
+        setGoal((current) => ({ ...current, goalText: event.goal || current.goalText }));
       } else if (event.type === 'goal_checkpoint') {
         setGoal((current) => ({
           ...current,
@@ -1205,6 +1209,8 @@ function App() {
           if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
           if (event.files !== undefined) toolPart.files = event.files;
         }
+        // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
+        if (toolPart?.name === 'install_skill') void refreshSkills();
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -1390,6 +1396,8 @@ function App() {
           if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
           if (event.files !== undefined) toolPart.files = event.files;
         }
+        // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
+        if (toolPart?.name === 'install_skill') void refreshSkills();
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -1533,7 +1541,11 @@ function App() {
 
   const _generateSessionTitleIfNeeded = (firstMessageContent: string, assistantResponse: string, sessionSessionId?: string) => {
     if (!sessionSessionId) return;
-    if (messages.length > 0) return;
+    // Only auto-title a session that still has its default placeholder title.
+    // The previous guard checked the *global* messages array, so after ANY
+    // session had been used no new session was ever titled.
+    const target = sessions.find((s) => s.id === sessionSessionId);
+    if (target && target.title && target.title !== '新会话' && target.title !== 'New chat' && target.title !== '新对话') return;
     chatService.generateTitle(sessionSessionId, firstMessageContent, assistantResponse).then(
       (newTitle) => {
         if (newTitle && newTitle !== '新会话') {
@@ -1644,6 +1656,8 @@ function App() {
               tp.status = event.status === 'success' ? 'success' : 'error';
               if (event.output) tp.output = event.output;
             }
+            // 装完即见：agent 安装技能后立刻刷新技能列表。
+            if (tp?.name === 'install_skill') void refreshSkills();
             applyResume('running');
           } else if (event.type === 'plan_start') {
             resumeParts.push({ type: 'plan', content: '' });
@@ -2529,7 +2543,7 @@ function App() {
                   onSkillsChange={refreshSkills}
                 />
               ) : activeView === 'memory' ? (
-                <MemoryPanel />
+                <MemoryPanel projectId={currentProjectId} />
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}

@@ -167,7 +167,12 @@ Transcript:
 
 
 def _recent_transcript(messages: list[dict[str, Any]], max_chars: int = 12_000) -> str:
-    """Join the tail of messages into one concise transcript for extraction."""
+    """Join the tail of messages into one concise transcript for extraction.
+
+    Always keeps the newest message even when it alone exceeds the budget — an
+    oversized tail line must never produce an empty transcript (which would
+    silently skip extraction).
+    """
     lines: list[str] = []
     total = 0
     for msg in reversed(messages):
@@ -179,10 +184,10 @@ def _recent_transcript(messages: list[dict[str, Any]], max_chars: int = 12_000) 
             continue
         prefix = "USER" if role == "user" else "ASSISTANT"
         line = f"{prefix}: {content}"
-        total += len(line)
-        if total > max_chars:
+        if lines and total + len(line) > max_chars:
             break
         lines.append(line)
+        total += len(line)
     lines.reverse()
     return "\n".join(lines)
 

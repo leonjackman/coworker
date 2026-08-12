@@ -64,6 +64,7 @@ import type {
   MemorySettings,
   MemorySettingsPatch,
 } from '../types';
+import { getLanguage } from '../lib/i18n';
 
 const BACKEND_URL = import.meta.env.VITE_COWORKER_BACKEND_URL || 'http://localhost:9527';
 
@@ -176,9 +177,9 @@ export interface ChatService {
   clearMemoryScope: (scope: MemoryScope) => Promise<MemoryWriteResponse>;
   listMemoryProposals: () => Promise<MemoryProposalsResponse>;
   resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
-  getMemoryFiles: () => Promise<MemoryFileListResponse>;
-  getMemoryFileContent: (scope: MemoryScope) => Promise<MemoryFileContentResponse>;
-  saveMemoryFile: (scope: MemoryScope, content: string) => Promise<MemoryFileSaveResponse>;
+  getMemoryFiles: (projectId?: string) => Promise<MemoryFileListResponse>;
+  getMemoryFileContent: (scope: MemoryScope, projectId?: string) => Promise<MemoryFileContentResponse>;
+  saveMemoryFile: (scope: MemoryScope, content: string, projectId?: string) => Promise<MemoryFileSaveResponse>;
   getMemorySettings: () => Promise<MemorySettings>;
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
   revealInFolder: (path: string) => Promise<{ status: string }>;
@@ -419,19 +420,19 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.resolveMemoryProposal(request);
   }
 
-  async getMemoryFiles(): Promise<MemoryFileListResponse> {
+  async getMemoryFiles(projectId?: string): Promise<MemoryFileListResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getMemoryFiles();
+    return window.electronAPI.getMemoryFiles(projectId);
   }
 
-  async getMemoryFileContent(scope: MemoryScope): Promise<MemoryFileContentResponse> {
+  async getMemoryFileContent(scope: MemoryScope, projectId?: string): Promise<MemoryFileContentResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getMemoryFile(scope);
+    return window.electronAPI.getMemoryFile(scope, projectId);
   }
 
-  async saveMemoryFile(scope: MemoryScope, content: string): Promise<MemoryFileSaveResponse> {
+  async saveMemoryFile(scope: MemoryScope, content: string, projectId?: string): Promise<MemoryFileSaveResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.saveMemoryFile({ scope, content });
+    return window.electronAPI.saveMemoryFile({ scope, content, project_id: projectId || '' });
   }
 
   async getMemorySettings(): Promise<MemorySettings> {
@@ -591,7 +592,7 @@ class ElectronChatService implements ChatService {
 
   async resumeGoal(sessionId: string, onEvent: StreamEventCallback): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent);
+    await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent, getLanguage());
   }
 
   async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number }> {
@@ -643,7 +644,7 @@ class ElectronChatService implements ChatService {
 
   async generateTitle(sessionId: string, firstUserMessage: string, assistantResponse?: string): Promise<string> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    const response = await window.electronAPI.generateTitle(sessionId, firstUserMessage, assistantResponse);
+    const response = await window.electronAPI.generateTitle(sessionId, firstUserMessage, assistantResponse, getLanguage());
     return response.title;
   }
 }
@@ -735,7 +736,7 @@ class HttpChatService implements ChatService {
           const { done, value } = await reader.read();
           if (done) break;
           resetIdle();
-          buffer += decoder.decode(value, { stream: true });
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
           const frames = buffer.split('\n\n');
           buffer = frames.pop() ?? '';
           for (const frame of frames) {
@@ -944,7 +945,7 @@ class HttpChatService implements ChatService {
   }
 
   async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
-    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate`, {}, onEvent, signal);
+    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate`, { language: getLanguage() }, onEvent, signal);
   }
 
   async streamEditMessage(
@@ -954,7 +955,7 @@ class HttpChatService implements ChatService {
     onEvent: StreamEventCallback,
     options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
   ): Promise<void> {
-    const payload: Record<string, unknown> = { content };
+    const payload: Record<string, unknown> = { content, language: getLanguage() };
     if (options?.workMode) payload.work_mode = options.workMode;
     if (options?.autonomy) payload.autonomy = options.autonomy;
     await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, payload, onEvent, options?.signal);
@@ -989,7 +990,7 @@ class HttpChatService implements ChatService {
   }
 
   async resumeGoal(sessionId: string, onEvent: StreamEventCallback): Promise<void> {
-    await this.streamPost('/goal/resume', { session_id: sessionId }, onEvent);
+    await this.streamPost('/goal/resume', { session_id: sessionId, language: getLanguage() }, onEvent);
   }
 
   private async streamPost(path: string, payload: Record<string, unknown>, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
@@ -1090,7 +1091,11 @@ class HttpChatService implements ChatService {
     const response = await this.request<{ status: string; title: string }>(`/sessions/${sessionId}/generateTitle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ first_user_message: firstUserMessage, assistant_response: assistantResponse || '' }),
+      body: JSON.stringify({
+        first_user_message: firstUserMessage,
+        assistant_response: assistantResponse || '',
+        language: getLanguage(),
+      }),
     });
     return response.title;
   }
@@ -1280,19 +1285,21 @@ class HttpChatService implements ChatService {
     });
   }
 
-  async getMemoryFiles(): Promise<MemoryFileListResponse> {
-    return this.request<MemoryFileListResponse>('/api/memory');
+  async getMemoryFiles(projectId?: string): Promise<MemoryFileListResponse> {
+    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+    return this.request<MemoryFileListResponse>(`/api/memory${query}`);
   }
 
-  async getMemoryFileContent(scope: MemoryScope): Promise<MemoryFileContentResponse> {
-    return this.request<MemoryFileContentResponse>(`/api/memory/file?scope=${encodeURIComponent(scope)}`);
+  async getMemoryFileContent(scope: MemoryScope, projectId?: string): Promise<MemoryFileContentResponse> {
+    const query = projectId ? `&project_id=${encodeURIComponent(projectId)}` : '';
+    return this.request<MemoryFileContentResponse>(`/api/memory/file?scope=${encodeURIComponent(scope)}${query}`);
   }
 
-  async saveMemoryFile(scope: MemoryScope, content: string): Promise<MemoryFileSaveResponse> {
+  async saveMemoryFile(scope: MemoryScope, content: string, projectId?: string): Promise<MemoryFileSaveResponse> {
     return this.request<MemoryFileSaveResponse>('/api/memory/file', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, content }),
+      body: JSON.stringify({ scope, content, project_id: projectId || '' }),
     });
   }
 

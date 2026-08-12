@@ -88,7 +88,7 @@ declare global {
       deleteSession: (sessionId: string) => Promise<{ status: string }>;
       renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
       getSession: (sessionId: string) => Promise<SessionDetailResponse>;
-      generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string) => Promise<{ status: string; title: string }>;
+      generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string, language?: string) => Promise<{ status: string; title: string }>;
       listProjects: () => Promise<ProjectsListResponse>;
       createProject: (payload: CreateProjectRequest) => Promise<ProjectResponse>;
       openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
@@ -121,7 +121,7 @@ declare global {
       goalStop: (sessionId: string) => Promise<{ status: string }>;
       goalEdit: (payload: { session_id: string; goal: string }) => Promise<{ status: string }>;
       goalDelete: (sessionId: string) => Promise<{ status: string }>;
-  goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
+  goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback, language?: string) => Promise<void>;
   goalStart: (request: { session_id: string; goal: string; language: string }) => Promise<{ status: string }>;
       fetchSettings?: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number }>;
       saveSettings?: (settings: { goal_max_rounds?: number; max_attachment_mb?: number }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>;
@@ -151,9 +151,9 @@ declare global {
       clearMemoryScope: (payload: { scope: MemoryScope }) => Promise<MemoryWriteResponse>;
       listMemoryProposals: () => Promise<MemoryProposalsResponse>;
       resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
-      getMemoryFiles: () => Promise<MemoryFileListResponse>;
-      getMemoryFile: (scope: MemoryScope) => Promise<MemoryFileContentResponse>;
-      saveMemoryFile: (payload: { scope: MemoryScope; content: string }) => Promise<MemoryFileSaveResponse>;
+      getMemoryFiles: (projectId?: string) => Promise<MemoryFileListResponse>;
+      getMemoryFile: (scope: MemoryScope, projectId?: string) => Promise<MemoryFileContentResponse>;
+      saveMemoryFile: (payload: { scope: MemoryScope; content: string; project_id?: string }) => Promise<MemoryFileSaveResponse>;
       getMemorySettings: () => Promise<MemorySettings>;
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
       revealInFolder: (path: string) => Promise<{ status: string }>;

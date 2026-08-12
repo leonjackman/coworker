@@ -35,13 +35,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   goalPause: (sessionId) => ipcRenderer.invoke('goal-pause', sessionId),
   goalEdit: (payload) => ipcRenderer.invoke('goal-edit', payload),
   goalDelete: (sessionId) => ipcRenderer.invoke('goal-delete', sessionId),
-  goalResume: (requestId, sessionId, onEvent) => {
+  goalResume: (requestId, sessionId, onEvent, language) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;
       onEvent(data.event);
     };
     ipcRenderer.on('chat-stream-event', listener);
-    return ipcRenderer.invoke('start-goal-resume', { requestId, sessionId }).finally(() => {
+    return ipcRenderer.invoke('start-goal-resume', { requestId, sessionId, language: language || 'zh' }).finally(() => {
       ipcRenderer.removeListener('chat-stream-event', listener);
     });
   },
@@ -56,11 +56,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createSession: (payload) => ipcRenderer.invoke('create-session', payload),
   deleteSession: (sessionId) => ipcRenderer.invoke('delete-session', sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke('rename-session', { session_id: sessionId, title }),
-  generateTitle: (sessionId, firstUserMessage, assistantResponse) =>
+  generateTitle: (sessionId, firstUserMessage, assistantResponse, language) =>
     ipcRenderer.invoke('generate-title', {
       session_id: sessionId,
       first_user_message: firstUserMessage,
       assistant_response: assistantResponse || '',
+      language: language || 'zh',
     }),
   getSession: (sessionId) => ipcRenderer.invoke('get-session', sessionId),
   rollbackMessage: (sessionId, messageId, withCode) =>
@@ -124,8 +125,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearMemoryScope: (payload) => ipcRenderer.invoke('clear-memory-scope', payload),
   listMemoryProposals: () => ipcRenderer.invoke('list-memory-proposals'),
   resolveMemoryProposal: (payload) => ipcRenderer.invoke('resolve-memory-proposal', payload),
-  getMemoryFiles: () => ipcRenderer.invoke('get-memory-files'),
-  getMemoryFile: (scope) => ipcRenderer.invoke('get-memory-file', scope),
+  getMemoryFiles: (projectId) => ipcRenderer.invoke('get-memory-files', projectId || ''),
+  getMemoryFile: (scope, projectId) => ipcRenderer.invoke('get-memory-file', scope, projectId || ''),
   saveMemoryFile: (payload) => ipcRenderer.invoke('save-memory-file', payload),
   getMemorySettings: () => ipcRenderer.invoke('get-memory-settings'),
   saveMemorySettings: (payload) => ipcRenderer.invoke('save-memory-settings', payload),

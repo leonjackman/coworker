@@ -8,6 +8,7 @@ import { WorkspacePage } from './ui/workspace-page';
 
 interface MemoryPanelProps {
   onClose?: () => void;
+  projectId?: string | undefined;
 }
 
 type Flash = { kind: 'ok' | 'error'; text: string } | null;
@@ -36,7 +37,7 @@ function splitEntriesLocal(text: string): string[] {
     .filter(Boolean);
 }
 
-export function MemoryPanel({ onClose }: MemoryPanelProps) {
+export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   const [files, setFiles] = useState<MemoryFileInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<MemoryScope | null>(null);
@@ -55,14 +56,14 @@ export function MemoryPanel({ onClose }: MemoryPanelProps) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await chatService.getMemoryFiles();
+      const res = await chatService.getMemoryFiles(projectId);
       setFiles(res.files);
     } catch (error) {
       notify('error', translateError(error));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
     void load();
@@ -70,7 +71,7 @@ export function MemoryPanel({ onClose }: MemoryPanelProps) {
 
   const openEditor = async (scope: MemoryScope) => {
     try {
-      const res = await chatService.getMemoryFileContent(scope);
+      const res = await chatService.getMemoryFileContent(scope, projectId);
       setEditorPath(res.path);
       setContent(res.content);
       setEditing(scope);
@@ -83,7 +84,7 @@ export function MemoryPanel({ onClose }: MemoryPanelProps) {
     if (!editing) return;
     setSaving(true);
     try {
-      await chatService.saveMemoryFile(editing, content);
+      await chatService.saveMemoryFile(editing, content, projectId);
       notify('ok', t('memory.saved'));
       setEditing(null);
       await load();

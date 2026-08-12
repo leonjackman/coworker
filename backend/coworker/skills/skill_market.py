@@ -137,6 +137,14 @@ CLAWHUB_TRENDING_FETCH = 200
 _UPSTREAM_UNAVAILABLE = "source_unavailable"
 
 
+class _UpstreamUnavailable(RuntimeError):
+    """Raised when a market upstream is unreachable / malformed.
+
+    Converted into ``MarketPage(error=_UPSTREAM_UNAVAILABLE)`` by the callers so
+    the UI can tell "source is down" from "no results" (mirrors ClawHub's
+    handling)."""
+
+
 @dataclass
 class MarketPage:
     """A normalised page of market results."""
@@ -216,10 +224,15 @@ class SkillMarketManager:
             del data[name]
             self._save_provenance(data)
 
-    def installed_identifiers(self) -> set[tuple[str, str]]:
-        """Return ``{(source, slug)}`` for every market-installed skill."""
+    def installed_identifiers(self) -> set[tuple[str, str, str]]:
+        """Return ``{(source, slug, owner)}`` for every market-installed skill.
+
+        Owner is part of the identity because ClawHub slugs are not unique across
+        owners (the same ``pdf`` slug exists under several owners); matching on
+        ``(source, slug)`` alone marks the wrong owner's card as installed.
+        """
         return {
-            (info.get("source", ""), info.get("slug", ""))
+            (info.get("source", ""), info.get("slug", ""), info.get("owner") or "")
             for info in self._load_provenance().values()
             if isinstance(info, dict)
         }
@@ -432,14 +445,14 @@ class SkillMarketManager:
             if cmd_entries:
                 # Re-emit the root SKILL.md with a commands: frontmatter block so
                 # the catalog exposes the sub-commands. The original body becomes
-                # the package overview.
-                new_fm: dict[str, Any] = {
-                    "name": resolved,
-                    "description": frontmatter.get("description") or "",
-                    "commands": cmd_entries,
-                }
-                if frontmatter.get("version"):
-                    new_fm["version"] = frontmatter["version"]
+                # the package overview. Keep ALL original frontmatter keys —
+                # dropping everything except name/description/version silently
+                # changed skill behavior (disable-model-invocation, allowed-tools,
+                # paths, license, ... were lost).
+                new_fm: dict[str, Any] = dict(frontmatter)
+                new_fm["name"] = resolved
+                new_fm.setdefault("description", frontmatter.get("description") or "")
+                new_fm["commands"] = cmd_entries
                 fm_text = yaml.safe_dump(new_fm, allow_unicode=True, sort_keys=False)
                 root_content = f"---\n{fm_text}---\n{body}".strip() + "\n"
                 skill_file.write_text(root_content, encoding="utf-8")
@@ -488,14 +501,17 @@ class SkillMarketManager:
         page = offset // limit + 1
         skip = offset % limit
 
-        items, total = await self._skillhub_fetch_page(
-            page=page, page_size=limit, keyword=keyword, category=category
-        )
-        if skip and len(items) >= limit:
-            extra, _ = await self._skillhub_fetch_page(
-                page=page + 1, page_size=limit, keyword=keyword, category=category
+        try:
+            items, total = await self._skillhub_fetch_page(
+                page=page, page_size=limit, keyword=keyword, category=category
             )
-            items = items + extra
+            if skip and len(items) >= limit:
+                extra, _ = await self._skillhub_fetch_page(
+                    page=page + 1, page_size=limit, keyword=keyword, category=category
+                )
+                items = items + extra
+        except _UpstreamUnavailable:
+            return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 
         window = items[skip : skip + limit]
 
@@ -526,7 +542,7 @@ class SkillMarketManager:
 
         data = await _get_json(SKILLHUB_API, params)
         if not isinstance(data, dict):
-            return [], None
+            raise _UpstreamUnavailable(f"SkillHub returned no usable payload for page {page}")
 
         inner = data.get("data")
         if isinstance(inner, dict):

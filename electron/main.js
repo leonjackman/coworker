@@ -482,7 +482,7 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
       res.setEncoding('utf8');
       let buffer = '';
       res.on('data', (chunk) => {
-        buffer += chunk;
+        buffer += chunk.replace(/\r\n/g, '\n');
         let sepIndex;
         while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, sepIndex);
@@ -553,7 +553,7 @@ ipcMain.handle('start-approval-stream', async (event, { requestId, resumeId }) =
       res.setEncoding('utf8');
       let buffer = '';
       res.on('data', (chunk) => {
-        buffer += chunk;
+        buffer += chunk.replace(/\r\n/g, '\n');
         let sepIndex;
         while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, sepIndex);
@@ -633,6 +633,7 @@ ipcMain.handle('generate-title', async (event, payload) => {
   return requestBackend(`/sessions/${payload.session_id}/generateTitle`, 'POST', {
     first_user_message: payload.first_user_message,
     assistant_response: payload.assistant_response || '',
+    language: payload.language || 'zh',
   });
 });
 
@@ -654,7 +655,7 @@ function startStreamingRequest(requestId, path, payload, sender, eventName = 'ch
       res.setEncoding('utf8');
       let buffer = '';
       res.on('data', (chunk) => {
-        buffer += chunk;
+        buffer += chunk.replace(/\r\n/g, '\n');
         let sepIndex;
         while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, sepIndex);
@@ -832,8 +833,8 @@ ipcMain.handle('goal-delete', async (event, sessionId) => {
   return requestBackend('/goal/delete', 'POST', { session_id: sessionId });
 });
 
-ipcMain.handle('start-goal-resume', async (event, { requestId, sessionId }) => {
-  const data = JSON.stringify({ session_id: sessionId });
+ipcMain.handle('start-goal-resume', async (event, { requestId, sessionId, language }) => {
+  const data = JSON.stringify({ session_id: sessionId, language: language || 'zh' });
   const options = {
     hostname: BACKEND_HOST,
     port: BACKEND_PORT,
@@ -850,7 +851,7 @@ ipcMain.handle('start-goal-resume', async (event, { requestId, sessionId }) => {
       res.setEncoding('utf8');
       let buffer = '';
       res.on('data', (chunk) => {
-        buffer += chunk;
+        buffer += chunk.replace(/\r\n/g, '\n');
         let sepIndex;
         while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, sepIndex);
@@ -945,8 +946,14 @@ ipcMain.handle('remove-memory-entry', (event, payload = {}) => requestBackend('/
 ipcMain.handle('clear-memory-scope', (event, payload = {}) => requestBackend('/api/memory/clear', 'POST', payload));
 ipcMain.handle('list-memory-proposals', () => requestBackend('/api/memory/proposals', 'GET'));
 ipcMain.handle('resolve-memory-proposal', (event, payload = {}) => requestBackend('/api/memory/proposals/resolve', 'POST', payload));
-ipcMain.handle('get-memory-files', () => requestBackend('/api/memory', 'GET'));
-ipcMain.handle('get-memory-file', (event, scope = 'project') => requestBackend(`/api/memory/file?scope=${encodeURIComponent(scope)}`, 'GET'));
+  ipcMain.handle('get-memory-files', (event, projectId = '') => {
+    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+    return requestBackend(`/api/memory${query}`, 'GET');
+  });
+  ipcMain.handle('get-memory-file', (event, scope = 'project', projectId = '') => {
+    const query = projectId ? `&project_id=${encodeURIComponent(projectId)}` : '';
+    return requestBackend(`/api/memory/file?scope=${encodeURIComponent(scope)}${query}`, 'GET');
+  });
 ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api/memory/file', 'POST', payload));
 ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings', 'GET'));
 ipcMain.handle('save-memory-settings', (event, payload = {}) => requestBackend('/api/memory/settings', 'POST', payload));
