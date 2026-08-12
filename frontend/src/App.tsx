@@ -1165,6 +1165,11 @@ function App() {
     setEditingMessage(null);
     setEditDraft('');
 
+    // 编辑会重跑该会话，任何同会话仍在跑的流都会被本次编辑取代。先中止旧流，
+    // 否则后端 _guard_session_not_streaming 会拒绝这次 /edit（409），且旧流的
+    // 事件会被陈旧守卫丢弃，气泡悬在 running 计秒。
+    abortStreamFor(currentSessionId);
+
     // 编辑模式下，如果内容包含 /goal 等斜杠命令，走 sendMessage 路径
     if (trimmed.startsWith('/')) {
       handleSlashCommand(trimmed);
@@ -1368,6 +1373,7 @@ function App() {
     bumpSessionSeq(currentSessionId);
     const myRequestSeq = getSessionSeq(currentSessionId);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    abortStreamFor(currentSessionId);
     setMessages((current) => {
       // 只截断「当前会话」的消息历史，保留其它会话仍在后台运行的消息。
       const others = current.filter((m) => m.sessionId && m.sessionId !== currentSessionId);

@@ -561,7 +561,18 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
         }
       });
       res.on('end', () => {
-        if (buffer) {
+        if (res.statusCode >= 400) {
+          // Non-SSE error body: surface it as an error event instead of
+          // silently resolving "ok" and leaving the running bubble counting.
+          let detail = `Backend returned ${res.statusCode}`;
+          try {
+            const parsed = JSON.parse(buffer);
+            if (parsed && parsed.detail) detail = parsed.detail;
+          } catch {
+            // not JSON, keep the status-based message
+          }
+          sender.send('chat-stream-event', { requestId, event: { type: 'error', error: detail } });
+        } else if (buffer) {
           const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
           if (dataLine) {
             const raw = dataLine.slice(5).trim();
@@ -736,7 +747,19 @@ function startStreamingRequest(requestId, path, payload, sender, eventName = 'ch
         }
       });
       res.on('end', () => {
-        if (buffer) {
+        if (res.statusCode >= 400) {
+          // Non-SSE error body (e.g. 409 while the same session is still
+          // generating): surface it as an error event instead of silently
+          // resolving "ok" and leaving the running bubble counting forever.
+          let detail = `Backend returned ${res.statusCode}`;
+          try {
+            const parsed = JSON.parse(buffer);
+            if (parsed && parsed.detail) detail = parsed.detail;
+          } catch {
+            // not JSON, keep the status-based message
+          }
+          if (sender) sender.send(eventName, { requestId, event: { type: 'error', error: detail } });
+        } else if (buffer) {
           const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
           if (dataLine) {
             const raw = dataLine.slice(5).trim();

@@ -372,6 +372,8 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
   const stickToBottomRef = useRef(true);
   const lastUserMessageIdRef = useRef<string | undefined>(undefined);
   const lastCountRef = useRef(0);
+  // 整个会话只有 1 条用户消息时，撤回会清空会话，隐藏撤销按钮。
+  const userMessageCount = messages.filter((m) => m.role === 'user').length;
 
   const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
     const viewport = viewportRef.current;
@@ -416,13 +418,13 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
       onViewportScroll={handleViewportScroll}
     >
       <section className="stream-wall" aria-live="polite">
-        {messages.map((message) =>
+        {messages.map((message, index) =>
           message.role === 'user' ? (
             <UserMessage
               key={message.id}
               message={message}
               {...(onEditMessage ? { onEdit: (content) => onEditMessage(message.id, content) } : {})}
-              {...(onRollbackMessage ? { onRollback: () => onRollbackMessage(message.id) } : {})}
+              {...(onRollbackMessage && index > 0 && userMessageCount > 1 ? { onRollback: () => onRollbackMessage(message.id) } : {})}
             />
           ) : (
             <AssistantMessage

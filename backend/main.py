@@ -978,11 +978,13 @@ async def chat_stream(request: ChatStreamRequest):
     # A session may only have ONE in-flight stream writing its checkpoint; a
     # second concurrent /chat/stream (e.g. a misbehaving client or a double
     # submit) would race the graph's SQLite writes on the same thread_id.
-    _guard_session_not_streaming(session_id)
+    await _guard_session_not_streaming(session_id)
 
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
     session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
-    if runtime.owns_runtime_messages and agent_registry.has_runtime_checkpoint(session_id):
+    # has_runtime_checkpoint opens a fresh sqlite connection; keep it off the
+    # event loop so a transient DB lock can never stall every other request.
+    if runtime.owns_runtime_messages and await asyncio.to_thread(agent_registry.has_runtime_checkpoint, session_id):
         messages = [user_message]
     else:
         messages = history + [user_message]
@@ -1516,7 +1518,7 @@ async def goal_delete(request: GoalPauseRequest):
 async def goal_resume(request: GoalResumeRequest):
     """Resume a paused goal: clear the pause flag and continue the autonomous
     goal loop from the checkpoint (round 2+), streaming progress via SSE."""
-    _guard_session_not_streaming(request.session_id)
+    await _guard_session_not_streaming(request.session_id)
     stream_id = str(uuid.uuid4())
     _goal_active_streams[stream_id] = request.session_id
     lock = _goal_locks.get(request.session_id)
@@ -1695,10 +1697,10 @@ async def get_session(session_id: str):
 
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
-    _guard_session_not_streaming(session_id)
+    await _guard_session_not_streaming(session_id)
     if not session_store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
-    agent_registry.forget_runtime_checkpoint(session_id)
+    await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
     agent_registry.change_store.delete_session(session_id)
     _goal_locks.pop(session_id, None)
     _goal_cancel_events.pop(session_id, None)
@@ -1766,18 +1768,25 @@ class RollbackRequest(BaseModel):
     with_code: bool = False
 
 
-def _guard_session_not_streaming(session_id: str) -> None:
+async def _guard_session_not_streaming(session_id: str) -> None:
     """Reject destructive session mutations while a stream is in flight.
 
     Truncating/deleting a session (or its checkpoint) mid-stream can silently
     drop the reply the running agent is still producing, so refuse with 409
     instead of racing it.
+
+    A short grace period covers the teardown window after the client aborts a
+    stream: the abort races the reconnect (e.g. a rapid edit), so instantly
+    returning 409 would reject an edit the user just issued.
     """
-    if session_id in agent_registry.checkpoint_manager.active_sessions():
-        raise HTTPException(
-            status_code=409,
-            detail="session is still generating; wait for the current response to finish",
-        )
+    for _ in range(30):
+        if session_id not in agent_registry.checkpoint_manager.active_sessions():
+            return
+        await asyncio.sleep(0.1)
+    raise HTTPException(
+        status_code=409,
+        detail="session is still generating; wait for the current response to finish",
+    )
 
 
 def _provider_id_for_model(provider_name: str, model: str) -> str:
@@ -1839,7 +1848,7 @@ async def rollback_message(session_id: str, message_id: str, request: RollbackRe
     reported as conflicts and left untouched).
     """
     with_code = bool(request and request.with_code)
-    _guard_session_not_streaming(session_id)
+    await _guard_session_not_streaming(session_id)
     try:
         session = session_store.require(session_id)
         target_index = session_store.find_message_index(session_id, message_id)
@@ -1855,7 +1864,9 @@ async def rollback_message(session_id: str, message_id: str, request: RollbackRe
                 agent_registry.change_store.delete_records(session_id, changed_ids)
 
         session_store.truncate_before(session_id, message_id)
-        agent_registry.forget_runtime_checkpoint(session_id)
+        # Checkpoint deletion touches SQLite; run off the event loop so a
+        # transient DB writer lock cannot stall unrelated requests for 30s.
+        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session = session_store.require(session_id)
@@ -1886,7 +1897,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
     """Re-run the assistant reply for the user message that precedes the given
     assistant message (or, if given a user message, for that user message).
     Truncates after that user message and streams a fresh reply."""
-    _guard_session_not_streaming(session_id)
+    await _guard_session_not_streaming(session_id)
     try:
         session = session_store.require(session_id)
         index = session_store.find_message_index(session_id, message_id)
@@ -1901,7 +1912,9 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
             raise HTTPException(status_code=400, detail="No user message to regenerate from")
         user_message = session.messages[user_index]
         session_store.truncate_from(session_id, user_message.id)
-        agent_registry.forget_runtime_checkpoint(session_id)
+        # Checkpoint deletion touches SQLite; run off the event loop so a
+        # transient DB writer lock cannot stall unrelated requests.
+        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
         session = session_store.require(session_id)
         history = _session_message_history(session)
         referenced_ids = _session_referenced_ids(session)
@@ -2005,7 +2018,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
 @app.post("/sessions/{session_id}/messages/{message_id}/edit")
 async def edit_message(session_id: str, message_id: str, request: EditMessageRequest):
     """Edit a user message and re-run the conversation from that point."""
-    _guard_session_not_streaming(session_id)
+    await _guard_session_not_streaming(session_id)
     try:
         session = session_store.require(session_id)
         index = session_store.find_message_index(session_id, message_id)
@@ -2013,7 +2026,9 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             raise HTTPException(status_code=400, detail="Only user messages can be edited")
         session_store.update_message_content(session_id, message_id, request.content)
         session_store.truncate_from(session_id, message_id)
-        agent_registry.forget_runtime_checkpoint(session_id)
+        # Checkpoint deletion touches SQLite; run off the event loop so a
+        # transient DB writer lock cannot stall unrelated requests.
+        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
         session = session_store.require(session_id)
         history = _session_message_history(session)
         referenced_ids = _session_referenced_ids(session)
@@ -2162,7 +2177,7 @@ async def delete_project(project_id: str):
     if not project_store.delete(project_id):
         raise HTTPException(status_code=404, detail=f"project {project_id} not found")
     for session in session_store.list_sessions(project_id):
-        agent_registry.forget_runtime_checkpoint(session["id"])
+        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
         agent_registry.change_store.delete_session(session["id"])
     session_store.delete_by_project(project_id)
     return {"status": "ok"}

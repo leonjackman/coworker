@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,24 +59,30 @@ class CheckpointManager:
         self.sessions_dir = Path(sessions_dir) if sessions_dir else None
         self.cap_per_session = cap_per_session
         self.max_bytes_per_thread = max_bytes_per_thread
-        # RLock: sweep() holds the lock while calling helpers (_active_set,
-        # _trim_thread) that may also take it.
-        self._lock = threading.RLock()
+        # NOTE: this lock ONLY guards the in-memory ``_active`` set. It must
+        # NEVER be held across SQLite I/O: a blocked statement (SQLite's busy
+        # handler can wait seconds) would otherwise stall every
+        # ``active_sessions()``/``mark_active``/``mark_idle`` call made on the
+        # event loop, hanging the whole app. DB concurrency is left to SQLite's
+        # own WAL + busy_timeout locking.
+        self._lock = threading.Lock()
         # Session ids with an in-flight stream; the sweep must never touch them.
         self._active: set[str] = set()
 
     # ------------------------------------------------------------------ #
     # Connection helpers
     # ------------------------------------------------------------------ #
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+    def _connect(self, timeout: float = 30.0, busy_timeout_ms: int = 30000) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), timeout=timeout)
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
         conn.execute("PRAGMA synchronous=NORMAL")
-        # Persistent DB-file property. On a fresh file this takes effect
-        # immediately; on a legacy file it is a no-op until a full VACUUM
-        # (handled by _ensure_incremental_autovacuum during sweep).
-        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        # NOTE: do NOT re-apply ``PRAGMA auto_vacuum=INCREMENTAL`` here. It is a
+        # persistent DB-file property (set once at startup by the registry's
+        # long-lived connection and by _ensure_incremental_autovacuum during the
+        # sweep) and re-applying it per connection raises "database is locked"
+        # while another writer (e.g. a streaming session's AsyncSqliteSaver) is
+        # active — see the matching note in AgentRuntimeRegistry._open_sync_checkpointer.
         return conn
 
     def _ensure_incremental_autovacuum(self, conn: sqlite3.Connection) -> bool:
@@ -198,55 +205,59 @@ class CheckpointManager:
             "orphan_writes": 0,
             "vacuumed": False,
         }
-        with self._lock:
-            conn = self._connect()
+        active = self._active_set()
+        conn = self._connect()
+        try:
+            for thread_id in self._orphan_threads(conn):
+                conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+                conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+                stats["orphan_threads"] += 1
+
+            for thread_id in self._all_thread_ids(conn):
+                if thread_id in active:
+                    continue
+                stats["trimmed_checkpoints"] += self._trim_thread(conn, thread_id)
+
+            stats["orphan_writes"] = self._delete_orphan_writes(conn)
+
+            # Release the DELETE transaction before any VACUUM-style
+            # statement (both VACUUM and incremental_vacuum require no open
+            # transaction).
+            conn.commit()
             try:
-                for thread_id in self._orphan_threads(conn):
-                    conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
-                    conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
-                    stats["orphan_threads"] += 1
-
-                active = self._active_set()
-                for thread_id in self._all_thread_ids(conn):
-                    if thread_id in active:
-                        continue
-                    stats["trimmed_checkpoints"] += self._trim_thread(conn, thread_id)
-
-                stats["orphan_writes"] = self._delete_orphan_writes(conn)
-
-                # Release the DELETE transaction before any VACUUM-style
-                # statement (both VACUUM and incremental_vacuum require no open
-                # transaction).
-                conn.commit()
                 stats["vacuumed"] = self._ensure_incremental_autovacuum(conn)
                 conn.execute("PRAGMA incremental_vacuum")
                 conn.commit()
-            finally:
-                conn.close()
+            except sqlite3.OperationalError as exc:
+                logger.warning("sweep: vacuum step skipped (writer lock): %s", exc)
+        finally:
+            conn.close()
         return stats
 
     def clear_all(self) -> dict[str, Any]:
         """Delete every checkpoint thread (active-stream threads are skipped),
         then reclaim disk. Used by the Settings "clear checkpoints" action."""
         stats: dict[str, Any] = {"cleared_threads": 0, "skipped_active": 0, "vacuumed": False}
-        with self._lock:
-            conn = self._connect()
-            try:
-                active = self._active_set()
-                for thread_id in self._all_thread_ids(conn):
-                    if thread_id in active:
-                        stats["skipped_active"] += 1
-                        continue
-                    conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
-                    conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
-                    stats["cleared_threads"] += 1
-                conn.commit()
-                if self._has_checkpoints_table(conn):
+        active = self._active_set()
+        conn = self._connect()
+        try:
+            for thread_id in self._all_thread_ids(conn):
+                if thread_id in active:
+                    stats["skipped_active"] += 1
+                    continue
+                conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+                conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+                stats["cleared_threads"] += 1
+            conn.commit()
+            if self._has_checkpoints_table(conn):
+                try:
                     stats["vacuumed"] = self._ensure_incremental_autovacuum(conn)
                     conn.execute("PRAGMA incremental_vacuum")
                     conn.commit()
-            finally:
-                conn.close()
+                except sqlite3.OperationalError as exc:
+                    logger.warning("clear_all: vacuum step skipped (writer lock): %s", exc)
+        finally:
+            conn.close()
         return stats
 
     def _delete_orphan_writes(self, conn: sqlite3.Connection) -> int:
@@ -268,15 +279,40 @@ class CheckpointManager:
     # Whole-thread deletion (session deleted / rolled back / re-run)
     # ------------------------------------------------------------------ #
     def delete_thread(self, session_id: str) -> None:
-        with self._lock:
-            conn = self._connect()
+        """Delete one session's checkpoint thread. The DELETE is the important
+        part (the next run must start from scratch); disk reclaim via
+        ``incremental_vacuum`` is best-effort because it can be blocked by a
+        concurrent writer in a way that the busy handler does not always cover.
+
+        Uses a SHORT busy timeout and a couple of quick retries so a transient
+        writer lock fails fast (callers run this off the event loop) instead of
+        blocking for 30s+ per attempt. If it still cannot get a lock the delete
+        is skipped with a warning — the next rerun re-tries it.
+        """
+        for attempt in range(2):
             try:
-                if not self._has_checkpoints_table(conn):
+                self._delete_thread_once(session_id)
+                return
+            except sqlite3.OperationalError as exc:
+                if attempt >= 1:
+                    logger.warning("delete_thread(%s) failed (writer lock): %s", session_id, exc)
                     return
-                conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (session_id,))
-                conn.execute("DELETE FROM writes WHERE thread_id = ?", (session_id,))
-                conn.commit()
+                time.sleep(0.2)
+
+    def _delete_thread_once(self, session_id: str) -> None:
+        conn = self._connect(timeout=2.0, busy_timeout_ms=2000)
+        try:
+            if not self._has_checkpoints_table(conn):
+                return
+            conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (session_id,))
+            conn.execute("DELETE FROM writes WHERE thread_id = ?", (session_id,))
+            conn.commit()
+            try:
                 conn.execute("PRAGMA incremental_vacuum")
                 conn.commit()
-            finally:
-                conn.close()
+            except sqlite3.OperationalError as exc:
+                # Best-effort reclaim: a transient writer lock must never
+                # turn a session mutation (rollback/edit/delete) into a 500.
+                logger.warning("incremental_vacuum skipped after delete_thread(%s): %s", session_id, exc)
+        finally:
+            conn.close()

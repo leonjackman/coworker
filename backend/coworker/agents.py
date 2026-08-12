@@ -359,7 +359,10 @@ def _open_checkpointer(checkpoint_path: Any):
             await conn.execute("PRAGMA journal_mode=WAL")
             await conn.execute("PRAGMA busy_timeout=30000")
             await conn.execute("PRAGMA synchronous=NORMAL")
-            await conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            # Do NOT set auto_vacuum per connection: it is a persistent DB-file
+            # property and re-applying it while another writer holds the lock
+            # raises "database is locked" (the checkpoint manager already
+            # guarantees INCREMENTAL mode, so this is redundant anyway).
             yield AsyncSqliteSaver(conn)
         finally:
             await conn.close()
@@ -3116,9 +3119,9 @@ class AgentRuntimeRegistry:
         # re-applied per connection — doing so raises "database is locked" when
         # the async saver is actively writing.
         from langgraph.checkpoint.sqlite import SqliteSaver
-        conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
+        conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=5.0)
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA synchronous=NORMAL")
         return SqliteSaver(conn), conn
 
@@ -3230,7 +3233,9 @@ class AgentRuntimeRegistry:
         workspace_path: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Reset the session checkpoint and re-run the agent from full history."""
-        self.forget_runtime_checkpoint(session_id)
+        # The checkpoint delete touches SQLite; run it off the event loop so a
+        # transient writer lock can never stall every other request in the app.
+        await asyncio.to_thread(self.forget_runtime_checkpoint, session_id)
         context = {
             "provider_id": provider_id or "",
             "model": model or "",

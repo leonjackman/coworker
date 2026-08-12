@@ -555,9 +555,23 @@ class ElectronChatService implements ChatService {
     const requestId = `regenerate-${messageId}-${Date.now()}`;
     const abortStream = () => window.electronAPI?.abortChatStream(requestId);
     const detachAbortListener = attachAbortListener(signal, abortStream);
+    // Same idle watchdog as sendMessageStream: a backend stream that stops
+    // pushing events (hung provider) must be aborted so the running bubble
+    // cannot count seconds forever.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => abortStream(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
+    const wrappedEvent: StreamEventCallback = (event) => {
+      resetIdle();
+      onEvent(event);
+    };
     try {
-      await window.electronAPI.streamRegenerateMessage(requestId, sessionId, messageId, onEvent, getLanguage());
+      await window.electronAPI.streamRegenerateMessage(requestId, sessionId, messageId, wrappedEvent, getLanguage());
     } finally {
+      if (idleTimer) clearTimeout(idleTimer);
       detachAbortListener();
     }
   }
@@ -577,12 +591,26 @@ class ElectronChatService implements ChatService {
     const requestId = `edit-${messageId}-${Date.now()}`;
     const abortStream = () => window.electronAPI?.abortChatStream(requestId);
     const detachAbortListener = attachAbortListener(signal, abortStream);
+    // Same idle watchdog as sendMessageStream: a backend stream that stops
+    // pushing events (hung provider) must be aborted so the running bubble
+    // cannot count seconds forever.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => abortStream(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
+    const wrappedEvent: StreamEventCallback = (event) => {
+      resetIdle();
+      onEvent(event);
+    };
     try {
-      await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, onEvent, {
+      await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, wrappedEvent, {
         ...(options?.workMode ? { work_mode: options.workMode } : {}),
         ...(options?.autonomy ? { autonomy: options.autonomy } : {}),
       }, getLanguage());
     } finally {
+      if (idleTimer) clearTimeout(idleTimer);
       detachAbortListener();
     }
   }
@@ -1003,47 +1031,64 @@ class HttpChatService implements ChatService {
   }
 
   private async streamPost(path: string, payload: Record<string, unknown>, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      ...(signal instanceof AbortSignal ? { signal } : {}),
-    });
-    if (!response.ok) {
-      let detail = `Backend returned ${response.status}`;
-      try {
-        const body = await response.json();
-        detail = body.detail || detail;
-      } catch {
-        // ignore
-      }
-      throw new Error(detail);
-    }
-    if (!response.body) return;
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+    // Merge the external abort signal with an idle watchdog so a backend
+    // stream that stops pushing events (hung provider) cannot leave a bubble
+    // counting seconds forever. Every received chunk resets the timer.
+    const internal = new AbortController();
+    const detachExternal = attachAbortListener(signal, () => internal.abort());
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => internal.abort(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() ?? '';
-        for (const frame of frames) {
-          const line = frame.split('\n').find((item) => item.startsWith('data:'));
-          if (!line) continue;
-          const raw = line.slice(5).trim();
-          if (!raw) continue;
-          try {
-            onEvent(JSON.parse(raw) as StreamEvent);
-          } catch {
-            // skip
+      const response = await fetch(`${BACKEND_URL}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: internal.signal,
+      });
+      if (!response.ok) {
+        let detail = `Backend returned ${response.status}`;
+        try {
+          const body = await response.json();
+          detail = body.detail || detail;
+        } catch {
+          // ignore
+        }
+        throw new Error(detail);
+      }
+      if (!response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          resetIdle();
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            const line = frame.split('\n').find((item) => item.startsWith('data:'));
+            if (!line) continue;
+            const raw = line.slice(5).trim();
+            if (!raw) continue;
+            try {
+              onEvent(JSON.parse(raw) as StreamEvent);
+            } catch {
+              // skip
+            }
           }
         }
+      } finally {
+        reader.releaseLock();
       }
     } finally {
-      reader.releaseLock();
+      if (idleTimer) clearTimeout(idleTimer);
+      detachExternal();
     }
   }
 
