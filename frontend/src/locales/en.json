@@ -19,7 +19,7 @@
   "common.send": "Send",
   "common.you": "You",
   "common.coworker": "CoWorker",
-  "common.reflash": "Refresh",
+  "common.refresh": "Refresh",
   "time.just_now": "Just now",
   "agent.thinking": "Thinking...",
   "agent.running_tools": "Running {count} tools",

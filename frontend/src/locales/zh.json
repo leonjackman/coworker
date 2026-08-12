@@ -19,7 +19,7 @@
   "common.send": "发送",
   "common.you": "你",
   "common.coworker": "CoWorker",
-  "common.reflash": "刷新",
+  "common.refresh": "刷新",
   "time.just_now": "刚刚",
   "agent.thinking": "思考中...",
   "agent.running_tools": "正在运行 {count} 个工具",
