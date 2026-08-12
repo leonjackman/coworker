@@ -2325,6 +2325,23 @@ async def list_market_categories(source: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _mark_market_installed(result: dict, installed: set) -> dict:
+    """Annotate each market skill dict with ``installed`` (True when its slug or
+    display name matches a locally installed skill). The UI greys out and labels
+    already-installed cards instead of guessing from the slug alone — which
+    otherwise misses skills whose SKILL.md ``name`` differs from the market slug.
+    """
+    skills = result.get("skills") if isinstance(result, dict) else None
+    if isinstance(skills, list):
+        for skill in skills:
+            if not isinstance(skill, dict):
+                continue
+            slug = skill.get("slug") or ""
+            name = skill.get("name") or ""
+            skill["installed"] = slug in installed or name in installed
+    return result
+
+
 @app.get("/skills/market/search")
 async def search_market_skills(
     source: str,
@@ -2340,7 +2357,10 @@ async def search_market_skills(
         page = await skill_market_manager.search(
             source, q.strip(), limit, offset, category
         )
-        return {"status": "ok", **page.to_dict()}
+        result = page.to_dict()
+        installed = {s["name"] for s in list_skills()["skills"]}
+        _mark_market_installed(result, installed)
+        return {"status": "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2359,7 +2379,10 @@ async def list_hot_market_skills(
         page = await skill_market_manager.list_hot(
             source, limit, offset, cursor, category, sort
         )
-        return {"status": "ok", **page.to_dict()}
+        result = page.to_dict()
+        installed = {s["name"] for s in list_skills()["skills"]}
+        _mark_market_installed(result, installed)
+        return {"status": "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -770,6 +770,8 @@ export interface MarketSkill {
   icon_url?: string | null;
   version?: string | null;
   verified?: boolean;
+  /** Set by the backend: true when this skill is already installed locally. */
+  installed?: boolean;
 }
 
 export interface MarketCategory {
