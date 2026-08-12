@@ -41,6 +41,8 @@ from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
 from coworker.skills.skill_manager import SKILLS_CONFIG_FILENAME, SkillManager
 from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
+from coworker.memory.memory_manager import MemoryConfig, MemoryManager
+from coworker.memory.auto_extract import MemoryProposalStore
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
@@ -69,8 +71,20 @@ skill_manager = SkillManager(settings.data_dir, settings.workspace_dir)
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
+memory_manager = MemoryManager(
+    settings.data_dir,
+    settings.workspace_dir,
+    config=MemoryConfig(
+        enabled=settings.memory_enabled,
+        char_limit=settings.memory_char_limit,
+        auto_extract=settings.memory_auto_extract,
+        nudge_interval=settings.memory_nudge_interval,
+        extract_model=settings.memory_extract_model,
+    ),
+)
+memory_proposal_store = MemoryProposalStore(settings.data_dir)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
-agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager)
+agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager)
 
 # Persistent MCP sessions: start the background loop, pre-warm connections so
 # the first chat is instant, and tear sessions down on exit.
@@ -446,6 +460,26 @@ class CommandApprovalResolve(BaseModel):
     approval_id: str
     decision: ApprovalDecisionPayload
 
+
+# --------------------------------------------------------------------------- #
+# Long-term memory helpers (read injection; Phase 2 auto-extract dispatch)
+# --------------------------------------------------------------------------- #
+
+def _memory_scope_store(scope: str) -> Any:
+    """Return a MemoryStore for the given scope using the default workspace."""
+    manager = memory_manager.for_workspace(settings.workspace_dir)
+    if scope in ("project", "user"):
+        return manager.store
+    raise HTTPException(status_code=400, detail=f"unknown memory scope: {scope}")
+
+
+def _memory_extract_llm() -> Any | None:
+    from coworker.memory.auto_extract import build_extract_llm
+
+    provider = provider_manager.default_provider()
+    return build_extract_llm(provider, settings.memory_extract_model)
+
+
 @app.get("/health")
 async def health():
     return {
@@ -551,6 +585,112 @@ async def chat(request: ChatRequest):
         mode=reply.mode,
         provider=reply.provider,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Long-term memory API (read/write/status + Phase 2 proposals)
+# --------------------------------------------------------------------------- #
+
+class MemoryWriteRequest(BaseModel):
+    scope: str = "project"
+    content: str = ""
+    target: str = ""
+
+
+class MemoryProposalResolveRequest(BaseModel):
+    proposal_id: str
+    status: str = "approved"  # approved | rejected
+
+
+@app.get("/api/memory/status")
+async def memory_status():
+    """Full memory overview: entries per scope, sizes, budget, enabled flags."""
+    scan = memory_manager.scanner.scan(include_missing=True)
+    payload: dict[str, Any] = {
+        "enabled": memory_manager.enabled,
+        "auto_extract": memory_manager.auto_extract,
+        "nudge_interval": memory_manager.config.nudge_interval,
+        "char_limit": memory_manager.char_limit,
+        "scopes": {},
+        "proposals_pending": len(memory_proposal_store.list_pending()),
+    }
+    for memory in scan.files():
+        payload["scopes"][memory.scope] = {
+            "path": str(memory.path),
+            "mtime": memory.mtime,
+            "entries": memory.entries,
+            "char_count": sum(len(e) for e in memory.entries),
+            "entry_count": len(memory.entries),
+        }
+    payload["scopes"].setdefault("project", {"path": "", "mtime": 0.0, "entries": [], "char_count": 0, "entry_count": 0})
+    payload["scopes"].setdefault("user", {"path": str(memory_manager.scanner.user_path()), "mtime": 0.0, "entries": [], "char_count": 0, "entry_count": 0})
+    return payload
+
+
+@app.post("/api/memory/write")
+async def memory_write(request: MemoryWriteRequest):
+    """Backend-direct memory write (UI path; bypasses the workspace guard).
+
+    ``target`` empty = add; ``target`` + ``content`` = replace.
+    """
+    if not memory_manager.enabled:
+        raise HTTPException(status_code=400, detail="memory is disabled")
+    store = _memory_scope_store(request.scope)
+    try:
+        if request.target:
+            if not request.content:
+                raise ValueError("content is required for replace")
+            memory = store.replace(request.scope, request.target, request.content)
+        elif request.content:
+            memory = store.add(request.scope, request.content)
+        else:
+            raise ValueError("content is required for add")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"scope": request.scope, "entries": memory.entries}
+
+
+@app.post("/api/memory/remove")
+async def memory_remove(request: MemoryWriteRequest):
+    """Remove a memory entry identified by ``target`` (substring match)."""
+    if not memory_manager.enabled:
+        raise HTTPException(status_code=400, detail="memory is disabled")
+    store = _memory_scope_store(request.scope)
+    if not request.target:
+        raise HTTPException(status_code=400, detail="target is required for remove")
+    try:
+        memory = store.remove(request.scope, request.target)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"scope": request.scope, "entries": memory.entries}
+
+
+@app.post("/api/memory/clear")
+async def memory_clear(request: MemoryWriteRequest):
+    store = _memory_scope_store(request.scope)
+    memory = store.clear(request.scope)
+    return {"scope": request.scope, "entries": memory.entries}
+
+
+@app.get("/api/memory/proposals")
+async def list_memory_proposals():
+    return {"proposals": memory_proposal_store.list_pending()}
+
+
+@app.post("/api/memory/proposals/resolve")
+async def resolve_memory_proposal(request: MemoryProposalResolveRequest):
+    record = memory_proposal_store.resolve(request.proposal_id, request.status)
+    if record is None:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    if request.status == "approved":
+        workspace_path = record.get("workspace_path") or ""
+        view = memory_manager.for_workspace(Path(workspace_path) if workspace_path else None)
+        try:
+            view.store.add("project", record.get("text", ""))
+        except ValueError as exc:
+            # Duplicate or already-saved: treat as resolved regardless.
+            logger.info("approve proposal %s: %s", request.proposal_id, exc)
+    return {"status": "ok", "record": record}
 
 from fastapi.responses import StreamingResponse
 import json as _json

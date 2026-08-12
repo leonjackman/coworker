@@ -1,6 +1,6 @@
 # Coworker Agent
 
-Coworker is a local-first Electron desktop agent app for coding assistance. The current product scope is a Codex-style single-agent workflow with local sessions, projects, provider configuration, streaming chat, and workspace-restricted file tools.
+Coworker is a local-first Electron desktop agent app for coding assistance. The current product scope is a Codex-style single-agent workflow with local sessions, projects, provider configuration, streaming chat, workspace-restricted file tools, and a persistent long-term memory system (project/user scopes with optional LLM auto-extract).
 
 ## Current Status
 
@@ -29,14 +29,21 @@ coworker/
 │       ├── projects.py            # Local project grouping store
 │       ├── providers.py           # Provider config store and connection checks
 │       ├── sessions.py            # Durable local chat session store
-│       └── workspace.py           # Workspace path guard and file preview helpers
+│       ├── workspace.py           # Workspace path guard and file preview helpers
+│       └── memory/                # Long-term memory subsystem
+│           ├── memory_manager.py  # Global manager + auto-extract dispatch
+│           ├── memory_store.py    # Scope files (project/user) CRUD
+│           ├── memory_scanner.py  # Memory file discovery + scan
+│           ├── memory_middleware.py # Session read injection into the prompt
+│           ├── auto_extract.py    # Phase 2: LLM extraction + proposals
+│           └── selftest.py        # 18-check offline test suite
 ├── electron/
 │   ├── main.js                    # Window, tray, IPC, backend process lifecycle
 │   └── preload.js                 # Renderer-safe API bridge
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx                # App state, streaming chat, sessions/projects
-│   │   ├── components/            # Reusable UI, chat, sidebar, settings, providers
+│   │   ├── components/            # Reusable UI, chat, sidebar, settings, providers, memory
 │   │   ├── lib/                   # i18n, theme, provider registry
 │   │   └── services/              # Electron/HTTP chat service boundary
 │   ├── index.html
@@ -118,7 +125,8 @@ NODE_ENV=development npx electron . --no-sandbox
 - Standalone sessions plus project sessions in the sidebar.
 - Markdown rendering, code highlighting, code copy button, and lazy-loaded Shiki highlighter.
 - Text attachment ingestion, attachment-only sending, attachment persistence in session history.
-- Slash commands: `/help`, `/new`, `/clear`, `/providers`, `/settings`, `/plan`, `/build`.
+- Slash commands: `/help`, `/new`, `/clear`, `/providers`, `/settings`, `/skills`, `/memory`, `/plan`, `/build`.
+- Long-term memory: project/user scopes stored as markdown files, injected into every chat prompt; editable in a Memory panel (`/memory` or sidebar); optional Phase 2 LLM auto-extract proposes memory entries from recent turns, reviewable in the same panel.
 - Chinese/English i18n.
 - Theme settings with presets, user color customization, light/dark mode, and translucent glass effect.
 - Electron tray behavior: close window keeps app running; quit exits frontend and backend.
@@ -144,6 +152,7 @@ Useful local checks:
 cd frontend && npx tsc --noEmit
 cd frontend && npm run build
 backend/venv/bin/python -m compileall backend/main.py backend/coworker
+backend/venv/bin/python -m coworker.memory.selftest
 node --check electron/preload.js && node --check electron/main.js
 git diff --check
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command

@@ -91,7 +91,7 @@ interface ChatInputProps {
   onOpenCommands?: () => void;
 }
 
-const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/settings"];
+const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/settings", "/memory"];
 const MAX_ATTACHMENT_CHARS = 120_000;
 // 二进制附件内联字节的体积上限由设置页的「文件体积上限」控制（默认 25MB），
 // 经 maxAttachmentMb prop 传入。超过则只保留元信息、不内联，由后端在提示词中

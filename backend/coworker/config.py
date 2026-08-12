@@ -13,6 +13,11 @@ class BackendSettings:
     checkpoint_cap_per_session: int
     checkpoint_max_bytes_per_thread: int
     checkpoint_sweep_interval_seconds: int
+    memory_enabled: bool
+    memory_char_limit: int
+    memory_auto_extract: bool
+    memory_nudge_interval: int
+    memory_extract_model: str
 
 
 def load_settings() -> BackendSettings:
@@ -33,6 +38,16 @@ def load_settings() -> BackendSettings:
         os.getenv("COWORKER_CHECKPOINT_SWEEP_INTERVAL_SECONDS", "21600").strip() or "21600"
     )
 
+    memory_enabled = os.getenv("COWORKER_MEMORY_ENABLED", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    memory_char_limit = int(os.getenv("COWORKER_MEMORY_CHAR_LIMIT", "2000").strip() or "2000")
+    memory_auto_extract = os.getenv("COWORKER_MEMORY_AUTO_EXTRACT", "0").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+    memory_nudge_interval = int(os.getenv("COWORKER_MEMORY_NUDGE_INTERVAL", "10").strip() or "10")
+    memory_extract_model = os.getenv("COWORKER_MEMORY_EXTRACT_MODEL", "").strip()
+
     data_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -45,4 +60,9 @@ def load_settings() -> BackendSettings:
         checkpoint_cap_per_session=checkpoint_cap_per_session,
         checkpoint_max_bytes_per_thread=checkpoint_max_bytes_per_thread,
         checkpoint_sweep_interval_seconds=checkpoint_sweep_interval_seconds,
+        memory_enabled=memory_enabled,
+        memory_char_limit=memory_char_limit,
+        memory_auto_extract=memory_auto_extract,
+        memory_nudge_interval=memory_nudge_interval,
+        memory_extract_model=memory_extract_model,
     )

@@ -145,6 +145,21 @@ class RunCommandArgs(BaseModel):
     timeout_seconds: int = Field(default=20, ge=1, le=60, description="Command timeout in seconds.")
 
 
+class MemoryArgs(BaseModel):
+    """Long-term memory write (project scope). Only available during execution."""
+    action: Literal["add", "replace", "remove"] = Field(
+        description="add appends a new memory; replace swaps every entry containing 'target'; remove deletes every entry containing 'target'."
+    )
+    content: str = Field(
+        min_length=1,
+        description="Memory text. For 'replace' this is the new text; for 'add' it is the entry to append; ignored for 'remove'.",
+    )
+    target: str = Field(
+        default="",
+        description="For 'replace'/'remove', a substring that identifies the entry to change. Leave empty for 'add'.",
+    )
+
+
 class AskUserOption(BaseModel):
     label: str = Field(description="Display text (1-5 words, concise).")
     description: str = Field(default="", description="Optional explanation of the choice.")
@@ -347,6 +362,7 @@ def build_workspace_tools(
     referenced_sessions: set[str] | None = None,
     skill_manager: Any | None = None,
     skill_market_manager: Any | None = None,
+    memory_store: Any | None = None,
 ) -> list[Any]:
     from langchain_core.tools import tool
     from pathlib import Path as _Path
@@ -446,6 +462,45 @@ def build_workspace_tools(
         except Exception as exc:
             return _error_result(exc, "install_skill")
 
+    @tool(args_schema=MemoryArgs)
+    def memory(action: str, content: str = "", target: str = "") -> str:
+        """Write a long-term memory entry for the current project.
+
+        Long-term memory persists across sessions and is injected into every
+        conversation. Use it for stable facts: user preferences, project
+        conventions, ports / commands that are always true, decisions with
+        lasting consequences. Do NOT store anything transient (a one-off error,
+        an exploratory guess) — that belongs in the conversation instead. Keep
+        each entry short and self-contained.
+
+        - ``add``: appends a new entry.
+        - ``replace``: replaces every entry containing ``target`` (substring)
+          with ``content``. Use it to update stale or outgrown entries.
+        - ``remove``: deletes every entry containing ``target``.
+
+        Memory is scoped to this project automatically; you cannot specify a
+        path or scope. In supervised mode a write pauses for the user's
+        confirmation. Failed writes (duplicate / target not found) return an
+        error message and change nothing.
+        """
+        try:
+            if memory_store is None:
+                return _error_result(RuntimeError("memory is not available"), "memory")
+            if action == "add":
+                memory = memory_store.add("project", content)
+            elif action == "replace":
+                memory = memory_store.replace("project", target, content)
+            elif action == "remove":
+                memory = memory_store.remove("project", target)
+            else:
+                return f"Unsupported memory action: {action}"
+            return (
+                f"Memory updated. {len(memory.entries)} entries now; "
+                f"file: {memory.path}"
+            )
+        except Exception as exc:
+            return _error_result(exc, "memory")
+
     @tool(args_schema=AskUserArgs)
     def ask_user(question: str, options: list[dict[str, str]], multiple: bool = False, header: str = "") -> str:
         """Ask the user a question with selectable options when you need a decision or clarification."""
@@ -517,6 +572,8 @@ def build_workspace_tools(
         )
 
     tools = [search_files, read_file, ask_user, submit_plan, replace_in_file, apply_text_edits, write_file, run_command, install_skill]
+    if memory_store is not None:
+        tools.append(memory)
     if session_store is not None:
         tools.append(read_session)
     return tools
@@ -527,7 +584,7 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session"}
 _PLAN_TOOLS = {"ask_user", "submit_plan"}
-_EXEC_TOOLS = {"run_command", "install_skill"}
+_EXEC_TOOLS = {"run_command", "install_skill", "memory"}
 
 
 def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
@@ -687,6 +744,14 @@ def command_approval_middleware(
             return False
         return normalize_autonomy(state.get("autonomy")) == "supervised"
 
+    def needs_memory_approval(req: Any) -> bool:
+        # Long-term memory writes persist across sessions, so in supervised
+        # mode the user must confirm each write; guarded/autonomous allow it.
+        state = req.state
+        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+            return False
+        return normalize_autonomy(state.get("autonomy")) == "supervised"
+
     def needs_ask_user(req: Any) -> bool:
         # In fully-autonomous execution the agent must not interrupt the user.
         # The tool is still registered so a stray call resolves cleanly, but it
@@ -760,6 +825,11 @@ def command_approval_middleware(
             "allowed_decisions": ["approve", "reject"],
             "description": "Coworker needs approval before running this workspace command.",
             "when": needs_command_approval,
+        },
+        "memory": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to update its long-term memory for this project.",
+            "when": needs_memory_approval,
         },
         **write_configs,
         "ask_user": {
@@ -1851,6 +1921,7 @@ def build_coworker_agent_graph(
     data_dir: Path | None = None,
     mcp_session_manager: Any | None = None,
     skill_manager: Any | None = None,
+    memory_manager: Any | None = None,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -1916,6 +1987,19 @@ def build_coworker_agent_graph(
 
         middleware.append(SkillMiddleware(skill_manager))
 
+    # Memory: inject long-term memory into every phase (planning needs the
+    # user's background facts most of all). Mounted after skills so the memory
+    # section lands before the skills catalog in the system prompt. Writes are
+    # gated separately by the phase gate + HITL middleware via the `memory`
+    # tool.
+    if memory_manager is not None:
+        from .memory.memory_middleware import MemoryMiddleware
+
+        try:
+            middleware.append(MemoryMiddleware(memory_manager))
+        except Exception as exc:  # noqa: BLE001 - a broken memory middleware must not break chat
+            logger.warning("Memory middleware unavailable: %s", exc)
+
     system_prompt = (
         f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
         "Use workspace tools only when they are needed and keep answers concise."
@@ -1965,7 +2049,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -1981,6 +2065,23 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.data_dir = data_dir
         self.mcp_session_manager = mcp_session_manager
         self.skill_manager = skill_manager
+        self.memory_manager = memory_manager
+
+    @property
+    def _memory(self) -> tuple[Any | None, Any | None]:
+        """Return ``(workspace_scoped_manager, memory_store)`` for this session."""
+        if self.memory_manager is None or not getattr(self.memory_manager, "enabled", False):
+            return None, None
+        view = self.memory_manager.for_workspace(self.workspace.root)
+        return view, getattr(view, "store", None)
+
+    def _nudge_memory(self, session_id: str) -> None:
+        """Phase 2: one call per settled turn; never blocks or raises."""
+        try:
+            if self.memory_manager is not None:
+                self.memory_manager.after_turn(session_id, workspace_root=self.workspace.root)
+        except Exception:  # noqa: BLE001 - a memory hiccup must never break a turn
+            logger.warning("memory nudge failed", exc_info=True)
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -2000,12 +2101,15 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         )
         self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "run"})
         turn_index = self._next_turn_index(session_id)
+        self._nudge_memory(session_id)
+        memory_view, memory_store = self._memory
         graph = build_coworker_agent_graph(
             self.llm,
             build_workspace_tools(
                 self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
                 session_store=self.session_store, referenced_sessions=self.referenced_sessions,
                 skill_manager=self.skill_manager,
+                memory_store=memory_store,
             ),
             work_mode=work_mode,
             language=language,
@@ -2015,6 +2119,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             data_dir=self.data_dir,
             mcp_session_manager=self.mcp_session_manager,
             skill_manager=self.skill_manager,
+            memory_manager=memory_view,
         )
         try:
             result = graph.invoke(
@@ -2053,7 +2158,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -2069,6 +2174,23 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.data_dir = data_dir
         self.mcp_session_manager = mcp_session_manager
         self.skill_manager = skill_manager
+        self.memory_manager = memory_manager
+
+    @property
+    def _memory(self) -> tuple[Any | None, Any | None]:
+        """Return ``(workspace_scoped_manager, memory_store)`` for this session."""
+        if self.memory_manager is None or not getattr(self.memory_manager, "enabled", False):
+            return None, None
+        view = self.memory_manager.for_workspace(self.workspace.root)
+        return view, getattr(view, "store", None)
+
+    def _nudge_memory(self, session_id: str) -> None:
+        """Phase 2: one call per settled turn; never blocks or raises."""
+        try:
+            if self.memory_manager is not None:
+                self.memory_manager.after_turn(session_id, workspace_root=self.workspace.root)
+        except Exception:  # noqa: BLE001 - a memory hiccup must never break a turn
+            logger.warning("memory nudge failed", exc_info=True)
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -2119,6 +2241,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         else:
             prepared_messages = prepare_agent_messages(messages)
         turn_index = self._next_turn_index(session_id)
+        self._nudge_memory(session_id)
+        memory_view, memory_store = self._memory
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
@@ -2126,12 +2250,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
                     session_store=self.session_store, referenced_sessions=self.referenced_sessions,
                     skill_manager=self.skill_manager,
+                    memory_store=memory_store,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
                 goal_mode=goal_mode, data_dir=self.data_dir,
                 mcp_session_manager=self.mcp_session_manager,
                 skill_manager=self.skill_manager,
+                memory_manager=memory_view,
             )
 
             inputs = {
@@ -2612,17 +2738,21 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         )
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
+            self._nudge_memory(session_id)
+            memory_view, memory_store = self._memory
             graph = build_coworker_agent_graph(
                 self.llm, build_workspace_tools(
                         self.workspace, audit_context, change_store=self.change_store,
                         session_store=self.session_store, referenced_sessions=self.referenced_sessions,
                         skill_manager=self.skill_manager,
+                        memory_store=memory_store,
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
                 data_dir=self.data_dir,
                 mcp_session_manager=self.mcp_session_manager,
                 skill_manager=self.skill_manager,
+                memory_manager=memory_view,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
@@ -2708,12 +2838,13 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
 
 class AgentRuntimeRegistry:
-    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None):
+    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None):
         from langgraph.checkpoint.sqlite import SqliteSaver
 
         self.settings = settings
         self.session_store = session_store
         self.skill_manager = skill_manager
+        self.memory_manager = memory_manager
         self.default_workspace = Workspace(settings.workspace_dir, settings.data_dir / TOOL_AUDIT_FILENAME)
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
@@ -2779,10 +2910,10 @@ class AgentRuntimeRegistry:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
@@ -2805,7 +2936,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:

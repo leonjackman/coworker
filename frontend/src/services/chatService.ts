@@ -15,8 +15,7 @@ import type {
   MarketSource,
   MarketSourceResponse,
   MarketSkillsResponse,
-  McpDiscoverPayload,
-  McpServerCreateRequest,
+  McpDiscoverPayload,  McpServerCreateRequest,
   McpServerEntry,
   McpServerListPayload,
   McpServerUpdateRequest,
@@ -52,6 +51,13 @@ import type {
   WorkspaceTreeResponse,
   WorkspaceBranchResponse,
   GoalStatusResponse,
+  MemoryProposalRecord,
+  MemoryProposalResolveRequest,
+  MemoryProposalsResponse,
+  MemoryScope,
+  MemoryStatusResponse,
+  MemoryWriteRequest,
+  MemoryWriteResponse,
 } from '../types';
 
 const BACKEND_URL = import.meta.env.VITE_COWORKER_BACKEND_URL || 'http://localhost:9527';
@@ -159,6 +165,12 @@ export interface ChatService {
   searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
+  getMemoryStatus: () => Promise<MemoryStatusResponse>;
+  writeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
+  removeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
+  clearMemoryScope: (scope: MemoryScope) => Promise<MemoryWriteResponse>;
+  listMemoryProposals: () => Promise<MemoryProposalsResponse>;
+  resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
 }
 
 class ElectronChatService implements ChatService {
@@ -364,6 +376,36 @@ class ElectronChatService implements ChatService {
   async installMarketSkill(source: string, slug: string, owner?: string | null): Promise<MarketInstallResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.installMarketSkill(source, slug, owner ?? null);
+  }
+
+  async getMemoryStatus(): Promise<MemoryStatusResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getMemoryStatus();
+  }
+
+  async writeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.writeMemoryEntry(request);
+  }
+
+  async removeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.removeMemoryEntry(request);
+  }
+
+  async clearMemoryScope(scope: MemoryScope): Promise<MemoryWriteResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.clearMemoryScope({ scope });
+  }
+
+  async listMemoryProposals(): Promise<MemoryProposalsResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listMemoryProposals();
+  }
+
+  async resolveMemoryProposal(request: MemoryProposalResolveRequest): Promise<{ status: string; record?: MemoryProposalRecord }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.resolveMemoryProposal(request);
   }
 
   async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
@@ -1154,6 +1196,46 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source, slug, owner: owner ?? null }),
+    });
+  }
+
+  async getMemoryStatus(): Promise<MemoryStatusResponse> {
+    return this.request<MemoryStatusResponse>('/api/memory/status');
+  }
+
+  async writeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
+    return this.request<MemoryWriteResponse>('/api/memory/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async removeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
+    return this.request<MemoryWriteResponse>('/api/memory/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async clearMemoryScope(scope: MemoryScope): Promise<MemoryWriteResponse> {
+    return this.request<MemoryWriteResponse>('/api/memory/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope }),
+    });
+  }
+
+  async listMemoryProposals(): Promise<MemoryProposalsResponse> {
+    return this.request<MemoryProposalsResponse>('/api/memory/proposals');
+  }
+
+  async resolveMemoryProposal(request: MemoryProposalResolveRequest): Promise<{ status: string; record?: MemoryProposalRecord }> {
+    return this.request<{ status: string; record?: MemoryProposalRecord }>('/api/memory/proposals/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
     });
   }
 

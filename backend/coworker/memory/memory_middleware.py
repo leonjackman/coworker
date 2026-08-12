@@ -1,0 +1,65 @@
+"""MemoryMiddleware: injects long-term memory into the agent graph.
+
+Unlike skills (which are hidden entirely in the ``discuss`` phase — planning is
+read-only), memory is *injected in every phase*: planning is exactly when the
+model needs the user's background preferences and project conventions. The
+write side is gated separately by the phase tool gate (the ``memory`` tool is
+only exposed in the ``execute`` phase), so "read everywhere, write only on
+approval during execution" holds structurally.
+
+Files are read directly from the backend through the MemoryManager — never via
+the workspace ``resolve_path`` guard — so the workspace boundary invariant is
+not weakened (an agent holding the memory files still cannot touch them with
+the regular file tools). The injected section carries each file's path and
+mtime so the model can reason about freshness (Claude's lesson: timestamps,
+not importance scoring).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import SystemMessage
+
+logger = logging.getLogger(__name__)
+
+
+class MemoryMiddleware(AgentMiddleware):
+
+    def __init__(self, manager: Any):
+        # Typed as Any to avoid a circular import with MemoryManager.
+        self.manager = manager
+
+    def _overrides(self, request: Any) -> dict[str, Any]:
+        try:
+            section = self.manager.render_prompt()
+        except Exception as exc:  # noqa: BLE001 - a scan failure must not break chat
+            logger.warning("Memory load failed: %s", exc)
+            return {}
+        if not section:
+            return {}
+
+        current = getattr(request, "system_message", None)
+        base_text = getattr(current, "text", "") or ""
+        overrides: dict[str, Any] = {}
+        if base_text:
+            overrides["system_message"] = SystemMessage(
+                content=f"{section}\n\n{base_text}"
+            )
+        else:
+            overrides["system_message"] = SystemMessage(content=section)
+        return overrides
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        overrides = self._overrides(request)
+        if overrides:
+            return handler(request.override(**overrides))
+        return handler(request)
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        overrides = self._overrides(request)
+        if overrides:
+            return await handler(request.override(**overrides))
+        return await handler(request)

@@ -1,4 +1,4 @@
-import { ArrowRight, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
+import { ArrowRight, BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -326,6 +326,10 @@ export function WorkspaceSidebar({
         <button className={`sidebar-nav-item ${activeView === 'skills' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('skills')}>
           <FileText size={17} />
           {!collapsed && <span>{t('nav.skills')}</span>}
+        </button>
+        <button className={`sidebar-nav-item ${activeView === 'memory' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('memory')}>
+          <BrainCircuit size={17} />
+          {!collapsed && <span>{t('nav.memory')}</span>}
         </button>
       </nav>
 

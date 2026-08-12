@@ -898,6 +898,12 @@ ipcMain.handle('delete-skill', (event, name) =>
 );
 ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));
+ipcMain.handle('get-memory-status', () => requestBackend('/api/memory/status', 'GET'));
+ipcMain.handle('write-memory-entry', (event, payload = {}) => requestBackend('/api/memory/write', 'POST', payload));
+ipcMain.handle('remove-memory-entry', (event, payload = {}) => requestBackend('/api/memory/remove', 'POST', payload));
+ipcMain.handle('clear-memory-scope', (event, payload = {}) => requestBackend('/api/memory/clear', 'POST', payload));
+ipcMain.handle('list-memory-proposals', () => requestBackend('/api/memory/proposals', 'GET'));
+ipcMain.handle('resolve-memory-proposal', (event, payload = {}) => requestBackend('/api/memory/proposals/resolve', 'POST', payload));
 
 // Skill Market IPC handlers
 // `offset` / `cursor` / `category` must survive this hop; serialise the whole

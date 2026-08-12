@@ -2,7 +2,7 @@ export type AgentMode = 'single';
 export type Language = 'zh' | 'en';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
-export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills';
+export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory';
 
 export interface McpToolEntry {
   name: string;
@@ -828,4 +828,57 @@ export interface MarketInstallResponse {
   status: string;
   skill: SkillEntry | null;
   message?: string;
+}
+
+// -- Long-term memory --------------------------------------------------------
+
+export type MemoryScope = 'project' | 'user';
+
+export interface MemoryScopeInfo {
+  path: string;
+  mtime: number;
+  entries: string[];
+  char_count: number;
+  entry_count: number;
+}
+
+export interface MemoryStatusResponse {
+  enabled: boolean;
+  auto_extract: boolean;
+  nudge_interval: number;
+  char_limit: number;
+  scopes: Partial<Record<MemoryScope, MemoryScopeInfo>>;
+  proposals_pending: number;
+}
+
+export interface MemoryWriteRequest {
+  scope: MemoryScope;
+  content: string;
+  target?: string;
+}
+
+export interface MemoryWriteResponse {
+  scope: MemoryScope;
+  entries: string[];
+}
+
+export interface MemoryProposalRecord {
+  id: string;
+  kind: string;
+  status: string;
+  text: string;
+  session_id: string;
+  provider: string;
+  model: string;
+  workspace_path: string;
+  created_at: string;
+}
+
+export interface MemoryProposalsResponse {
+  proposals: MemoryProposalRecord[];
+}
+
+export interface MemoryProposalResolveRequest {
+  proposal_id: string;
+  status: 'approved' | 'rejected';
 }

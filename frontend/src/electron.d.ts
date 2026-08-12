@@ -48,6 +48,13 @@ import type {
   WorkspaceTreeResponse,
   WorkspaceBranchResponse,
   GoalStatusResponse,
+  MemoryProposalRecord,
+  MemoryProposalResolveRequest,
+  MemoryProposalsResponse,
+  MemoryScope,
+  MemoryStatusResponse,
+  MemoryWriteRequest,
+  MemoryWriteResponse,
 } from './types';
 
 export type StreamEventCallback = (event: StreamEvent) => void;
@@ -132,6 +139,12 @@ declare global {
       searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
+      getMemoryStatus: () => Promise<MemoryStatusResponse>;
+      writeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
+      removeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
+      clearMemoryScope: (payload: { scope: MemoryScope }) => Promise<MemoryWriteResponse>;
+      listMemoryProposals: () => Promise<MemoryProposalsResponse>;
+      resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
     };
   }
 }

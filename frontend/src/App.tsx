@@ -6,6 +6,7 @@ import { GoalCard } from './components/GoalCard';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { MCPPanel } from './components/MCPPanel';
 import { SkillsPanel } from './components/SkillsPanel';
+import { MemoryPanel } from './components/MemoryPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
@@ -2024,6 +2025,10 @@ function App() {
       setActiveView('skills');
       return;
     }
+    if (command === '/memory') {
+      setActiveView('memory');
+      return;
+    }
     if (command === '/skill') {
       void handleSkillSlash(message);
       return;
@@ -2503,6 +2508,8 @@ function App() {
                   setDiagnostics={setSkillDiagnostics}
                   onSkillsChange={refreshSkills}
                 />
+              ) : activeView === 'memory' ? (
+                <MemoryPanel />
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}
