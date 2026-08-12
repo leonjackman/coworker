@@ -2325,11 +2325,20 @@ async def list_market_categories(source: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _mark_market_installed(result: dict, installed: set) -> dict:
-    """Annotate each market skill dict with ``installed`` (True when its slug or
-    display name matches a locally installed skill). The UI greys out and labels
-    already-installed cards instead of guessing from the slug alone — which
-    otherwise misses skills whose SKILL.md ``name`` differs from the market slug.
+def _mark_market_installed(
+    result: dict, installed_names: set, installed_ids: set
+) -> dict:
+    """Annotate each market skill dict with ``installed``.
+
+    Matching is exact-first: a skill is marked installed when its ``(source,
+    slug)`` matches a record persisted at install time (see
+    ``SkillMarketManager.record_install``). This is reliable because the market
+    slug is the stable identity — the local SKILL.md ``name`` can differ from
+    the market slug / display name, which previously caused already-installed
+    cards to look installable.
+
+    A name/slug fallback is kept so skills installed *before* this feature also
+    get flagged when their frontmatter ``name`` happens to match.
     """
     skills = result.get("skills") if isinstance(result, dict) else None
     if isinstance(skills, list):
@@ -2338,7 +2347,12 @@ def _mark_market_installed(result: dict, installed: set) -> dict:
                 continue
             slug = skill.get("slug") or ""
             name = skill.get("name") or ""
-            skill["installed"] = slug in installed or name in installed
+            src = skill.get("source") or ""
+            skill["installed"] = (
+                (src, slug) in installed_ids
+                or slug in installed_names
+                or name in installed_names
+            )
     return result
 
 
@@ -2358,8 +2372,9 @@ async def search_market_skills(
             source, q.strip(), limit, offset, category
         )
         result = page.to_dict()
-        installed = {s["name"] for s in list_skills()["skills"]}
-        _mark_market_installed(result, installed)
+        installed_names = {s["name"] for s in list_skills()["skills"]}
+        installed_ids = skill_market_manager.installed_identifiers()
+        _mark_market_installed(result, installed_names, installed_ids)
         return {"status": "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2380,8 +2395,9 @@ async def list_hot_market_skills(
             source, limit, offset, cursor, category, sort
         )
         result = page.to_dict()
-        installed = {s["name"] for s in list_skills()["skills"]}
-        _mark_market_installed(result, installed)
+        installed_names = {s["name"] for s in list_skills()["skills"]}
+        installed_ids = skill_market_manager.installed_identifiers()
+        _mark_market_installed(result, installed_names, installed_ids)
         return {"status": "ok", **result}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2471,6 +2487,8 @@ def delete_skill_route(skill_name: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not removed:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    # Drop the market provenance record so the card becomes installable again.
+    skill_market_manager.forget_install(skill_name)
     return {"status": "ok", "name": skill_name, "removed": True}
 
 
