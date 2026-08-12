@@ -153,11 +153,19 @@ class ProviderManager:
         )
 
     def _clear_secret(self, provider: ProviderEntry) -> None:
-        """Remove the stored secret and the key_in_secrets marker."""
+        """Remove the stored secret and the key_in_secrets marker.
+
+        Only when a secret actually exists — if the Keychain entry was deleted
+        out-of-band (e.g. the user emptied the keychain), keep ``key_in_secrets``
+        True so a restored entry is still resolved instead of silently flipping
+        the provider to "no key".
+        """
         if self.data_dir is None:
             return
-        from .secrets import delete_secret
+        from .secrets import delete_secret, get_secret
 
+        if get_secret(self.data_dir, self.SECRET_SERVICE, provider.id) is None:
+            return
         delete_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
         self._key_cache.pop(provider.id, None)
         provider.key_in_secrets = False

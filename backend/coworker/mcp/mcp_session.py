@@ -543,6 +543,11 @@ class McpSessionManager:
             except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("MCP connect to %s exceeded its budget; cooling down", server_id)
                 self._connect_failures[server_id] = time.monotonic()
+                # Stop the stranded connect task (it would otherwise linger
+                # forever on a server that opens but never speaks MCP). The
+                # owner's shielded teardown handles the transport cleanup.
+                if not task.done():
+                    task.cancel()
             finally:
                 self._connecting.pop(server_id, None)
 
@@ -599,7 +604,8 @@ class McpSessionManager:
         except BaseException as exc:  # noqa: BLE001 - one bad server must not affect others
             if _classify_auth_error(exc):
                 status, error = STATUS_NEEDS_AUTH, _friendly_error(exc, server.get("transport", ""))
-            else:                status, error = STATUS_ERROR, _friendly_error(exc, server.get("transport", ""))
+            else:
+                status, error = STATUS_ERROR, _friendly_error(exc, server.get("transport", ""))
             logger.info("MCP server %s not available: %s", server_id, error)
             self._connect_failures[server_id] = time.monotonic()
             await asyncio.to_thread(
@@ -1096,6 +1102,9 @@ class McpSessionManager:
     async def _close_server_async(self, server_id: str) -> None:
         rt = self._servers.pop(server_id, None)
         self._trust_cache.pop(server_id, None)
+        # A manually closed/re-enabled server must retry immediately — don't
+        # leave it trapped in the connect-failure cooldown.
+        self._connect_failures.pop(server_id, None)
         if rt is not None:
             await rt.close()
         # Removing a server can un-conflict names that were namespaced.

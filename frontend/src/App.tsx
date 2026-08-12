@@ -224,10 +224,18 @@ function App() {
     return stored === 'plan' || stored === 'build' ? stored : 'build';
   });
   useEffect(() => {
-    localStorage.setItem('cw.autonomy', autonomy);
+    try {
+      localStorage.setItem('cw.autonomy', autonomy);
+    } catch {
+      // storage unavailable (privacy mode / quota) — ignore, state still works
+    }
   }, [autonomy]);
   useEffect(() => {
-    localStorage.setItem('cw.workMode', workMode);
+    try {
+      localStorage.setItem('cw.workMode', workMode);
+    } catch {
+      // ignore
+    }
   }, [workMode]);
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -1190,6 +1198,7 @@ function App() {
     });
     let streamedContent = '';
     let localParts: MessagePart[] = [];
+    let receivedDone = false;
     let streamStartAt = Date.now();
     streamStartAtsRef.current[streamKey(currentSessionId)] = streamStartAt;
     const controller = new AbortController();
@@ -1282,6 +1291,7 @@ function App() {
           ),
         );
       } else if (event.type === 'done') {
+        receivedDone = true;
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         localParts = settleRunningTools(localParts);
@@ -1337,11 +1347,13 @@ function App() {
         delete streamStartAtsRef.current[streamKey(currentSessionId)];
       }
       // Safety net: ensure the assistant message leaves the "running" state
-      // even if the terminal event was dropped by the backend.
+      // even if the terminal event was dropped by the backend. A stream that
+      // ended without a done event is interrupted, not "done" (half a reply
+      // must not masquerade as complete).
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
+            ? { ...item, content: streamedContent || (receivedDone ? item.content : t('chat.stream_interrupted')), status: receivedDone ? 'done' : 'interrupted', streamEndAt: Date.now() }
             : item,
         ),
       );
@@ -1377,6 +1389,7 @@ function App() {
     });
     let streamedContent = '';
     let localParts: MessagePart[] = [];
+    let receivedDone = false;
     let streamStartAt = Date.now();
     streamStartAtsRef.current[streamKey(currentSessionId)] = streamStartAt;
     const controller = new AbortController();
@@ -1469,6 +1482,7 @@ function App() {
           ),
         );
       } else if (event.type === 'done') {
+        receivedDone = true;
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         localParts = settleRunningTools(localParts);
@@ -1520,11 +1534,13 @@ function App() {
         delete streamStartAtsRef.current[streamKey(currentSessionId)];
       }
       // Safety net: ensure the assistant message leaves the "running" state
-      // even if the terminal event was dropped by the backend.
+      // even if the terminal event was dropped by the backend. A stream that
+      // ended without a done event is interrupted, not "done" (half a reply
+      // must not masquerade as complete).
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
+            ? { ...item, content: streamedContent || (receivedDone ? item.content : t('chat.stream_interrupted')), status: receivedDone ? 'done' : 'interrupted', streamEndAt: Date.now() }
             : item,
         ),
       );
@@ -1632,6 +1648,7 @@ function App() {
     const resumeRequestSeq = getSessionSeq(resumeSessionId);
     let resumeContent = '';
     let resumeParts: MessagePart[] = [];
+    let resumeDone = false;
     const applyResume = (status: 'running' | 'done') => {
       setMessages((current) =>
         current.map((item) =>
@@ -1648,6 +1665,7 @@ function App() {
           // P1 陈旧请求守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
           if (isStreamStale(resumeSessionId, resumeRequestSeq)) return;
           if (event.type === 'done') {
+            resumeDone = true;
             resumeContent = event.content || resumeContent;
             if (event.parts && event.parts.length > 0) {
               resumeParts = event.parts;
@@ -1742,6 +1760,17 @@ function App() {
         delete streamControllersRef.current[streamKey(resumeSessionId)];
         delete activeAssistantMessageIdsRef.current[streamKey(resumeSessionId)];
         delete streamStartAtsRef.current[streamKey(resumeSessionId)];
+      }
+      // 断线兜底：resume 流结束却没收到 done，把目标消息从 running 收尾为
+      // interrupted，避免 spinner 永久挂起。
+      if (!resumeDone) {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === targetMessageId && item.status === 'running'
+              ? { ...item, content: resumeContent || t('chat.stream_interrupted'), status: 'interrupted' as const, parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
+              : item,
+          ),
+        );
       }
     }
   };

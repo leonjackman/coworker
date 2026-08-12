@@ -218,10 +218,17 @@ class ApprovalEventBus:
     def __init__(self, buffer_size: int = 64) -> None:
         self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = defaultdict(list)
         self._buffer: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self._closed: set[str] = set()
         self._buffer_size = buffer_size
 
     def subscribe(self, resume_id: str) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+        if resume_id in self._closed:
+            # The resume already finished before this subscriber attached: hand
+            # it an immediate stream_end so the SSE connection terminates instead
+            # of hanging on heartbeats forever.
+            queue.put_nowait({"type": "stream_end"})
+            return queue
         self._subscribers[resume_id].append(queue)
         for event in list(self._buffer.get(resume_id, [])):
             try:
@@ -253,9 +260,14 @@ class ApprovalEventBus:
         queues = self._subscribers.pop(resume_id, [])
         for queue in queues:
             queue.put_nowait({"type": "stream_end"})
-        # Drop the ring buffer too — otherwise every HITL resume leaks up to
-        # buffer_size event dicts for the lifetime of the process.
+        # Drop the ring buffer and mark the resume finished so late subscribers
+        # terminate immediately (see subscribe) instead of hanging.
         self._buffer.pop(resume_id, None)
+        self._closed.add(resume_id)
+        # The closed set is small (one entry per HITL resume); bound it so it
+        # cannot grow unboundedly for a long-running process.
+        if len(self._closed) > 512:
+            self._closed = set(list(self._closed)[-256:])
 
 
 approval_event_bus = ApprovalEventBus()
@@ -1143,6 +1155,8 @@ async def chat_stream(request: ChatStreamRequest):
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
             if in_goal_flag:
                 _goal_active_streams.pop(f"chat-goal:{session_id}", None)
+                if not any(v == session_id for v in _goal_active_streams.values()):
+                    _goal_locks.pop(session_id, None)
             if cancel_event is not None:
                 _goal_cancel_events.pop(session_id, None)
                 try:
@@ -1498,6 +1512,7 @@ async def goal_delete(request: GoalPauseRequest):
 async def goal_resume(request: GoalResumeRequest):
     """Resume a paused goal: clear the pause flag and continue the autonomous
     goal loop from the checkpoint (round 2+), streaming progress via SSE."""
+    _guard_session_not_streaming(request.session_id)
     stream_id = str(uuid.uuid4())
     _goal_active_streams[stream_id] = request.session_id
     lock = _goal_locks.get(request.session_id)
@@ -1896,7 +1911,12 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
     provider_id = _provider_id_for_model(provider_name, model)
     try:
         workspace_path = workspace_controller.workspace_for_session(session_id).root
-    except Exception:  # noqa: BLE001 - fall back to the default workspace
+    except ValueError as exc:
+        # The session's project workspace is missing/invalid. Refuse instead of
+        # silently re-running in the DEFAULT workspace (which would write files
+        # in the wrong place under the project's session).
+        raise HTTPException(status_code=400, detail=f"workspace unavailable: {exc}") from exc
+    except Exception:  # noqa: BLE001 - genuinely workspace-less sessions use the default
         workspace_path = None
 
     async def event_stream():
@@ -2015,7 +2035,12 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     provider_id = _provider_id_for_model(provider_name, model)
     try:
         workspace_path = workspace_controller.workspace_for_session(session_id).root
-    except Exception:  # noqa: BLE001 - fall back to the default workspace
+    except ValueError as exc:
+        # The session's project workspace is missing/invalid. Refuse instead of
+        # silently re-running in the DEFAULT workspace (which would write files
+        # in the wrong place under the project's session).
+        raise HTTPException(status_code=400, detail=f"workspace unavailable: {exc}") from exc
+    except Exception:  # noqa: BLE001 - genuinely workspace-less sessions use the default
         workspace_path = None
 
     async def event_stream():

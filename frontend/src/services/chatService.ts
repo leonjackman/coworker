@@ -337,14 +337,8 @@ class ElectronChatService implements ChatService {
   }
 
   async installSkill(name: string, content: string, commands?: { name: string; description: string; body: string }[]): Promise<{ status: string; message?: string }> {
-    const res = await fetch(`${BACKEND_URL}/skills/install`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, content, commands: commands || [] }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.detail || `Failed to install skill (${res.status})`);
-    return data;
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.installSkill({ name, content, commands: commands || [] });
   }
 
   async getSkill(name: string, command?: string): Promise<SkillDetailResponse> {
@@ -497,42 +491,38 @@ class ElectronChatService implements ChatService {
   }
 
   async exportToolAudit(): Promise<string> {
-    const res = await fetch(`${BACKEND_URL}/audit/tool/export`);
-    return res.ok ? await res.text() : '';
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.exportToolAudit();
   }
 
   async clearToolAudit(): Promise<{ status: string }> {
-    const res = await fetch(`${BACKEND_URL}/audit/tool/clear`, { method: 'POST' });
-    return res.ok ? { status: 'ok' } : { status: 'error' };
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.clearToolAudit();
   }
 
   async exportAgentTraces(): Promise<string> {
-    const res = await fetch(`${BACKEND_URL}/traces/agent/export`);
-    return res.ok ? await res.text() : '';
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.exportAgentTraces();
   }
 
   async clearAgentTraces(): Promise<{ status: string }> {
-    const res = await fetch(`${BACKEND_URL}/traces/agent/clear`, { method: 'POST' });
-    return res.ok ? { status: 'ok' } : { status: 'error' };
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.clearAgentTraces();
   }
 
   async clearCheckpoints(): Promise<{ status: string }> {
-    const res = await fetch(`${BACKEND_URL}/checkpoints/clear`, { method: 'POST' });
-    return res.ok ? { status: 'ok' } : { status: 'error' };
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.clearCheckpoints();
   }
 
   async getRetentionSettings(): Promise<{ trace_lines: number; audit_lines: number }> {
-    const res = await fetch(`${BACKEND_URL}/settings/retention`);
-    return res.ok ? await res.json() : { trace_lines: 100, audit_lines: 100 };
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getRetentionSettings();
   }
 
   async saveRetentionSettings(patch: { trace_lines?: number; audit_lines?: number }): Promise<{ trace_lines: number; audit_lines: number }> {
-    const res = await fetch(`${BACKEND_URL}/settings/retention`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
-    return res.ok ? await res.json() : { trace_lines: 100, audit_lines: 100 };
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveRetentionSettings(patch);
   }
 
   async listCommandApprovals(): Promise<CommandApprovalsResponse> {

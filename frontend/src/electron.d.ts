@@ -146,6 +146,14 @@ declare global {
       getMemorySettings: () => Promise<MemorySettings>;
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
       revealInFolder: (path: string) => Promise<{ status: string }>;
+      installSkill: (payload: { name: string; content: string; commands?: { name: string; description: string; body: string }[] }) => Promise<{ status: string; message?: string }>;
+      exportToolAudit: () => Promise<string>;
+      clearToolAudit: () => Promise<{ status: string }>;
+      exportAgentTraces: () => Promise<string>;
+      clearAgentTraces: () => Promise<{ status: string }>;
+      clearCheckpoints: () => Promise<{ status: string }>;
+      getRetentionSettings: () => Promise<{ trace_lines: number; audit_lines: number }>;
+      saveRetentionSettings: (patch: { trace_lines?: number; audit_lines?: number }) => Promise<{ trace_lines: number; audit_lines: number }>;
     };
   }
 }

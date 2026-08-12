@@ -522,7 +522,7 @@ def build_workspace_tools(
             branch = workspace_git_branch(root)
             diff = workspace_git_diff(root)
             result: dict[str, Any] = {
-                "git": bool(branch.get("is_git", False) or diff.get("git", False)),
+                "git": bool(branch.get("is_repo", False) or diff.get("git", False)),
                 "workspace": str(workspace.root),
                 "branch": branch.get("branch"),
             }
@@ -1640,6 +1640,29 @@ def _msg_chars(msg: Any) -> int:
     return 0
 
 
+def _truncate_message(msg: Any, budget: int) -> Any:
+    """Return a copy of ``msg`` with string content truncated to ``budget``.
+
+    Only safe for plain-text user/system messages (not tool calls / tool results,
+    which must stay intact for pairing). Falls back to the original message when
+    the content is not trimmable.
+    """
+    try:
+        content = msg.content
+    except Exception:  # noqa: BLE001
+        return msg
+    if isinstance(content, str) and len(content) > budget:
+        from langchain_core.messages import HumanMessage
+
+        if getattr(msg, "type", "") in ("human", "system"):
+            return HumanMessage(
+                content=content[:budget] + "\n[content truncated by Coworker to fit context]",
+                id=getattr(msg, "id", None),
+            )
+        return msg
+    return msg
+
+
 class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     """Trim the model-bound message list to ``CONTEXT_WINDOW_CHARS``.
 
@@ -1647,9 +1670,17 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     grow the checkpoint), eventually exceeding the provider's context window and
     failing the turn with a 400. Dropping the OLDEST messages (keeping the first
     system message + the most recent exchanges) is a safe rolling window.
+
+    The trim must be expressed with ``RemoveMessage``: the ``messages`` state
+    channel uses the ``add_messages`` reducer, so merely returning a shorter list
+    merges by message id and does NOT delete the trimmed messages. Tool messages
+    are also kept paired with their triggering AIMessage so the provider never
+    sees an orphaned ToolMessage.
     """
 
     def _trim(self, state: CoworkerAgentState) -> list[Any] | None:
+        from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
+
         messages = state.get("messages", [])
         if not messages:
             return None
@@ -1657,36 +1688,51 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         if total <= CONTEXT_WINDOW_CHARS:
             return None
         # Keep the first message (system prompt) and then the most recent tail
-        # (oldest-first drop), so ordering is preserved.
-        head = list(messages[:1])
-        tail = list(messages[1:])
-        total = _msg_chars(head[0]) if head else 0
+        # (oldest-first drop). Oversized user/system content is truncated instead
+        # of dropped so the model still sees the user's current input; oversized
+        # tool/AI messages are dropped (cannot be truncated without breaking
+        # tool-call pairing).
+        head: list[Any] = []
+        budget = CONTEXT_WINDOW_CHARS
+        for msg in messages[:1]:
+            chars = _msg_chars(msg)
+            if chars > budget:
+                msg = _truncate_message(msg, budget)
+            head.append(msg)
+            budget -= _msg_chars(msg)
+
         kept_tail: list[Any] = []
-        for msg in reversed(tail):
+        for msg in reversed(messages[1:]):
             chars = _msg_chars(msg)
             if chars >= CONTEXT_WINDOW_CHARS:
+                # Oversized message: truncate user/system, drop tool/AI.
+                if getattr(msg, "type", "") in ("human", "system", "user"):
+                    kept_tail.append(_truncate_message(msg, CONTEXT_WINDOW_CHARS))
+                    budget = 0
+                    break
                 continue
-            if total + chars > CONTEXT_WINDOW_CHARS:
+            if budget - chars < 0:
                 break
             kept_tail.append(msg)
-            total += chars
+            budget -= chars
+
         kept_tail.reverse()
+        # Drop any leading ToolMessage whose triggering AIMessage landed in the
+        # trimmed gap (a ToolMessage is always preceded by its AIMessage in the
+        # list; keeping it alone would 400 the provider).
+        while kept_tail and getattr(kept_tail[0], "type", "") == "tool":
+            kept_tail.pop(0)
+
         kept = head + kept_tail
         if len(kept) == len(messages):
             return None
-        return kept
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        trimmed = self._trim(state)
-        if trimmed is None:
-            return None
-        return {"messages": trimmed}
+        return self._trim(state)
 
     async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        trimmed = self._trim(state)
-        if trimmed is None:
-            return None
-        return {"messages": trimmed}
+        return self._trim(state)
 
 
 # ---------------------------------------------------------------------------
@@ -2448,8 +2494,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             if goal_mode:
                 inputs["goal_mode"] = True
                 inputs["goal_text"] = goal_text
-            if _nudge:
-                inputs["goal_nudge"] = _nudge
+                # A stale goal_nudge left in the checkpoint from a previous
+                # force retry must not re-inject into later rounds. Clear it
+                # unless THIS call is the force retry carrying a fresh nudge.
+                inputs["goal_nudge"] = _nudge or ""
             config = agent_run_config(
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
                 language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,

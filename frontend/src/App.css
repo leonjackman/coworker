@@ -1807,6 +1807,11 @@ body.bottom-panel-resizing {
   padding-left: 12px;
 }
 
+.stream-content--interrupted {
+  border-left: 2px solid var(--warning, #d99100);
+  padding-left: 12px;
+}
+
 .stream-role {
   margin-bottom: 4px;
   color: var(--muted-foreground);
@@ -8270,6 +8275,9 @@ body.bottom-panel-resizing {
 .bottom-panel__log-status--success { color: var(--success-foreground, #22c55e); }
 .bottom-panel__log-status--error { color: var(--destructive, #ef4444); }
 .bottom-panel__log-status--pending { color: var(--warning, #d99100); }
+.bottom-panel__log-status--ok { color: var(--success-foreground, #22c55e); }
+.bottom-panel__log-status--approval_required,
+.bottom-panel__log-status--approval_denied { color: var(--warning, #d99100); }
 
 .bottom-panel__log-op {
   width: 110px;

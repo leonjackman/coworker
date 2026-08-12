@@ -328,3 +328,4 @@
 | 2026-08-12 | 补做 | 完成：文件陈旧守卫跨轮持久化（决策②→A）、记忆并发检测+合并（决策①→A）；均先验证后实现 |
 | 2026-08-12 | 验收 | 全面验收已完成修复点，修复 20 项 bug 隐患（4 高 / 12 中 / 4 低），详见"全面验收"节 |
 | 2026-08-12 | 二轮全局审计 | 全新审计发现的 P0/P1/P2/二梯队/三梯队问题全部处理：provider 密钥迁移丢 key、MCP 死 server 冷却、load_skill 工具、rerun_stream 工作区、install_skill 审批、goal force 去重、chat_stream/edit 流中防护、各类泄漏、SSE 断线标记 interrupted、Electron 空闲超时/IPC 编码、LLM 内置重试、ContextWindow 长上下文滚动、git_status 工具、技能创建 UI、autonomy/workMode 持久化、日志面板真数据、README 修正、launcher 安全杀进程、.coworker_settings.json 移出版本控制 |
+| 2026-08-12 | 二轮验收 | 验收二轮修复，修复 16 项隐患：ContextWindow 用 RemoveMessage 真删（原实现被 add_messages reducer 吞掉不生效）、Electron 直连 fetch 被 CORS 拦截（installSkill/导出/清空/retention 全走 IPC）、git_status is_repo 键名、regenerate/edit 工作区异常不再静默回退、edit/regenerate/resume 断线统一标 interrupted、ApprovalEventBus 迟到订阅者不挂起、MCP 超时取消孤儿任务、close 清冷却、goal_nudge 每轮清残留、goal_resume 补流中防护、断线 _goal_locks 清理、_clear_secret 保守、interrupted 消息补重新生成按钮、localStorage try/catch、日志状态 CSS、IPC 编码 |

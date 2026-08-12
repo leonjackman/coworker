@@ -231,6 +231,7 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
 function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onRegenerate?: () => void }) {
   const isError = message.status === 'error';
   const isStopped = message.status === 'stopped' || message.status === 'interrupted';
+  const isInterrupted = message.status === 'interrupted';
   const isRunning = message.status === 'running';
   const isRunningEmpty = isRunning && !message.content;
   const isWaiting = message.content.includes(t('chat.waiting_resolution'));
@@ -353,7 +354,12 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
           <div className="stream-stopped">{message.content}</div>
         ) : null}
 
+        {/* interrupted messages keep the regenerate action so the user can act on
+            the "connection interrupted; you can regenerate" hint. */}
         {!isError && !isStopped && !isRunning && !isRunningEmpty && !isWaiting && (
+          <MessageActions role="assistant" content={message.content} {...(onRegenerate ? { onRegenerate } : {})} />
+        )}
+        {isInterrupted && (
           <MessageActions role="assistant" content={message.content} {...(onRegenerate ? { onRegenerate } : {})} />
         )}
       </div>

@@ -447,6 +447,60 @@ ipcMain.handle('get-runtime-config', async () => {
   return requestBackend('/config');
 });
 
+// Raw-text request helper for export endpoints (PlainTextResponse), which
+// requestBackend would otherwise try to JSON-parse.
+function requestBackendText(pathname, method = 'GET', timeoutMs = 30000) {
+  const options = {
+    hostname: BACKEND_HOST,
+    port: BACKEND_PORT,
+    path: pathname,
+    method,
+    headers: {},
+  };
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          reject(new Error(`Backend returned ${res.statusCode}`));
+          return;
+        }
+        resolve(body);
+      });
+    });
+    req.on('error', (e) => reject(new Error(`Failed to connect to backend: ${e.message}`)));
+    req.setTimeout(timeoutMs);
+    req.on('timeout', () => { req.destroy(); reject(new Error('Backend request timed out')); });
+    req.end();
+  });
+}
+
+ipcMain.handle('skills-install', async (event, payload) => {
+  return requestBackend('/skills/install', 'POST', payload);
+});
+ipcMain.handle('audit-tool-export', async () => {
+  return requestBackendText('/audit/tool/export');
+});
+ipcMain.handle('audit-tool-clear', async () => {
+  return requestBackend('/audit/tool/clear', 'POST');
+});
+ipcMain.handle('traces-agent-export', async () => {
+  return requestBackendText('/traces/agent/export');
+});
+ipcMain.handle('traces-agent-clear', async () => {
+  return requestBackend('/traces/agent/clear', 'POST');
+});
+ipcMain.handle('checkpoints-clear', async () => {
+  return requestBackend('/checkpoints/clear', 'POST');
+});
+ipcMain.handle('settings-retention-get', async () => {
+  return requestBackend('/settings/retention');
+});
+ipcMain.handle('settings-retention-set', async (event, patch) => {
+  return requestBackend('/settings/retention', 'POST', patch);
+});
+
 ipcMain.handle('update-runtime-config', async (event, payload) => {
   return requestBackend('/config', 'PATCH', payload);
 });
@@ -723,14 +777,14 @@ ipcMain.handle('get-revert-preview', async (event, payload) => {
 });
 
 ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language }) => {
-  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/regenerate`, { language: language || 'zh' }, event.sender);
+  return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/regenerate`, { language: language || 'zh' }, event.sender);
 });
 
 ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, language }) => {
   const payload = { content, language: language || 'zh' };
   if (work_mode) payload.work_mode = work_mode;
   if (autonomy) payload.autonomy = autonomy;
-  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/edit`, payload, event.sender);
+  return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/edit`, payload, event.sender);
 });
 
 ipcMain.handle('list-projects', async () => {

@@ -139,4 +139,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listHotSkills: (query) => ipcRenderer.invoke('list-hot-skills', query),
   installMarketSkill: (source, slug, owner) =>
     ipcRenderer.invoke('install-market-skill', source, slug, owner ?? null),
+  installSkill: (payload) => ipcRenderer.invoke('skills-install', payload),
+  exportToolAudit: () => ipcRenderer.invoke('audit-tool-export'),
+  clearToolAudit: () => ipcRenderer.invoke('audit-tool-clear'),
+  exportAgentTraces: () => ipcRenderer.invoke('traces-agent-export'),
+  clearAgentTraces: () => ipcRenderer.invoke('traces-agent-clear'),
+  clearCheckpoints: () => ipcRenderer.invoke('checkpoints-clear'),
+  getRetentionSettings: () => ipcRenderer.invoke('settings-retention-get'),
+  saveRetentionSettings: (patch) => ipcRenderer.invoke('settings-retention-set', patch),
 });
