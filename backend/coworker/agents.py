@@ -470,8 +470,12 @@ def build_workspace_tools(
         conversation. Use it for stable facts: user preferences, project
         conventions, ports / commands that are always true, decisions with
         lasting consequences. Do NOT store anything transient (a one-off error,
-        an exploratory guess) — that belongs in the conversation instead. Keep
-        each entry short and self-contained.
+        an exploratory guess) — that belongs in the conversation instead.
+
+        Write each entry as a CONDENSED, self-contained fact in your own words:
+        distill the durable takeaway rather than quoting messages or pasting raw
+        text. Keep entries concise (a sentence or two, ideally under ~200 chars)
+        and merge related facts into what it makes sense to remember.
 
         - ``add``: appends a new entry.
         - ``replace``: replaces every entry containing ``target`` (substring)

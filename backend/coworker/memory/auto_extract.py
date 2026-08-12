@@ -146,6 +146,15 @@ Do NOT extract:
 - Anything secret (API keys, passwords, credentials)
 - Facts already answered entirely within this session
 
+CONDENSATION RULES (important):
+- Write each memory as a CONCISE, SELF-CONTAINED fact in your OWN words — distill
+  the durable takeaway, never paste or quote raw transcript text.
+- Do NOT copy error messages, step-by-step procedures, or long explanations.
+  Reduce them to their lasting essence (e.g. "backend binds port 9527" instead of
+  a debugging dialogue).
+- Each entry must be at most ~200 characters.
+- One key fact per entry.
+
 Respond with ONLY a JSON array of strings, e.g. ["user prefers Chinese replies",
 "frontend builds with npm run build only"]. If nothing is worth saving, respond
 with the literal JSON [].

@@ -540,6 +540,28 @@ def _memory_extract_llm() -> Any | None:
     return build_extract_llm(provider, memory_manager.config.extract_model)
 
 
+def _memory_transcript(session_id: str) -> list[dict[str, Any]]:
+    """Return recent role/content pairs for a session (auto-extract input)."""
+    session = session_store.load(session_id)
+    if session is None:
+        return []
+    return [
+        {"role": msg.role, "content": msg.content}
+        for msg in session.messages
+        if msg.content
+    ]
+
+
+# Wire the Phase 2 auto-extract dependencies (proposal store + extractor LLM +
+# transcript provider). Without this, after_turn's extraction task short-circuits
+# and auto-extract silently never runs.
+memory_manager.configure_extractor(
+    proposal_store=memory_proposal_store,
+    llm_factory=_memory_extract_llm,
+    transcript_provider=_memory_transcript,
+)
+
+
 @app.get("/health")
 async def health():
     return {
