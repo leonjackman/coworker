@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Command, HelpCircle, ListChecks, Plug } from 'lucide-react';
+import { Command, HelpCircle, Plug } from 'lucide-react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { CardSlot } from '@/components/ui/card-slot';
 import { t } from '@/lib/i18n';
@@ -461,62 +461,6 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
   );
 }
 
-function PlanDock({ request, onResolve }: { request: PendingRequest & { kind: 'plan' }; onResolve: (req: PendingRequest & { kind: 'plan' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
-  const [resolving, setResolving] = useState(false);
-
-  const dispatch = useCallback(async (decision: ApprovalDecisionPayload) => {
-    if (resolving) return;
-    setResolving(true);
-    try {
-      await onResolve(request, decision);
-    } finally {
-      setResolving(false);
-    }
-  }, [resolving, request, onResolve]);
-
-  return (
-    <div className="pending-dock__body">
-      <div className="pending-dock__question" data-slot="plan-content">
-        <p className="pending-dock__plan-text">{request.plan || ''}</p>
-      </div>
-      <div className="pending-dock__footer" data-slot="plan-actions">
-        <button
-          type="button"
-          className="button-ghost"
-          onClick={() => dispatch({ type: 'continue_discuss' })}
-          disabled={resolving}
-        >
-          {t('chat.plan_continue')}
-        </button>
-        <button
-          type="button"
-          className="button-secondary"
-          onClick={() => dispatch({ type: 'approve', autonomy: 'supervised' })}
-          disabled={resolving}
-        >
-          {t('chat.plan_approve_supervised')}
-        </button>
-        <button
-          type="button"
-          className="button-secondary"
-          onClick={() => dispatch({ type: 'approve', autonomy: 'guarded' })}
-          disabled={resolving}
-        >
-          {t('chat.plan_approve_guarded')}
-        </button>
-        <button
-          type="button"
-          className="button-primary"
-          onClick={() => dispatch({ type: 'approve', autonomy: 'autonomous' })}
-          disabled={resolving}
-        >
-          {t('chat.plan_approve_autonomous')}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksProps) {
   const front = requests[0];
   if (!front) return null;
@@ -549,7 +493,7 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
         <div className="pending-dock__header">
           <div className="pending-dock__title">
             <span className="pending-dock__icon">
-              {front.kind === 'command' ? <Command size={14} /> : front.kind === 'mcp' ? <Plug size={14} /> : front.kind === 'question' ? <HelpCircle size={14} /> : <ListChecks size={14} />}
+              {front.kind === 'command' ? <Command size={14} /> : front.kind === 'mcp' ? <Plug size={14} /> : <HelpCircle size={14} />}
             </span>
             <span className="pending-dock__title-text">{titleText}</span>
             <span className="pending-dock__kind">{kindLabel}</span>
@@ -574,9 +518,7 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
           <McpApprovalDock request={front as PendingRequest & { kind: 'mcp' }} onResolve={onResolve} />
         ) : front.kind === 'question' ? (
           <QuestionDock request={front as PendingRequest & { kind: 'question' }} total={questionTotal} onResolve={onResolve} />
-        ) : (
-          <PlanDock request={front as PendingRequest & { kind: 'plan' }} onResolve={onResolve} />
-        )}
+        ) : null}
       </CardSlot>
     </div>
   );

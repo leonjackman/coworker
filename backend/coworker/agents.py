@@ -151,10 +151,6 @@ class ApplyTextEditsArgs(BaseModel):
     edits: list[TextEditArgs] = Field(description="Ordered exact text edits. All edits must validate before the file is written.")
 
 
-class SubmitPlanArgs(BaseModel):
-    plan_text: str = Field(description="Your concise implementation plan to present to the user for approval before making changes.")
-
-
 class RunCommandArgs(BaseModel):
     command: list[str] = Field(description="Command argv array, for example ['npm', 'run', 'build']. Shell strings are not accepted.")
     cwd: str = Field(default="", description="Optional workspace-relative working directory.")
@@ -280,26 +276,32 @@ def phase_system_prompt(language: Language, phase: Phase, autonomy: Autonomy) ->
     contract for that phase.
     """
     lang_line = f"Reply in {language_name(language)}."
+    todo_hint = (
+        "Break your work into a visible task list: call write_todos with the concrete steps "
+        "you intend to take, then call write_todos again as each step completes to update its "
+        "status. Keep the checklist in sync with your actual progress."
+    )
     if phase == "discuss":
         return (
             f"{lang_line}\n"
-            "You are planning. Use the read-only tools to research the workspace, call ask_user "
-            "when you need to clarify the user's intent, and finish by calling submit_plan with a "
-            "concise implementation plan. Do NOT modify files or run commands until the user "
-            "approves the plan."
+            "You are planning (read-only). Use the read-only tools to research the workspace and "
+            "gather context (auditing, investigating, or breaking down the task). Use write_todos "
+            "to present the plan as a checklist of what you will do. "
+            "Do NOT modify files or run commands — execution is deferred until the user switches "
+            "to build mode. Finish by summarizing your findings and the planned steps."
         )
     if autonomy == "autonomous":
         return (
             f"{lang_line}\n"
             "You are executing with full autonomy. You may read, edit files and run workspace "
             "commands. Do not ask the user anything — make reasonable decisions and complete the "
-            "task to the best of your ability."
+            "task to the best of your ability. " + todo_hint
         )
     return (
         f"{lang_line}\n"
         "You are executing. You may read, edit files and run workspace commands. Only call "
         "ask_user when you are genuinely blocked and need a decision to continue; otherwise make "
-        "reasonable assumptions and proceed autonomously."
+        "reasonable assumptions and proceed autonomously. " + todo_hint
     )
 
 
@@ -604,11 +606,6 @@ def build_workspace_tools(
         }
         return json.dumps(result, ensure_ascii=False)
 
-    @tool(args_schema=SubmitPlanArgs)
-    def submit_plan(plan_text: str) -> str:
-        """Present your implementation plan for approval before making any changes. Call this AFTER researching the workspace and BEFORE writing or editing files or running commands."""
-        return f"Plan:\n{plan_text}"
-
     allowed_references = referenced_sessions or set()
 
     @tool(args_schema=ReadSessionArgs)
@@ -658,7 +655,7 @@ def build_workspace_tools(
             ensure_ascii=False,
         )
 
-    tools = [search_files, read_file, ask_user, submit_plan, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
+    tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
     if memory_store is not None:
         tools.append(memory)
     if session_store is not None:
@@ -670,7 +667,7 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "load_skill", "git_status"}
-_PLAN_TOOLS = {"ask_user", "submit_plan"}
+_PLAN_TOOLS = {"ask_user"}
 _EXEC_TOOLS = {"run_command", "install_skill", "memory"}
 
 
@@ -973,8 +970,6 @@ def interrupt_action_kind(
     name = str(action.get("name") or "")
     if name == "ask_user":
         return "question"
-    if name == "submit_plan":
-        return "plan"
     if mcp_policy is not None and name:
         try:
             if mcp_policy(name) is not None:
@@ -1100,15 +1095,6 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
             "header": str(args.get("header") or ""),
             "options": options,
             "multiple": bool(args.get("multiple")),
-        }
-    if kind == "plan":
-        args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
-        return {
-            **base,
-            "type": "plan_required",
-            "plan": str(args.get("plan_text") or ""),
-            "command": approval.get("command", []),
-            "cwd": approval.get("cwd", ""),
         }
     if kind == "mcp":
         args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
@@ -1799,7 +1785,7 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     model only ever sees the tools the current phase allows:
 
     * ``discuss`` (plan mode before approval): read-only + ``ask_user`` +
-      ``submit_plan`` — the agent cannot touch the filesystem.
+      the agent cannot touch the filesystem.
     * ``execute``: read + write + ``run_command``; ``ask_user`` stays available
       unless autonomy is ``autonomous`` (physical removal — the model cannot
       interrupt the user at all in full-autonomy mode).
@@ -1832,6 +1818,10 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                     allowed |= self.mcp_tool_names_provider()
                 except Exception:  # noqa: BLE001 - a broken provider must not gate tools
                     pass
+        # Task-list management is available in EVERY phase and mode (build/plan/
+        # goal): write_todos only writes graph state, never files, so it stays
+        # safe in the read-only discuss phase too.
+        allowed.add("write_todos")
         if state.get("goal_mode"):
             allowed |= {"finalize_goal", "write_todos"}
         return allowed
@@ -2029,109 +2019,6 @@ class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
 
 # ---------------------------------------------------------------------------
-# PlanApprovalMiddleware – plan-first approval gate (Claude Code style).
-# ---------------------------------------------------------------------------
-
-class PlanApprovalMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
-    """Plan-first approval gate, scoped to the ``discuss`` phase.
-
-    The agent calls ``submit_plan`` to present its implementation plan and
-    receive user approval before any write/execute tool is allowed to run. The
-    gate only fires while ``phase == "discuss"`` (plan mode before approval);
-    in ``execute`` phase it is inert, so build-mode sessions run without a plan
-    gate (Codex-style boundary autonomy).
-
-    On approval the decision also carries the user-chosen execution autonomy
-    (``supervised`` / ``guarded`` / ``autonomous``), which is written to state
-    together with ``phase = "execute"`` — the approval action *routes* the
-    follow-up execution posture (Claude Code ExitPlanMode semantics).
-
-    Exits:
-    * ``approve`` + ``autonomy`` -> execute with that autonomy.
-    * ``continue_discuss`` -> stay in discuss, refine the plan.
-    * ``reject`` -> stay in discuss, explain/revise.
-    """
-
-    def __init__(self, language: Language = "en"):
-        self.language = language
-
-    def _last_ai_with_tool_calls(self, state: CoworkerAgentState):
-        from langchain_core.messages import AIMessage
-        messages = state.get("messages", [])
-        # Only the most recent model output is eligible for gating. Scanning
-        # further back would re-interrupt on a stale submit_plan after a
-        # "continue discussing" decision.
-        if messages and isinstance(messages[-1], AIMessage) and getattr(messages[-1], "tool_calls", None):
-            return messages[-1]
-        return None
-
-    def _active(self, state: CoworkerAgentState) -> bool:
-        return normalize_phase(state.get("phase"), state.get("work_mode")) == "discuss"
-
-    def after_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        if not self._active(state):
-            return None
-        return self._handle_submit_plan(state)
-
-    async def aafter_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        return self.after_model(state, runtime)
-
-    def _handle_submit_plan(self, state: CoworkerAgentState) -> dict[str, Any] | None:
-        from langchain_core.messages import AIMessage, ToolMessage
-        from langgraph.types import interrupt
-
-        last_ai = self._last_ai_with_tool_calls(state)
-        if not last_ai:
-            return None
-        plan_calls = [tc for tc in last_ai.tool_calls if tc.get("name") == "submit_plan"]
-        if not plan_calls:
-            return None
-        plan_call = plan_calls[0]
-        plan_text = str(plan_call.get("args", {}).get("plan_text", "") or "")
-
-        hitl_request = {
-            "action_requests": [{"name": "submit_plan", "args": {"plan_text": plan_text}}],
-            "review_configs": [{"action_name": "submit_plan", "allowed_decisions": ["approve", "reject"]}],
-        }
-        decisions = interrupt(hitl_request)["decisions"]
-        decision = decisions[0] if decisions else {"type": "reject"}
-        dtype = str(decision.get("type", "reject"))
-
-        # Keep submit_plan in the tool calls: the synthetic ToolMessage below
-        # (same tool_call_id) satisfies the tool executor so submit_plan is not
-        # re-run, while the agent loop continues to the next model call in the
-        # resolved phase (official HITL "respond" semantics).
-        autonomy = normalize_autonomy(state.get("autonomy"))
-        if dtype == "approve":
-            autonomy = normalize_autonomy(decision.get("autonomy") or state.get("autonomy"))
-            phase = "execute"
-            tool_msg = ToolMessage(
-                content="The user approved your plan. Proceed to implement it using the write/execute tools.",
-                name="submit_plan",
-                tool_call_id=plan_call.get("id", "unknown"),
-                status="success",
-            )
-        elif dtype == "continue_discuss":
-            phase = "discuss"
-            tool_msg = ToolMessage(
-                content="The user wants to keep discussing before you execute. Refine your plan, research more, or ask clarifying questions. Do not modify files or run commands yet.",
-                name="submit_plan",
-                tool_call_id=plan_call.get("id", "unknown"),
-                status="error",
-            )
-        else:
-            phase = "discuss"
-            tool_msg = ToolMessage(
-                content="The user rejected your plan. Do not modify any files or run commands. Explain your approach to the user instead.",
-                name="submit_plan",
-                tool_call_id=plan_call.get("id", "unknown"),
-                status="error",
-            )
-
-        return {"messages": [last_ai, tool_msg], "phase": phase, "autonomy": autonomy}
-
-
-# ---------------------------------------------------------------------------
 # Agent builder – single create_agent graph (official langchain idiom).
 # ---------------------------------------------------------------------------
 
@@ -2157,14 +2044,14 @@ def build_coworker_agent_graph(
       the current ``phase``/``autonomy`` (physical enforcement, not prompt).
     * ``GoalModeMiddleware`` drives the autonomous /goal loop when ``goal_mode``
       is active (goal prompt + finalize_goal/continue_goal + premature-end guard).
-    * ``TodoListMiddleware`` (goal mode) exposes ``write_todos`` so the agent can
-      break the goal into a visible task list.
-    * ``PlanApprovalMiddleware`` gates ``submit_plan`` while ``phase ==
-      "discuss"`` and routes the approved execution autonomy.
+    * ``TodoListMiddleware`` (always mounted) exposes ``write_todos`` in every
+      mode so the agent can break its task into a visible checklist that the UI
+      renders as the TodoBlock card.
     * ``HumanInTheLoopMiddleware`` (always mounted) interrupts commands/writes
       only in ``execute`` + ``supervised``, and ``ask_user`` regardless.
     """
     from langchain.agents import create_agent
+    from langchain.agents.middleware.todo import TodoListMiddleware
 
     from .mcp.mcp_middleware import McpToolMiddleware
 
@@ -2193,15 +2080,15 @@ def build_coworker_agent_graph(
         ToolCallCleanerMiddleware(),
         phase_gate,
         GoalModeMiddleware(language),
+        # Task-list management in EVERY mode (build / plan / goal): the agent
+        # breaks its work into a `write_todos` checklist and keeps it updated as
+        # it completes each step. Read-only-safe (writes graph state only).
+        TodoListMiddleware(),
     ]
     if goal_mode:
-        from langchain.agents.middleware.todo import TodoListMiddleware
-
-        middleware.append(TodoListMiddleware())
         # Register the goal-completion tool in the graph's tool registry so the
         # tool node can execute it (the middleware also exposes it to the model).
         tools = [*tools, _goal_tools()[0]]
-    middleware.append(PlanApprovalMiddleware(language))
     middleware.extend(command_approval_middleware(approval_store, mcp_middleware.tool_policy))
 
     middleware.append(mcp_middleware)
@@ -2536,8 +2423,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
                             for approval in approvals:
                                 event = stream_event_from_interrupt(approval)
-                                if event.get("type") == "plan_required":
-                                    parts.append({"type": "plan", "content": str(event.get("plan") or "")})
                                 yield event
                             return
                         # write_todos updates the todo list via a Command state update.
@@ -2651,7 +2536,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             last_todos = event.get("todos") or []
                         elif etype == "tool_start":
                             round_had_tools = True
-                        elif etype in ("plan_required", "approval_required"):
+                        elif etype == "approval_required":
                             round_had_interrupt = True
                         yield event
             except asyncio.TimeoutError:
@@ -2851,9 +2736,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 if not tc_id:
                     continue
 
-                if tc_name in ("submit_plan", "finalize_goal", "write_todos"):
-                    # submit_plan renders as a Plan block; finalize_goal/write_todos
-                    # are goal-loop controls (goal_checkpoint/todos events).
+                if tc_name in ("finalize_goal", "write_todos"):
+                    # finalize_goal/write_todos are goal-loop / task-list controls
+                    # rendered via goal_checkpoint/todos events, not tool cards.
                     continue
 
                 if tc_id not in tool_state:
@@ -2876,9 +2761,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         elif isinstance(msg, ToolMessage):
             msg_name = getattr(msg, "name", "") or ""
-            if msg_name == "submit_plan":
-                # submit_plan is rendered as a Plan block, not a tool card.
-                return events
             tc_id = getattr(msg, "tool_call_id", "") or ""
             content = getattr(msg, "content", "") or ""
             if msg_name == "finalize_goal":
@@ -3020,8 +2902,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals], "resumed": True})
                             for item in approvals:
                                 event = stream_event_from_interrupt(item)
-                                if event.get("type") == "plan_required":
-                                    parts.append({"type": "plan", "content": str(event.get("plan") or "")})
                                 yield event
                             continue
             except Exception as exc:

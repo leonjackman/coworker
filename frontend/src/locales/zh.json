@@ -121,6 +121,7 @@
   "chat.goal_edit_cancel": "取消编辑",
   "chat.goal_paused_message": "目标已暂停，点击\"继续\"可恢复。",
   "chat.goal_toggle_todos": "展开/收起任务清单",
+  "todo.task_list": "任务清单",
   "chat.command_approval_waiting": "命令正在等待审批。请到设置页的工具审计中批准或拒绝。",
   "chat.approval_title": "命令需要你的批准",
   "chat.approval_deny": "拒绝",

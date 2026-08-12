@@ -641,13 +641,6 @@ export interface PendingRequest {
         approval_status: string;
         session_id?: string;
       }
-    | {
-        type: 'plan_required';
-        approval_id: string;
-        plan: string;
-        approval_status: string;
-        session_id?: string;
-      }
     | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
     | { type: 'error'; error: string; session_id?: string }
     | { type: 'goal_start'; goal: string; session_id?: string }

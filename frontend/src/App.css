@@ -8296,3 +8296,34 @@ body.bottom-panel-resizing {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.todo-block {
+  border: 1px solid var(--border, rgba(120, 140, 180, 0.16));
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--surface, rgba(120, 140, 180, 0.06));
+}
+
+.todo-block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.todo-block__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted-foreground);
+}
+
+.todo-block__sign {
+  color: var(--accent);
+}
+
+.todo-block__head .goal-card__todos-count {
+  margin-left: auto;
+}

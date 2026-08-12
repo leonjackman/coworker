@@ -3,6 +3,7 @@ import { ChatInput, extractSessionIds } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { GoalCard } from './components/GoalCard';
+import { TodoBlock } from './components/TodoBlock';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { MCPPanel } from './components/MCPPanel';
 import { SkillsPanel } from './components/SkillsPanel';
@@ -93,7 +94,7 @@ function upsertToolPart(parts: MessagePart[], id: string, name: string, input: s
 
 type ApprovalStreamEvent = Extract<
   StreamEvent,
-  { type: 'approval_required' } | { type: 'question_required' } | { type: 'plan_required' }
+  { type: 'approval_required' } | { type: 'question_required' }
 >;
 
 /**
@@ -121,7 +122,6 @@ function pendingRequestFromEvent(
     approval_status: event.approval_status,
     messageId,
   };
-  if (event.type === 'plan_required') return { ...base, plan: event.plan };
   if (event.type === 'question_required') {
     return {
       ...base,
@@ -165,6 +165,9 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [goal, setGoal] = useState<GoalState>({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
+  // Global task-list (write_todos) shown by the TodoBlock card above the
+  // composer, in every mode — the agent's self-decomposed checklist.
+  const [todos, setTodos] = useState<GoalTodo[]>([]);
   const [editingGoalDraft, setEditingGoalDraft] = useState(false);
   const goalDraftRef = useRef('');
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
@@ -849,13 +852,10 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
+      } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
         const pending = pendingRequestFromEvent(event, sessionIdValue, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
-        if (event.type === 'plan_required') {
-          localParts.push({ type: 'plan', content: event.plan });
-        }
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -923,6 +923,9 @@ function App() {
           }));
         }
       } else if (event.type === 'todos') {
+        // Task list is global across modes: the TodoBlock card above the composer
+        // shows it in build / plan / goal alike; keep goal.todos in sync too.
+        setTodos(event.todos);
         if (goalMatchesView) setGoal((current) => ({ ...current, todos: event.todos }));
       } else if (event.type === 'goal_force') {
         // Force-loop nudge: agent didn't use tools, system will retry.
@@ -1283,12 +1286,9 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
+      } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
-        if (event.type === 'plan_required') {
-          localParts.push({ type: 'plan', content: event.plan });
-        }
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -1475,12 +1475,9 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
+      } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
-        if (event.type === 'plan_required') {
-          localParts.push({ type: 'plan', content: event.plan });
-        }
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -1624,8 +1621,8 @@ function App() {
       const response = await chatService.resolveCommandApproval(request.approval_id, decision);
       resumeId = response.resume_id;
       const chained = (response.events ?? []).filter(
-        (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' } | { type: 'plan_required' }> =>
-          event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required',
+        (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }> =>
+          event.type === 'approval_required' || event.type === 'question_required',
       );
       setPendingRequests((current) => [
         ...current.filter((item) => item.approval_id !== request.approval_id),
@@ -1730,7 +1727,7 @@ function App() {
                   : item,
               ),
             );
-          } else if (event.type === 'approval_required' || event.type === 'question_required' || event.type === 'plan_required') {
+          } else if (event.type === 'approval_required' || event.type === 'question_required') {
             setPendingRequests((current) => {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
               return [...current, pendingRequestFromEvent(event, resumeSessionId, targetMessageId)];
@@ -2227,12 +2224,14 @@ function App() {
   };
 
   const toggleTodo = (index: number) => {
-    const todo = goal.todos[index];
+    const todo = todos[index];
     if (!todo) return;
     const newStatus = todo.status === 'completed' ? 'pending' : 'completed';
+    setTodos((current) => current.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t)));
+    // Keep the goal card's todo list in sync for goal-mode runs.
     setGoal((current) => {
-      const newTodos = current.todos.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t));
-      return { ...current, todos: newTodos };
+      if (!current.goalText) return current;
+      return { ...current, todos: current.todos.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t)) };
     });
   };
 
@@ -2283,6 +2282,7 @@ function App() {
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
     } else if (event.type === 'todos') {
+      setTodos(event.todos);
       setGoal((current) => ({ ...current, todos: event.todos }));
     } else if (event.type === 'goal_done') {
       const failed =
@@ -2308,6 +2308,7 @@ function App() {
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
     } else if (event.type === 'todos') {
+      setTodos(event.todos);
       setGoal((current) => ({ ...current, todos: event.todos }));
     } else if (event.type === 'goal_system') {
       // Display system messages in chat
@@ -2557,8 +2558,11 @@ function App() {
                   )}
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
+                      {/* Task list (write_todos) — the agent's self-decomposed
+                          checklist, shown in every mode above the composer. */}
+                      <TodoBlock todos={todos} onToggleTodo={toggleTodo} />
                       {goal.goalText && !editingGoalDraft && (
-                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} onToggleTodo={toggleTodo} recentToolNames={goal.recentToolNames ?? undefined} />
+                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} recentToolNames={goal.recentToolNames ?? undefined} />
                       )}
                       {editingGoalDraft && (
                         <div className="goal-edit-banner">

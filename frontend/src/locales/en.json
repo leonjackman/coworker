@@ -121,6 +121,7 @@
   "chat.goal_edit_cancel": "Cancel",
   "chat.goal_paused_message": "Goal paused — click Resume to continue.",
   "chat.goal_toggle_todos": "Toggle todo list",
+  "todo.task_list": "Task list",
   "chat.command_approval_waiting": "Command approval is pending. Approve or reject it in Settings > Tool Audit.",
   "chat.approval_title": "Command needs your approval",
   "chat.approval_deny": "Deny",

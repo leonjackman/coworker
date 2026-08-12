@@ -1,5 +1,4 @@
-import { Check, ChevronDown, Pause, Play, Pencil, Target, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import { Pause, Play, Pencil, Target, Trash2 } from 'lucide-react';
 import { t } from '../lib/i18n';
 import type { GoalState } from '../types';
 import { Button } from './ui/button';
@@ -10,14 +9,10 @@ interface GoalCardProps {
   onResume: () => void;
   onDelete: () => void;
   onDraftEdit: () => void;
-  onToggleTodo?: (index: number) => void;
   recentToolNames?: string[] | undefined;
 }
 
-export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onToggleTodo, recentToolNames }: GoalCardProps) {
-  const [expanded, setExpanded] = useState(true);
-  const hasTodos = goal.todos.length > 0;
-  const doneCount = goal.todos.filter((todo) => todo.status === 'completed').length;
+export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recentToolNames }: GoalCardProps) {
 
   return (
     <div className="goal-card" data-state={goal.done ? 'done' : goal.paused ? 'paused' : goal.stalled ? 'stalled' : 'active'}>
@@ -80,33 +75,6 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, onTog
               ))}
             </ul>
           </div>
-        )}
-        {hasTodos && (
-          <>
-            <div className="goal-card__todos-head">
-              <span className="goal-card__todos-count">{doneCount}/{goal.todos.length}</span>
-              <button type="button" className="goal-card__toggle" onClick={() => setExpanded((value) => !value)} aria-label={t('chat.goal_toggle_todos')}>
-                <ChevronDown size={13} className={expanded ? 'goal-card__toggle-open' : ''} />
-              </button>
-            </div>
-            {expanded && (
-              <ul className="goal-card__todos">
-                {goal.todos.map((todo, index) => (
-                  <li
-                    key={`${todo.content}-${index}`}
-                    className={`goal-card__todo goal-card__todo--${todo.status}`}
-                    onClick={() => onToggleTodo?.(index)}
-                    role="checkbox"
-                    aria-checked={todo.status === 'completed'}
-                    tabIndex={0}
-                  >
-                    {todo.status === 'completed' ? <Check size={13} /> : <span className="goal-card__todo-dot" />}
-                    <span>{todo.content}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
         )}
         {!goal.done && !goal.stalled && goal.progress && <p className="goal-card__progress">{goal.progress}</p>}
       </div>
