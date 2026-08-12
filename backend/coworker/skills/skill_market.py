@@ -417,7 +417,9 @@ class SkillMarketManager:
             if problems:
                 return {"status": "error", "message": "; ".join(problems)}
 
-            install_dir = self.install_dir / resolved
+            # Containment check: reject a pre-existing symlink at the install
+            # path that points outside the skills root (mirrors install()).
+            install_dir = _safe_install_dir(self.install_dir, resolved)
             install_dir.mkdir(parents=True, exist_ok=True)
             skill_file = install_dir / "SKILL.md"
 
@@ -500,10 +502,15 @@ class SkillMarketManager:
                 page=page, page_size=limit, keyword=keyword, category=category
             )
             if skip and len(items) >= limit:
-                extra, _ = await self._skillhub_fetch_page(
-                    page=page + 1, page_size=limit, keyword=keyword, category=category
-                )
-                items = items + extra
+                try:
+                    extra, _ = await self._skillhub_fetch_page(
+                        page=page + 1, page_size=limit, keyword=keyword, category=category
+                    )
+                    items = items + extra
+                except _UpstreamUnavailable:
+                    # The first page is fine; don't drop it just because the
+                    # stitching page failed — degrade to the first page's items.
+                    pass
         except _UpstreamUnavailable:
             return MarketPage(error=_UPSTREAM_UNAVAILABLE)
 

@@ -143,7 +143,7 @@ export interface ChatService {
   pauseGoal: (sessionId: string) => Promise<{ status: string }>;
   editGoal: (sessionId: string, goal: string) => Promise<{ status: string }>;
   deleteGoal: (sessionId: string) => Promise<{ status: string }>;
-  resumeGoal: (sessionId: string, onEvent: StreamEventCallback) => Promise<void>;
+  resumeGoal: (sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   fetchSettings: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number }>;
   saveSettings: (settings: { goal_max_rounds?: number; max_attachment_mb?: number }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>;
   listMcps: () => Promise<McpServerListPayload>;
@@ -540,7 +540,7 @@ class ElectronChatService implements ChatService {
     const abortStream = () => window.electronAPI?.abortChatStream(requestId);
     const detachAbortListener = attachAbortListener(signal, abortStream);
     try {
-      await window.electronAPI.streamRegenerateMessage(requestId, sessionId, messageId, onEvent);
+      await window.electronAPI.streamRegenerateMessage(requestId, sessionId, messageId, onEvent, getLanguage());
     } finally {
       detachAbortListener();
     }
@@ -565,7 +565,7 @@ class ElectronChatService implements ChatService {
       await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, onEvent, {
         ...(options?.workMode ? { work_mode: options.workMode } : {}),
         ...(options?.autonomy ? { autonomy: options.autonomy } : {}),
-      });
+      }, getLanguage());
     } finally {
       detachAbortListener();
     }
@@ -590,9 +590,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.goalDelete(sessionId);
   }
 
-  async resumeGoal(sessionId: string, onEvent: StreamEventCallback): Promise<void> {
+  async resumeGoal(sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent, getLanguage());
+    await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent, getLanguage(), signal);
   }
 
   async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number }> {
@@ -925,7 +925,7 @@ class HttpChatService implements ChatService {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         const frames = buffer.split('\n\n');
         buffer = frames.pop() ?? '';
         for (const frame of frames) {
@@ -990,8 +990,8 @@ class HttpChatService implements ChatService {
     });
   }
 
-  async resumeGoal(sessionId: string, onEvent: StreamEventCallback): Promise<void> {
-    await this.streamPost('/goal/resume', { session_id: sessionId, language: getLanguage() }, onEvent);
+  async resumeGoal(sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    await this.streamPost('/goal/resume', { session_id: sessionId, language: getLanguage() }, onEvent, signal);
   }
 
   private async streamPost(path: string, payload: Record<string, unknown>, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
@@ -1019,7 +1019,7 @@ class HttpChatService implements ChatService {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         const frames = buffer.split('\n\n');
         buffer = frames.pop() ?? '';
         for (const frame of frames) {

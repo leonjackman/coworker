@@ -311,8 +311,11 @@ class Workspace:
             return ""
         return digest.hexdigest()
 
-    def _fingerprint(self, path: Path) -> tuple[int, int, str]:
-        stat = path.stat()
+    def _fingerprint(self, path: Path) -> tuple[int, int, str] | None:
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
         return stat.st_mtime_ns, stat.st_size, self._sha256(path)
 
     def _load_fingerprints(self) -> None:
@@ -370,6 +373,12 @@ class Workspace:
         if recorded is None:
             return
         current = self._fingerprint(target)
+        if current is None:
+            # File was deleted since the agent read it: there is no content to
+            # clobber, so (re)creating it is safe. Drop the stale fingerprint.
+            self._fingerprints.pop(rel, None)
+            self._persist_fingerprints()
+            return
         if current != recorded:
             raise ValueError(
                 f"File changed since it was last read: {rel}. "

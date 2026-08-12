@@ -36,16 +36,11 @@ import type {
   SkillValidateRequest,
   SkillValidateResponse,
   StreamEvent,
-  ToolAuditResponse,  WorkspaceCommandRequest,
-  MarketSourceResponse,
+  ToolAuditResponse,  MarketSourceResponse,
   MarketCategoriesResponse,
   MarketQuery,
   MarketSkillsResponse,
   MarketInstallResponse,
-  WorkspaceCommandResponse,
-  WorkspaceDirResponse,
-  WorkspaceFileResponse,
-  WorkspaceTreeResponse,
   WorkspaceBranchResponse,
   GoalStatusResponse,
   MemoryProposalRecord,
@@ -102,7 +97,7 @@ declare global {
       getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
       getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
       rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
-      streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback) => Promise<void>;
+      streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback, language?: string) => Promise<void>;
       streamEditMessage: (
         requestId: string,
         sessionId: string,
@@ -110,12 +105,13 @@ declare global {
         content: string,
         onEvent: StreamEventCallback,
         options?: { work_mode?: string; autonomy?: string },
+        language?: string,
       ) => Promise<void>;
       goalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
       goalPause: (sessionId: string) => Promise<{ status: string }>;
       goalEdit: (payload: { session_id: string; goal: string }) => Promise<{ status: string }>;
       goalDelete: (sessionId: string) => Promise<{ status: string }>;
-  goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback, language?: string) => Promise<void>;
+  goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback, language?: string, signal?: AbortSignalLike) => Promise<void>;
       fetchSettings?: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number }>;
       saveSettings?: (settings: { goal_max_rounds?: number; max_attachment_mb?: number }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>;
       listMcps: () => Promise<McpServerListPayload>;

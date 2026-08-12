@@ -723,12 +723,15 @@ function App() {
       if (isStreamStale(requestSessionId, myRequestSeq)) return;
       // Goal-state events (goal_*, todos) must only drive the goal card of the
       // currently-viewed session; a background session's goal must not clobber
-      // it. Message events (delta/tool/plan/done) are always processed.
-      const goalMatchesView =
-        !event.session_id || event.session_id === sessionIdRef.current || !sessionIdRef.current;
+      // it (including while on the hero/draft, where no goal card should exist).
+      // Message events (delta/tool/plan/done) are always processed.
+      const goalMatchesView = !event.session_id || event.session_id === sessionIdRef.current;
       if (event.type === 'start') {
         streamStartAt = Date.now();
-        if (event.session_id && !sessionIdRef.current) {
+        // Only the stream started by THIS sendMessage may bind the view to a
+        // session; a delayed start event from a background session must not
+        // yank the user away from the hero/draft.
+        if (event.session_id && !sessionIdRef.current && event.session_id === requestSessionId) {
           setSessionId(event.session_id);
           sessionIdRef.current = event.session_id;
         }
@@ -2126,11 +2129,22 @@ function App() {
     // isThinking is derived from goal.running scoped to this session.
     goalSessionIdRef.current = targetSessionId;
     setGoal((current) => ({ ...current, running: true, paused: false }));
+    // Register an abort controller so the Stop button can cancel the resume
+    // stream (previously stopMessage was a no-op during goal resume).
+    const controller = new AbortController();
+    const key = streamKey(targetSessionId);
+    streamControllersRef.current[key] = controller;
     try {
-      await chatService.resumeGoal(targetSessionId, handleGoalResumeEventWithChat);
+      await chatService.resumeGoal(targetSessionId, handleGoalResumeEventWithChat, controller.signal);
     } catch (error) {
-      console.error('Failed to resume goal:', error);
+      if ((error as Error).name !== 'AbortError') {
+        console.error('Failed to resume goal:', error);
+      }
       setGoal((current) => ({ ...current, running: false }));
+    } finally {
+      if (streamControllersRef.current[key] === controller) {
+        delete streamControllersRef.current[key];
+      }
     }
   };
 
@@ -2623,7 +2637,9 @@ function App() {
 function currentSessionTitle(messages: ChatMessage[], sessions: SessionSummary[], sessionId?: string): string {
   const saved = sessionId ? sessions.find((session) => session.id === sessionId)?.title : undefined;
   if (saved) return saved;
-  const firstUserMessage = messages.find((message) => message.role === 'user');
+  // R1 keeps every session's messages in one array; only fall back to the
+  // current session's own first user message, never another session's.
+  const firstUserMessage = messages.find((message) => message.role === 'user' && (!sessionId || message.sessionId === sessionId));
   if (!firstUserMessage?.content.trim()) return t('sidebar.new_chat');
   return firstUserMessage.content.trim().slice(0, 64);
 }

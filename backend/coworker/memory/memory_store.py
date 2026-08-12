@@ -70,10 +70,12 @@ class MemoryStore:
         each other's entries. A crash mid-write can never leave a truncated file
         (atomic rename).
 
-        A post-write verification then detects the one writer that never takes
-        the lock — the user editing ``MEMORY.md`` directly in an editor — and
-        MERGES both sides instead of silently dropping either (decision ①=A:
-        conflict detection + merge, not last-write-wins).
+        The updater may return ``(entries, removed_set)`` to declare which exact
+        entries it deliberately deleted. A post-write verification then detects
+        the one writer that never takes the lock — the user editing ``MEMORY.md``
+        directly in an editor — and MERGES both sides (decision ①=A). Entries the
+        operation explicitly removed are NOT resurrected by the merge; truly new
+        concurrent additions are preserved.
         """
         path = self.path_for(scope)
         if path.parent and not path.parent.exists():
@@ -84,7 +86,12 @@ class MemoryStore:
                 current = _read_file_with_retry(path, scope) if path.is_file() else MemoryFile(
                     scope=scope, path=path, mtime=0.0, entries=[]
                 )
-                new_entries = updater(current.entries)
+                result = updater(current.entries)
+                if isinstance(result, tuple):
+                    new_entries, removed_set = result
+                    removed_set = set(removed_set)
+                else:
+                    new_entries, removed_set = result, set()
                 payload = render_file(new_entries)
                 self._write_payload_atomic(path, payload)
                 # Detect a non-cooperating writer (no lock held) that interleaved
@@ -95,7 +102,7 @@ class MemoryStore:
                     disk_raw = ""
                 if disk_raw != payload:
                     disk = _read_file_with_retry(path, scope)
-                    merged = _merge_entries(disk.entries, new_entries)
+                    merged = _merge_entries(disk.entries, new_entries, removed_set)
                     merged_payload = render_file(merged)
                     if merged_payload != payload:
                         self._write_payload_atomic(path, merged_payload)
@@ -126,8 +133,11 @@ class MemoryStore:
         The body is re-parsed into entries (``§``-delimited) and written with
         the same lock + atomic rename as every other write path.
         """
+        entries = split_entries(text)
+        for entry in entries:
+            self._validate_entry_text(entry)
         with self._lock:
-            return self._update_locked(scope, lambda _entries: split_entries(text))
+            return self._update_locked(scope, lambda _entries: entries)
 
     def list_scope(self, scope: str) -> MemoryFile:
         with self._lock:
@@ -139,13 +149,17 @@ class MemoryStore:
     def _validate_entry_text(self, text: str) -> None:
         """Reject text that would break the ``§``-delimited file format.
 
-        A line that is exactly ``§`` is the entry delimiter; embedding it inside
-        an entry would silently split into multiple entries on the next read.
+        The ``§`` separator splits on lines that are exactly ``§`` (allowing
+        surrounding whitespace) AND on lines ending with ``§`` — the split regex
+        matches ``\n*\s*§\s*\n+`` with zero-width ``\n*``/``\s*``, so an entry
+        whose last line ends with ``§`` would be silently split on the next read.
         """
-        if any(line.strip() == ENTRY_DELIMITER for line in text.splitlines()):
-            raise MemoryError(
-                f"memory entry cannot contain a line that is exactly '{ENTRY_DELIMITER}'"
-            )
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped == ENTRY_DELIMITER or stripped.endswith(ENTRY_DELIMITER):
+                raise MemoryError(
+                    f"memory entry cannot contain a line that ends with or equals '{ENTRY_DELIMITER}'"
+                )
 
     def add(self, scope: str, text: str) -> MemoryFile:
         text = text.strip()
@@ -193,36 +207,48 @@ class MemoryStore:
         if not target:
             raise MemoryError("remove target is empty")
         with self._lock:
-            def _remove(entries: list[str]) -> list[str]:
+            def _remove(entries: list[str]):
                 kept = [e for e in entries if target not in e]
                 if len(kept) == len(entries):
                     raise MemoryError("remove target not found")
-                return kept
+                removed = {e for e in entries if target in e}
+                return kept, removed
             return self._update_locked(scope, _remove)
 
     def clear(self, scope: str) -> MemoryFile:
         with self._lock:
-            return self._update_locked(scope, lambda _entries: [])
+            def _clear(entries: list[str]):
+                # Clear removes everything the store knew about; truly new
+                # concurrent additions survive the conflict merge.
+                return [], set(entries)
+            return self._update_locked(scope, _clear)
 
 
-def _read_file_with_retry(path: Path, scope: str) -> MemoryFile:
-    """Read + parse; retry once if the file grew between stat and read."""
+def _read_file_with_retry(path: Path, scope: str, retries: int = 3) -> MemoryFile:
+    """Read + parse, re-reading if the file changed mid-read (concurrent write).
+
+    The stability check compares the raw BYTE count against ``st_size`` —
+    comparing against the re-encoded text length is wrong (``read_text`` strips
+    ``\\r`` and expands invalid UTF-8), which would loop forever on CRLF or
+    non-UTF-8 files. Bounded retries guarantee termination.
+    """
     try:
         stat = path.stat()
-        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:  # pragma: no cover - defensive
         logger.warning("Memory read failed for %s: %s", path, exc)
         return MemoryFile(scope=scope, path=path, mtime=0.0, entries=[])
-    while True:
-        if not text:
-            break
-        # Re-read if size changed (concurrent write), best effort.
+    for _ in range(max(1, retries)):
         try:
-            if path.stat().st_size == len(text.encode("utf-8")):
-                break
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:  # pragma: no cover - defensive
-            break
+            raw = path.read_bytes()
+            size_now = path.stat().st_size
+        except OSError as exc:  # pragma: no cover - defensive
+            logger.warning("Memory read failed for %s: %s", path, exc)
+            return MemoryFile(scope=scope, path=path, mtime=stat.st_mtime, entries=[])
+        if len(raw) == size_now:
+            text = raw.decode("utf-8", errors="replace")
+            return MemoryFile(scope=scope, path=path, mtime=stat.st_mtime, entries=split_entries(text))
+    # Could not get a stable snapshot (file keeps growing); use the last read.
+    text = raw.decode("utf-8", errors="replace")
     return MemoryFile(scope=scope, path=path, mtime=stat.st_mtime, entries=split_entries(text))
 
 
@@ -255,15 +281,17 @@ except ImportError:  # pragma: no cover - Windows branch
             msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def _merge_entries(disk_entries: list[str], ours: list[str]) -> list[str]:
-    """Merge a disk state with our just-written entries (exact-dedup).
+def _merge_entries(disk_entries: list[str], ours: list[str], removed_set: set[str]) -> list[str]:
+    """Merge a disk state with our just-written entries.
 
-    Disk entries keep their order (they may be newer); our additions that are not
-    already present are appended. Used when a non-cooperating writer changed the
-    file between our read and our write — neither side is dropped.
+    Disk entries keep their order (they may be newer) except those our operation
+    explicitly removed (``removed_set``) — a remove/clear must not have its
+    entries resurrected by a concurrent save. Our additions that are not already
+    present are appended.
     """
     seen = set(disk_entries)
-    merged = list(disk_entries)
+    merged = [e for e in disk_entries if e not in removed_set]
+    seen = set(merged)
     for entry in ours:
         if entry not in seen:
             merged.append(entry)

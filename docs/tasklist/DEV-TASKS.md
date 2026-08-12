@@ -291,6 +291,32 @@
 
 ---
 
+## 全面验收（2026-08-12）
+
+对已完成全部修复点做验收，排查出的 bug 隐患已修复：
+
+- **高：记忆读取死循环**：`_read_file_with_retry` 用"重编码字节数 vs st_size"比对，CRLF/非法 UTF-8 文件永不相等→无限循环（记忆 DoS）。改为按原始字节数比对 + 重试上限。实测 CRLF/坏字节不再挂死。
+- **高：/ws/terminal Origin 绕过**：`startswith("http://localhost")` 被 `http://localhost.evil.com` 绕过，且放行 `null`（sandboxed iframe）。改为 urlparse 精确主机名（localhost/127.0.0.1/::1）+ 拒绝 null。实测 evil/null 均拒、localhost 放行。
+- **高：Electron listActiveSessions 信封未解包**：main.js 返回 `{session_ids}` 而前端按 `string[]` 处理→TypeError+5s 报错循环。改为在 main.js 解包。
+- **高：Electron regenerate/edit 丢 language**：Electron 路径请求体不带 language→英文用户重生成/编辑被强制切中文。preload/main.js 全链补齐。
+- **高：provider 密钥清不掉**：`api_key=""` 不删 Keychain 旧密钥→删除后复活。`save()` 对 key_in_secrets 且 api_key 空时 `_clear_secret`。
+- **中：chat_stream goal 未登记活跃流**：goal_delete 锁释放误判→并发双 goal 循环写同一 checkpoint。chat goal 流登记 `chat-goal:{sid}` 标记 + 退出清理。
+- **中：merge 复活删除/清空条目**：remove/clear 的结果被并发写合并回退。updater 返回 removed_set，merge 不复活已删条目（保留真正新增）。实测 remove/clear 语义正确。
+- **中：§ 校验缺口**：行尾 `§` 的条目仍被拆分；`write_file_text` 无校验。两者补齐。
+- **中：_ensure_fresh 已删文件裸异常**：读取后文件被删→write 永久卡死（无逃生通道）。`_fingerprint` 缺失返回 None，`_ensure_fresh` 删指纹放行重建。
+- **中：_on_error 重复 append**：done 后断连再 append 一条相同消息。edit/regenerate 加 terminal_sent 守卫。
+- **中：install_from_content symlink 逃逸**：对齐 install() 用 `_safe_install_dir`。
+- **中：goalMatchesView hero 污染 + start 劫持**：hero 下后台 goal 事件驱动 goal 卡；后台流 start 把视图拉回旧会话。守卫改为仅当前会话；start 仅当 `=== requestSessionId` 时绑定。
+- **中：currentSessionTitle 跨会话串标题**：R1 后 messages 含全会话，fallback 取到别会话消息。按 sessionId 过滤。
+- **中：goal resume 期间 Stop 失灵**：resumeGoal 未注册 AbortController。前端注册 + preload/main.js 登记 activeStreams + signal 透传。
+- **中：CSP 拦市场远程图标**：img-src 缺 https:。已加。
+- **中：/checkpoints/export tmp 泄漏**：BackgroundTask 清理；顺带修 FileResponse 用法（500）。
+- **低：** will-navigate 前缀绕过收紧、settings 三写者改原子写、ToolAuditPanel NaN/revoke、streamPost CRLF 归一化、electron.d.ts 死类型清理、_goal_locks 结束清理、skillhub 二次 fetch 降级。
+
+已检查无明显隐患：CORS 精确匹配、slugs 两路径防护一致、MCP 0600 时序、D9 结论、记忆锁释放路径、fingerprint 并发（丢失更新失败开放可接受）。
+
+---
+
 ## 变更记录
 
 | 日期 | 阶段 | 变更 |
@@ -300,3 +326,4 @@
 | 2026-08-12 | 阶段 2 | 完成：L1-L14（语言跟随系统、记忆 scope 对齐、自动标题、SkillHub 错误上抛、溯源带 owner、install 保留 frontmatter 等）；全部先验证后修复，前端经 ego-browser 真机验证 |
 | 2026-08-12 | 阶段 3 | 完成：R1-R6（真后台流、前后端死代码清理、运行记录导出/清空/保留、provider 密钥入 Keychain、README）；R1 先复现再修复，R4 面板经 ego-browser 验证 |
 | 2026-08-12 | 补做 | 完成：文件陈旧守卫跨轮持久化（决策②→A）、记忆并发检测+合并（决策①→A）；均先验证后实现 |
+| 2026-08-12 | 验收 | 全面验收已完成修复点，修复 20 项 bug 隐患（4 高 / 12 中 / 4 低），详见"全面验收"节 |

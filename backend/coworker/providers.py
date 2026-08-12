@@ -129,15 +129,28 @@ class ProviderManager:
 
     def save(self, config: ProviderConfig) -> None:
         config.updated_at = datetime.now(timezone.utc).isoformat()
-        # Move any plaintext keys into the secret store before writing.
+        # Move any plaintext keys into the secret store; an explicit empty key
+        # clears the stored secret instead of leaving a stale Keychain entry.
         for provider in config.providers:
             if provider.api_key:
                 self._store_secret(provider)
+            elif provider.key_in_secrets:
+                self._clear_secret(provider)
         self._key_cache.clear()
         atomic_write_text(
             self.config_path,
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
         )
+
+    def _clear_secret(self, provider: ProviderEntry) -> None:
+        """Remove the stored secret and the key_in_secrets marker."""
+        if self.data_dir is None:
+            return
+        from .secrets import delete_secret
+
+        delete_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
+        self._key_cache.pop(provider.id, None)
+        provider.key_in_secrets = False
 
     def public_config(self) -> dict[str, Any]:
         config = self.load()

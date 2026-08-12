@@ -320,12 +320,22 @@ function createWindow() {
   });
 
   // Never navigate the app window away from the bundled app / dev server.
+  // Hostnames/ports are matched exactly so lookalike origins (e.g.
+  // http://localhost:5173.evil.com) cannot navigate the window.
+  const localOrigin = /^https?:\/\/(localhost|127\.0\.0\.1|::1)(:\d+)?\//;
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    const allowed =
-      !FRONTEND_URL && url.startsWith('file:') ||
-      (FRONTEND_URL && url.startsWith(FRONTEND_URL)) ||
-      /^https?:\/\/localhost(:\d+)?\//.test(url) ||
-      /^https?:\/\/127\.0\.0\.1(:\d+)?\//.test(url);
+    let parsed = null;
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
+    const devAllowed =
+      FRONTEND_URL && parsed !== null &&
+      parsed.protocol === 'http:' && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') &&
+      parsed.port === new URL(FRONTEND_URL).port;
+    const packagedAllowed = !FRONTEND_URL && url.startsWith('file:') && !parsed.pathname.includes('..');
+    const allowed = devAllowed || packagedAllowed || localOrigin.test(url);
     if (!allowed) {
       event.preventDefault();
       if (/^https?:\/\//i.test(url)) {
@@ -603,7 +613,9 @@ ipcMain.handle('list-sessions', async () => {
 });
 
 ipcMain.handle('list-active-sessions', async () => {
-  return requestBackend('/sessions/active');
+  const envelope = await requestBackend('/sessions/active');
+  // Backend returns {status, session_ids}; unwrap so the renderer receives string[].
+  return Array.isArray(envelope?.session_ids) ? envelope.session_ids : [];
 });
 
 ipcMain.handle('create-session', async (event, payload) => {
@@ -710,12 +722,12 @@ ipcMain.handle('get-revert-preview', async (event, payload) => {
   return requestBackend(`/sessions/${payload.session_id}/messages/${payload.message_id}/revert-preview`);
 });
 
-ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id }) => {
-  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/regenerate`, {}, event.sender);
+ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language }) => {
+  return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/regenerate`, { language: language || 'zh' }, event.sender);
 });
 
-ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy }) => {
-  const payload = { content };
+ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, language }) => {
+  const payload = { content, language: language || 'zh' };
   if (work_mode) payload.work_mode = work_mode;
   if (autonomy) payload.autonomy = autonomy;
   return startStreamingRequest(requestId, `/sessions/${session_id}/messages/${message_id}/edit`, payload, event.sender);
@@ -838,10 +850,21 @@ ipcMain.handle('start-goal-resume', async (event, { requestId, sessionId, langua
           sender.send('chat-stream-event', { requestId, event: payload });
         }
       });
-      res.on('end', () => resolve({ ok: true }));
-      res.on('error', (err) => reject(err));
+      res.on('end', () => {
+        activeStreams.delete(requestId);
+        resolve({ ok: true });
+      });
+      res.on('error', (err) => {
+        activeStreams.delete(requestId);
+        reject(err);
+      });
     });
-    req.on('error', (err) => reject(err));
+    // Register so the Stop button's abort-chat-stream can cancel a running resume.
+    activeStreams.set(requestId, req);
+    req.on('error', (err) => {
+      activeStreams.delete(requestId);
+      reject(err);
+    });
     req.write(data);
     req.end();
   });

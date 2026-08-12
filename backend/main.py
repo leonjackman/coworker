@@ -13,6 +13,7 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -1093,6 +1094,12 @@ async def chat_stream(request: ChatStreamRequest):
         if goal_lock is None and in_goal_flag:
             goal_lock = asyncio.Lock()
             _goal_locks[session_id] = goal_lock
+        if in_goal_flag:
+            # Register the chat-started goal stream so goal_delete's lock-release
+            # guard sees an active stream (it would otherwise falsely pop the lock
+            # under a running loop and allow a second goal to race it on the same
+            # checkpoint thread).
+            _goal_active_streams[f"chat-goal:{session_id}"] = session_id
 
         _raw_stream_iter = stream_iter
 
@@ -1124,8 +1131,10 @@ async def chat_stream(request: ChatStreamRequest):
         def _on_error(exc):
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
             nonlocal terminal_sent
-            if accumulated_content:
+            if accumulated_content and not terminal_sent:
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+            if in_goal_flag:
+                _goal_active_streams.pop(f"chat-goal:{session_id}", None)
             if cancel_event is not None:
                 _goal_cancel_events.pop(session_id, None)
                 try:
@@ -1148,6 +1157,9 @@ async def chat_stream(request: ChatStreamRequest):
                 break
             else:
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        # Goal stream ended (normal, error, or disconnect): drop the active marker.
+        if in_goal_flag:
+            _goal_active_streams.pop(f"chat-goal:{session_id}", None)
 
     return StreamingResponse(
         event_stream(),
@@ -1232,13 +1244,20 @@ def read_user_memory_settings() -> dict:
     return {k: v for k, v in stored.items() if k in known}
 
 
-def save_user_memory_settings(settings: dict) -> None:
-    """Merge memory settings into .coworker_settings.json without clobbering others."""
+def _save_user_settings_file(payload: dict) -> None:
+    """Persist .coworker_settings.json atomically (never a truncated JSON)."""
+    from coworker.atomicio import atomic_write_text
+
     path = Path(SETTING_FILE)
     path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False))
+
+
+def save_user_memory_settings(settings: dict) -> None:
+    """Merge memory settings into .coworker_settings.json without clobbering others."""
     existing = _load_user_settings_file()
     existing["memory"] = {k: v for k, v in settings.items() if v is not None}
-    path.write_text(json.dumps(existing, ensure_ascii=False))
+    _save_user_settings_file(existing)
 
 
 def read_user_retention_settings() -> dict:
@@ -1257,11 +1276,10 @@ def save_user_retention_settings(settings: dict) -> None:
     from coworker.workspace import set_tool_audit_retention
 
     path = Path(SETTING_FILE)
-    path.parent.mkdir(parents=True, exist_ok=True)
     existing = _load_user_settings_file()
     merged = {**read_user_retention_settings(), **{k: v for k, v in settings.items() if v is not None}}
     existing["retention"] = merged
-    path.write_text(json.dumps(existing, ensure_ascii=False))
+    _save_user_settings_file(existing)
     # Apply immediately so the running process trims at the new cap.
     set_trace_retention(merged.get("trace_lines", 0))
     set_tool_audit_retention(merged.get("audit_lines", 0))
@@ -1314,16 +1332,10 @@ async def set_settings(request: SettingsUpdate):
         max_rounds = max(0, min(1000, max_rounds))
     max_attachment_mb = max(MIN_MAX_ATTACHMENT_MB, min(MAX_MAX_ATTACHMENT_MB, request.max_attachment_mb))
     try:
-        path = Path(SETTING_FILE)
-        path.parent.mkdir(parents=True, exist_ok=True)
         # Merge so the two keys don't clobber each other across saves.
-        existing: dict = {}
-        try:
-            existing = json.loads(path.read_text() or "{}")
-        except Exception:
-            existing = {}
+        existing: dict = _load_user_settings_file()
         existing.update({"goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb})
-        path.write_text(json.dumps(existing))
+        _save_user_settings_file(existing)
     except Exception as exc:
         print(f"[settings] failed to persist settings: {exc!r}", file=sys.stderr)
         return {"status": "error", "goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb, "detail": str(exc)}
@@ -1588,6 +1600,10 @@ async def goal_resume(request: GoalResumeRequest):
             finally:
                 _goal_cancel_events.pop(request.session_id, None)
                 _goal_active_streams.pop(stream_id, None)
+                # Goal loop fully ended: release the per-session lock so it does
+                # not accumulate for every session that ever ran a goal.
+                if not any(v == request.session_id for v in _goal_active_streams.values()):
+                    _goal_locks.pop(request.session_id, None)
 
     return StreamingResponse(
         event_stream(),
@@ -1868,11 +1884,13 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
 
     async def event_stream():
         accumulated_content = ""
+        terminal_sent = False
 
         def _persist_partial():
-            nonlocal accumulated_content
-            if not accumulated_content:
+            nonlocal accumulated_content, terminal_sent
+            if not accumulated_content or terminal_sent:
                 return
+            terminal_sent = True
             try:
                 session = session_store.append_message(
                     session_id,
@@ -1892,11 +1910,12 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                 pass
 
         def _on_event(event):
-            nonlocal accumulated_content
+            nonlocal accumulated_content, terminal_sent
             event["session_id"] = session_id
             if event.get("type") == "delta" and event.get("content"):
                 accumulated_content += event.get("content", "")
             if event.get("type") == "done":
+                terminal_sent = True
                 try:
                     session = session_store.append_message(
                         session_id,
@@ -1979,11 +1998,13 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
 
     async def event_stream():
         accumulated_content = ""
+        terminal_sent = False
 
         def _persist_partial():
-            nonlocal accumulated_content
-            if not accumulated_content:
+            nonlocal accumulated_content, terminal_sent
+            if not accumulated_content or terminal_sent:
                 return
+            terminal_sent = True
             try:
                 session = session_store.append_message(
                     session_id,
@@ -2003,11 +2024,12 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                 pass
 
         def _on_event(event):
-            nonlocal accumulated_content
+            nonlocal accumulated_content, terminal_sent
             event["session_id"] = session_id
             if event.get("type") == "delta" and event.get("content"):
                 accumulated_content += event.get("content", "")
             if event.get("type") == "done":
+                terminal_sent = True
                 try:
                     session = session_store.append_message(
                         session_id,
@@ -2244,18 +2266,32 @@ async def clear_agent_traces():
 @app.get("/checkpoints/export")
 async def export_checkpoints():
     """Download the LangGraph checkpoint SQLite DB (best-effort copy)."""
+    from starlette.background import BackgroundTask
+    from fastapi import BackgroundTasks
     from fastapi.responses import FileResponse
     import shutil
 
     db_path = agent_registry.checkpoint_path
     if not db_path.exists():
         return {"status": "ok", "size": 0, "note": "no checkpoints yet"}
-    tmp = db_path.with_name(db_path.name + ".export.tmp")
+    tmp = db_path.with_name(f"{db_path.name}.export.{uuid.uuid4().hex[:8]}.tmp")
     try:
         shutil.copy2(db_path, tmp)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"failed to snapshot checkpoints: {exc}") from exc
-    return FileResponse(str(tmp), media_type="application/octet-stream", filename="coworker-checkpoints.sqlite3")
+
+    def _cleanup() -> None:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    return FileResponse(
+        str(tmp),
+        media_type="application/octet-stream",
+        filename="coworker-checkpoints.sqlite3",
+        background=BackgroundTasks([BackgroundTask(_cleanup)]),
+    )
 
 
 @app.post("/checkpoints/clear")
@@ -2777,17 +2813,19 @@ async def ws_terminal(websocket: WebSocket):
     """
     # Origin gate: WebSocket is not subject to CORS, so a malicious web page
     # could otherwise drive this PTY shell directly. Only allow the local dev
-    # origins the app itself uses (plus Electron's file:// / null origins).
+    # origins the app itself uses (plus Electron's file:// origin). Hostnames
+    # are matched exactly — a prefix match (e.g. http://localhost.evil.com) and
+    # the opaque "null" origin (spawned by sandboxed iframes) must be rejected.
     origin = websocket.headers.get("origin", "")
     if origin:
-        origin_host = origin.lower()
-        allowed = (
-            origin_host.startswith("http://localhost")
-            or origin_host.startswith("http://127.0.0.1")
-            or origin_host.startswith("file://")
-            or origin_host == "null"
-        )
-        if not allowed:
+        parsed = urlparse(origin)
+        scheme = parsed.scheme.lower()
+        host = (parsed.hostname or "").lower()
+        if scheme == "file":
+            pass  # Electron loads the bundled app from file://
+        elif host in {"localhost", "127.0.0.1", "::1"} and scheme in {"http", "https"}:
+            pass
+        else:
             await websocket.close(code=1008)
             return
 

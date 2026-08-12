@@ -12,7 +12,8 @@ function downloadText(filename: string, text: string): void {
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  // Defer revocation so the download actually starts before the blob is released.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function formatAuditTime(timestamp: string): string {
@@ -98,8 +99,12 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
   }
 
   async function saveRetention() {
+    const trace = Number.isFinite(traceLines) && traceLines >= 1 ? Math.floor(traceLines) : 100;
+    const audit = Number.isFinite(auditLines) && auditLines >= 1 ? Math.floor(auditLines) : 100;
+    setTraceLines(trace);
+    setAuditLines(audit);
     try {
-      await chatService.saveRetentionSettings({ trace_lines: traceLines, audit_lines: auditLines });
+      await chatService.saveRetentionSettings({ trace_lines: trace, audit_lines: audit });
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('settings.audit_load_failed'));
