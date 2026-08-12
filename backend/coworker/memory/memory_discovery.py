@@ -48,13 +48,6 @@ class MemoryScanner:
         """The user-level memory file path."""
         return self.user_home / COWORKER_DIR / MEMORY_FILE_NAME
 
-    def roots(self) -> list[tuple[Path | None, str]]:
-        """Return ``(path_or_None, scope)`` pairs in precedence order (project first)."""
-        return [
-            (self.project_path(), "project"),
-            (self.user_path(), "user"),
-        ]
-
     def _path_missing(self, path: Path | None) -> bool:
         return path is None or not path.is_file()
 

@@ -71,7 +71,6 @@ declare global {
       platform: string;
       getRuntimeConfig: () => Promise<RuntimeConfig>;
       updateRuntimeConfig: (payload: RuntimeConfigUpdate) => Promise<RuntimeConfig>;
-      sendChatMessage: (payload: ChatRequest) => Promise<ChatResponse>;
       streamChatMessage: (requestId: string, payload: ChatRequest, onEvent: StreamEventCallback) => Promise<void>;
       abortChatStream: (requestId: string) => void;
       streamApprovalEvents: (requestId: string, resumeId: string, onEvent: StreamEventCallback) => Promise<void>;
@@ -94,11 +93,7 @@ declare global {
       openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
       renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
       deleteProject: (projectId: string) => Promise<{ status: string }>;
-      getWorkspaceTree: (projectId?: string) => Promise<WorkspaceTreeResponse>;
-      getWorkspaceDir: (path: string, projectId?: string) => Promise<WorkspaceDirResponse>;
-      getWorkspaceFile: (path: string, projectId?: string) => Promise<WorkspaceFileResponse>;
       getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
-      runWorkspaceCommand: (payload: WorkspaceCommandRequest) => Promise<WorkspaceCommandResponse>;
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
@@ -118,11 +113,9 @@ declare global {
       ) => Promise<void>;
       goalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
       goalPause: (sessionId: string) => Promise<{ status: string }>;
-      goalStop: (sessionId: string) => Promise<{ status: string }>;
       goalEdit: (payload: { session_id: string; goal: string }) => Promise<{ status: string }>;
       goalDelete: (sessionId: string) => Promise<{ status: string }>;
   goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback, language?: string) => Promise<void>;
-  goalStart: (request: { session_id: string; goal: string; language: string }) => Promise<{ status: string }>;
       fetchSettings?: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number }>;
       saveSettings?: (settings: { goal_max_rounds?: number; max_attachment_mb?: number }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>;
       listMcps: () => Promise<McpServerListPayload>;

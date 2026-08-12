@@ -39,7 +39,7 @@ from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
-from coworker.skills.skill_manager import SKILLS_CONFIG_FILENAME, SkillManager
+from coworker.skills.skill_manager import SkillManager
 from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
 from coworker.memory.memory_manager import MemoryConfig, MemoryManager
 from coworker.memory.auto_extract import MemoryProposalStore
@@ -63,7 +63,7 @@ app.add_middleware(
 )
 settings = load_settings()
 session_store = SessionStore(settings.data_dir / "sessions")
-provider_manager = ProviderManager(settings.data_dir / "providers.json")
+provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
 config_controller = AppConfigController(settings, provider_manager)
 mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
 mcp_sessions = McpSessionManager(settings.data_dir, mcp_manager)
@@ -151,7 +151,6 @@ async def _startup_checkpoint_maintenance() -> None:
 # one-shot backfill searches the market for each installed skill and records the
 # provenance when a confident (normalised) match is found. It is conservative:
 # only exact normalised slug/name matches are accepted, to avoid false positives.
-_market_backfill_task: "asyncio.Task | None" = None
 
 
 def _norm_market_key(value: str | None) -> str:
@@ -912,8 +911,6 @@ async def save_memory_settings(request: MemorySettingsUpdate):
     return await get_memory_settings()
 
 from fastapi.responses import StreamingResponse
-import json as _json
-from pydantic import BaseModel
 
 class ChatStreamRequest(ChatRequest):
     session_id: str = ""
@@ -1150,7 +1147,7 @@ async def chat_stream(request: ChatStreamRequest):
             elif kind == "end":
                 break
             else:
-                yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -1244,6 +1241,43 @@ def save_user_memory_settings(settings: dict) -> None:
     path.write_text(json.dumps(existing, ensure_ascii=False))
 
 
+def read_user_retention_settings() -> dict:
+    """Read user-level data-retention overrides (trace/audit line caps)."""
+    data = _load_user_settings_file()
+    stored = data.get("retention")
+    if not isinstance(stored, dict):
+        return {}
+    known = {"trace_lines", "audit_lines"}
+    return {k: v for k, v in stored.items() if k in known and isinstance(v, int)}
+
+
+def save_user_retention_settings(settings: dict) -> None:
+    """Merge retention settings into .coworker_settings.json and apply at runtime."""
+    from coworker.traces import set_trace_retention
+    from coworker.workspace import set_tool_audit_retention
+
+    path = Path(SETTING_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _load_user_settings_file()
+    merged = {**read_user_retention_settings(), **{k: v for k, v in settings.items() if v is not None}}
+    existing["retention"] = merged
+    path.write_text(json.dumps(existing, ensure_ascii=False))
+    # Apply immediately so the running process trims at the new cap.
+    set_trace_retention(merged.get("trace_lines", 0))
+    set_tool_audit_retention(merged.get("audit_lines", 0))
+
+
+def apply_stored_retention_settings() -> None:
+    """Apply persisted retention overrides at startup."""
+    from coworker.traces import set_trace_retention
+    from coworker.workspace import set_tool_audit_retention
+
+    stored = read_user_retention_settings()
+    if stored:
+        set_trace_retention(stored.get("trace_lines", 0))
+        set_tool_audit_retention(stored.get("audit_lines", 0))
+
+
 def apply_stored_memory_settings() -> None:
     """Overlay user-saved memory settings onto the runtime MemoryConfig."""
     overrides = read_user_memory_settings()
@@ -1260,6 +1294,7 @@ def apply_stored_memory_settings() -> None:
 
 
 apply_stored_memory_settings()
+apply_stored_retention_settings()
 
 
 @app.get("/settings")
@@ -1547,7 +1582,7 @@ async def goal_resume(request: GoalResumeRequest):
                     if kind == "heartbeat":
                         yield ": ping\n\n"
                     else:
-                        yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                         if kind == "end":
                             break
             finally:
@@ -1902,7 +1937,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
             elif kind == "end":
                 break
             else:
-                yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -2013,12 +2048,11 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             elif kind == "end":
                 break
             else:
-                yield f"data: {_json.dumps(payload, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.post("/sessions/{session_id}/messages/{message_id}/rollback")
 @app.get("/projects")
 async def list_projects():
     projects = []
@@ -2145,9 +2179,123 @@ async def workspace_command(request: WorkspaceCommandRequest):
 async def tool_audit(limit: int = 100):
     return {"status": "ok", "events": list_tool_audit_events(tool_audit_path, limit)}
 
+
+@app.get("/audit/tool/export")
+async def export_tool_audit():
+    """Export the full tool-audit JSONL as a text download."""
+    from fastapi.responses import PlainTextResponse
+
+    text = ""
+    try:
+        if tool_audit_path.exists():
+            text = tool_audit_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    return PlainTextResponse(text, media_type="text/plain")
+
+
+@app.post("/audit/tool/clear")
+async def clear_tool_audit():
+    """Empty the tool-audit log (retention trim keeps it bounded afterwards)."""
+    from coworker.atomicio import atomic_write_text
+
+    try:
+        if tool_audit_path.exists():
+            atomic_write_text(tool_audit_path, "")
+    except OSError:
+        pass
+    return {"status": "ok"}
+
+
 @app.get("/traces/agent")
 async def agent_traces(limit: int = 100):
     return {"status": "ok", "events": agent_registry.list_agent_traces(limit)}
+
+
+@app.get("/traces/agent/export")
+async def export_agent_traces():
+    """Export the full agent-trace JSONL as a text download."""
+    from fastapi.responses import PlainTextResponse
+
+    trace_path = settings.data_dir / AGENT_TRACE_FILENAME
+    text = ""
+    try:
+        if trace_path.exists():
+            text = trace_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    return PlainTextResponse(text, media_type="text/plain")
+
+
+@app.post("/traces/agent/clear")
+async def clear_agent_traces():
+    """Empty the agent-trace log (retention trim keeps it bounded afterwards)."""
+    from coworker.atomicio import atomic_write_text
+
+    trace_path = settings.data_dir / AGENT_TRACE_FILENAME
+    try:
+        if trace_path.exists():
+            atomic_write_text(trace_path, "")
+    except OSError:
+        pass
+    return {"status": "ok"}
+
+
+@app.get("/checkpoints/export")
+async def export_checkpoints():
+    """Download the LangGraph checkpoint SQLite DB (best-effort copy)."""
+    from fastapi.responses import FileResponse
+    import shutil
+
+    db_path = agent_registry.checkpoint_path
+    if not db_path.exists():
+        return {"status": "ok", "size": 0, "note": "no checkpoints yet"}
+    tmp = db_path.with_name(db_path.name + ".export.tmp")
+    try:
+        shutil.copy2(db_path, tmp)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"failed to snapshot checkpoints: {exc}") from exc
+    return FileResponse(str(tmp), media_type="application/octet-stream", filename="coworker-checkpoints.sqlite3")
+
+
+@app.post("/checkpoints/clear")
+async def clear_checkpoints():
+    """Delete all runtime checkpoint threads (active streams are skipped)."""
+    stats = await asyncio.to_thread(agent_registry.checkpoint_manager.clear_all)
+    return {"status": "ok", "stats": stats}
+
+
+@app.get("/settings/retention")
+async def get_retention_settings():
+    """Current data-retention caps (trace/audit line limits)."""
+    from coworker.traces import ACTIVE_TRACE_RETENTION
+    from coworker.workspace import ACTIVE_TOOL_AUDIT_RETENTION
+
+    return {
+        "trace_lines": ACTIVE_TRACE_RETENTION,
+        "audit_lines": ACTIVE_TOOL_AUDIT_RETENTION,
+    }
+
+
+class RetentionUpdate(BaseModel):
+    trace_lines: int | None = None
+    audit_lines: int | None = None
+
+
+@app.post("/settings/retention")
+async def save_retention_settings(request: RetentionUpdate):
+    """Save and immediately apply retention caps for trace/audit logs."""
+    if request.trace_lines is not None or request.audit_lines is not None:
+        save_user_retention_settings(
+            {
+                "trace_lines": request.trace_lines,
+                "audit_lines": request.audit_lines,
+            }
+        )
+    from coworker.traces import ACTIVE_TRACE_RETENTION
+    from coworker.workspace import ACTIVE_TOOL_AUDIT_RETENTION
+
+    return {"status": "ok", "trace_lines": ACTIVE_TRACE_RETENTION, "audit_lines": ACTIVE_TOOL_AUDIT_RETENTION}
 
 @app.get("/command-approvals")
 async def list_command_approvals():
@@ -2362,7 +2510,7 @@ async def stream_approval_events(resume_id: str):
                     continue
                 if event.get("type") == "stream_end":
                     break
-                yield f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
             approval_event_bus.unsubscribe(resume_id, queue)
 

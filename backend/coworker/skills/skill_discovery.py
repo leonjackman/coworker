@@ -92,7 +92,7 @@ class SkillScanner:
             if not root.is_dir():
                 continue
             try:
-                collected, diags = self._scan_tree(root, source, root)
+                collected, diags = self._scan_tree(root, source)
             except OSError as exc:  # pragma: no cover - defensive
                 logger.warning("Skill scan failed for %s: %s", root, exc)
                 continue
@@ -115,7 +115,7 @@ class SkillScanner:
         return ScanResult(skills=all_skills, diagnostics=diagnostics)
 
     def _scan_tree(
-        self, directory: Path, source: str, root: Path
+        self, directory: Path, source: str
     ) -> tuple[list[SkillEntry], list[SkillDiagnostic]]:
         skills: list[SkillEntry] = []
         diagnostics: list[SkillDiagnostic] = []
@@ -143,7 +143,7 @@ class SkillScanner:
                 continue
             if entry.name in _SKIP_DIR_NAMES:
                 continue
-            sub_skills, sub_diags = self._scan_tree(Path(entry.path), source, root)
+            sub_skills, sub_diags = self._scan_tree(Path(entry.path), source)
             skills.extend(sub_skills)
             diagnostics.extend(sub_diags)
         return skills, diagnostics

@@ -3768,6 +3768,39 @@ body.bottom-panel-resizing {
   margin-bottom: 12px;
 }
 
+.settings-audit__retention {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border, rgba(120, 140, 180, 0.16));
+  font-size: 12px;
+}
+
+.settings-audit__retention label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-audit__retention input[type='number'] {
+  width: 72px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border, rgba(120, 140, 180, 0.16));
+  background: var(--input-bg, transparent);
+  color: inherit;
+  font-size: 12px;
+}
+
+.settings-audit__retention-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
 .settings-audit__card {
   display: grid;
 }

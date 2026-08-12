@@ -1,6 +1,6 @@
 import { ArrowRight, BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
-import type { AppView, ProjectEntry, RuntimeConfig, SessionSummary } from '../types';
+import type { AppView, ProjectEntry, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
 import { formatTimeAgo } from '../lib/utils';
 import { Button } from './ui/button';
@@ -11,7 +11,6 @@ import coworkerLogoBlack from '../assets/brand/coworker-logo-black.png';
 import coworkerLogoWhite from '../assets/brand/coworker-logo-white.png';
 
 interface WorkspaceSidebarProps {
-  config: RuntimeConfig | null;
   sessions: SessionSummary[];
   projects: ProjectEntry[];
   activeView: AppView;
@@ -214,7 +213,6 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
 }
 
 export function WorkspaceSidebar({
-  config,
   sessions,
   projects,
   activeView,

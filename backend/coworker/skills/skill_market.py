@@ -304,12 +304,6 @@ class SkillMarketManager:
         else:
             raise ValueError(f"Unknown market source: {source}")
 
-    async def list_categories(self, source: str) -> list[dict[str, Any]]:
-        """Backwards-compatible accessor returning only the facet items."""
-        facet = await self.list_facets(source)
-        items = facet.get("items")
-        return items if isinstance(items, list) else []
-
     async def install(
         self,
         source: str,

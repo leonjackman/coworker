@@ -25,6 +25,9 @@ class ProviderEntry:
     enabled: bool = True
     created_at: str = ""
     updated_at: str = ""
+    # When True the real api_key lives in the OS secret store (Keychain) and the
+    # JSON only carries an empty placeholder; load() resolves it in memory.
+    key_in_secrets: bool = False
 
 
 @dataclass
@@ -63,9 +66,45 @@ class ProviderConfig:
 
 
 class ProviderManager:
-    def __init__(self, config_path: Path):
+    SECRET_SERVICE = "coworker-provider"
+
+    def __init__(self, config_path: Path, data_dir: Path | None = None):
         self.config_path = config_path
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.data_dir = data_dir
+        # In-memory api_key cache so repeated load() calls don't spawn a
+        # `security` subprocess per provider on every request.
+        self._key_cache: dict[str, str] = {}
+
+    def _resolve_secret(self, provider: ProviderEntry) -> None:
+        """Fill provider.api_key from the secret store (cached)."""
+        if not provider.key_in_secrets:
+            return
+        cached = self._key_cache.get(provider.id)
+        if cached is not None:
+            provider.api_key = cached
+            return
+        if self.data_dir is None:
+            return
+        from .secrets import get_secret
+
+        value = get_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
+        if value:
+            provider.api_key = value
+            self._key_cache[provider.id] = value
+
+    def _store_secret(self, provider: ProviderEntry) -> None:
+        """Move a plaintext api_key into the secret store, leaving the JSON empty."""
+        if not provider.api_key:
+            return
+        if self.data_dir is None:
+            return
+        from .secrets import set_secret
+
+        set_secret(self.data_dir, self.SECRET_SERVICE, provider.id, provider.api_key)
+        self._key_cache[provider.id] = provider.api_key
+        provider.api_key = ""
+        provider.key_in_secrets = True
 
     def load(self) -> ProviderConfig:
         if not self.config_path.exists():
@@ -76,10 +115,25 @@ class ProviderManager:
             payload = json.loads(self.config_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             payload = {}
-        return ProviderConfig.from_dict(payload)
+        config = ProviderConfig.from_dict(payload)
+        # Resolve secrets into memory; legacy plaintext keys get migrated once.
+        migrated = False
+        for provider in config.providers:
+            self._resolve_secret(provider)
+            if provider.api_key and not provider.key_in_secrets:
+                self._store_secret(provider)
+                migrated = True
+        if migrated:
+            self.save(config)
+        return config
 
     def save(self, config: ProviderConfig) -> None:
         config.updated_at = datetime.now(timezone.utc).isoformat()
+        # Move any plaintext keys into the secret store before writing.
+        for provider in config.providers:
+            if provider.api_key:
+                self._store_secret(provider)
+        self._key_cache.clear()
         atomic_write_text(
             self.config_path,
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
@@ -167,6 +221,11 @@ class ProviderManager:
                 config.default_provider_id = config.providers[0].id if config.providers else ""
                 config.default_model = config.providers[0].model if config.providers and config.providers[0].model else ""
             self.save(config)
+            self._key_cache.pop(provider_id, None)
+            if self.data_dir is not None and provider.key_in_secrets:
+                from .secrets import delete_secret
+
+                delete_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
             return
         raise ValueError(f"provider {provider_id} not found")
 

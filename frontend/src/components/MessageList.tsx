@@ -351,7 +351,7 @@ function AssistantMessage({ message, onRegenerate }: { message: ChatMessage; onR
           <div className="stream-error">{message.content}</div>
         ) : isStopped ? (
           <div className="stream-stopped">{message.content}</div>
-        ) : isRunningEmpty ? null : null}
+        ) : null}
 
         {!isError && !isStopped && !isRunning && !isRunningEmpty && !isWaiting && (
           <MessageActions role="assistant" content={message.content} {...(onRegenerate ? { onRegenerate } : {})} />

@@ -42,6 +42,16 @@ COMMAND_APPROVAL_FILENAME = "command_approvals.json"
 # capped at the most recent N entries.
 MAX_APPROVAL_HISTORY = 100
 MAX_TOOL_AUDIT_LINES = 100
+
+# Runtime-adjustable retention (Settings page overrides the default; applied on
+# every audit write so the change takes effect without a restart).
+ACTIVE_TOOL_AUDIT_RETENTION = MAX_TOOL_AUDIT_LINES
+
+
+def set_tool_audit_retention(lines: int) -> None:
+    global ACTIVE_TOOL_AUDIT_RETENTION
+    ACTIVE_TOOL_AUDIT_RETENTION = max(1, min(int(lines or MAX_TOOL_AUDIT_LINES), 10_000))
+
 ALLOWED_COMMANDS = {
     "cat",
     "git",
@@ -1053,7 +1063,7 @@ def append_tool_audit(
         "context": context or {},
         "details": details,
     }
-    append_jsonl_retained(audit_path, event, MAX_TOOL_AUDIT_LINES)
+    append_jsonl_retained(audit_path, event, ACTIVE_TOOL_AUDIT_RETENTION)
 
 
 def list_tool_audit_events(audit_path: Path, limit: int = 100) -> list[dict[str, Any]]:

@@ -132,6 +132,9 @@ NODE_ENV=development npx electron . --no-sandbox
 - Electron tray behavior: close window keeps app running; quit exits frontend and backend.
 - Startup diagnostics instead of silent white screen.
 - Workspace tree, directory listing, and file preview APIs.
+- True background streams: switching sessions keeps the original session's reply streaming to completion; per-session `/clear` never wipes other sessions' in-progress messages.
+- Runtime observability retention/export: Agent trace and tool audit logs can be exported, cleared, and their retention (line caps) configured from Settings.
+- Provider API keys stored in the macOS Keychain (0600-file fallback), keeping secrets out of plaintext JSON.
 
 ## Current Limitations
 
@@ -139,8 +142,9 @@ NODE_ENV=development npx electron . --no-sandbox
 - Toolset is intentionally small: search/read files by default; exact replace, atomic structured text edits, full write, and allowlisted command execution only in Build + Full Access.
 - Agent command execution pauses at a LangGraph human-in-the-loop interrupt before the process is started; approval resumes the same checkpoint. Bottom-panel terminal command execution still requires a settings-page one-time approval.
 - Default provider remains simulated until a real provider is configured.
-- Provider secrets are stored locally in the app data directory; production-grade credential storage is still a hardening item.
-- Agent trace and tool audit records are append-only local JSONL; retention controls are still missing.
+- Provider API keys are stored in the macOS Keychain (falling back to a 0600 file when Keychain is unavailable); MCP env/header secrets stay in the (0600-protected) local config.
+- Agent trace and tool audit logs are rolling JSONL with user-configurable retention (Settings → Runtime Observability), exportable and clearable from the same panel.
+- The file-staleness guard ("File changed since it was last read") only applies within a single agent turn; cross-turn/cross-session edits rely on git + the change rollback panel rather than a persistent fingerprint.
 - Packaging/distribution is not complete.
 - Plan/Build and Default/Full Access gating is still Coworker-owned runtime policy.
 
@@ -161,8 +165,6 @@ COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ## Next Development Phase
 
 1. Add a real multi-file patch/diff tool if exact structured text edits are not enough.
-2. Add checkpoint retention/export controls if long-running sessions need operational management.
-3. Add retention/export controls for local Agent trace, checkpoints, and tool audit records.
-4. Harden local secret storage and provider validation.
-5. Add packaging, updater, and release evidence.
-6. Optionally migrate to assistant-ui only if it replaces the current frontend chat runtime owner instead of wrapping the existing `App.tsx` message state.
+2. Add packaging, updater, and release evidence.
+3. Add checkpoint retention/export controls if long-running sessions need operational management.
+4. Optionally migrate to assistant-ui only if it replaces the current frontend chat runtime owner instead of wrapping the existing `App.tsx` message state.

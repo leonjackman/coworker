@@ -72,7 +72,6 @@ interface ChatInputProps {
   editing?: boolean;
   onCancelEdit?: () => void;
   branchStatus?: { isRepo: boolean; branch: string | null } | null;
-  workspaceLabel?: string;
   /** 新对话草稿态：在 composer 顶部显示 workspace 选择器 */
   showWorkspacePicker?: boolean;
   workspaceOptions?: WorkspaceOption[];
@@ -196,7 +195,6 @@ export function ChatInput({
   editing = false,
   onCancelEdit,
   branchStatus = null,
-  workspaceLabel,
   showWorkspacePicker = false,
   workspaceOptions = [],
   activeWorkspaceId,

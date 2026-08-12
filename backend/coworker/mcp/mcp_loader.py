@@ -27,8 +27,6 @@ TRANSPORT_HTTP = "streamable_http"
 TRANSPORT_SSE = "sse"
 TRANSPORT_WEBSOCKET = "websocket"
 
-REMOTE_TRANSPORTS = {TRANSPORT_HTTP, TRANSPORT_SSE, TRANSPORT_WEBSOCKET}
-
 _TRANSPORT_ALIASES: dict[str, str] = {
     "stdio": TRANSPORT_STDIO,
     "local": TRANSPORT_STDIO,
@@ -48,10 +46,6 @@ def normalize_transport(value: str | None) -> str:
     """Map a stored/user-supplied transport string to its canonical name."""
     key = (value or "").strip().lower()
     return _TRANSPORT_ALIASES.get(key, TRANSPORT_STDIO)
-
-
-def is_remote_transport(value: str | None) -> bool:
-    return normalize_transport(value) in REMOTE_TRANSPORTS
 
 
 def split_args(raw: str | None) -> list[str]:

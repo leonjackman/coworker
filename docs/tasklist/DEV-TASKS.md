@@ -209,7 +209,7 @@
 
 ## 阶段 3｜后台流重构 + 死代码清理 + 保留导出/密钥加密（决策⑤=A、⑥）
 
-- [ ] **R1 真后台更新：重构 App.tsx 流管理（决策⑤=A）**
+- [x] **R1 真后台更新：重构 App.tsx 流管理（决策⑤=A）**
   - 预期：切换会话后，原会话的流继续在后台生成并更新自己的消息，完成时侧栏不再一直转圈；一个会话的 `/clear` 不再抹掉其它会话进行中的消息
   - 改法（`frontend/src/App.tsx` 主体）：
     - 把全局单一消息数组改为"按会话 id 隔离的 streaming 状态"，流事件按 `session_id` 路由到各自会话（替换 `App.tsx:721-723` 的"非活跃会话全部丢弃"逻辑）
@@ -217,7 +217,7 @@
     - 顺带消除：P2 每 token 全量 `setMessages` O(n) map（改增量更新/按会话更新）、P7 无 sessionId 的 ambient 消息串入所有会话、B5 `resolvePendingRequest` 空 map、B9 `resolvingRef` 无 idle 超时可 wedge、`goalStreamIdRef` 只写不读（App.tsx:301,944-952,2213-2216）
   - 注意：后端多会话并发流已有 checkpoint 隔离（此前 commit 84cfdadd），本项纯前端状态重构；重构期间保持 SSE 事件协议不变
 
-- [ ] **R2 后端死代码清理**
+- [x] **R2 后端死代码清理**
   - 预期：减少误导与维护负担；确认删除后无引用
   - 改法（逐项确认无调用后删除）：
     - `backend/main.py:42` `SKILLS_CONFIG_FILENAME` 导入
@@ -234,7 +234,7 @@
     - `backend/coworker/skills/skill_market.py:271-275` `list_categories()`（端点用 `list_facets`）
     - `backend/coworker/skills/skill_discovery.py:117-149` `_scan_tree` 未用的 `root` 参数
 
-- [ ] **R3 前端死代码清理**
+- [x] **R3 前端死代码清理**
   - 预期：`goalStart`/`goalStop` 等断桥不再留在类型里诱导调用崩溃
   - 改法（确认无调用后删除/实现）：
     - `frontend/src/electron.d.ts:121,125` 与 `chatService.ts:102,209-214,692` 的 `goalStart`/`startGoal`、`goalStop`（goal 实际走 `goal_mode` 启动，App.tsx:977）
@@ -244,14 +244,14 @@
     - `ChatInput.tsx:199` `workspaceLabel` prop、`WorkspaceSidebar.tsx:217` 未用 `config` prop、`MessageList.tsx:354` `isRunningEmpty ? null : null`
     - `App.tsx:1566-1573` `resolvePendingRequest` 无操作 map
 
-- [ ] **R4 运行记录保留/导出（决策⑥）**
+- [x] **R4 运行记录保留/导出（决策⑥）**
   - 预期：trace / tool audit / checkpoint 可导出、可清空、可设保留条数；长期使用不再无限膨胀
   - 改法：
     - 后端：`backend/coworker/traces.py`、`backend/coworker/workspace.py`（tool audit）、`backend/coworker/checkpoints.py` 各新增导出（返回文件内容/下载流）与清理（按条数/按时间裁剪）API；设置接口加保留条数配置（复用 `.coworker_settings.json` 模式）
     - 前端：Runtime Observability（Agent trace）面板与 ToolAuditPanel 加"导出 / 清空 / 保留条数"控件，调用新 API
   - 约束：不改变现有 append-only 记录结构，仅在写入/展示侧加保留策略
 
-- [ ] **R5 密钥加密（决策⑥，打包除外）**
+- [x] **R5 密钥加密（决策⑥，打包除外）**
   - 预期：provider API key 与 MCP secrets 不再明文躺在 JSON；重启后密钥仍可用
   - 改法（待确认实现路径，见下方待定项）：
     - 新增 `backend/coworker/secrets.py`：macOS 用 `security` CLI 存取 Keychain（`security add-generic-password`/`find-generic-password`），不可用时回退 0600 明文文件并 `logger.warning`
@@ -259,18 +259,24 @@
     - 兼容已有 `providers.json` 中存量明文 key：首次启动迁移进 Keychain 并从 JSON 移除（或保留读取兼容）
   - 待定：若实现复杂度过高，退化为"0600 权限 + 文档说明"为阶段内可接受交付，需在阶段 3 开工时确认
 
-- [ ] **R6 README 更新**
+- [x] **R6 README 更新**
   - 预期：已知限制与能力描述与实现一致
   - 改法：`README.md` 补充：文件陈旧守卫为单轮限制（决策②=B）、语言跟随系统语言规则、技能安装可见性、运行记录保留/导出、密钥存储方式；`Current Limitations` 去掉已修复项
 
 ### 阶段 3 验证清单
 
-- [ ] `cd frontend && npx tsc --noEmit` 通过
-- [ ] `cd frontend && npm run build` 通过
-- [ ] 冒烟：同时开两个会话并行生成，来回切换，后台消息照常更新、完成状态正确；一个会话 `/clear` 不影响另一个会话
-- [ ] 导出/清空 trace、tool audit、checkpoint 后对应面板更新；保留条数设置生效
-- [ ] 配置 provider 后重启 app，密钥仍可用（Keychain 或 0600 回退）
-- [ ] `git diff --check` 无空白错误
+- [x] `cd frontend && npx tsc --noEmit` 通过
+- [x] `cd frontend && npm run build` 通过
+- [x] 冒烟：同时开两个会话并行生成，来回切换，后台消息照常更新、完成状态正确；一个会话 `/clear` 不影响另一个会话（浏览器实测：A 流式中切到 B，A 完成后侧栏 Running 指示器归零；B 执行 /clear 后 A 消息完好）
+- [x] 导出/清空 trace、tool audit、checkpoint 后对应面板更新；保留条数设置生效（浏览器实测清空轨迹后 traces 归零、保留条数 55 保存且重启后持久）
+- [x] 配置 provider 后重启 app，密钥仍可用（Keychain 或 0600 回退）（迁移后 SSE 聊天正常、`key_present: True`、providers.json 无明文 key）
+- [x] `git diff --check` 无空白错误
+
+### 阶段 3 额外说明（经真机验证）
+
+- R1 关键 bug 复现：A 会话流式中切到已有会话 B，A 完成后侧栏 Running 指示器仍为 1（事件被丢弃）；修复后归零。核心改动=移除主 handler 的"非活跃会话丢弃"守卫，改按消息 id 更新；goal 状态更新加会话守卫；`/clear` 会话隔离；finally 安全网按 id 收尾。
+- R2 清理后确认 `_goal_active_streams` 仍被 goal_delete 锁清理守卫使用（阶段 1 引入），非死代码，保留。
+- R5 MCP env/headers secrets 采用 0600 回退（任务单允许项）：避免破坏 SECRET_PLACEHOLDER 占位回填与测试流程；provider API key 完整迁移 Keychain。
 
 ---
 
@@ -289,3 +295,4 @@
 | 2026-08-12 | - | 初始版本：基于全局审计 + 决策 B/B/A/A/A、⑥ 做、打包不做 |
 | 2026-08-12 | 阶段 1 | 完成并提交：S1-S8、D1-D8、U1-U2；D9 实测后判定为误判/有界泄漏未改动；真机测试额外修复 chat_stream 的 sqlite database is locked 崩溃 |
 | 2026-08-12 | 阶段 2 | 完成：L1-L14（语言跟随系统、记忆 scope 对齐、自动标题、SkillHub 错误上抛、溯源带 owner、install 保留 frontmatter 等）；全部先验证后修复，前端经 ego-browser 真机验证 |
+| 2026-08-12 | 阶段 3 | 完成：R1-R6（真后台流、前后端死代码清理、运行记录导出/清空/保留、provider 密钥入 Keychain、README）；R1 先复现再修复，R4 面板经 ego-browser 验证 |

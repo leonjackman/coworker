@@ -457,10 +457,6 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   }
 });
 
-ipcMain.handle('send-chat-message', async (event, payload) => {
-  return requestBackend('/chat', 'POST', payload);
-});
-
 const activeStreams = new Map();
 
 ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
@@ -752,31 +748,6 @@ ipcMain.handle('rename-project', async (event, payload) => {
 
 ipcMain.handle('delete-project', async (event, projectId) => {
   return requestBackend(`/projects/${projectId}`, 'DELETE');
-});
-
-ipcMain.handle('get-workspace-tree', async (event, projectId) => {
-  const suffix = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-  return requestBackend(`/workspace/tree${suffix}`);
-});
-
-ipcMain.handle('get-workspace-dir', async (event, payload) => {
-  const currentPath = typeof payload === 'string' ? payload : payload?.path || '';
-  const projectId = typeof payload === 'object' && payload ? payload.project_id || '' : '';
-  const params = new URLSearchParams({ path: currentPath });
-  if (projectId) params.set('project_id', projectId);
-  return requestBackend(`/workspace/dir?${params.toString()}`);
-});
-
-ipcMain.handle('get-workspace-file', async (event, payload) => {
-  const currentPath = typeof payload === 'string' ? payload : payload?.path || '';
-  const projectId = typeof payload === 'object' && payload ? payload.project_id || '' : '';
-  const params = new URLSearchParams({ path: currentPath });
-  if (projectId) params.set('project_id', projectId);
-  return requestBackend(`/workspace/file?${params.toString()}`);
-});
-
-ipcMain.handle('run-workspace-command', async (event, payload) => {
-  return requestBackend('/workspace/command', 'POST', payload);
 });
 
 ipcMain.handle('list-tool-audit', async (event, limit) => {

@@ -358,7 +358,6 @@ def _open_checkpointer(checkpoint_path: Any):
 def build_workspace_tools(
     workspace: Workspace,
     audit_context: dict[str, Any] | None = None,
-    approval_store: CommandApprovalStore | None = None,
     change_store: ChangeStore | None = None,
     turn_index: int = 1,
     session_store: SessionStore | None = None,
@@ -428,7 +427,9 @@ def build_workspace_tools(
     def run_command(command: list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
         """Run an allowlisted command in the workspace after runtime policy approval."""
         try:
-            result = workspace.run_command(command, cwd, timeout_seconds, audit_context, approval_store, approval_store is not None)
+            # Runtime policy approval (HITL) is owned by HumanInTheLoopMiddleware;
+            # this tool call is not the sync bottom-panel approval flow.
+            result = workspace.run_command(command, cwd, timeout_seconds, audit_context)
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "run_command")
@@ -1282,7 +1283,7 @@ def generate_title(first_user_message: str, assistant_response: str = "", langua
         from .config import load_settings
         from .providers import ProviderManager
         settings = load_settings()
-        provider_manager = ProviderManager(settings.data_dir / "providers.json")
+        provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
         dp = provider_manager.default_provider()
         if dp and dp.api_key and (dp.base_url or dp.provider_type):
             llm = ChatOpenAI(model=dp.model, temperature=0, api_key=dp.api_key, base_url=dp.base_url or None)
@@ -2857,7 +2858,7 @@ class AgentRuntimeRegistry:
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
         self.change_store = ChangeStore(settings.data_dir)
-        self.provider_manager = ProviderManager(settings.data_dir / "providers.json")
+        self.provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
         self.mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
         self.mcp_session_manager = mcp_session_manager
         self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"

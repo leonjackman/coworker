@@ -2,7 +2,6 @@ import type {
   AgentTraceResponse,
   ApprovalDecisionPayload,
   ChatRequest,
-  ChatResponse,
   CommandApprovalResponse,
   CommandApprovalsResponse,
   CreateProjectRequest,
@@ -44,11 +43,6 @@ import type {
   SkillValidateResponse,
   StreamEvent,
   ToolAuditResponse,
-  WorkspaceCommandRequest,
-  WorkspaceCommandResponse,
-  WorkspaceDirResponse,
-  WorkspaceFileResponse,
-  WorkspaceTreeResponse,
   WorkspaceBranchResponse,
   GoalStatusResponse,
   MemoryProposalRecord,
@@ -99,8 +93,6 @@ function attachAbortListener(signal: unknown, listener: () => void): () => void 
 export interface ChatService {
   getRuntimeConfig: () => Promise<RuntimeConfig>;
   updateRuntimeConfig: (request: RuntimeConfigUpdate) => Promise<RuntimeConfig>;
-  sendMessage: (request: ChatRequest) => Promise<ChatResponse>;
-  startGoal: (request: { session_id: string; goal: string; language: string }) => Promise<void>;
   sendMessageStream: (request: ChatRequest, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   listProviders: () => Promise<ProvidersListResponse>;
   createProvider: (request: ProviderPayload) => Promise<void>;
@@ -121,10 +113,6 @@ export interface ChatService {
   createProject: (request: CreateProjectRequest) => Promise<ProjectResponse>;
   renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
   deleteProject: (projectId: string) => Promise<void>;
-  getWorkspaceTree: (projectId?: string) => Promise<WorkspaceTreeResponse>;
-  getWorkspaceDir: (path: string, projectId?: string) => Promise<WorkspaceDirResponse>;
-  getWorkspaceFile: (path: string, projectId?: string) => Promise<WorkspaceFileResponse>;
-  runWorkspaceCommand: (request: WorkspaceCommandRequest) => Promise<WorkspaceCommandResponse>;
   listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
   listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
   listCommandApprovals: () => Promise<CommandApprovalsResponse>;
@@ -135,6 +123,13 @@ export interface ChatService {
   getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
   getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
   rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
+  exportToolAudit: () => Promise<string>;
+  clearToolAudit: () => Promise<{ status: string }>;
+  exportAgentTraces: () => Promise<string>;
+  clearAgentTraces: () => Promise<{ status: string }>;
+  clearCheckpoints: () => Promise<{ status: string }>;
+  getRetentionSettings: () => Promise<{ trace_lines: number; audit_lines: number }>;
+  saveRetentionSettings: (patch: { trace_lines?: number; audit_lines?: number }) => Promise<{ trace_lines: number; audit_lines: number }>;
   getTerminalUrl: (projectId?: string) => string;
   streamRegenerateMessage: (sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   streamEditMessage: (
@@ -198,20 +193,6 @@ class ElectronChatService implements ChatService {
       throw new Error('Electron API is unavailable');
     }
     return window.electronAPI.updateRuntimeConfig(request);
-  }
-
-  async sendMessage(request: ChatRequest): Promise<ChatResponse> {
-    if (!window.electronAPI) {
-      throw new Error('Electron API is unavailable');
-    }
-    return window.electronAPI.sendChatMessage(request);
-  }
-
-  async startGoal(request: { session_id: string; goal: string; language: string }): Promise<void> {
-    if (!window.electronAPI) {
-      throw new Error('Electron API is unavailable');
-    }
-    await window.electronAPI.goalStart(request);
   }
 
   async sendMessageStream(request: ChatRequest, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
@@ -450,26 +431,6 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.revealInFolder(path);
   }
 
-  async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getWorkspaceTree(projectId);
-  }
-
-  async getWorkspaceDir(path: string, projectId?: string): Promise<WorkspaceDirResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getWorkspaceDir(path, projectId);
-  }
-
-  async getWorkspaceFile(path: string, projectId?: string): Promise<WorkspaceFileResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getWorkspaceFile(path, projectId);
-  }
-
-  async runWorkspaceCommand(request: WorkspaceCommandRequest): Promise<WorkspaceCommandResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.runWorkspaceCommand(request);
-  }
-
   async listToolAudit(limit = 100): Promise<ToolAuditResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listToolAudit(limit);
@@ -507,6 +468,45 @@ class ElectronChatService implements ChatService {
   async listAgentTraces(limit = 100): Promise<AgentTraceResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listAgentTraces(limit);
+  }
+
+  async exportToolAudit(): Promise<string> {
+    const res = await fetch(`${BACKEND_URL}/audit/tool/export`);
+    return res.ok ? await res.text() : '';
+  }
+
+  async clearToolAudit(): Promise<{ status: string }> {
+    const res = await fetch(`${BACKEND_URL}/audit/tool/clear`, { method: 'POST' });
+    return res.ok ? { status: 'ok' } : { status: 'error' };
+  }
+
+  async exportAgentTraces(): Promise<string> {
+    const res = await fetch(`${BACKEND_URL}/traces/agent/export`);
+    return res.ok ? await res.text() : '';
+  }
+
+  async clearAgentTraces(): Promise<{ status: string }> {
+    const res = await fetch(`${BACKEND_URL}/traces/agent/clear`, { method: 'POST' });
+    return res.ok ? { status: 'ok' } : { status: 'error' };
+  }
+
+  async clearCheckpoints(): Promise<{ status: string }> {
+    const res = await fetch(`${BACKEND_URL}/checkpoints/clear`, { method: 'POST' });
+    return res.ok ? { status: 'ok' } : { status: 'error' };
+  }
+
+  async getRetentionSettings(): Promise<{ trace_lines: number; audit_lines: number }> {
+    const res = await fetch(`${BACKEND_URL}/settings/retention`);
+    return res.ok ? await res.json() : { trace_lines: 100, audit_lines: 100 };
+  }
+
+  async saveRetentionSettings(patch: { trace_lines?: number; audit_lines?: number }): Promise<{ trace_lines: number; audit_lines: number }> {
+    const res = await fetch(`${BACKEND_URL}/settings/retention`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    return res.ok ? await res.json() : { trace_lines: 100, audit_lines: 100 };
   }
 
   async listCommandApprovals(): Promise<CommandApprovalsResponse> {
@@ -682,14 +682,6 @@ class HttpChatService implements ChatService {
     });
   }
 
-  async sendMessage(request: ChatRequest): Promise<ChatResponse> {
-    return this.request<ChatResponse>('/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-  }
-
   async startGoal(request: { session_id: string; goal: string; language: string }): Promise<void> {
     return this.request('/goal/start', {
       method: 'POST',
@@ -829,31 +821,6 @@ class HttpChatService implements ChatService {
     await this.request(`/projects/${projectId}`, { method: 'DELETE' });
   }
 
-  async getWorkspaceTree(projectId?: string): Promise<WorkspaceTreeResponse> {
-    const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-    return this.request<WorkspaceTreeResponse>(`/workspace/tree${params}`);
-  }
-
-  async getWorkspaceDir(path: string, projectId?: string): Promise<WorkspaceDirResponse> {
-    const params = new URLSearchParams({ path });
-    if (projectId) params.set('project_id', projectId);
-    return this.request<WorkspaceDirResponse>(`/workspace/dir?${params.toString()}`);
-  }
-
-  async getWorkspaceFile(path: string, projectId?: string): Promise<WorkspaceFileResponse> {
-    const params = new URLSearchParams({ path });
-    if (projectId) params.set('project_id', projectId);
-    return this.request<WorkspaceFileResponse>(`/workspace/file?${params.toString()}`);
-  }
-
-  async runWorkspaceCommand(request: WorkspaceCommandRequest): Promise<WorkspaceCommandResponse> {
-    return this.request<WorkspaceCommandResponse>('/workspace/command', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
-    });
-  }
-
   async listToolAudit(limit = 100): Promise<ToolAuditResponse> {
     return this.request<ToolAuditResponse>(`/audit/tool?limit=${encodeURIComponent(limit)}`);
   }
@@ -898,6 +865,40 @@ class HttpChatService implements ChatService {
 
   async listCommandApprovals(): Promise<CommandApprovalsResponse> {
     return this.request<CommandApprovalsResponse>('/command-approvals');
+  }
+
+  async exportToolAudit(): Promise<string> {
+    const res = await fetch(`${BACKEND_URL}/audit/tool/export`);
+    return res.ok ? await res.text() : '';
+  }
+
+  async clearToolAudit(): Promise<{ status: string }> {
+    return this.request<{ status: string }>('/audit/tool/clear', { method: 'POST' });
+  }
+
+  async exportAgentTraces(): Promise<string> {
+    const res = await fetch(`${BACKEND_URL}/traces/agent/export`);
+    return res.ok ? await res.text() : '';
+  }
+
+  async clearAgentTraces(): Promise<{ status: string }> {
+    return this.request<{ status: string }>('/traces/agent/clear', { method: 'POST' });
+  }
+
+  async clearCheckpoints(): Promise<{ status: string }> {
+    return this.request<{ status: string }>('/checkpoints/clear', { method: 'POST' });
+  }
+
+  async getRetentionSettings(): Promise<{ trace_lines: number; audit_lines: number }> {
+    return this.request<{ trace_lines: number; audit_lines: number }>('/settings/retention');
+  }
+
+  async saveRetentionSettings(patch: { trace_lines?: number; audit_lines?: number }): Promise<{ trace_lines: number; audit_lines: number }> {
+    return this.request<{ trace_lines: number; audit_lines: number }>('/settings/retention', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
   }
 
   async resolveCommandApproval(approvalId: string, decision: ApprovalDecisionPayload): Promise<CommandApprovalResponse> {

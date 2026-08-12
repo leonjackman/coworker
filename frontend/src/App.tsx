@@ -175,7 +175,8 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [draftMode, setDraftMode] = useState(false);
-  const _language = useLanguage();
+  // useLanguage() 订阅语言变化以触发重渲染（返回值不直接使用）。
+  useLanguage();
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -715,12 +716,16 @@ function App() {
 
     const handleEvent = (event: StreamEvent) => {
       // Stale guard: only superseded streams of the SAME session are ignored.
-      // A stream belonging to another session (kept alive across a switch)
-      // continues updating its own message in the background.
+      // Events from a stream belonging to another session MUST be processed —
+      // they update that session's own message by id (kept alive across a
+      // switch), so the background reply streams to completion instead of
+      // freezing at status "running" forever.
       if (isStreamStale(requestSessionId, myRequestSeq)) return;
-      if (event.session_id && sessionIdRef.current && event.session_id !== sessionIdRef.current) {
-        if (event.type !== 'start') return;
-      }
+      // Goal-state events (goal_*, todos) must only drive the goal card of the
+      // currently-viewed session; a background session's goal must not clobber
+      // it. Message events (delta/tool/plan/done) are always processed.
+      const goalMatchesView =
+        !event.session_id || event.session_id === sessionIdRef.current || !sessionIdRef.current;
       if (event.type === 'start') {
         streamStartAt = Date.now();
         if (event.session_id && !sessionIdRef.current) {
@@ -873,39 +878,45 @@ function App() {
         );
       } else if (event.type === 'goal_start') {
         inGoal = true;
-        if (event.session_id) goalSessionIdRef.current = event.session_id;
-        setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
+        if (goalMatchesView) {
+          if (event.session_id) goalSessionIdRef.current = event.session_id;
+          setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
+        }
       } else if (event.type === 'goal_round') {
-        setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
+        if (goalMatchesView) setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
       } else if (event.type === 'goal_edited') {
-        setGoal((current) => ({ ...current, goalText: event.goal || current.goalText }));
+        if (goalMatchesView) setGoal((current) => ({ ...current, goalText: event.goal || current.goalText }));
       } else if (event.type === 'goal_checkpoint') {
-        setGoal((current) => ({
-          ...current,
-          progress: event.progress || current.progress,
-          ...(event.achieved ? { done: true } : {}),
-        }));
+        if (goalMatchesView) {
+          setGoal((current) => ({
+            ...current,
+            progress: event.progress || current.progress,
+            ...(event.achieved ? { done: true } : {}),
+          }));
+        }
       } else if (event.type === 'todos') {
-        setGoal((current) => ({ ...current, todos: event.todos }));
+        if (goalMatchesView) setGoal((current) => ({ ...current, todos: event.todos }));
       } else if (event.type === 'goal_force') {
         // Force-loop nudge: agent didn't use tools, system will retry.
-        setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
+        if (goalMatchesView) setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
       } else if (event.type === 'goal_done') {
         const failed =
           Boolean(event.stalled) ||
           ['timeout', 'stopped', 'interrupted', 'max_rounds_exceeded'].includes(event.reason || '');
-        setGoal((current) => {
-          const next: GoalState = {
-            ...current,
-            done: true,
-            running: false,
-            stalled: failed,
-            progress: event.content || current.progress,
-          };
-          if (event.reason) next.reason = event.reason;
-          if (event.verification) next.verification = event.verification;
-          return next;
-        });
+        if (goalMatchesView) {
+          setGoal((current) => {
+            const next: GoalState = {
+              ...current,
+              done: true,
+              running: false,
+              stalled: failed,
+              progress: event.content || current.progress,
+            };
+            if (event.reason) next.reason = event.reason;
+            if (event.verification) next.verification = event.verification;
+            return next;
+          });
+        }
         if (event.content) streamedContent = event.content;
         localParts = settleRunningTools(localParts);
         const msgStatus = failed ? 'error' : 'done';
@@ -927,7 +938,7 @@ function App() {
           ),
         );
       } else if (event.type === 'goal_paused') {
-        setGoal((current) => ({ ...current, paused: true, running: false }));
+        if (goalMatchesView) setGoal((current) => ({ ...current, paused: true, running: false }));
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -950,7 +961,10 @@ function App() {
       } else if (event.type === 'goal_system') {
         setMessages((current) => [
           ...current,
-          createMessage('assistant', event.content, { status: 'done' }),
+          createMessage('assistant', event.content, {
+            status: 'done',
+            ...(event.session_id ? { sessionId: event.session_id } : {}),
+          }),
         ]);
       } else if (event.type === 'goal_attached') {
         goalStreamIdRef.current = event.stream_id;
@@ -1064,19 +1078,15 @@ function App() {
       }
     } finally {
       // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
-      // 仅当该流仍属当前请求 且 消息属于当前会话时才收尾。切走会话时不再中止流，
-      // 该流在后台继续更新自己的消息（displayedMessages 会按 sessionId 过滤），
-      // 切回时仍能看到半截回复并在原地续流，直到收到 done 自然收尾。
-      const belongsToCurrent = requestId === requestSeqRef.current && sessionIdRef.current === requestSessionId;
-      if (belongsToCurrent) {
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId && item.status === 'running'
-              ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
-              : item,
-          ),
-        );
-      }
+      // 按消息 id 收尾（每个流持有独立 id），因此切走会话后后台流结束时也会被正确收尾，
+      // 侧栏 running 指示随之清除；不会误伤其它流的消息。
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId && item.status === 'running'
+            ? { ...item, content: streamedContent, status: 'done', streamEndAt: Date.now() }
+            : item,
+        ),
+      );
       if (streamControllersRef.current[streamKey(requestSessionId)] === controller) {
         delete streamControllersRef.current[streamKey(requestSessionId)];
         delete activeAssistantMessageIdsRef.current[streamKey(requestSessionId)];
@@ -1533,10 +1543,6 @@ function App() {
     }
   };
 
-  const pendingRequestsRef = useRef<PendingRequest[]>([]);
-  useEffect(() => {
-    pendingRequestsRef.current = pendingRequests;
-  }, [pendingRequests]);
   const resolvingRef = useRef(false);
 
   const _generateSessionTitleIfNeeded = (firstMessageContent: string, assistantResponse: string, sessionSessionId?: string) => {
@@ -1576,12 +1582,6 @@ function App() {
         ...chained.map((event): PendingRequest => pendingRequestFromEvent(event, request.session_id, targetMessageId)),
       ]);
       if (response.resumed === false && !response.resume_id) {
-        setMessages((current) =>
-          current.map((item) => {
-            if (item.id !== targetMessageId) return item;
-            return item;
-          }),
-        );
         return;
       }
     } catch (error) {
@@ -1721,8 +1721,6 @@ function App() {
   const dismissPendingRequest = (request: PendingRequest) => {
     void resolvePendingRequest(request, { type: 'reject' });
   };
-
-  const isResolving = () => resolvingRef.current;
 
   const startProjectDraft = (projectId?: string, firstMessage = '') => {
     // 新开对话不中止任何会话的流：并行任务各自在后台继续跑（真·多进程互不干扰）。
@@ -2024,7 +2022,8 @@ function App() {
       return;
     }
     if (command === '/clear') {
-      setMessages([]);
+      // 只清当前会话的消息，其它会话仍在后台运行的流不受影响。
+      setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionIdRef.current));
       setAttachments([]);
       return;
     }
@@ -2403,7 +2402,6 @@ function App() {
           />
         ) : null}
         <WorkspaceSidebar
-          config={runtimeConfig}
           sessions={sessions}
           projects={projects}
           activeView={activeView}
@@ -2517,7 +2515,6 @@ function App() {
                           setEditDraft('');
                         }}
                         branchStatus={branchStatus}
-                        {...(activeProject?.workspace_path ? { workspaceLabel: activeProject.workspace_path } : {})}
                         showWorkspacePicker={showNewChatHero}
                         workspaceOptions={workspaceOptions}
                         {...(currentProjectId ? { activeWorkspaceId: currentProjectId } : {})}
@@ -2597,7 +2594,6 @@ function App() {
               projectCount={projects.length}
               messageCount={messages.length}
               {...(currentProjectId ? { projectId: currentProjectId } : {})}
-              {...(activeProject?.workspace_path ? { workspaceLabel: activeProject.workspace_path } : {})}
               onViewChange={setBottomPanelView}
               onResizeStart={() => setBottomPanelResizing(true)}
               onResizeEnd={() => setBottomPanelResizing(false)}

@@ -13,7 +13,6 @@ interface WorkspaceBottomPanelProps {
   projectCount: number;
   messageCount: number;
   projectId?: string;
-  workspaceLabel?: string;
   onViewChange: (view: BottomPanelView) => void;
   onResizeStart?: () => void;
   onResizeEnd?: () => void;

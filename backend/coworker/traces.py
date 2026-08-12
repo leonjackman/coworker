@@ -14,6 +14,15 @@ AGENT_TRACE_FILENAME = "agent_trace.jsonl"
 # so each record trims the file back to the most recent MAX_TRACE_LINES.
 MAX_TRACE_LINES = 100
 
+# Runtime-adjustable retention (Settings page overrides the default; applied on
+# every record so the change takes effect without a restart).
+ACTIVE_TRACE_RETENTION = MAX_TRACE_LINES
+
+
+def set_trace_retention(lines: int) -> None:
+    global ACTIVE_TRACE_RETENTION
+    ACTIVE_TRACE_RETENTION = max(1, min(int(lines or MAX_TRACE_LINES), 10_000))
+
 
 def _trim_jsonl(path: Path, max_lines: int) -> None:
     trim_jsonl(path, max_lines)
@@ -38,7 +47,7 @@ class AgentTraceStore:
             "context": context,
             "details": details or {},
         }
-        append_jsonl_retained(self.path, entry, MAX_TRACE_LINES)
+        append_jsonl_retained(self.path, entry, ACTIVE_TRACE_RETENTION)
 
     def list(self, limit: int = 100) -> list[dict[str, Any]]:
         if not self.path.exists():

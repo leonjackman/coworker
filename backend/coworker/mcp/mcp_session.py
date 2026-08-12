@@ -992,17 +992,6 @@ class McpSessionManager:
                 raise McpSessionClosedError(f"Session for {server_id} closed") from exc
             raise
 
-    def reconnect(self, server_id: str, enable_browser_flow: bool = False) -> None:
-        if self._loop is None:
-            return
-        try:
-            fut = asyncio.run_coroutine_threadsafe(
-                self._reconnect_async(server_id, enable_browser_flow), self._loop
-            )
-            fut.result(timeout=self._connect_timeout + 10)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("MCP reconnect failed for %s: %s", server_id, exc)
-
     async def _reconnect_async(self, server_id: str, enable_browser_flow: bool) -> None:
         try:
             server = self.mcp_manager.get_runtime_config(server_id)

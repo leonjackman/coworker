@@ -8,7 +8,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateRuntimeConfig: (payload) => ipcRenderer.invoke('update-runtime-config', payload),
   fetchSettings: () => ipcRenderer.invoke('fetchSettings'),
   saveSettings: (payload) => ipcRenderer.invoke('saveSettings', payload),
-  sendChatMessage: (payload) => ipcRenderer.invoke('send-chat-message', payload),
   streamChatMessage: (requestId, payload, onEvent) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;
@@ -93,11 +92,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openDirectoryPicker: (options) => ipcRenderer.invoke('open-directory-picker', options),
   renameProject: (projectId, name) => ipcRenderer.invoke('rename-project', { project_id: projectId, name }),
   deleteProject: (projectId) => ipcRenderer.invoke('delete-project', projectId),
-  getWorkspaceTree: (projectId) => ipcRenderer.invoke('get-workspace-tree', projectId),
-  getWorkspaceDir: (path, projectId) => ipcRenderer.invoke('get-workspace-dir', { path, project_id: projectId || '' }),
-  getWorkspaceFile: (path, projectId) => ipcRenderer.invoke('get-workspace-file', { path, project_id: projectId || '' }),
   getWorkspaceBranch: (projectId) => ipcRenderer.invoke('get-workspace-branch', projectId),
-  runWorkspaceCommand: (payload) => ipcRenderer.invoke('run-workspace-command', payload),
   listToolAudit: (limit) => ipcRenderer.invoke('list-tool-audit', limit),
   listAgentTraces: (limit) => ipcRenderer.invoke('list-agent-traces', limit),
   listCommandApprovals: () => ipcRenderer.invoke('list-command-approvals'),

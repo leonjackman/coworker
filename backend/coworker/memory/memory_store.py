@@ -113,14 +113,6 @@ class MemoryStore:
             memory, _ = self._read_locked(scope)
         return memory
 
-    def scan_all(self, *, include_missing: bool = True) -> dict[str, MemoryFile | None]:
-        """Return ``{scope: MemoryFile}`` for both scopes (project may be None)."""
-        with self._lock:
-            return {
-                "project": self.scanner.scan(include_missing=include_missing).project,
-                "user": self.scanner.scan(include_missing=include_missing).user,
-            }
-
     # -- write API ---------------------------------------------------------
 
     def _validate_entry_text(self, text: str) -> None:

@@ -96,16 +96,6 @@ class MemoryManager:
 
     # -- middleware factory -------------------------------------------------
 
-    def build_middleware(self, workspace_root: Path | None) -> Any:
-        """Build a workspace-scoped ``MemoryMiddleware``.
-
-        The injected read is bound to the *session's* workspace, so project
-        memory follows the session even though the manager itself is global.
-        """
-        from .memory_middleware import MemoryMiddleware
-
-        return MemoryMiddleware(self.for_workspace(workspace_root))
-
     def for_workspace(self, workspace_root: Path | None) -> "MemoryManager":
         """Return a lightweight view of this manager for one workspace.
 

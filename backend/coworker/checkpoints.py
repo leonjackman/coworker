@@ -225,6 +225,30 @@ class CheckpointManager:
                 conn.close()
         return stats
 
+    def clear_all(self) -> dict[str, Any]:
+        """Delete every checkpoint thread (active-stream threads are skipped),
+        then reclaim disk. Used by the Settings "clear checkpoints" action."""
+        stats: dict[str, Any] = {"cleared_threads": 0, "skipped_active": 0, "vacuumed": False}
+        with self._lock:
+            conn = self._connect()
+            try:
+                active = self._active_set()
+                for thread_id in self._all_thread_ids(conn):
+                    if thread_id in active:
+                        stats["skipped_active"] += 1
+                        continue
+                    conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+                    conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
+                    stats["cleared_threads"] += 1
+                conn.commit()
+                if self._has_checkpoints_table(conn):
+                    stats["vacuumed"] = self._ensure_incremental_autovacuum(conn)
+                    conn.execute("PRAGMA incremental_vacuum")
+                    conn.commit()
+            finally:
+                conn.close()
+        return stats
+
     def _delete_orphan_writes(self, conn: sqlite3.Connection) -> int:
         """Delete writes rows whose checkpoint no longer exists."""
         if not self._has_checkpoints_table(conn):

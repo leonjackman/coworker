@@ -1,9 +1,19 @@
-import { RefreshCw, ShieldCheck } from 'lucide-react';
+import { Download, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
 import type { AgentTraceEvent, CommandApproval, ToolAuditEvent } from '../../types';
 import { Button } from '../ui/button';
+
+function downloadText(filename: string, text: string): void {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 function formatAuditTime(timestamp: string): string {
   const date = new Date(timestamp);
@@ -54,6 +64,47 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [resumeMessage, setResumeMessage] = useState('');
+  const [traceLines, setTraceLines] = useState(100);
+  const [auditLines, setAuditLines] = useState(100);
+
+  async function loadRetention() {
+    try {
+      const r = await chatService.getRetentionSettings();
+      setTraceLines(r.trace_lines);
+      setAuditLines(r.audit_lines);
+    } catch {
+      // default 100/100
+    }
+  }
+
+  async function exportTrace() {
+    const text = await chatService.exportAgentTraces();
+    downloadText('agent_trace.jsonl', text);
+  }
+
+  async function exportAudit() {
+    const text = await chatService.exportToolAudit();
+    downloadText('tool_audit.jsonl', text);
+  }
+
+  async function clearTrace() {
+    await chatService.clearAgentTraces();
+    await refreshAudit();
+  }
+
+  async function clearAudit() {
+    await chatService.clearToolAudit();
+    await refreshAudit();
+  }
+
+  async function saveRetention() {
+    try {
+      await chatService.saveRetentionSettings({ trace_lines: traceLines, audit_lines: auditLines });
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('settings.audit_load_failed'));
+    }
+  }
 
   async function refreshAudit() {
     setLoading(true);
@@ -100,6 +151,7 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
 
   useEffect(() => {
     void refreshAudit();
+    void loadRetention();
     const timer = window.setInterval(() => {
       void refreshApprovalsOnly();
     }, 5000);
@@ -131,6 +183,43 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
       )}
 
       <div className="settings-card settings-audit__card">
+        <div className="settings-audit__retention">
+          <label>
+            {t('settings.retention_trace')}
+            <input
+              type="number"
+              min={1}
+              max={10000}
+              value={traceLines}
+              onChange={(e) => setTraceLines(Number(e.target.value))}
+            />
+          </label>
+          <label>
+            {t('settings.retention_audit')}
+            <input
+              type="number"
+              min={1}
+              max={10000}
+              value={auditLines}
+              onChange={(e) => setAuditLines(Number(e.target.value))}
+            />
+          </label>
+          <Button variant="secondary" onClick={saveRetention}>{t('settings.retention_save')}</Button>
+          <span className="settings-audit__retention-actions">
+            <Button variant="secondary" onClick={exportTrace} title={t('settings.export_trace')}>
+              <Download size={14} /> {t('settings.export_trace')}
+            </Button>
+            <Button variant="secondary" onClick={exportAudit} title={t('settings.export_audit')}>
+              <Download size={14} /> {t('settings.export_audit')}
+            </Button>
+            <Button variant="ghost" onClick={clearTrace} title={t('settings.clear_trace')}>
+              <Trash2 size={14} /> {t('settings.clear_trace')}
+            </Button>
+            <Button variant="ghost" onClick={clearAudit} title={t('settings.clear_audit')}>
+              <Trash2 size={14} /> {t('settings.clear_audit')}
+            </Button>
+          </span>
+        </div>
         {error && <div className="settings-audit__empty">{error}</div>}
         {!error && resumeMessage && (
           <article className="settings-audit__event settings-audit__event--approval">
