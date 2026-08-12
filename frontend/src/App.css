@@ -2336,6 +2336,15 @@ body.bottom-panel-resizing {
   font-size: 12px;
   color: var(--foreground);
   padding: 2px 0;
+  min-width: 0;
+}
+
+.goal-card__todo > span {
+  /* Long todo text (including unbroken strings/paths) wraps to multiple lines
+     at a fixed width instead of stretching the card / overflowing. */
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .goal-card__todo--completed {
@@ -8303,6 +8312,13 @@ body.bottom-panel-resizing {
   padding: 8px 10px;
   margin-bottom: 8px;
   background: var(--surface, rgba(120, 140, 180, 0.06));
+  box-sizing: border-box;
+  /* Constrain to the composer width and center, so a very long todo item can
+     never blow the card wider than the chat column. */
+  width: min(var(--bottom-card-width), 100%);
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .todo-block__head {
