@@ -185,14 +185,15 @@ class MemoryManager:
             if llm is None:
                 logger.info("auto-extract skipped for %s: no provider configured", session_id)
                 return
+            model_label = getattr(llm, "model_name", "") or self.config.extract_model
             messages = self._transcript_provider(session_id)
             result = await run_auto_extract(
                 llm=llm,
                 messages=messages,
                 proposal_store=self._proposal_store,
                 session_id=session_id,
-                provider_name=self.config.extract_model or "memory-extract",
-                model_name=self.config.extract_model,
+                provider_name=model_label or "memory-extract",
+                model_name=model_label,
                 workspace_path=str(workspace_root) if workspace_root else "",
             )
             logger.info("auto-extract done for %s: %s", session_id, result)

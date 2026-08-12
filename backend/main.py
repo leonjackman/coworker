@@ -533,11 +533,24 @@ def _memory_scope_store(scope: str) -> Any:
 def _memory_extract_llm() -> Any | None:
     from coworker.memory.auto_extract import build_extract_llm
 
-    provider = provider_manager.default_provider()
-    # Use the runtime config (Settings page / persisted overlay), falling back to
-    # the provider default. NOT the env-only settings value, so UI changes and
-    # .coworker_settings.json overrides actually reach the extractor.
-    return build_extract_llm(provider, memory_manager.config.extract_model)
+    select = memory_manager.config.extract_model  # "" = default, else a provider id
+    provider = None
+    model_override = ""
+    if select:
+        try:
+            provider = provider_manager.load().find_enabled(select)
+        except Exception:
+            provider = None
+        if provider is None:
+            # Legacy value: a bare model string (pre-dropdown config) — treat as
+            # a model override against the default provider's endpoint.
+            provider = provider_manager.default_provider()
+            model_override = select
+    if provider is None:
+        provider = provider_manager.default_provider()
+    if provider is None:
+        return None
+    return build_extract_llm(provider, model_override)
 
 
 def _memory_transcript(session_id: str) -> list[dict[str, Any]]:

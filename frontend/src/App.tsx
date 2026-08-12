@@ -2542,6 +2542,7 @@ function App() {
                   onAutonomyChange={setAutonomy}
                   memorySettings={memorySettings}
                   onMemorySettingsChange={changeMemorySettings}
+                  modelOptions={modelOptions}
                   onClose={() => setActiveView('chat')}
                 />
               )}

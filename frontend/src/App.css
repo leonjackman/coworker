@@ -3713,6 +3713,24 @@ body.bottom-panel-resizing {
   color: var(--text-muted, #9ca3af);
 }
 
+.settings-select {
+  width: auto;
+  max-width: 320px;
+  min-width: 180px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--input);
+  color: var(--text-base, var(--foreground));
+  font-size: 13px;
+  outline: none;
+}
+
+.settings-select:focus {
+  border-color: var(--accent, #6366f1);
+}
+
 .settings-row__meta {
   margin-left: auto;
 }

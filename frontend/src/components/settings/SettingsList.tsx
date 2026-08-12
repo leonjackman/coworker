@@ -59,6 +59,15 @@ export type SettingsItem =
       value: string;
       placeholder?: string;
       onChange: (value: string) => void;
+    }
+  | {
+      id: string;
+      type: 'select';
+      label: ReactNode;
+      description?: ReactNode;
+      value: string;
+      options: { value: string; label: ReactNode }[];
+      onChange: (value: string) => void;
     };
 
 export interface SettingsGroup {
@@ -101,6 +110,10 @@ function SettingControl({ item }: { item: SettingsItem }) {
 
   if (item.type === 'text_input') {
     return <TextInputControl value={item.value} placeholder={item.placeholder} onChange={item.onChange} />;
+  }
+
+  if (item.type === 'select') {
+    return <SelectControl value={item.value} options={item.options} onChange={item.onChange} />;
   }
 
   return (
@@ -166,6 +179,32 @@ function TextInputControl({
       onChange={(e) => onChange(e.target.value)}
       aria-label={placeholder ?? 'value'}
     />
+  );
+}
+
+function SelectControl({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: { value: string; label: ReactNode }[];
+  onChange: (value: string) => void;
+}) {
+  const hasValue = options.some((option) => option.value === value);
+  return (
+    <select
+      className="settings-select"
+      value={hasValue ? value : ''}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="select"
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 }
 

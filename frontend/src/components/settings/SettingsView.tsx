@@ -22,6 +22,7 @@ interface SettingsViewProps {
   onAutonomyChange: (mode: Autonomy) => void;
   memorySettings: MemorySettings | null;
   onMemorySettingsChange: (patch: MemorySettingsPatch) => void;
+  modelOptions: { id: string; label: string; provider: string }[];
   onLanguageChange?: () => void;
   onClose: () => void;
 }
@@ -37,6 +38,7 @@ export function SettingsView({
   onAutonomyChange,
   memorySettings,
   onMemorySettingsChange,
+  modelOptions,
   onLanguageChange,
   onClose,
 }: SettingsViewProps) {
@@ -226,11 +228,17 @@ export function SettingsView({
               },
               {
                 id: 'memory_extract_model',
-                type: 'text_input',
+                type: 'select',
                 label: t('settings.memory_extract_model'),
                 description: t('settings.memory_extract_model_desc'),
                 value: memorySettings?.extract_model ?? '',
-                placeholder: t('settings.memory_extract_model_placeholder'),
+                options: [
+                  { value: '', label: t('settings.memory_extract_model_default') },
+                  ...modelOptions.map((model) => ({
+                    value: model.id,
+                    label: `${model.provider} · ${model.label}`,
+                  })),
+                ],
                 onChange: (value) => onMemorySettingsChange({ extract_model: value }),
               },
               {
