@@ -122,6 +122,63 @@ async def _startup_checkpoint_maintenance() -> None:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("checkpoint sweep (startup) failed: %s", exc)
     _checkpoint_sweep_task = asyncio.create_task(_checkpoint_sweep_loop())
+    # Best-effort: tag already-installed skills (from before the provenance
+    # feature) so their market cards show as "already installed". Retries until
+    # the upstream market is reachable, then stops.
+    asyncio.create_task(_backfill_market_provenance_loop())
+
+
+# ---------------------------------------------------------------------------
+# Market-provenance backfill
+# ---------------------------------------------------------------------------
+# Skills installed *before* the install-provenance feature exist on disk but
+# carry no provenance record, so the market UI cannot tell they are installed
+# (their market slug often differs from the local frontmatter name). This
+# one-shot backfill searches the market for each installed skill and records the
+# provenance when a confident (normalised) match is found. It is conservative:
+# only exact normalised slug/name matches are accepted, to avoid false positives.
+_market_backfill_task: "asyncio.Task | None" = None
+
+
+def _norm_market_key(value: str | None) -> str:
+    return "".join(c for c in (value or "").lower() if c.isalnum())
+
+
+async def _backfill_market_provenance_once() -> None:
+    installed = list_skills()["skills"]
+    provenance = skill_market_manager._load_provenance()
+    for s in installed:
+        name = s.get("name")
+        if not name or name in provenance:
+            continue
+        target = _norm_market_key(name)
+        if not target:
+            continue
+        hit: tuple[str, str | None, str | None] | None = None
+        for source in ("skillhub", "clawhub"):
+            try:
+                page = await skill_market_manager.search(source, name, limit=5)
+            except Exception:
+                continue
+            for sk in page.skills:
+                if _norm_market_key(sk.get("slug")) == target or _norm_market_key(sk.get("name")) == target:
+                    hit = (source, sk.get("slug"), sk.get("owner"))
+                    break
+            if hit:
+                break
+        if hit:
+            skill_market_manager.record_install(hit[0], hit[1], hit[2], name)
+
+
+async def _backfill_market_provenance_loop() -> None:
+    while True:
+        try:
+            await _backfill_market_provenance_once()
+            return
+        except Exception as exc:  # network / upstream transient failures
+            logger.warning("market provenance backfill deferred: %s", exc)
+            await asyncio.sleep(120)
+
 
 
 @app.on_event("shutdown")
