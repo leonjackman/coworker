@@ -99,6 +99,17 @@ def main() -> int:
         empty = format_memory_prompt([], char_limit=2000)
         check("empty prompt is empty", empty == "")
 
+        # --- budget is SOFT: never blocks writes or reads ------------------
+        store.clear("project")
+        store.add("project", "z" * 5000)  # far past any budget
+        check("write beyond budget accepted", len(store.list_scope("project").entries) == 1)
+        over = format_memory_prompt(
+            [("project", "/p (updated 2026-08-12 10:00)", store.list_scope("project").entries)],
+            char_limit=100,
+        )
+        check("budget does not truncate entries", over.count("<memory_item>") == 1, over)
+        check("budget still warns", "<budget_warning>" in over)
+
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]
     if failures:

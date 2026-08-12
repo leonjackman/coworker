@@ -534,7 +534,10 @@ def _memory_extract_llm() -> Any | None:
     from coworker.memory.auto_extract import build_extract_llm
 
     provider = provider_manager.default_provider()
-    return build_extract_llm(provider, settings.memory_extract_model)
+    # Use the runtime config (Settings page / persisted overlay), falling back to
+    # the provider default. NOT the env-only settings value, so UI changes and
+    # .coworker_settings.json overrides actually reach the extractor.
+    return build_extract_llm(provider, memory_manager.config.extract_model)
 
 
 @app.get("/health")
