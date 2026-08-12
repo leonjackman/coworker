@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .atomicio import atomic_write_lines
+
 
 CHANGE_MAX_CONTENT_BYTES = 512 * 1024
 CHANGE_MAX_ENTRIES = 500
@@ -130,9 +132,10 @@ class ChangeStore:
 
     def _write_entries(self, path: Path, entries: list[dict[str, Any]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
-            for entry in entries:
-                handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+        atomic_write_lines(
+            path,
+            (json.dumps(entry, ensure_ascii=False, sort_keys=True) for entry in entries),
+        )
 
     def record(
         self,

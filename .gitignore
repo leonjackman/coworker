@@ -46,3 +46,6 @@ out/
 
 .opencode/
 .workbuddy/
+
+# Project-level long-term memory (app data, per-project)
+.coworker/

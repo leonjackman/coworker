@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,28 @@ from coworker.skills.skills import (
 # ---------------------------------------------------------------------------
 # API endpoints
 # ---------------------------------------------------------------------------
+
+# Market slugs are used verbatim as local directory names, so they must be safe
+# path components. Allow the same characters seen in real SkillHub/ClawHub slugs
+# (letters, digits, dots, underscores, hyphens) but nothing that can escape the
+# install root (no separators, no "..", no leading dot, no spaces).
+_SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _safe_install_dir(root: Path, label: str) -> Path:
+    """Return ``root / label`` after guarding against path traversal.
+
+    Raises ``ValueError`` when ``label`` is not a safe single path component or
+    when the resolved result escapes ``root``.
+    """
+    if not _SAFE_SLUG_RE.match(label):
+        raise ValueError(f"unsafe skill identifier: {label!r}")
+    root_resolved = root.resolve()
+    candidate = (root_resolved / label).resolve()
+    if candidate != root_resolved and not candidate.is_relative_to(root_resolved):
+        raise ValueError(f"skill path escapes install root: {label!r}")
+    return candidate
+
 
 SKILLHUB_API = "https://api.skillhub.cn/api/skills"
 SKILLHUB_V1 = "https://api.skillhub.cn/api/v1"
@@ -297,12 +320,11 @@ class SkillMarketManager:
                     "message": error or "Failed to fetch skill file (downloaded content is empty)",
                 }
 
-            # Step 2: validate
-            install_dir = self.install_dir / slug
-            install_dir.mkdir(parents=True, exist_ok=True)
-            skill_file = install_dir / "SKILL.md"
+            # Step 2: validate (before any filesystem side effect — the slug and
+            # the frontmatter name are both used as path components)
+            if not _SAFE_SLUG_RE.match(slug):
+                return {"status": "error", "message": f"Unsafe skill slug: {slug!r}"}
 
-            # Before writing, ensure the name matches the slug
             frontmatter, _body = parse_frontmatter(content)
             fallback_name = slug.strip()
             name: str = frontmatter.get("name") or fallback_name
@@ -311,23 +333,15 @@ class SkillMarketManager:
             else:
                 name = fallback_name
 
-            if name != slug:
-                # The frontmatter name wins; drop the placeholder directory we
-                # just created (only when it is still empty).
-                try:
-                    if not any(install_dir.iterdir()):
-                        install_dir.rmdir()
-                except OSError:
-                    pass
-                install_dir = self.install_dir / name
-                install_dir.mkdir(parents=True, exist_ok=True)
-                skill_file = install_dir / "SKILL.md"
-
             problems = validate_name(name) + validate_description(
                 _str_or_none(frontmatter.get("description", "")) or ""
             )
             if problems:
                 return {"status": "error", "message": "; ".join(problems)}
+
+            install_dir = _safe_install_dir(self.install_dir, name)
+            install_dir.mkdir(parents=True, exist_ok=True)
+            skill_file = install_dir / "SKILL.md"
 
             # Step 3: write SKILL.md
             skill_file.write_text(content, encoding="utf-8")

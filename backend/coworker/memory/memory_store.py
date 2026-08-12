@@ -16,11 +16,12 @@ following the hermes implementation the audit called out:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from pathlib import Path
 
 from .memory_discovery import MemoryScanner
-from .memory_file import HEADER, MemoryFile, render_file, split_entries
+from .memory_file import ENTRY_DELIMITER, HEADER, MemoryFile, render_file, split_entries
 
 logger = logging.getLogger(__name__)
 
@@ -59,33 +60,34 @@ class MemoryStore:
             return MemoryFile(scope=scope, path=path, mtime=0.0, entries=[]), path
         return _read_file_with_retry(path, scope), path
 
-    def _write_locked(self, scope: str, entries: list[str]) -> MemoryFile:
-        """Write entries under lock with a verified round trip."""
+    def _update_locked(self, scope: str, updater) -> MemoryFile:
+        """Atomically read-modify-write a memory file under a shared file lock.
+
+        Every write is a full ``read -> mutate -> render -> temp+rename`` cycle
+        guarded by an ``flock``/``msvcrt`` lock on a dedicated ``.lock`` file
+        (never renamed, so the lock is stable even across a rename of the target).
+        Concurrent agent turns and the auto-extract worker therefore cannot lose
+        each other's entries. A crash mid-write can never leave a truncated file
+        (atomic rename).
+        """
         path = self.path_for(scope)
         if path.parent and not path.parent.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
-        payload = render_file(entries)
         lock_fd = _open_locked(path)
         try:
             with _file_lock(lock_fd):
-                path.write_text(payload, encoding="utf-8")
+                current = _read_file_with_retry(path, scope) if path.is_file() else MemoryFile(
+                    scope=scope, path=path, mtime=0.0, entries=[]
+                )
+                new_entries = updater(current.entries)
+                payload = render_file(new_entries)
+                tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                tmp.write_text(payload, encoding="utf-8")
+                tmp.replace(path)
                 path.touch(exist_ok=True)
         finally:
             _release_lock(lock_fd)
-        # Round-trip verification: another process may have edited after our
-        # acquire/write; confirm what we wrote survived.
-        readback = _read_file_with_retry(path, scope)
-        if readback.entries != [e.strip() for e in entries if e.strip()]:
-            backup = path.with_suffix(path.suffix + ".bak")
-            try:
-                backup.write_text(payload, encoding="utf-8")
-            except OSError as exc:  # pragma: no cover - defensive
-                logger.warning("Memory round-trip mismatch; backup write failed: %s", exc)
-            raise MemoryError(
-                "memory file changed concurrently (round-trip mismatch); intended "
-                f"content preserved at {backup}"
-            )
-        return readback
+        return _read_file_with_retry(path, scope)
 
     # -- read API ----------------------------------------------------------
 
@@ -101,10 +103,10 @@ class MemoryStore:
         """Replace a whole memory file from raw markdown.
 
         The body is re-parsed into entries (``§``-delimited) and written with
-        the same lock + round-trip verification as every other write path.
+        the same lock + atomic rename as every other write path.
         """
         with self._lock:
-            return self._write_locked(scope, split_entries(text))
+            return self._update_locked(scope, lambda _entries: split_entries(text))
 
     def list_scope(self, scope: str) -> MemoryFile:
         with self._lock:
@@ -121,53 +123,73 @@ class MemoryStore:
 
     # -- write API ---------------------------------------------------------
 
+    def _validate_entry_text(self, text: str) -> None:
+        """Reject text that would break the ``§``-delimited file format.
+
+        A line that is exactly ``§`` is the entry delimiter; embedding it inside
+        an entry would silently split into multiple entries on the next read.
+        """
+        if any(line.strip() == ENTRY_DELIMITER for line in text.splitlines()):
+            raise MemoryError(
+                f"memory entry cannot contain a line that is exactly '{ENTRY_DELIMITER}'"
+            )
+
     def add(self, scope: str, text: str) -> MemoryFile:
         text = text.strip()
         if not text:
             raise MemoryError("cannot add empty memory")
+        self._validate_entry_text(text)
         with self._lock:
-            memory, _ = self._read_locked(scope)
-            if any(e == text for e in memory.entries):
-                raise MemoryError("duplicate memory entry (already exists)")
-            return self._write_locked(scope, [*memory.entries, text])
+            def _add(entries: list[str]) -> list[str]:
+                if any(e == text for e in entries):
+                    raise MemoryError("duplicate memory entry (already exists)")
+                return [*entries, text]
+            return self._update_locked(scope, _add)
 
     def replace(self, scope: str, target: str, text: str) -> MemoryFile:
         text = text.strip()
         target = target.strip()
         if not text:
             raise MemoryError("cannot replace with empty memory")
+        self._validate_entry_text(text)
         with self._lock:
-            memory, _ = self._read_locked(scope)
-            if not memory.entries:
-                raise MemoryError("replace target not found (memory is empty)")
             if not target:
                 raise MemoryError("replace target is empty")
-            hit = 0
-            updated: list[str] = []
-            for entry in memory.entries:
-                if target in entry:
-                    updated.append(text)
-                    hit += 1
-                else:
-                    updated.append(entry)
-            if not hit:
-                raise MemoryError("replace target not found")
-            return self._write_locked(scope, updated)
+
+            def _replace(entries: list[str]) -> list[str]:
+                if not entries:
+                    raise MemoryError("replace target not found (memory is empty)")
+                # Replace only the first matching entry so a single replace cannot
+                # fabricate duplicate identical entries.
+                updated: list[str] = []
+                replaced = False
+                for entry in entries:
+                    if not replaced and target in entry:
+                        updated.append(text)
+                        replaced = True
+                    else:
+                        updated.append(entry)
+                if not replaced:
+                    raise MemoryError("replace target not found")
+                return updated
+
+            return self._update_locked(scope, _replace)
 
     def remove(self, scope: str, target: str) -> MemoryFile:
         target = target.strip()
         if not target:
             raise MemoryError("remove target is empty")
         with self._lock:
-            memory, _ = self._read_locked(scope)
-            kept = [e for e in memory.entries if target not in e]
-            if len(kept) == len(memory.entries):
-                raise MemoryError("remove target not found")
-            return self._write_locked(scope, kept)
+            def _remove(entries: list[str]) -> list[str]:
+                kept = [e for e in entries if target not in e]
+                if len(kept) == len(entries):
+                    raise MemoryError("remove target not found")
+                return kept
+            return self._update_locked(scope, _remove)
 
     def clear(self, scope: str) -> MemoryFile:
         with self._lock:
-            return self._write_locked(scope, [])
+            return self._update_locked(scope, lambda _entries: [])
 
 
 def _read_file_with_retry(path: Path, scope: str) -> MemoryFile:
@@ -221,11 +243,23 @@ except ImportError:  # pragma: no cover - Windows branch
 
 
 def _open_locked(path: Path):
-    """Open the target file for appending without flushing a newline change.
+    """Open a dedicated lock file for the memory target.
 
-    ``a+`` positions the cursor at EOF for write; read still works after seek(0).
+    A separate ``.lock`` sibling is used so the lock file is never replaced by
+    the atomic rename of the memory file itself (a rename would otherwise hand
+    the lock to a fresh inode and break cross-writer serialization). On Windows,
+    ``msvcrt.locking`` cannot lock a 0-byte file, so give the lock file a byte
+    to lock.
     """
-    return path.open("a+", encoding="utf-8")
+    lock_path = path.with_name(path.name + ".lock")
+    fd = lock_path.open("a+", encoding="utf-8")
+    try:
+        if lock_path.stat().st_size == 0:
+            fd.write("\n")
+            fd.flush()
+    except OSError:  # pragma: no cover - defensive
+        pass
+    return fd
 
 
 def _release_lock(fd):

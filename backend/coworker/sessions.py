@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .atomicio import atomic_write_text
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -152,9 +154,9 @@ class SessionStore:
 
     def save(self, session: Session) -> None:
         session.updated_at = _now()
-        self._path(session.id).write_text(
+        atomic_write_text(
+            self._path(session.id),
             json.dumps(session.to_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def list_sessions(self, project_id: str | None = None) -> list[dict[str, Any]]:

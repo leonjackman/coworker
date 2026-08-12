@@ -619,7 +619,17 @@ async def chat(request: ChatRequest):
         runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
         agent_registry.checkpoint_manager.mark_active(session_id)
         try:
-            reply = runtime.run(format_user_message(request.message, request.attachments, references), session_id, request.language, work_mode, autonomy)
+            # The sync path runs the whole LangGraph turn (LLM calls + possibly a
+            # subprocess command) on a worker thread so it never blocks the
+            # event loop that also serves SSE/heartbeats for other sessions.
+            reply = await asyncio.to_thread(
+                runtime.run,
+                format_user_message(request.message, request.attachments, references),
+                session_id,
+                request.language,
+                work_mode,
+                autonomy,
+            )
         finally:
             agent_registry.checkpoint_manager.mark_idle(session_id)
     except (KeyError, ValueError) as exc:
@@ -1381,6 +1391,12 @@ async def goal_delete(request: GoalPauseRequest):
         cancel = _goal_cancel_events.pop(request.session_id, None)
         if cancel:
             cancel.set()
+        # The goal is gone for this session: release the per-session lock/state
+        # so long-running use does not leak memory. Only when no stream is still
+        # holding the lock (a delete mid-stream must not free the lock under the
+        # running generator).
+        if not any(v == request.session_id for v in _goal_active_streams.values()):
+            _goal_locks.pop(request.session_id, None)
         for sid, vlist in list(_goal_active_streams.items()):
             if vlist == request.session_id:
                 _goal_active_streams.pop(sid, None)
@@ -1432,6 +1448,7 @@ async def goal_resume(request: GoalResumeRequest):
         async with lock:
             async def _goal_iter():
                 nonlocal terminal_sent
+                accumulated_content = ""
                 async with asyncio.timeout(SSE_TIMEOUT):
                     async for event in runtime.goal_stream(
                         [], request.session_id, language, work_mode, autonomy,
@@ -1441,6 +1458,7 @@ async def goal_resume(request: GoalResumeRequest):
                         event["session_id"] = request.session_id
                         etype = event.get("type")
                         if etype == "done":
+                            accumulated_content = str(event.get("content") or accumulated_content)
                             for part in (event.get("parts") or []):
                                 goal_parts_accum.append(part)
                         elif etype == "goal_done":
@@ -1459,6 +1477,23 @@ async def goal_resume(request: GoalResumeRequest):
                                 pass
                             terminal_sent = True
                         elif etype == "goal_paused":
+                            # Persist the work done up to the pause point (content
+                            # + tool/plan parts) so pausing/resuming/refreshing the
+                            # goal never loses the round's trajectory — mirroring
+                            # the chat_stream goal_paused path.
+                            if accumulated_content or goal_parts_accum:
+                                try:
+                                    session_store.append_message(
+                                        request.session_id,
+                                        role="assistant",
+                                        content=accumulated_content,
+                                        mode="single",
+                                        work_mode=work_mode,
+                                        autonomy=autonomy,
+                                        parts=_merge_goal_parts(goal_parts_accum),
+                                    )
+                                except KeyError:
+                                    pass
                             terminal_sent = True
                         yield event
 
@@ -1547,10 +1582,13 @@ async def get_session(session_id: str):
 
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
+    _guard_session_not_streaming(session_id)
     if not session_store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
     agent_registry.forget_runtime_checkpoint(session_id)
     agent_registry.change_store.delete_session(session_id)
+    _goal_locks.pop(session_id, None)
+    _goal_cancel_events.pop(session_id, None)
     return {"status": "ok"}
 
 @app.post("/sessions/{session_id}/rename")
@@ -1587,7 +1625,9 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
     if not user_message:
         return {"status": "ok", "title": session.title}
     from coworker.agents import generate_title
-    new_title = generate_title(user_message, assistant_message or request.assistant_response or "")
+    new_title = await asyncio.to_thread(
+        generate_title, user_message, assistant_message or request.assistant_response or ""
+    )
     final_title = new_title or session.title
     session_store.rename(session_id, final_title)
     return {"status": "ok", "title": final_title}
@@ -1602,6 +1642,20 @@ class EditMessageRequest(BaseModel):
 
 class RollbackRequest(BaseModel):
     with_code: bool = False
+
+
+def _guard_session_not_streaming(session_id: str) -> None:
+    """Reject destructive session mutations while a stream is in flight.
+
+    Truncating/deleting a session (or its checkpoint) mid-stream can silently
+    drop the reply the running agent is still producing, so refuse with 409
+    instead of racing it.
+    """
+    if session_id in agent_registry.checkpoint_manager.active_sessions():
+        raise HTTPException(
+            status_code=409,
+            detail="session is still generating; wait for the current response to finish",
+        )
 
 
 def request_language_for_session(session) -> str:
@@ -1667,6 +1721,7 @@ async def rollback_message(session_id: str, message_id: str, request: RollbackRe
     reported as conflicts and left untouched).
     """
     with_code = bool(request and request.with_code)
+    _guard_session_not_streaming(session_id)
     try:
         session = session_store.require(session_id)
         target_index = session_store.find_message_index(session_id, message_id)
@@ -1713,6 +1768,7 @@ async def regenerate_message(session_id: str, message_id: str):
     """Re-run the assistant reply for the user message that precedes the given
     assistant message (or, if given a user message, for that user message).
     Truncates after that user message and streams a fresh reply."""
+    _guard_session_not_streaming(session_id)
     try:
         session = session_store.require(session_id)
         index = session_store.find_message_index(session_id, message_id)
@@ -2273,7 +2329,10 @@ async def delete_provider(provider_id: str):
 
 @app.post("/providers/test")
 async def test_provider(request: ProviderTestPayload):
-    result = provider_manager.test_provider_connection(request.base_url, request.api_key, request.model)
+    try:
+        result = provider_manager.test_provider_connection(request.base_url, request.api_key, request.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "result": result}
 
 @app.post("/providers/fetch-models")
@@ -2465,12 +2524,28 @@ async def ws_terminal(websocket: WebSocket):
 
     Protocol (JSON text frames):
       client -> server: {"type": "input", "data": "<raw keystrokes>"}
-                       {"type": "resize", "cols": N, "rows": M}
+                        {"type": "resize", "cols": N, "rows": M}
       server -> client: raw terminal bytes (text)
                        {"type": "error", "message": "..."}  (on spawn failure)
     The cwd is the project's workspace when project_id is given, otherwise the
     default workspace.
     """
+    # Origin gate: WebSocket is not subject to CORS, so a malicious web page
+    # could otherwise drive this PTY shell directly. Only allow the local dev
+    # origins the app itself uses (plus Electron's file:// / null origins).
+    origin = websocket.headers.get("origin", "")
+    if origin:
+        origin_host = origin.lower()
+        allowed = (
+            origin_host.startswith("http://localhost")
+            or origin_host.startswith("http://127.0.0.1")
+            or origin_host.startswith("file://")
+            or origin_host == "null"
+        )
+        if not allowed:
+            await websocket.close(code=1008)
+            return
+
     await websocket.accept()
 
     project_id = websocket.query_params.get("project_id")
@@ -2883,6 +2958,15 @@ def validate_skill(request: SkillValidatePayload):
     candidate = Path(target).expanduser().resolve()
     if not candidate.exists():
         raise HTTPException(status_code=404, detail=f"Path not found: {target}")
+    # Restrict validation to the skill roots this app actually scans, so the
+    # endpoint cannot be used to probe arbitrary files on the machine.
+    allowed_roots: list[Path] = []
+    try:
+        allowed_roots = [Path(root).resolve() for root, _label in skill_manager.scanner.roots()]
+    except Exception:  # noqa: BLE001 - never let scanner errors disable the guard
+        pass
+    if not any(candidate == root or candidate.is_relative_to(root) for root in allowed_roots):
+        raise HTTPException(status_code=403, detail="Path is outside the skill directories")
     if candidate.is_dir():
         candidate = candidate / SKILL_FILE
         if not candidate.exists():
@@ -2897,4 +2981,4 @@ def validate_skill(request: SkillValidatePayload):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9527)
+    uvicorn.run(app, host="127.0.0.1", port=9527)

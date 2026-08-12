@@ -169,6 +169,10 @@ def _parse_commands(frontmatter: dict[str, Any]) -> list[SkillCommand]:
         cfile = _frontmatter_str(item, "file").strip()
         if not cfile:
             cfile = f"commands/{cname}.md"
+        # Only allow relative paths inside the skill package: a command file must
+        # never be absolute or escape the skill directory (e.g. ../../.ssh/...).
+        if cfile.startswith("/") or "\\" in cfile or any(seg == ".." for seg in cfile.split("/")):
+            continue
         commands.append(SkillCommand(name=cname, description=cdesc, file=cfile))
     return commands
 

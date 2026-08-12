@@ -15,6 +15,7 @@ key to be removed (omit it) or replaced (send a new value).
 from __future__ import annotations
 
 import json
+import os
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field, fields
@@ -216,6 +217,10 @@ class McpManager:
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+        try:
+            os.chmod(tmp_path, 0o600)  # secrets in env/headers must not be world-readable
+        except OSError:
+            pass
         tmp_path.replace(self.config_path)
 
     # ── CRUD ───────────────────────────────────────────────────────

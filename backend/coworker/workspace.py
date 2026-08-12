@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .atomicio import append_jsonl_retained, trim_jsonl
+
 
 DEFAULT_IGNORED_DIRS = {
     ".git",
@@ -818,15 +820,28 @@ class Workspace:
         if not target.is_dir():
             raise ValueError(f"Not a directory: {rel_path or '.'}")
         entries: list[dict[str, Any]] = []
-        for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
-            if child.is_dir() and child.name in DEFAULT_IGNORED_DIRS:
+        try:
+            children = sorted(target.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            return entries
+        for child in children:
+            try:
+                is_dir = child.is_dir()
+            except OSError:
+                continue
+            if is_dir and child.name in DEFAULT_IGNORED_DIRS:
+                continue
+            try:
+                is_file = child.is_file()
+                size = child.stat().st_size if is_file else None
+            except OSError:
                 continue
             entries.append(
                 {
                     "name": child.name,
                     "path": self.rel_path(child),
-                    "type": "dir" if child.is_dir() else "file",
-                    "size": child.stat().st_size if child.is_file() else None,
+                    "type": "dir" if is_dir else "file",
+                    "size": size,
                 }
             )
         return entries
@@ -841,20 +856,28 @@ class Workspace:
         if depth <= 0:
             return node
         node["children"] = []
-        for child in sorted(target.iterdir(), key=lambda p: p.name.lower()):
-            if child.is_dir():
-                if child.name in DEFAULT_IGNORED_DIRS:
-                    continue
-                node["children"].append(self.build_tree(self.rel_path(child), depth=depth - 1))
-            else:
-                node["children"].append(
-                    {
-                        "name": child.name,
-                        "path": self.rel_path(child),
-                        "type": "file",
-                        "size": child.stat().st_size,
-                    }
-                )
+        try:
+            children = sorted(target.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            return node
+        for child in children:
+            try:
+                if child.is_dir():
+                    if child.name in DEFAULT_IGNORED_DIRS:
+                        continue
+                    node["children"].append(self.build_tree(self.rel_path(child), depth=depth - 1))
+                else:
+                    node["children"].append(
+                        {
+                            "name": child.name,
+                            "path": self.rel_path(child),
+                            "type": "file",
+                            "size": child.stat().st_size,
+                        }
+                    )
+            except OSError:
+                # Broken/dangling symlink or unreadable entry: skip rather than 500.
+                continue
         return node
 
     @staticmethod
@@ -951,13 +974,35 @@ class Workspace:
         if not root.is_dir():
             raise ValueError(f"Not a file or directory: {self.rel_path(root)}")
 
-        for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-            if child.is_dir():
-                if child.name in DEFAULT_IGNORED_DIRS:
+        # Guard against directory-symlink cycles (e.g. `ln -s . loop`): track
+        # the resolved real path of every directory we descend into and skip
+        # any already-visited one, so a cycle cannot recurse forever.
+        visited: set[str] = set()
+
+        def _walk(dirpath: Path) -> Any:
+            try:
+                real = str(dirpath.resolve())
+            except OSError:
+                return
+            if real in visited:
+                return
+            visited.add(real)
+            try:
+                children = sorted(dirpath.iterdir(), key=lambda p: p.name.lower())
+            except OSError:
+                return
+            for child in children:
+                try:
+                    if child.is_dir():
+                        if child.name in DEFAULT_IGNORED_DIRS:
+                            continue
+                        yield from _walk(child)
+                    elif child.is_file():
+                        yield child
+                except OSError:
                     continue
-                yield from self.walk_files(child)
-            elif child.is_file():
-                yield child
+
+        yield from _walk(root)
 
     def rel_path(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix()
@@ -998,14 +1043,7 @@ def append_tool_audit(
         "context": context or {},
         "details": details,
     }
-    try:
-        audit_path.parent.mkdir(parents=True, exist_ok=True)
-        with audit_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True, default=str) + "\n")
-    except OSError:
-        # Audit must not mask the tool's real outcome.
-        return
-    trim_jsonl_file(audit_path, MAX_TOOL_AUDIT_LINES)
+    append_jsonl_retained(audit_path, event, MAX_TOOL_AUDIT_LINES)
 
 
 def list_tool_audit_events(audit_path: Path, limit: int = 100) -> list[dict[str, Any]]:
@@ -1030,19 +1068,7 @@ def trim_jsonl_file(path: Path, max_lines: int) -> None:
     """Rolling retention for append-only JSONL logs: keep only the last
     ``max_lines`` lines. Reads+rewrites only when over the cap, so steady-state
     writes stay cheap."""
-    if max_lines <= 0:
-        return
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return
-    if len(lines) <= max_lines:
-        return
-    try:
-        path.write_text("\n".join(lines[-max_lines:]) + "\n", encoding="utf-8")
-    except OSError:
-        # Best-effort: retention must never break the active write path.
-        return
+    trim_jsonl(path, max_lines)
 
 
 GIT_MAX_FILES = 500

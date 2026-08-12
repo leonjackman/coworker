@@ -241,7 +241,14 @@ class SkillManager:
         cmd = next((c for c in skill.commands if c.name == command), None)
         if cmd is None:
             return None
-        path = skill.base_dir / cmd.file
+        base_dir = Path(skill.base_dir)
+        path = (base_dir / cmd.file).resolve()
+        # Defence-in-depth: a command file must stay inside its skill package.
+        try:
+            if path != base_dir.resolve() and not path.is_relative_to(base_dir.resolve()):
+                return None
+        except OSError:
+            return None
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
         except OSError:

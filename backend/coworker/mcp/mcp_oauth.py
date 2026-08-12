@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,10 @@ class FileTokenStorage:
     def _write(self, data: dict[str, Any]) -> None:
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        try:
+            os.chmod(tmp, 0o600)  # access/refresh tokens must not be world-readable
+        except OSError:
+            pass
         tmp.replace(self.path)
 
     # ── TokenStorage protocol ───────────────────────────────────────────

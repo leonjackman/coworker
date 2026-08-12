@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .atomicio import atomic_write_text
+
 CONFIG_VERSION = 2
 
 
@@ -81,9 +83,9 @@ class ProjectStore:
 
     def save(self, config: ProjectConfig) -> None:
         config.updated_at = _now()
-        self.config_path.write_text(
+        atomic_write_text(
+            self.config_path,
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
         )
 
     def list_projects(self) -> list[Project]:

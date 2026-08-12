@@ -1,6 +1,25 @@
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Parse an integer env var, falling back to ``default`` on bad input.
+
+    A malformed value (e.g. ``COWORKER_CHECKPOINT_CAP=abc``) must never crash
+    backend startup — fall back to the product default and log instead.
+    """
+    raw = (os.getenv(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer for %s=%r; using default %d", name, raw, default)
+        return default
 
 
 @dataclass(frozen=True)
@@ -30,22 +49,18 @@ def load_settings() -> BackendSettings:
     openai_model = os.getenv("COWORKER_OPENAI_MODEL", "gpt-4.1-mini").strip()
 
     # Checkpoint lifecycle tuning (see coworker.checkpoints).
-    checkpoint_cap_per_session = int(os.getenv("COWORKER_CHECKPOINT_CAP", "500").strip() or "500")
-    checkpoint_max_bytes_per_thread = int(
-        os.getenv("COWORKER_CHECKPOINT_MAX_MB_PER_THREAD", "32").strip() or "32"
-    ) * 1024 * 1024
-    checkpoint_sweep_interval_seconds = int(
-        os.getenv("COWORKER_CHECKPOINT_SWEEP_INTERVAL_SECONDS", "21600").strip() or "21600"
-    )
+    checkpoint_cap_per_session = _env_int("COWORKER_CHECKPOINT_CAP", 500)
+    checkpoint_max_bytes_per_thread = _env_int("COWORKER_CHECKPOINT_MAX_MB_PER_THREAD", 32) * 1024 * 1024
+    checkpoint_sweep_interval_seconds = _env_int("COWORKER_CHECKPOINT_SWEEP_INTERVAL_SECONDS", 21600)
 
     memory_enabled = os.getenv("COWORKER_MEMORY_ENABLED", "1").strip().lower() not in {
         "0", "false", "no", "off",
     }
-    memory_char_limit = int(os.getenv("COWORKER_MEMORY_CHAR_LIMIT", "2000").strip() or "2000")
+    memory_char_limit = _env_int("COWORKER_MEMORY_CHAR_LIMIT", 2000)
     memory_auto_extract = os.getenv("COWORKER_MEMORY_AUTO_EXTRACT", "0").strip().lower() not in {
         "0", "false", "no", "off",
     }
-    memory_nudge_interval = int(os.getenv("COWORKER_MEMORY_NUDGE_INTERVAL", "10").strip() or "10")
+    memory_nudge_interval = _env_int("COWORKER_MEMORY_NUDGE_INTERVAL", 10)
     memory_extract_model = os.getenv("COWORKER_MEMORY_EXTRACT_MODEL", "").strip()
 
     data_dir.mkdir(parents=True, exist_ok=True)

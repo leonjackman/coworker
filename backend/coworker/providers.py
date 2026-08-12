@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .atomicio import atomic_write_text
+
 CONFIG_VERSION = 1
 
 
@@ -78,7 +80,10 @@ class ProviderManager:
 
     def save(self, config: ProviderConfig) -> None:
         config.updated_at = datetime.now(timezone.utc).isoformat()
-        self.config_path.write_text(json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic_write_text(
+            self.config_path,
+            json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        )
 
     def public_config(self) -> dict[str, Any]:
         config = self.load()
@@ -178,6 +183,10 @@ class ProviderManager:
         return self.public_provider(provider)
 
     def test_provider_connection(self, base_url: str, api_key: str, model: str) -> dict[str, Any]:
+        # Apply the same URL guard as create/update so the test endpoint cannot
+        # be used as an arbitrary-network scanner. Custom type keeps plain-http
+        # LAN/Ollama endpoints working (see validate_base_url).
+        self.validate_base_url(base_url, "custom")
         endpoint = self.chat_completions_url(base_url)
         body = {
             "model": model,
@@ -199,6 +208,7 @@ class ProviderManager:
             return {"ok": False, "latency_ms": None, "error": str(exc)[:240]}
 
     def fetch_models(self, base_url: str, api_key: str = "", provider_type: str = "custom") -> list[str]:
+        self.validate_base_url(base_url, provider_type)
         base = base_url.rstrip("/")
         if provider_type == "ollama":
             url = f"{base}/api/tags"

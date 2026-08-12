@@ -256,6 +256,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       enableRemoteModule: false,
+      sandbox: true,
+      nodeIntegration: false,
     },
   });
 
@@ -308,6 +310,30 @@ function createWindow() {
     }
   });
 
+  // Open external links (markdown <a target="_blank">) in the system browser
+  // instead of spawning uncontrolled Electron windows.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  // Never navigate the app window away from the bundled app / dev server.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed =
+      !FRONTEND_URL && url.startsWith('file:') ||
+      (FRONTEND_URL && url.startsWith(FRONTEND_URL)) ||
+      /^https?:\/\/localhost(:\d+)?\//.test(url) ||
+      /^https?:\/\/127\.0\.0\.1(:\d+)?\//.test(url);
+    if (!allowed) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(url)) {
+        shell.openExternal(url);
+      }
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -322,6 +348,21 @@ app.whenReady().then(() => {
     showMainWindow();
   });
 });
+
+// Single-instance lock: double-launching the app (e.g. clicking the launcher
+// twice) would otherwise open two windows/renderers racing against one backend.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      showMainWindow();
+    }
+  });
+}
 
 app.on('before-quit', () => {
   isQuitting = true;

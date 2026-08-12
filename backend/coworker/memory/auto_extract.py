@@ -25,6 +25,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
+from ..atomicio import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 PROPOSALS_FILENAME = "memory_proposals.jsonl"
@@ -90,9 +92,9 @@ class MemoryProposalStore:
 
     def _write(self, records: list[dict[str, Any]]) -> None:
         try:
-            self.path.write_text(
+            atomic_write_text(
+                self.path,
                 "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
-                encoding="utf-8",
             )
         except OSError as exc:  # pragma: no cover - defensive
             logger.warning("Failed to persist memory proposals: %s", exc)

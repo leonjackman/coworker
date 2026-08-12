@@ -2874,22 +2874,33 @@ class AgentRuntimeRegistry:
     def _open_sync_checkpointer(self):
         # A fresh synchronous connection per call, committed and closed, so it
         # never holds a lingering lock that contends with the async saver used
-        # during streaming/resume.
+        # during streaming/resume. ``auto_vacuum`` is a persistent DB property
+        # (already set by the checkpoint manager at startup) and cannot be
+        # re-applied per connection — doing so raises "database is locked" when
+        # the async saver is actively writing.
         from langgraph.checkpoint.sqlite import SqliteSaver
         conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         return SqliteSaver(conn), conn
 
     def has_runtime_checkpoint(self, session_id: str) -> bool:
-        saver, conn = self._open_sync_checkpointer()
+        try:
+            saver, conn = self._open_sync_checkpointer()
+        except sqlite3.OperationalError:
+            # Concurrent async saver write: treat as "no checkpoint yet" rather
+            # than crashing the stream the UI is waiting on.
+            return False
         try:
             return saver.get({"configurable": {"thread_id": session_id}}) is not None
+        except sqlite3.OperationalError:
+            return False
         finally:
-            conn.commit()
-            conn.close()
+            try:
+                conn.commit()
+            finally:
+                conn.close()
 
     def forget_runtime_checkpoint(self, session_id: str) -> None:
         # Delegate to the manager so the delete also reclaims disk space.
