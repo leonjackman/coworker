@@ -380,8 +380,9 @@ def build_workspace_tools(
     skill_market_manager: Any | None = None,
     memory_store: Any | None = None,
 ) -> list[Any]:
-    from langchain_core.tools import tool
     from pathlib import Path as _Path
+
+    from langchain_core.tools import tool
 
     def _error_result(error: Exception, operation: str) -> str:
         details = {"error": str(error)[:500], "operation": operation}
