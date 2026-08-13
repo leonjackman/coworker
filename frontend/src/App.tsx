@@ -949,6 +949,7 @@ function App() {
             return next;
           });
         }
+        setTodos([]);
         if (event.content) streamedContent = event.content;
         localParts = settleRunningTools(localParts);
         const msgStatus = failed ? 'error' : 'done';
@@ -971,6 +972,7 @@ function App() {
         );
       } else if (event.type === 'goal_paused') {
         if (goalMatchesView) setGoal((current) => ({ ...current, paused: true, running: false }));
+        setTodos([]);
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -2293,8 +2295,10 @@ function App() {
         if (event.reason) next.reason = event.reason;
         return next;
       });
+      setTodos([]);
     } else if (event.type === 'goal_paused') {
       setGoal((current) => ({ ...current, paused: true, running: false }));
+      setTodos([]);
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
     }
@@ -2326,6 +2330,7 @@ function App() {
         if (event.reason) next.reason = event.reason;
         return next;
       });
+      setTodos([]);
       const content = event.content;
       if (content) {
         setMessages((current) => [
@@ -2335,6 +2340,7 @@ function App() {
       }
     } else if (event.type === 'goal_paused') {
       setGoal((current) => ({ ...current, paused: true, running: false }));
+      setTodos([]);
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
     } else if (event.type === 'delta') {
