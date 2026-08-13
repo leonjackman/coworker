@@ -2988,9 +2988,11 @@ class AgentRuntimeRegistry:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
         self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
+        self.checkpoint_conn.commit()
+        self.checkpoint_conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        self.checkpoint_conn.commit()
         self.checkpoint_conn.execute("PRAGMA busy_timeout=30000")
         self.checkpoint_conn.execute("PRAGMA synchronous=NORMAL")
-        self.checkpoint_conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         self.checkpointer = SqliteSaver(self.checkpoint_conn)
         self.checkpoint_manager = CheckpointManager(
             self.checkpoint_path,

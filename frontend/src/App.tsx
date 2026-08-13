@@ -904,6 +904,7 @@ function App() {
               : item,
           ),
         );
+        setTodos([]);
       } else if (event.type === 'goal_start') {
         inGoal = true;
         if (goalMatchesView) {
@@ -925,8 +926,10 @@ function App() {
       } else if (event.type === 'todos') {
         // Task list is global across modes: the TodoBlock card above the composer
         // shows it in build / plan / goal alike; keep goal.todos in sync too.
-        setTodos(event.todos);
-        if (goalMatchesView) setGoal((current) => ({ ...current, todos: event.todos }));
+        if (goalMatchesView) {
+          setTodos(event.todos);
+          setGoal((current) => ({ ...current, todos: event.todos }));
+        }
       } else if (event.type === 'goal_force') {
         // Force-loop nudge: agent didn't use tools, system will retry.
         if (goalMatchesView) setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
@@ -948,8 +951,8 @@ function App() {
             if (event.verification) next.verification = event.verification;
             return next;
           });
+          setTodos([]);
         }
-        setTodos([]);
         if (event.content) streamedContent = event.content;
         localParts = settleRunningTools(localParts);
         const msgStatus = failed ? 'error' : 'done';
@@ -971,8 +974,10 @@ function App() {
           ),
         );
       } else if (event.type === 'goal_paused') {
-        if (goalMatchesView) setGoal((current) => ({ ...current, paused: true, running: false }));
-        setTodos([]);
+        if (goalMatchesView) {
+          setGoal((current) => ({ ...current, paused: true, running: false }));
+          setTodos([]);
+        }
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -1307,6 +1312,7 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
           ),
         );
+        setTodos([]);
       } else if (event.type === 'stage') {
         // P1 补充 stage 处理（编辑/重生成路径）
         setMessages((current) =>
@@ -1496,6 +1502,7 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
           ),
         );
+        setTodos([]);
       } else if (event.type === 'stage') {
         // P1 补充 stage 处理（编辑/重生成路径）
         setMessages((current) =>
@@ -1952,6 +1959,7 @@ function App() {
         goalSessionIdRef.current = sessionIdToOpen;
       } else {
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
+        setTodos([]);
       }
       // 后台 resume 可能仍在运行：切回时首扫可能早于新审批创建，延迟重扫兜底。
       for (const delay of [5000, 15000]) {
