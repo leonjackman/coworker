@@ -1968,7 +1968,7 @@ function App() {
       // 切回时若目标会话仍在前台或后台流式中，loaded 不含该消息，running 会被保留；
       // 若后端已完成并持久化（同 id），则用持久化版本（内容完整），这是正确收尾。
       setMessages((current) => {
-        const running = current.filter((m) => m.status === 'running');
+        const running = current.filter((m) => m.status === 'running' && m.sessionId === sessionIdToOpen);
         if (running.length === 0) return loaded;
         const loadedIds = new Set(loaded.map((m) => m.id));
         const preserved = running.filter((m) => !loadedIds.has(m.id));
@@ -1986,13 +1986,13 @@ function App() {
       if (sessionIdRef.current === sessionIdToDelete) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
-        // 保留其它会话仍在后台运行的消息
-        setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionIdToDelete));
         setInput('');
         setAttachments([]);
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
         setDraftMode(true);
       }
+      // 清理被删除会话在所有上下文中的消息
+      setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionIdToDelete));
       // 清理被删除会话所属项目的 activeProjectId
       const deletedSessionProject = sessions.find((s) => s.id === sessionIdToDelete)?.project_id;
       if (deletedSessionProject && activeProjectId === deletedSessionProject) {
@@ -2047,17 +2047,18 @@ function App() {
     const confirmed = window.confirm(t('sidebar.project_delete_confirm'));
     if (!confirmed) return;
     try {
-      const sessionInProject = sessions.find((session) => session.project_id === projectId);
+      const sessionsInProject = sessions.filter((session) => session.project_id === projectId);
       await chatService.deleteProject(projectId);
-      if (sessionInProject && sessionIdRef.current === sessionInProject.id) {
+      const deletedSessionIds = new Set(sessionsInProject.map(s => s.id));
+      if (sessionsInProject.some(s => sessionIdRef.current === s.id)) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
-        // 保留其它会话仍在后台运行的消息
-        setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionInProject.id));
         setInput('');
         setAttachments([]);
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
       }
+      // 清理所有属于该项目的会话的消息
+      setMessages((current) => current.filter((m) => !m.sessionId || !deletedSessionIds.has(m.sessionId)));
       if (activeProjectId === projectId) {
         setActiveProjectId(undefined);
         pendingProjectIdRef.current = undefined;
@@ -2386,8 +2387,8 @@ function App() {
   const activeProject = projects.find((project) => project.id === currentProjectId);
   const titlebarProjectName = activeProject?.name ?? t('sidebar.default_project');
   const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
-  const showNewChatHero = activeView === 'chat' && !sessionId && messages.length === 0 && runtimeStatus === 'ready' && (!activeProject || draftMode);
-  const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && messages.length === 0 && !draftMode;
+  const showNewChatHero = activeView === 'chat' && !sessionId  && runtimeStatus === 'ready' && (!activeProject || draftMode);
+  const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && !draftMode;
   const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && runtimeStatus === 'ready' && !draftMode;
   const workspaceOptions = projects.map((project) => ({
     id: project.id,
@@ -2722,13 +2723,17 @@ function App() {
 }
 
 function currentSessionTitle(messages: ChatMessage[], sessions: SessionSummary[], sessionId?: string): string {
-  const saved = sessionId ? sessions.find((session) => session.id === sessionId)?.title : undefined;
+  if (!sessionId) return t('sidebar.new_chat');
+  const saved = sessions.find((session) => session.id === sessionId)?.title;
   if (saved) return saved;
-  // R1 keeps every session's messages in one array; only fall back to the
-  // current session's own first user message, never another session's.
-  const firstUserMessage = messages.find((message) => message.role === 'user' && (!sessionId || message.sessionId === sessionId));
-  if (!firstUserMessage?.content.trim()) return t('sidebar.new_chat');
-  return firstUserMessage.content.trim().slice(0, 64);
+  // R1 keeps every session's messages in one array; fall back to the
+  // current session's own first user message only.
+  if (sessionId) {
+    const firstUserMessage = messages.find((message) => message.role === 'user' && message.sessionId === sessionId);
+    if (!firstUserMessage?.content.trim()) return t('sidebar.new_chat');
+    return firstUserMessage.content.trim().slice(0, 64);
+  }
+  return t('sidebar.new_chat');
 }
 
 export default App;
