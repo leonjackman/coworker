@@ -9,13 +9,28 @@ cd "$ROOT_DIR"
 
 echo "=== Coworker Desktop ==="
 
-echo "[1/5] Preparing Python backend..."
+echo "[0/6] Killing existing Coworker processes..."
+pkill -f 'npm run desktop' 2>/dev/null || true
+pkill -f 'npm run dev' 2>/dev/null || true
+pkill -f 'electron.*coworker\|electron.*--dir.*coworker' 2>/dev/null || true
+pkill -f 'uvicorn.*main:app.*coworker' 2>/dev/null || true
+pkill -f 'python.*uvicorn.*main:app.*app-dir.*coworker' 2>/dev/null || true
+pkill -f 'node.*vite.*coworker' 2>/dev/null || true
+for _ in {1..10}; do
+  if ! pgrep -f 'npm run desktop\|npm run dev\|electron.*coworker\|uvicorn.*main:app.*app-dir.*coworker\|node.*vite.*coworker' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
+sleep 0.3
+
+echo "[1/6] Preparing Python backend..."
 if [[ ! -d "$ROOT_DIR/backend/venv" ]]; then
   python3 -m venv "$ROOT_DIR/backend/venv"
 fi
 "$ROOT_DIR/backend/venv/bin/python" -m pip install -q -r "$ROOT_DIR/backend/requirements.txt" -i https://mirrors.aliyun.com/pypi/simple/
 
-echo "[2/5] Preparing Node dependencies..."
+echo "[2/6] Preparing Node dependencies..."
 if [[ ! -d "$ROOT_DIR/node_modules" ]]; then
   npm install
 fi
@@ -23,10 +38,10 @@ if [[ ! -d "$ROOT_DIR/frontend/node_modules" ]]; then
   (cd "$ROOT_DIR/frontend" && npm install)
 fi
 
-echo "[3/5] Building frontend..."
+echo "[3/6] Building frontend..."
 (cd "$ROOT_DIR/frontend" && npm run build)
 
-echo "[4/5] Starting backend..."
+echo "[4/6] Starting backend..."
 # Kill any stale backend holding the port, then wait for the port to free up.
 # Only kill pids whose command line actually looks like the Coworker backend, so
 # an unrelated process that happens to use the port is never killed.
@@ -96,7 +111,7 @@ if [[ "$backend_ready" != "1" ]]; then
   exit 1
 fi
 
-echo "[5/5] Launching desktop window..."
+echo "[5/6] Launching desktop window..."
 if [[ "${COWORKER_SKIP_DESKTOP:-0}" == "1" ]]; then
   echo "Desktop launch skipped by COWORKER_SKIP_DESKTOP=1 — backend stays up on 127.0.0.1:$BACKEND_PORT for testing."
   echo "Press Ctrl+C to stop the backend."

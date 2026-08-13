@@ -126,6 +126,9 @@ class McpToolMiddleware(AgentMiddleware):
         return "\n".join(lines)
 
     def _overrides(self, request: Any) -> dict[str, Any]:
+        logger.info("MCP _overrides START request_id=%s", id(request))
+        logger.info("MCP _overrides _connecting=%d _servers=%d", len(self.session_manager._connecting), len(self.session_manager._servers))
+        logger.info("MCP _overrides: calling ensure_connected")
         self.session_manager.ensure_connected(enable_browser_flow=False)
         self._refresh_tools()
         tools = self.tools
@@ -181,7 +184,11 @@ class McpToolMiddleware(AgentMiddleware):
         # Streaming/resume run the graph asynchronously (`astream`/`ainvoke`).
         # The initial MCP connect can block for seconds, so run it off the
         # event loop via `to_thread`; `_overrides` itself is idempotent.
+        _t0 = time.monotonic()
+        logger.info("MCP awrap_model_call START request_id=%s", id(request))
         overrides = await asyncio.to_thread(self._overrides, request)
+        _t1 = time.monotonic()
+        logger.info("MCP awrap_model_call to_thread(self._overrides) took %.2fs", _t1 - _t0)
         if overrides:
             return await handler(request.override(**overrides))
         return await handler(request)

@@ -69,10 +69,17 @@ class PathBoundaryError(ValueError):
 
 
 class ExternalWriteError(PathBoundaryError):
-    """Marker exception for external write — bridging HITL approval and code enforcement."""
+    """Marker exception for external write — used by HITL approval flow."""
 
     def __init__(self, path: str):
         super().__init__(path, "external_write")
+
+
+READ_ONLY_COMMANDS = frozenset({
+    "cat", "ls", "pwd", "head", "tail", "more", "less",
+    "wc", "grep", "rg", "find", "file", "stat", "du", "df",
+    "id", "whoami", "uname", "date", "echo",
+})
 
 
 def fingerprint_path_for(data_dir: Path, workspace_root: Path) -> Path:

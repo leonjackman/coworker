@@ -495,13 +495,19 @@ class McpSessionManager:
             fut = asyncio.run_coroutine_threadsafe(
                 self._ensure_connected_async(enable_browser_flow=enable_browser_flow), self._loop
             )
+            logger.info("MCP ensure_connected: bridging to loop")
             fut.result(timeout=self._connect_timeout + 10)
+            logger.info("MCP ensure_connected: bridge complete")
         except TimeoutError:
             logger.warning("MCP connect did not finish within the timeout")
         except BaseException as exc:  # noqa: BLE001 - a broken server must never break chat
             logger.warning("MCP connect failed: %s", _friendly_error(exc))
 
+    _call_count: int = 0
+
     async def _ensure_connected_async(self, enable_browser_flow: bool = False) -> None:
+        self._call_count += 1
+        logger.info("MCP _ensure_connected_async START call_count=%d", self._call_count)
         if self._closing:
             return
         try:
@@ -552,6 +558,7 @@ class McpSessionManager:
                 self._connecting.pop(server_id, None)
 
         await asyncio.gather(*(connect_one(s) for s in pending), return_exceptions=True)
+        logger.info("MCP _ensure_connected_async END call_count=%d _connecting=%d _servers=%d", self._call_count, len(self._connecting), len(self._servers))
 
     def _in_fail_cooldown(self, server_id: str) -> bool:
         """Whether a failed connect happened recently enough to skip retrying."""

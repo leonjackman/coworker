@@ -7,10 +7,12 @@ import sqlite3
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable, Iterable
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
 
 def _llm_stream_chunk_timeout() -> float:
     """Timeout (seconds) for how long the LLM stream may pause between chunks.
@@ -22,23 +24,33 @@ def _llm_stream_chunk_timeout() -> float:
         return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "300.0"))
     except (TypeError, ValueError):
         return 300.0
-from pathlib import Path
-from typing import Any, AsyncGenerator, Iterable, Literal, TypedDict
+
+
+from typing import Any, Literal
 from typing_extensions import NotRequired
 
-from pydantic import BaseModel, Field
-from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, Runtime
+from langchain_core.messages import SystemMessage
+from pydantic import BaseModel, Field
 
+from .checkpoints import CheckpointManager
+from .changes import ChangeStore
 from .config import BackendSettings
 from .mcp.mcp import McpManager
 from .providers import ProviderEntry, ProviderManager
-from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
-from .changes import ChangeStore
 from .sessions import SessionStore
-from .workspace import ALLOWED_COMMANDS, COMMAND_APPROVAL_FILENAME, TOOL_AUDIT_FILENAME, CommandApprovalStore, Workspace, fingerprint_path_for, workspace_git_branch, workspace_git_diff
-from .checkpoints import CheckpointManager
+from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
+from .workspace import (
+    COMMAND_APPROVAL_FILENAME,
+    READ_ONLY_COMMANDS,
+    TOOL_AUDIT_FILENAME,
+    CommandApprovalStore,
+    Workspace,
+    fingerprint_path_for,
+    workspace_git_branch,
+    workspace_git_diff,
+)
 
 AgentMode = Literal["single"]
 Language = Literal["zh", "en"]
@@ -479,7 +491,9 @@ def build_workspace_tools(
                 try:
                     skill_manager.refresh()
                 except Exception:  # refresh must not mask the install result
-                    pass
+                    import logging
+
+                    logging.getLogger(__name__).exception("Failed to refresh skill catalog after install")
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "install_skill")
@@ -676,7 +690,7 @@ def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
         return ""
     try:
         args = json.loads(input_raw)
-    except Exception:
+    except json.JSONDecodeError:
         return ""
     if not isinstance(args, dict):
         return ""
@@ -697,15 +711,6 @@ def _change_to_public(change: dict[str, Any]) -> dict[str, Any]:
     return public
 
 
-def _command_digest_from_tool_call(tool_call: Any) -> str:
-    args = tool_call.get("args") if isinstance(tool_call, dict) else {}
-    command = args.get("command") if isinstance(args, dict) else None
-    cwd = str(args.get("cwd") or "") if isinstance(args, dict) else ""
-    if isinstance(command, list) and all(isinstance(part, str) for part in command):
-        return Workspace.command_digest(command, cwd)
-    return ""
-
-
 def _is_external_path_candidate(file_path: str, workspace_root: Path) -> bool:
     """Lightweight: resolve path against workspace_root, check containment.
     
@@ -714,7 +719,7 @@ def _is_external_path_candidate(file_path: str, workspace_root: Path) -> bool:
     if not file_path or not file_path.strip():
         return False
     path_str = file_path.strip()
-    if path_str.startswith("/") or path_str.startswith("~"):
+    if path_str.startswith(("/", "~")):
         try:
             resolved = Path(path_str).expanduser().resolve()
             if resolved != workspace_root and workspace_root not in resolved.parents:
@@ -728,22 +733,6 @@ def _is_external_path_candidate(file_path: str, workspace_root: Path) -> bool:
     except (OSError, ValueError):
         return False
     return False
-
-
-def _command_is_allowed(tool_call: Any) -> bool:
-    """Whether this tool call's executable can pass the workspace allowlist.
-
-    Used to avoid prompting the user to approve a command that the tool layer
-    will refuse regardless of the decision.
-    """
-    args = tool_call.get("args") if isinstance(tool_call, dict) else {}
-    command = args.get("command") if isinstance(args, dict) else None
-    if not isinstance(command, list) or not command:
-        return True
-    executable = command[0]
-    if not isinstance(executable, str) or not executable:
-        return True
-    return Path(executable).name in ALLOWED_COMMANDS
 
 
 class _DynamicInterruptOn(dict):
@@ -830,97 +819,107 @@ def command_approval_middleware(
     workspace_root = workspace.root if workspace is not None else None
     from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
 
-    def needs_command_approval(req: Any) -> bool:
+    def _is_read_only_command(command_list: list[str]) -> bool:
+        if not command_list:
+            return False
+        return Path(command_list[0]).name in READ_ONLY_COMMANDS
+
+    def _needs_command_approval(req: Any) -> bool:
         state = req.state
-        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
+        if phase != "execute":
             return False
         autonomy = normalize_autonomy(state.get("autonomy"))
-        if autonomy != "supervised":
-            # guarded runs allowlisted commands freely; autonomous never asks.
+        if autonomy in ("guarded", "autonomous"):
             return False
-        # Only ask for commands that can actually run (allowlist members);
-        # out-of-allowlist commands are refused by the tool layer regardless.
-        if not _command_is_allowed(req.tool_call):
-            return False
-        if approval_store is not None:
-            digest = _command_digest_from_tool_call(req.tool_call)
-            if digest and approval_store.is_always_allowed(digest):
-                return False
-        return True
+        # read-only commands in supervised → direct pass (ls, cat, head, etc.)
+        tool_input = req.tool_call.get("args", {}) if isinstance(req.tool_call, dict) else {}
+        command_val = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+        if isinstance(command_val, list):
+            _parts = command_val if command_val else []
+        elif isinstance(command_val, str):
+            _parts = command_val.split() if command_val else []
+        else:
+            _parts = []
+        return not _is_read_only_command(_parts)
 
-    def needs_write_approval(req: Any) -> bool:
+    def _needs_write_approval(req: Any) -> bool:
         state = req.state
-        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
+        if phase != "execute":
             return False
         autonomy = normalize_autonomy(state.get("autonomy"))
         if autonomy == "autonomous":
-            return False  # autonomous → all writes direct
-        
+            return False
         if autonomy == "supervised":
-            return True  # supervised → all writes HITL
-        
-        # guarded: only external writes need HITL
+            return True
         if autonomy == "guarded" and workspace_root is not None:
-            tool_name = str(req.tool_call.name if hasattr(req, "tool_call") else "")
-            file_path = _path_from_tool_input(tool_name, str(getattr(req, "input", {}) or ""))
-            if file_path and _is_external_path_candidate(file_path, workspace_root):
-                return True  # external write → HITL
-            return False   # internal write → direct pass
-        
-        return True  # fallback for unknown modes
+            tool_args = req.tool_call.get("args", {}) if isinstance(req.tool_call, dict) else {}
+            file_path = str(tool_args.get("file_path", "") or "") if isinstance(tool_args, dict) else ""
+            return file_path and _is_external_path_candidate(file_path, workspace_root)
+        return False
 
-    def needs_install_skill_approval(req: Any) -> bool:
-        # Installing a skill writes OUTSIDE the workspace (~/.agents/skills) and
-        # persists across sessions. Ask in supervised AND guarded modes (an
-        # out-of-workspace write is a boundary crossing); autonomous never asks.
+    def _needs_mcp_approval(req: Any) -> bool:
         state = req.state
-        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
-            return False
-        return normalize_autonomy(state.get("autonomy")) in ("supervised", "guarded")
-
-    def needs_memory_approval(req: Any) -> bool:
-        # Long-term memory writes persist across sessions, so in supervised
-        # mode the user must confirm each write; guarded/autonomous allow it.
-        state = req.state
-        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
-            return False
-        return normalize_autonomy(state.get("autonomy")) == "supervised"
-
-    def needs_ask_user(req: Any) -> bool:
-        # In fully-autonomous execution the agent must not interrupt the user.
-        # The tool is still registered so a stray call resolves cleanly, but it
-        # must not raise an HITL interrupt here.
-        state = req.state
-        if normalize_phase(state.get("phase"), state.get("work_mode")) == "execute" and normalize_autonomy(state.get("autonomy")) == "autonomous":
-            return False
-        return True
-
-    def needs_mcp_approval(req: Any) -> bool:
-        state = req.state
-        # MCP tools are execute-phase only (the phase gate hides them in
-        # discuss); this is belt-and-braces for a stray call.
         if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
             return False
         policy = _mcp_policy_for(req.tool_call)
         if policy is None:
             return False
-        if policy.get("trusted"):
-            return False
-        if policy.get("read_only"):
+        if policy.get("trusted") or policy.get("read_only"):
             return False
         autonomy = normalize_autonomy(state.get("autonomy"))
         if autonomy == "autonomous":
             return False
         if autonomy == "guarded":
-            # Guarded only stops for calls the server itself flags destructive.
             annotations = policy.get("annotations") or {}
             if annotations.get("destructive") is not True:
                 return False
-        if approval_store is not None:
-            digest = str(policy.get("digest") or "")
-            if digest and approval_store.is_always_allowed(digest):
-                return False
-        return True
+        return not (policy.get("digest") and approval_store is not None and approval_store.is_always_allowed(policy["digest"]))
+
+    def _needs_sensitive_approval(req: Any) -> bool:
+        state = req.state
+        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+            return False
+        autonomy = normalize_autonomy(state.get("autonomy"))
+        # memory + install_skill: HITL for supervised + guarded, direct pass for autonomous
+        return autonomy != "autonomous"
+
+    def _needs_ask_user(req: Any) -> bool:
+        state = req.state
+        return not (normalize_phase(state.get("phase"), state.get("work_mode")) == "execute" and normalize_autonomy(state.get("autonomy")) == "autonomous")
+
+    write_configs: dict[str, Any] = {}
+    for tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
+        write_configs[tool_name] = {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to modify a file.",
+            "when": _needs_write_approval,
+        }
+
+    static_configs: dict[str, Any] = {**write_configs,
+        "run_command": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker needs approval before running this workspace command.",
+            "when": _needs_command_approval,
+        },
+        "memory": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to update its long-term memory for this project.",
+            "when": _needs_sensitive_approval,
+        },
+        "install_skill": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to install a new skill. Installing persists across "
+            "sessions and injects the skill's instructions into future conversations.",
+            "when": _needs_sensitive_approval,
+        },
+        "ask_user": {
+            "allowed_decisions": ["respond", "reject"],
+            "description": "Coworker asks the user a question that needs an answer.",
+            "when": _needs_ask_user,
+        },
+    }
 
     def _mcp_policy_for(tool_call: Any) -> dict[str, Any] | None:
         if mcp_policy is None:
@@ -944,46 +943,11 @@ def command_approval_middleware(
         return {
             "allowed_decisions": ["approve", "reject"],
             "description": _mcp_interrupt_description,
-            "when": needs_mcp_approval,
+            "when": _needs_mcp_approval,
         }
-
-    write_configs: dict[str, Any] = {}
-    for tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
-        write_configs[tool_name] = {
-            "allowed_decisions": ["approve", "reject"],
-            "when": needs_write_approval,
-        }
-
-    static_configs: dict[str, Any] = {
-        "run_command": {
-            "allowed_decisions": ["approve", "reject"],
-            "description": "Coworker needs approval before running this workspace command.",
-            "when": needs_command_approval,
-        },
-        "memory": {
-            "allowed_decisions": ["approve", "reject"],
-            "description": "Coworker wants to update its long-term memory for this project.",
-            "when": needs_memory_approval,
-        },
-        **write_configs,
-        "install_skill": {
-            "allowed_decisions": ["approve", "reject"],
-            "description": "Coworker wants to install a new skill. Installing persists across "
-            "sessions and injects the skill's instructions into future conversations.",
-            "when": needs_install_skill_approval,
-        },
-        "ask_user": {
-            "allowed_decisions": ["respond", "reject"],
-            "description": "Coworker asks the user a question that needs an answer.",
-            "when": needs_ask_user,
-        },
-    }
 
     hitl = HumanInTheLoopMiddleware(interrupt_on=static_configs)
     if mcp_policy is not None:
-        # ``HumanInTheLoopMiddleware`` normalizes ``interrupt_on`` in its
-        # constructor, so the dynamic mapping is swapped in afterwards, seeded
-        # with the already-resolved static configs.
         hitl.interrupt_on = _DynamicInterruptOn(hitl.interrupt_on, resolve_mcp_config)
     return [hitl]
 
@@ -1015,8 +979,8 @@ def interrupt_action_kind(
         try:
             if mcp_policy(name) is not None:
                 return "mcp"
-        except Exception:  # noqa: BLE001 - classification must never break a run
-            pass
+        except Exception:
+            logger.exception("mcp_policy lookup failed for name=%r", name)
     return "command"
 
 
@@ -2902,7 +2866,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             decision = approval_rec.get("decision") or {}
             if decision.get("type") == "approve":
                 tool_name = str(approval_rec.get("tool_name", ""))
-                if tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
+                if tool_name in ("write_file", "replace_in_file", "apply_text_edits", "run_command"):
                     self.workspace._allow_external_write = True
                     break
 
