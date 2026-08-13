@@ -1983,6 +1983,12 @@ function App() {
   const deleteSession = async (sessionIdToDelete: string) => {
     try {
       await chatService.deleteSession(sessionIdToDelete);
+      // 清理被删除会话所属项目的 activeProjectId（先于 sessionId 清理，避免中间状态导致 currentProjectId 指向已删除项目）
+      const deletedSessionProject = sessions.find((s) => s.id === sessionIdToDelete)?.project_id;
+      if (deletedSessionProject && activeProjectId === deletedSessionProject) {
+        setActiveProjectId(undefined);
+        pendingProjectIdRef.current = undefined;
+      }
       if (sessionIdRef.current === sessionIdToDelete) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
@@ -1993,17 +1999,10 @@ function App() {
       }
       // 清理被删除会话在所有上下文中的消息
       setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionIdToDelete));
-      // 清理被删除会话所属项目的 activeProjectId
-      const deletedSessionProject = sessions.find((s) => s.id === sessionIdToDelete)?.project_id;
-      if (deletedSessionProject && activeProjectId === deletedSessionProject) {
-        setActiveProjectId(undefined);
-        pendingProjectIdRef.current = undefined;
-      }
       abortStreamFor(sessionIdToDelete);
       requestSeqRef.current += 1;
       setPendingRequests([]);
-      await refreshSessions();
-      await refreshProjects();
+      await Promise.all([refreshSessions(), refreshProjects()]);
     } catch (error) {
       console.error('Failed to delete session:', error);
       window.alert(error instanceof Error ? error.message : 'Failed to delete session');
@@ -2050,7 +2049,13 @@ function App() {
       const sessionsInProject = sessions.filter((session) => session.project_id === projectId);
       await chatService.deleteProject(projectId);
       const deletedSessionIds = new Set(sessionsInProject.map(s => s.id));
-      if (sessionsInProject.some(s => sessionIdRef.current === s.id)) {
+      // 如果当前 activeProject 就是该项目，无条件清空
+      if (activeProjectId === projectId) {
+        setActiveProjectId(undefined);
+        pendingProjectIdRef.current = undefined;
+      }
+      // 如果当前正在编辑该项目内的会话，清空 sessionId 和相关状态
+      if (sessionsInProject.some(s => s.id === sessionIdRef.current)) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
         setInput('');
@@ -2059,12 +2064,7 @@ function App() {
       }
       // 清理所有属于该项目的会话的消息
       setMessages((current) => current.filter((m) => !m.sessionId || !deletedSessionIds.has(m.sessionId)));
-      if (activeProjectId === projectId) {
-        setActiveProjectId(undefined);
-        pendingProjectIdRef.current = undefined;
-      }
-      await refreshSessions();
-      await refreshProjects();
+      await Promise.all([refreshSessions(), refreshProjects()]);
     } catch (error) {
       console.error('Failed to delete project:', error);
       window.alert(error instanceof Error ? error.message : 'Failed to delete project');
@@ -2406,6 +2406,11 @@ function App() {
         setBranchStatus(null);
         return;
       }
+      const projectExists = projects.some((p) => p.id === currentProjectId);
+      if (!projectExists) {
+        setBranchStatus(null);
+        return;
+      }
       try {
         const res = await chatService.getWorkspaceBranch(currentProjectId);
         if (!cancelled) setBranchStatus({ isRepo: res.is_repo, branch: res.branch });
@@ -2422,7 +2427,7 @@ function App() {
       clearInterval(interval);
       window.removeEventListener('focus', onFocus);
     };
-  }, [currentProjectId]);
+  }, [currentProjectId, projects]);
 
   const changeThemeSettings = (nextSettings: ThemeSettings) => {
     setThemeSettingsState(nextSettings);
