@@ -706,6 +706,30 @@ def _command_digest_from_tool_call(tool_call: Any) -> str:
     return ""
 
 
+def _is_external_path_candidate(file_path: str, workspace_root: Path) -> bool:
+    """Lightweight: resolve path against workspace_root, check containment.
+    
+    Returns True if path is likely outside, False if inside or undeterminable.
+    """
+    if not file_path or not file_path.strip():
+        return False
+    path_str = file_path.strip()
+    if path_str.startswith("/") or path_str.startswith("~"):
+        try:
+            resolved = Path(path_str).expanduser().resolve()
+            if resolved != workspace_root and workspace_root not in resolved.parents:
+                return True
+        except (OSError, ValueError):
+            return False
+    try:
+        resolved = (workspace_root / path_str).resolve()
+        if resolved != workspace_root and workspace_root not in resolved.parents:
+            return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
 def _command_is_allowed(tool_call: Any) -> bool:
     """Whether this tool call's executable can pass the workspace allowlist.
 
@@ -776,6 +800,7 @@ def _mcp_interrupt_description(tool_call: Any, state: Any, runtime: Any) -> str:
 def command_approval_middleware(
     approval_store: CommandApprovalStore | None = None,
     mcp_policy: Callable[[str], dict[str, Any] | None] | None = None,
+    workspace: Any | None = None,  # NEW: for external write detection in guarded mode
 ) -> list[Any]:
     """Always-mounted HITL middleware; approval decisions live in ``when``
     predicates that read phase/autonomy from agent state.
@@ -802,6 +827,7 @@ def command_approval_middleware(
       the entire meaning of the trust toggle), and "always allow" adds the
       individual tool to the approval allowlist.
     """
+    workspace_root = workspace.root if workspace is not None else None
     from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
 
     def needs_command_approval(req: Any) -> bool:
@@ -826,7 +852,22 @@ def command_approval_middleware(
         state = req.state
         if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
             return False
-        return normalize_autonomy(state.get("autonomy")) == "supervised"
+        autonomy = normalize_autonomy(state.get("autonomy"))
+        if autonomy == "autonomous":
+            return False  # autonomous → all writes direct
+        
+        if autonomy == "supervised":
+            return True  # supervised → all writes HITL
+        
+        # guarded: only external writes need HITL
+        if autonomy == "guarded" and workspace_root is not None:
+            tool_name = str(req.tool_call.name if hasattr(req, "tool_call") else "")
+            file_path = _path_from_tool_input(tool_name, str(getattr(req, "input", {}) or ""))
+            if file_path and _is_external_path_candidate(file_path, workspace_root):
+                return True  # external write → HITL
+            return False   # internal write → direct pass
+        
+        return True  # fallback for unknown modes
 
     def needs_install_skill_approval(req: Any) -> bool:
         # Installing a skill writes OUTSIDE the workspace (~/.agents/skills) and
@@ -2035,6 +2076,7 @@ def build_coworker_agent_graph(
     mcp_session_manager: Any | None = None,
     skill_manager: Any | None = None,
     memory_manager: Any | None = None,
+    workspace: Any | None = None,  # NEW: for external write HITL bridge
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -2089,7 +2131,7 @@ def build_coworker_agent_graph(
         # Register the goal-completion tool in the graph's tool registry so the
         # tool node can execute it (the middleware also exposes it to the model).
         tools = [*tools, _goal_tools()[0]]
-    middleware.extend(command_approval_middleware(approval_store, mcp_middleware.tool_policy))
+    middleware.extend(command_approval_middleware(approval_store, mcp_middleware.tool_policy, workspace=workspace))
 
     middleware.append(mcp_middleware)
     phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names
@@ -2234,6 +2276,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             mcp_session_manager=self.mcp_session_manager,
             skill_manager=self.skill_manager,
             memory_manager=memory_view,
+            workspace=self.workspace,
         )
         try:
             result = graph.invoke(
@@ -2372,6 +2415,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 mcp_session_manager=self.mcp_session_manager,
                 skill_manager=self.skill_manager,
                 memory_manager=memory_view,
+                workspace=self.workspace,
             )
 
             inputs = {
@@ -2851,6 +2895,17 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         decision_types = ", ".join(str(item.get("type")) for item in decisions)
         self.trace_store.record("agent_activity", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
 
+        # If HITL approved write operations, mark the workspace so that
+        # resolve_write_path() will accept external paths during the resumed run.
+        approved_approvals = self.approval_store.list()
+        for approval_rec in approved_approvals:
+            decision = approval_rec.get("decision") or {}
+            if decision.get("type") == "approve":
+                tool_name = str(approval_rec.get("tool_name", ""))
+                if tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
+                    self.workspace._allow_external_write = True
+                    break
+
         config = agent_run_config(
             session_id=session_id, provider=self.provider_name, model=self.model_name,
             language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
@@ -2872,6 +2927,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 mcp_session_manager=self.mcp_session_manager,
                 skill_manager=self.skill_manager,
                 memory_manager=memory_view,
+                workspace=self.workspace,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
@@ -2907,6 +2963,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})
                 raise
+            finally:
+                # Reset so the flag cannot leak into subsequent turns or agent runs.
+                self.workspace._allow_external_write = False
 
         final_content = "".join(content_parts)
         final_content = _strip_plan_leak(final_content, parts)

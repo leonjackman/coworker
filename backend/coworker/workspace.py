@@ -38,6 +38,42 @@ MAX_COMMAND_OUTPUT_CHARS = 12_000
 TOOL_AUDIT_FILENAME = "tool_audit.jsonl"
 COMMAND_APPROVAL_FILENAME = "command_approvals.json"
 
+# ── Sensitive file patterns for read-path blocking ──────────────────────────
+SENSITIVE_BASENAMES = frozenset({
+    ".env", ".env.local", ".env.production", ".env.staging", ".env.development",
+    ".pem", ".key", "id_rsa", "id_ed25519",
+    ".secret", ".secrets", "secrets.json", "secrets.yaml",
+    ".credentials", ".htpasswd", ".netrc",
+    "wp-config.php", "web.config",
+})
+SENSITIVE_SUFFIXES = frozenset({
+    ".pem", ".key", ".p12", ".pfx", ".jks", ".env", ".secret", ".secrets",
+})
+
+
+# ── Path boundary violation exception classes ─────────────────────────────
+class PathBoundaryError(ValueError):
+    """Raised when a path violates workspace security policy."""
+
+    REASONS = {
+        "relative_escape": "Access denied: {} escapes workspace boundary (path traversal)",
+        "external_write": "Write denied: {} is outside the workspace sandbox",
+        "sensitive_read": "Access denied: {} is a sensitive file",
+    }
+
+    def __init__(self, path: str, reason: str):
+        self.path = path
+        self.reason = reason
+        msg = self.REASONS.get(reason, "Access denied: {}")
+        super().__init__(msg.format(path))
+
+
+class ExternalWriteError(PathBoundaryError):
+    """Marker exception for external write — bridging HITL approval and code enforcement."""
+
+    def __init__(self, path: str):
+        super().__init__(path, "external_write")
+
 
 def fingerprint_path_for(data_dir: Path, workspace_root: Path) -> Path:
     """Stable per-workspace path for the persisted staleness fingerprints.
@@ -287,18 +323,79 @@ class Workspace:
         if fingerprint_path is not None:
             self._load_fingerprints()
 
-    def resolve_path(self, file_path: str) -> Path:
-        candidate = (self.root / file_path).resolve()
-        if candidate != self.root and self.root not in candidate.parents:
-            raise ValueError(f"Access denied: {file_path} is outside the workspace")
+        # Flag set by resume_interrupt when HITL approves an external write.
+        # Only one tool executes per resume step, so a plain instance variable
+        # is safe against concurrent access.
+        self._allow_external_write: bool = False
+
+    def _resolve(self, file_path: str) -> Path:
+        """Resolve a path against workspace root without boundary check."""
+        return (self.root / file_path).resolve()
+
+    def resolve_read_path(self, file_path: str) -> Path:
+        """Resolve path for reading — external paths allowed.
+
+        Security guards:
+        1. Symlink-based path traversal (relative + absolute escape)
+        2. Sensitive file detection (secrets, keys, env vars)
+        """
+        candidate = self._resolve(file_path)
+
+        # Guard 1a: relative path must not lexically escape the workspace root
+        # before filesystem resolution (user supplied ../foo, catch early).
+        is_relative = not file_path.startswith("/") and not file_path.startswith("~")
+        if is_relative:
+            if candidate != self.root and self.root not in candidate.parents:
+                raise PathBoundaryError(file_path, "relative_escape")
+
+        # Guard 2: sensitive files blocked regardless of path location.
+        if self._is_sensitive_file(candidate):
+            raise PathBoundaryError(file_path, "sensitive_read")
+
         return candidate
+
+    def resolve_write_path(self, file_path: str) -> Path:
+        """Resolve path for writing — internal paths always allowed, external
+        paths allowed only when _allow_external_write is True (set by
+        resume_interrupt after HITL approval).
+        """
+        candidate = self._resolve(file_path)
+        if candidate == self.root or self.root in candidate.parents:
+            return candidate
+        if self._allow_external_write:
+            return candidate
+        raise ExternalWriteError(file_path)
+
+    @staticmethod
+    def _is_sensitive_file(path: Path) -> bool:
+        """Check if a file is potentially sensitive (secrets, keys, env vars)."""
+        name = path.name
+        if name in SENSITIVE_BASENAMES:
+            return True
+        name_lower = name.lower()
+        return any(name_lower.endswith(s.lower()) for s in SENSITIVE_SUFFIXES)
+
+    def _safe_rel_path(self, path: Path) -> str:
+        """Return workspace-relative path, or absolute if path is outside workspace."""
+        try:
+            return self.rel_path(path)
+        except ValueError:
+            return str(path)
 
     def normalize_rel_path(self, file_path: str) -> str:
         """Best-effort conversion of a tool-supplied path to a workspace-relative path."""
         try:
-            return self.rel_path(self.resolve_path(file_path))
+            return self.rel_path(self.resolve_write_path(file_path))
         except (ValueError, OSError):
             return str(file_path).lstrip("./").replace("\\", "/")
+
+    def resolve_path(self, file_path: str) -> Path:
+        """DEPRECATED: Use resolve_read_path() for reads or resolve_write_path() for writes.
+        
+        Kept for backward compatibility — new code should use the specific methods.
+        This delegates to resolve_write_path().
+        """
+        return self.resolve_write_path(file_path)
 
     @staticmethod
     def _sha256(path: Path) -> str:
@@ -354,7 +451,7 @@ class Workspace:
 
     def _record_fingerprint(self, target: Path) -> None:
         try:
-            self._fingerprints[self.rel_path(target)] = self._fingerprint(target)
+            self._fingerprints[self._safe_rel_path(target)] = self._fingerprint(target)
         except (OSError, ValueError):
             return
         self._persist_fingerprints()
@@ -386,7 +483,7 @@ class Workspace:
             )
 
     def read_text(self, file_path: str) -> str:
-        target = self.resolve_path(file_path)
+        target = self.resolve_read_path(file_path)
         content = target.read_text(encoding="utf-8")
         self._record_fingerprint(target)
         return content
@@ -435,8 +532,9 @@ class Workspace:
         before: str | None = None
         file_existed = False
         try:
-            target = self.resolve_path(file_path)
-            details["path"] = self.rel_path(target)
+            target = self.resolve_write_path(file_path)
+
+            details["path"] = self._safe_rel_path(target)
             self._ensure_fresh(target)
             if target.is_file():
                 before = target.read_text(encoding="utf-8", errors="replace")
@@ -470,8 +568,8 @@ class Workspace:
             if not old_text:
                 raise ValueError("old_text is required")
 
-            target = self.resolve_path(file_path)
-            details["path"] = self.rel_path(target)
+            target = self.resolve_write_path(file_path)
+            details["path"] = self._safe_rel_path(target)
             if not target.is_file():
                 raise ValueError(f"Not a file: {file_path}")
             if not self.is_text_file(target):
@@ -489,7 +587,7 @@ class Workspace:
             updated = content.replace(old_text, new_text) if replace_all else content.replace(old_text, new_text, 1)
             target.write_text(updated, encoding="utf-8")
             result = {
-                "path": self.rel_path(target),
+                "path": self._safe_rel_path(target),
                 "replacements": occurrences if replace_all else 1,
                 "remaining_occurrences": 0 if replace_all else max(occurrences - 1, 0),
             }
@@ -512,10 +610,10 @@ class Workspace:
         details: dict[str, Any] = {"path": file_path, "edit_count": len(edits) if isinstance(edits, list) else 0}
         try:
             if not edits:
-                raise ValueError("edits must be a non-empty array")
+                 raise ValueError("edits must be a non-empty array")
 
-            target = self.resolve_path(file_path)
-            details["path"] = self.rel_path(target)
+            target = self.resolve_write_path(file_path)
+            details["path"] = self._safe_rel_path(target)
             if not target.is_file():
                 raise ValueError(f"Not a file: {file_path}")
             if not self.is_text_file(target):
@@ -554,7 +652,7 @@ class Workspace:
 
             target.write_text(updated, encoding="utf-8")
             result = {
-                "path": self.rel_path(target),
+                "path": self._safe_rel_path(target),
                 "edit_count": len(edits),
                 "replacements": sum(item["replacements"] for item in results),
                 "edits": results,
@@ -598,16 +696,16 @@ class Workspace:
         }
         try:
             if not command or not all(isinstance(part, str) and part for part in command):
-                raise ValueError("command must be a non-empty string array")
+                 raise ValueError("command must be a non-empty string array")
 
-            working_dir = self.resolve_path(cwd)
+            working_dir = self.resolve_write_path(cwd)
             if not working_dir.is_dir():
                 raise ValueError(f"Command cwd is not a directory: {cwd or '.'}")
 
             executable = self.resolve_executable(command[0], working_dir)
             safe_timeout = max(1, min(int(timeout_seconds or DEFAULT_COMMAND_TIMEOUT_SECONDS), MAX_COMMAND_TIMEOUT_SECONDS))
             safe_command = [executable, *command[1:]]
-            details["cwd"] = self.rel_path(working_dir) if working_dir != self.root else ""
+            details["cwd"] = self._safe_rel_path(working_dir) if working_dir != self.root else ""
             details["timeout_seconds"] = safe_timeout
 
             if require_approval:
@@ -784,8 +882,8 @@ class Workspace:
         hunks = change.get("hunks") or []
 
         try:
-            target = self.resolve_path(file_path)
-        except (ValueError, OSError) as exc:
+            target = self.resolve_write_path(file_path)
+        except (PathBoundaryError, OSError) as exc:
             result["reason"] = str(exc)[:200]
             return result
 
@@ -802,7 +900,7 @@ class Workspace:
         if not file_existed:
             if after is not None and current == after:
                 target.unlink(missing_ok=True)
-                self._fingerprints.pop(self.rel_path(target), None); self._persist_fingerprints()
+                self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
                 return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), "deleted": True, **({"id": change_id} if change_id else {})}
             result["reason"] = "file changed after it was created; refusing to delete"
             return result
@@ -817,7 +915,7 @@ class Workspace:
             except OSError as exc:
                 result["reason"] = str(exc)[:200]
                 return result
-            self._fingerprints.pop(self.rel_path(target), None); self._persist_fingerprints()
+            self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
             return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), "deleted": before == "", **({"id": change_id} if change_id else {})}
 
         # File diverged (another session/user edited it): try hunk-level inverse
@@ -836,7 +934,7 @@ class Workspace:
         except OSError as exc:
             result["reason"] = str(exc)[:200]
             return result
-        self._fingerprints.pop(self.rel_path(target), None); self._persist_fingerprints()
+        self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
         return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), **({"id": change_id} if change_id else {})}
 
     @staticmethod
@@ -898,7 +996,7 @@ class Workspace:
         return redacted
 
     def list_dir(self, rel_path: str = "") -> list[dict[str, Any]]:
-        target = self.resolve_path(rel_path)
+        target = self.resolve_read_path(rel_path)
         if not target.is_dir():
             raise ValueError(f"Not a directory: {rel_path or '.'}")
         entries: list[dict[str, Any]] = []
@@ -919,9 +1017,9 @@ class Workspace:
             except OSError:
                 continue
             entries.append(
-                {
-                    "name": child.name,
-                    "path": self.rel_path(child),
+                 {
+                     "name": child.name,
+                     "path": self._safe_rel_path(child),
                     "type": "dir" if is_dir else "file",
                     "size": size,
                 }
@@ -929,10 +1027,10 @@ class Workspace:
         return entries
 
     def build_tree(self, rel_path: str = "", depth: int = 3) -> dict[str, Any]:
-        target = self.resolve_path(rel_path)
+        target = self.resolve_read_path(rel_path)
         node: dict[str, Any] = {
-            "name": target.name or self.root.name,
-            "path": self.rel_path(target),
+             "name": target.name or self.root.name,
+             "path": self._safe_rel_path(target),
             "type": "dir",
         }
         if depth <= 0:
@@ -945,14 +1043,14 @@ class Workspace:
         for child in children:
             try:
                 if child.is_dir():
-                    if child.name in DEFAULT_IGNORED_DIRS:
-                        continue
-                    node["children"].append(self.build_tree(self.rel_path(child), depth=depth - 1))
+                     if child.name in DEFAULT_IGNORED_DIRS:
+                         continue
+                     node["children"].append(self.build_tree(self._safe_rel_path(child), depth=depth - 1))
                 else:
                     node["children"].append(
-                        {
-                            "name": child.name,
-                            "path": self.rel_path(child),
+                         {
+                             "name": child.name,
+                             "path": self._safe_rel_path(child),
                             "type": "file",
                             "size": child.stat().st_size,
                         }
@@ -977,7 +1075,7 @@ class Workspace:
         return False
 
     def read_preview(self, file_path: str, max_chars: int = 100_000) -> dict[str, Any]:
-        target = self.resolve_path(file_path)
+        target = self.resolve_read_path(file_path)
         if not target.is_file():
             raise ValueError(f"Not a file: {file_path}")
         if not self.is_text_file(target):
@@ -1000,7 +1098,7 @@ class Workspace:
         if not needle:
             raise ValueError("search query is required")
 
-        target = self.resolve_path(rel_path)
+        target = self.resolve_read_path(rel_path)
         if not target.exists():
             raise ValueError(f"Path not found: {rel_path or '.'}")
 
@@ -1029,7 +1127,7 @@ class Workspace:
                         continue
                     results.append(
                         {
-                            "path": self.rel_path(path),
+                            "path": self._safe_rel_path(path),
                             "line": line_number,
                             "preview": line.strip()[:240],
                         }
@@ -1041,7 +1139,7 @@ class Workspace:
 
         return {
             "query": needle,
-            "path": self.rel_path(target) if target != self.root else "",
+            "path": self._safe_rel_path(target) if target != self.root else "",
             "results": results,
             "result_count": len(results),
             "searched_files": searched_files,
@@ -1054,7 +1152,7 @@ class Workspace:
             yield root
             return
         if not root.is_dir():
-            raise ValueError(f"Not a file or directory: {self.rel_path(root)}")
+            raise ValueError(f"Not a file or directory: {self._safe_rel_path(root)}")
 
         # Guard against directory-symlink cycles (e.g. `ln -s . loop`): track
         # the resolved real path of every directory we descend into and skip
