@@ -57,9 +57,7 @@ Language = Literal["zh", "en"]
 WorkMode = Literal["plan", "build"]
 Phase = Literal["discuss", "execute"]
 Autonomy = Literal["supervised", "guarded", "autonomous"]
-# Backward-compatible alias: legacy "default"/"full" access maps to
-# guarded/autonomous autonomy (see autonomy_from_access).
-AccessMode = Literal["default", "full"]
+
 
 SYSTEM_PROMPT = (
     "You are Coworker, a local coding assistant. "
@@ -245,28 +243,14 @@ class AgentStreamRuntime(ABC):
 def language_name(language: Language) -> str:
     return "Chinese" if language == "zh" else "English"
 
-
 def normalize_work_mode(work_mode: str | None) -> WorkMode:
     return "plan" if work_mode == "plan" else "build"
-
-
-def normalize_access_mode(access_mode: str | None) -> AccessMode:
-    return "full" if access_mode == "full" else "default"
 
 
 def normalize_autonomy(autonomy: str | None) -> Autonomy:
     if autonomy in ("supervised", "guarded", "autonomous"):
         return autonomy
     return "guarded"
-
-
-def autonomy_from_access(access_mode: str | None) -> Autonomy:
-    """Map the legacy access_mode switch onto the autonomy axis.
-
-    ``default`` -> ``guarded`` (Codex ``on-request``) and ``full`` ->
-    ``autonomous`` (Codex ``never``). Kept so older API payloads keep working.
-    """
-    return "autonomous" if normalize_access_mode(access_mode) == "full" else "guarded"
 
 
 def normalize_phase(phase: str | None, work_mode: str | None = None) -> Phase:

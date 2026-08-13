@@ -288,7 +288,6 @@ export interface ChatRequest {
   language: Language;
   work_mode?: WorkMode;
   autonomy?: Autonomy;
-  access_mode?: 'default' | 'full';
   goal_mode?: boolean;
   goal_text?: string;
   provider_id?: string;

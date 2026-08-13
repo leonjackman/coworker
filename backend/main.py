@@ -355,7 +355,6 @@ class ChatRequest(BaseModel):
     mode: AgentMode = "single"
     language: Language = "zh"
     work_mode: Optional[str] = None
-    access_mode: Optional[str] = None
     autonomy: Optional[str] = None
     goal_mode: Optional[bool] = None
     goal_text: Optional[str] = None
@@ -388,16 +387,10 @@ def _resolve_references(referenced_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def resolve_request_autonomy(request) -> str:
-    """Effective autonomy for a chat request.
-
-    Prefers the explicit ``autonomy`` field and falls back to mapping the
-    legacy ``access_mode`` switch (default->guarded, full->autonomous).
-    """
+    """Effective autonomy for a chat request."""
     if getattr(request, "autonomy", None):
         return normalize_autonomy(request.autonomy)
-    from coworker.agents import autonomy_from_access
-
-    return autonomy_from_access(getattr(request, "access_mode", None))
+    return "guarded"
 
 class ChatResponse(BaseModel):
     response: str
@@ -1755,9 +1748,7 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
 class EditMessageRequest(BaseModel):
     content: str
     work_mode: Optional[str] = None
-    access_mode: Optional[str] = None
     autonomy: Optional[str] = None
-    language: Language = "zh"
 
 
 class RegenerateRequest(BaseModel):
@@ -2039,13 +2030,9 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     work_mode = normalize_work_mode(request.work_mode or session.work_mode)
     if request.autonomy:
         autonomy = normalize_autonomy(request.autonomy)
-    elif request.access_mode:
-        from coworker.agents import autonomy_from_access
-
-        autonomy = autonomy_from_access(request.access_mode)
     else:
         autonomy = normalize_autonomy(session.autonomy)
-    if request.work_mode or request.autonomy or request.access_mode:
+    if request.work_mode or request.autonomy:
         try:
             session_store.update_modes(session_id, work_mode, autonomy)
         except KeyError:
