@@ -1749,6 +1749,7 @@ class EditMessageRequest(BaseModel):
     content: str
     work_mode: Optional[str] = None
     autonomy: Optional[str] = None
+    language: Language = "zh"
 
 
 class RegenerateRequest(BaseModel):
