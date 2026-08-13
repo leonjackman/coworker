@@ -225,9 +225,18 @@ class CheckpointManager:
             # transaction).
             conn.commit()
             try:
-                stats["vacuumed"] = self._ensure_incremental_autovacuum(conn)
-                conn.execute("PRAGMA incremental_vacuum")
-                conn.commit()
+                self._ensure_incremental_autovacuum(conn)
+                for v_attempt in range(5):
+                    try:
+                        conn.execute("PRAGMA incremental_vacuum")
+                        conn.commit()
+                        stats["vacuumed"] = True
+                        break
+                    except sqlite3.OperationalError:
+                        if v_attempt >= 4:
+                            logger.warning("sweep: vacuum step failed after %d attempts", v_attempt + 1)
+                            break
+                        time.sleep(0.5)
             except sqlite3.OperationalError as exc:
                 logger.warning("sweep: vacuum step skipped (writer lock): %s", exc)
         finally:
@@ -251,9 +260,18 @@ class CheckpointManager:
             conn.commit()
             if self._has_checkpoints_table(conn):
                 try:
-                    stats["vacuumed"] = self._ensure_incremental_autovacuum(conn)
-                    conn.execute("PRAGMA incremental_vacuum")
-                    conn.commit()
+                    self._ensure_incremental_autovacuum(conn)
+                    for v_attempt in range(5):
+                        try:
+                            conn.execute("PRAGMA incremental_vacuum")
+                            conn.commit()
+                            stats["vacuumed"] = True
+                            break
+                        except sqlite3.OperationalError:
+                            if v_attempt >= 4:
+                                logger.warning("clear_all: vacuum step failed after %d attempts", v_attempt + 1)
+                                break
+                            time.sleep(0.5)
                 except sqlite3.OperationalError as exc:
                     logger.warning("clear_all: vacuum step skipped (writer lock): %s", exc)
         finally:
@@ -280,39 +298,30 @@ class CheckpointManager:
     # ------------------------------------------------------------------ #
     def delete_thread(self, session_id: str) -> None:
         """Delete one session's checkpoint thread. The DELETE is the important
-        part (the next run must start from scratch); disk reclaim via
-        ``incremental_vacuum`` is best-effort because it can be blocked by a
-        concurrent writer in a way that the busy handler does not always cover.
+        part (the next run must start from scratch); disk reclaim is done by the
+        periodic sweep instead of incrementally.
 
-        Uses a SHORT busy timeout and a couple of quick retries so a transient
-        writer lock fails fast (callers run this off the event loop) instead of
-        blocking for 30s+ per attempt. If it still cannot get a lock the delete
-        is skipped with a warning — the next rerun re-tries it.
+        Uses a generous busy timeout (matching the writer side) and several
+        retries with back-off so transient writer locks do not cause silent
+        skips.
         """
-        for attempt in range(2):
+        for attempt in range(5):
             try:
                 self._delete_thread_once(session_id)
                 return
             except sqlite3.OperationalError as exc:
-                if attempt >= 1:
+                if attempt >= 4:
                     logger.warning("delete_thread(%s) failed (writer lock): %s", session_id, exc)
                     return
-                time.sleep(0.2)
+                time.sleep(0.5 * (attempt + 1))
 
     def _delete_thread_once(self, session_id: str) -> None:
-        conn = self._connect(timeout=2.0, busy_timeout_ms=2000)
+        conn = self._connect(timeout=5.0, busy_timeout_ms=30000)
         try:
             if not self._has_checkpoints_table(conn):
                 return
             conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (session_id,))
             conn.execute("DELETE FROM writes WHERE thread_id = ?", (session_id,))
             conn.commit()
-            try:
-                conn.execute("PRAGMA incremental_vacuum")
-                conn.commit()
-            except sqlite3.OperationalError as exc:
-                # Best-effort reclaim: a transient writer lock must never
-                # turn a session mutation (rollback/edit/delete) into a 500.
-                logger.warning("incremental_vacuum skipped after delete_thread(%s): %s", session_id, exc)
         finally:
             conn.close()
