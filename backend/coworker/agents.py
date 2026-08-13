@@ -2988,8 +2988,11 @@ class AgentRuntimeRegistry:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
         self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
-        self.checkpoint_conn.commit()
-        self.checkpoint_conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        # Set auto_vacuum=FULL so SQLite automatically recycles free pages on commit.
+        # Must VACUUM after setting auto_vacuum — only VACUUM writes the PRAGMA
+        # value into the DB-file header for an existing database.
+        self.checkpoint_conn.execute("PRAGMA auto_vacuum=FULL")
+        self.checkpoint_conn.execute("VACUUM")
         self.checkpoint_conn.commit()
         self.checkpoint_conn.execute("PRAGMA busy_timeout=30000")
         self.checkpoint_conn.execute("PRAGMA synchronous=NORMAL")

@@ -32,10 +32,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CAP_PER_SESSION = 500
-DEFAULT_MAX_BYTES_PER_THREAD = 32 * 1024 * 1024  # 32 MB
+_DEFAULT_CAP_PER_SESSION = 500
+_DEFAULT_MAX_BYTES_PER_THREAD = 32 * 1024 * 1024  # 32 MB
 
 _AUTO_VACUUM_INCREMENTAL = 2
+_AUTO_VACUUM_FULL = 1
 
 
 class CheckpointManager:
@@ -52,8 +53,8 @@ class CheckpointManager:
         self,
         db_path: Path,
         sessions_dir: Path | None = None,
-        cap_per_session: int = DEFAULT_CAP_PER_SESSION,
-        max_bytes_per_thread: int = DEFAULT_MAX_BYTES_PER_THREAD,
+        cap_per_session: int = _DEFAULT_CAP_PER_SESSION,
+        max_bytes_per_thread: int = _DEFAULT_MAX_BYTES_PER_THREAD,
     ) -> None:
         self.db_path = Path(db_path)
         self.sessions_dir = Path(sessions_dir) if sessions_dir else None
@@ -79,22 +80,25 @@ class CheckpointManager:
         conn.execute("PRAGMA synchronous=NORMAL")
         # NOTE: do NOT re-apply ``PRAGMA auto_vacuum=INCREMENTAL`` here. It is a
         # persistent DB-file property (set once at startup by the registry's
-        # long-lived connection and by _ensure_incremental_autovacuum during the
+        # long-lived connection and by _ensure_autovacuum during the
         # sweep) and re-applying it per connection raises "database is locked"
         # while another writer (e.g. a streaming session's AsyncSqliteSaver) is
         # active — see the matching note in AgentRuntimeRegistry._open_sync_checkpointer.
         return conn
 
-    def _ensure_incremental_autovacuum(self, conn: sqlite3.Connection) -> bool:
-        """Migrate a legacy DB to auto_vacuum=INCREMENTAL. Returns True if a
+    def _ensure_autovacuum(self, conn: sqlite3.Connection) -> bool:
+        """Migrate a legacy DB to an auto-recycling mode. Returns True if a
         full VACUUM was run (so callers can log it)."""
         mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
         if mode == _AUTO_VACUUM_INCREMENTAL:
+            return False
+        if mode == _AUTO_VACUUM_FULL:
             return False
         # Requires no open transaction and rewrites the whole file — only safe
         # on the startup/idle sweep path.
         conn.execute("VACUUM")
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        conn.commit()  # writes the PRAGMA change into the new file header
         return True
 
     # ------------------------------------------------------------------ #
@@ -225,7 +229,7 @@ class CheckpointManager:
             # transaction).
             conn.commit()
             try:
-                self._ensure_incremental_autovacuum(conn)
+                self._ensure_autovacuum(conn)
                 for v_attempt in range(5):
                     try:
                         conn.execute("PRAGMA incremental_vacuum")
@@ -260,7 +264,7 @@ class CheckpointManager:
             conn.commit()
             if self._has_checkpoints_table(conn):
                 try:
-                    self._ensure_incremental_autovacuum(conn)
+                    self._ensure_autovacuum(conn)
                     for v_attempt in range(5):
                         try:
                             conn.execute("PRAGMA incremental_vacuum")
@@ -297,9 +301,8 @@ class CheckpointManager:
     # Whole-thread deletion (session deleted / rolled back / re-run)
     # ------------------------------------------------------------------ #
     def delete_thread(self, session_id: str) -> None:
-        """Delete one session's checkpoint thread. The DELETE is the important
-        part (the next run must start from scratch); disk reclaim is done by the
-        periodic sweep instead of incrementally.
+        """Delete one session's checkpoint thread. Also calls incremental_vacuum
+        to reclaim disk space after deletions.
 
         Uses a generous busy timeout (matching the writer side) and several
         retries with back-off so transient writer locks do not cause silent
@@ -323,5 +326,16 @@ class CheckpointManager:
             conn.execute("DELETE FROM checkpoints WHERE thread_id = ?", (session_id,))
             conn.execute("DELETE FROM writes WHERE thread_id = ?", (session_id,))
             conn.commit()
+            # Reclaim disk space after deletion. Uses a short retry loop so a
+            # transient writer lock doesn't leave space permanently unreclaimed.
+            for v_attempt in range(3):
+                try:
+                    conn.execute("PRAGMA incremental_vacuum")
+                    conn.commit()
+                    break
+                except sqlite3.OperationalError:
+                    if v_attempt >= 2:
+                        break
+                    time.sleep(0.2)
         finally:
             conn.close()
