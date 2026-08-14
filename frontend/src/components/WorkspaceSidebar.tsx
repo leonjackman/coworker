@@ -7,6 +7,8 @@ import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { Tooltip } from './ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
+import cwIconWhite from '../../../assets/brand/png/cw-icon-white.png';
+import cwIconBlack from '../../../assets/brand/png/cw-icon-black.png';
 import coworkerLogoBlack from '../../../assets/brand/png/coworker-logo-black.png';
 import coworkerLogoWhite from '../../../assets/brand/png/coworker-logo-white.png';
 
@@ -300,11 +302,16 @@ export function WorkspaceSidebar({
         onPointerDown={handleResizePointerDown}
       />
       <div className="sidebar__brand">
-        {!collapsed && (
+        {!collapsed ? (
           <span className="sidebar__brand-lockup" aria-label="CoWorker">
             <img className="sidebar__brand-logo sidebar__brand-logo--dark" src={coworkerLogoBlack} alt="CoWorker" />
             <img className="sidebar__brand-logo sidebar__brand-logo--light" src={coworkerLogoWhite} alt="" aria-hidden="true" />
           </span>
+        ) : (
+          <>
+            <img className="sidebar__brand-icon sidebar__brand-icon--dark" src={cwIconBlack} alt="CW" />
+            <img className="sidebar__brand-icon sidebar__brand-icon--light" src={cwIconWhite} alt="CW" />
+          </>
         )}
       </div>
 

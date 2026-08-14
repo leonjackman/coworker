@@ -327,8 +327,32 @@ body.sidebar-resizing {
   display: block;
   width: auto;
   max-width: 100%;
-  height: 18px;
+  height: 20px;
   object-fit: contain;
+}
+
+.sidebar__brand-icon {
+  display: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.sidebar__brand-icon--dark {
+  display: block;
+}
+
+.sidebar__brand-icon--light {
+  display: none;
+}
+
+:root[data-theme="dark"] .sidebar--collapsed .sidebar__brand-icon--light {
+  display: block;
+}
+
+:root[data-theme="dark"] .sidebar--collapsed .sidebar__brand-icon--dark {
+  display: none;
 }
 
 .sidebar__brand-logo--light {
