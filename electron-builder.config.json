@@ -32,6 +32,7 @@
     "createStartMenuShortcut": false
   },
   "mac": {
+    "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
     "target": [
       {
         "target": "dmg",
@@ -44,6 +45,7 @@
     "identity": "-"
   },
   "win": {
+    "artifactName": "${productName}-${version}-win-${arch}.${ext}",
     "target": [
       {
         "target": "nsis",
@@ -53,6 +55,7 @@
     "icon": "assets/brand/cw-icon-blue-white-background.png"
   },
   "linux": {
+    "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
     "target": [
       {
         "target": "AppImage",

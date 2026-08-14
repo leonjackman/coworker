@@ -50,7 +50,6 @@ jobs:
           name: mac-arm64
           path: |
             release/*.dmg
-            release/*.dmg.blockmap
             release/latest-mac.yml
           retention-days: 7
 
@@ -92,7 +91,6 @@ jobs:
           name: win-x64
           path: |
             release/*.exe
-            release/*.exe.blockmap
             release/latest.yml
           retention-days: 7
 
@@ -162,4 +160,4 @@ jobs:
         run: |
           ls -R release-artifacts
           mapfile -t FILES < <(find release-artifacts -type f)
-          gh release create "${{ github.ref_name }}" "${FILES[@]}" --generate-notes --title "Coworker ${{ github.ref_name }}"
+          gh release create "${{ github.ref_name }}" "${FILES[@]}" --generate-notes --title "CoWorker ${{ github.ref_name }}"
