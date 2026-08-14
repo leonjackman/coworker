@@ -894,7 +894,7 @@ function App() {
         }
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) {
-          localParts = event.parts;
+          localParts = mergeMessageParts(localParts, event.parts);
         }
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
