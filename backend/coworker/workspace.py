@@ -108,6 +108,7 @@ def set_tool_audit_retention(lines: int) -> None:
 
 ALLOWED_COMMANDS = {
     "cat",
+    "chmod",
     "find",
     "git",
     "ls",
