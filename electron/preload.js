@@ -147,4 +147,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearCheckpoints: () => ipcRenderer.invoke('checkpoints-clear'),
   getRetentionSettings: () => ipcRenderer.invoke('settings-retention-get'),
   saveRetentionSettings: (patch) => ipcRenderer.invoke('settings-retention-set', patch),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  onUpdateAvailable: (callback) => {
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on('app:update-available', listener);
+    return () => ipcRenderer.removeListener('app:update-available', listener);
+  },
+  onUpdateDownloaded: (callback) => {
+    const listener = (_event, info) => callback(info);
+    ipcRenderer.on('app:update-downloaded', listener);
+    return () => ipcRenderer.removeListener('app:update-downloaded', listener);
+  },
 });

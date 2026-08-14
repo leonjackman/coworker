@@ -678,5 +678,9 @@
   "memory.back": "返回",
   "memory.no_files": "暂无记忆文件。",
   "memory.no_path": "暂无文件",
-  "memory.updated": "更新于"
+  "memory.updated": "更新于",
+  "settings.about_group": "关于",
+  "settings.about_group_desc": "应用版本和更新设置。",
+  "settings.version": "版本",
+  "settings.check_for_updates": "检查更新"
 }

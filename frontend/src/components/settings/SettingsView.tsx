@@ -281,6 +281,27 @@ export function SettingsView({
               },
             ],
           },
+          {
+            id: 'about',
+            title: t('settings.about_group'),
+            description: t('settings.about_group_desc'),
+            items: [
+              {
+                id: 'version',
+                type: 'action',
+                label: t('settings.version'),
+                description: 'Electron / PyInstaller',
+                actionLabel: t('settings.check_for_updates'),
+                onAction: async () => {
+                  if (!window.electronAPI) return;
+                  const result = await window.electronAPI.checkForUpdates();
+                  if (result.status === 'dev-mode') {
+                    console.log('Auto-update disabled in dev mode');
+                  }
+                },
+              },
+            ],
+          },
         ]}
       />
     </WorkspacePage>

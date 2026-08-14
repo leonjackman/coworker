@@ -154,6 +154,9 @@ declare global {
       clearCheckpoints: () => Promise<{ status: string }>;
       getRetentionSettings: () => Promise<{ trace_lines: number; audit_lines: number }>;
       saveRetentionSettings: (patch: { trace_lines?: number; audit_lines?: number }) => Promise<{ trace_lines: number; audit_lines: number }>;
+      checkForUpdates: () => Promise<{ status: string }>;
+      onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string | null }) => void) => () => void;
+      onUpdateDownloaded: (callback: (info: { version: string }) => void) => () => void;
     };
   }
 }

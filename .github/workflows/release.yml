@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-mac:
+    name: macOS (arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install pyinstaller httpx uvicorn fastapi sse-starlette langchain langchain-openai langgraph langgraph-checkpoint-safely-persistent
+          npm ci
+          npm run build:frontend
+          cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
+          npx electron-builder --mac --config electron-builder.config.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-arm64
+          path: release/*.dmg
+          retention-days: 7
+
+  build-win:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          py -m venv .venv
+          .venv\Scripts\python -m pip install pyinstaller httpx uvicorn fastapi sse-starlette langchain langchain-openai langgraph langgraph-checkpoint-safely-persistent
+          npm ci
+          npm run build:frontend
+          cd backend && rm -rf dist build && .venv\Scripts\python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
+          npx electron-builder --win --config electron-builder.config.json
+        shell: cmd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-x64
+          path: |
+            release/*.exe
+          retention-days: 7
+
+  build-linux:
+    name: Linux (AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools appstream
+          sudo apt-get install -y fakeroot rpm libdbus-1-dev libglib2.0-dev libgl1-mesa-glx libwebp-dev
+
+      - name: Build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install pyinstaller httpx uvicorn fastapi sse-starlette langchain langchain-openai langgraph langgraph-checkpoint-safely-persistent
+          npm ci
+          npm run build:frontend
+          cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
+          npx electron-builder --linux AppImage --config electron-builder.config.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: release/*.AppImage
+          retention-days: 7

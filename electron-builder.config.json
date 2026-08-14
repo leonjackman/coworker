@@ -16,8 +16,8 @@
   ],
   "publish": {
     "provider": "github",
-    "owner": "REPLACE_ME",
-    "repo": "REPLACE_ME",
+    "owner": "leonjackman",
+    "repo": "coworker",
     "private": false,
     "releaseType": "release"
   },

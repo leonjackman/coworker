@@ -42,6 +42,43 @@ const { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage, nativeThem
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
+const { autoUpdater } = require('electron-updater');
+
+autoUpdater.autoDownload = false;
+autoUpdater.allowDowngrade = false;
+
+// Only enable auto-updater in packaged builds (not in dev)
+if (!IS_DEV) {
+  autoUpdater.on('update-available', (info) => {
+    console.log('Update available:', info.version);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('app:update-available', { version: info.version, releaseNotes: info.releaseNotes });
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('Update downloaded:', info.version);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('app:update-downloaded', { version: info.version });
+    }
+    // Silent install — quit and install
+    setImmediate(() => autoUpdater.quitAndInstall());
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('Auto-update error:', err);
+  });
+
+  // Check for updates every 30 minutes
+  setInterval(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch(console.error);
+  }, 30 * 60 * 1000);
+
+  // Check immediately on startup
+  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+    console.error('Failed to check for updates:', err);
+  });
+}
 
 // `app.isPackaged` is the only reliable packaged/dev signal in Electron —
 // NODE_ENV and IS_PACKAGED are not set automatically.
@@ -588,6 +625,14 @@ ipcMain.handle('settings-retention-get', async () => {
 });
 ipcMain.handle('settings-retention-set', async (event, patch) => {
   return requestBackend('/settings/retention', 'POST', patch);
+});
+
+// ── Auto-update IPC handlers ───────────────────────────────────────────
+ipcMain.handle('check-for-updates', async () => {
+  if (!IS_DEV && autoUpdater.isUpdaterActive()) {
+    return { status: 'ok' };
+  }
+  return { status: IS_DEV ? 'dev-mode' : 'unavailable' };
 });
 
 ipcMain.handle('update-runtime-config', async (event, payload) => {
