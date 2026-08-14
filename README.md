@@ -34,6 +34,8 @@
 
 ## Install
 
+> **Pre-release** — Coworker is under active development. Features are added and improved regularly. Download to try it out, report bugs, and help shape the road ahead.
+
 Pre-built installers are available from [GitHub Releases](https://github.com/leonjackman/coworker/releases).
 
 | Platform | What to download | Notes |
@@ -145,6 +147,8 @@ COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ---
 
 ## Contributing
+
+> **Bug reports & feedback** — Coworker is an evolving project. If something doesn't work, please [open an issue](https://github.com/leonjackman/coworker/issues) with steps to reproduce. We'll fix it.
 
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a PR.
 

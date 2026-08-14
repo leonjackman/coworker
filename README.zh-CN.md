@@ -34,6 +34,8 @@
 
 ## 安装
 
+> **前置预览版** — Coworker 正在积极开发中，功能持续迭代完善。下载试用，发现 bug 并报告，帮助我们共同打造更好产品。
+
 预构建安装包可从 [GitHub Releases](https://github.com/leonjackman/coworker/releases) 下载。
 
 | 平台 | 下载文件 | 说明 |
@@ -145,6 +147,8 @@ COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ---
 
 ## 参与贡献
+
+> **Bug 报告 & 反馈** — Coworker 是持续迭代的项目。遇到问题请 [提交 Issue](https://github.com/leonjackman/coworker/issues) 并附上复现步骤，我们会修复。
 
 欢迎贡献！提交 PR 前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
