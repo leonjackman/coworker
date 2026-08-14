@@ -315,7 +315,9 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
           </Suspense>
         )}
 
-        {!isRunning && hasToolsOrFiles && (
+        {fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
+
+        {hasToolsOrFiles && (
           <div className="turn-summary">
             <CheckIcon size={12} className="turn-summary__check" />
             <span className="turn-summary__text">
@@ -345,8 +347,6 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
             </span>
           </div>
         )}
-
-        {!isRunning && fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
 
         {isError ? (
           <div className="stream-error">{message.content}</div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight, FilePenLine } from 'lucide-react';
 import type { PartFileChange } from '../types';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
@@ -29,12 +29,18 @@ export function FileChangesInline({ files }: { files: PartFileChange[] }) {
 }
 
 export function FileChangesCard({ files }: { files: PartFileChange[] }) {
-  const [open, setOpen] = useState(false);
   if (!files.length) return null;
 
   const totalAdded = files.reduce((sum, file) => sum + file.added, 0);
   const totalRemoved = files.reduce((sum, file) => sum + file.removed, 0);
   const hasDiffs = files.some((file) => file.hunks && file.hunks.length > 0);
+  const [open, setOpen] = useState(totalAdded > 0 || totalRemoved > 0);
+
+  useEffect(() => {
+    if (totalAdded > 0 || totalRemoved > 0) {
+      setOpen(true);
+    }
+  }, [files]);
 
   return (
     <div className="file-changes-card">
