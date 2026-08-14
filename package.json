@@ -12,9 +12,21 @@
     "build:macos-universal": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac universal --config electron-builder.config.json",
     "build": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac universal --config electron-builder.config.json"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "electron",
+    "ai-agent",
+    "coding-assistant",
+    "langgraph",
+    "fastapi",
+    "copilot",
+    "desktop-app"
+  ],
+  "author": "leonjackman",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leonjackman/coworker.git"
+  },
   "devDependencies": {
     "electron": "43.2.0",
     "electron-builder": "26.15.3"

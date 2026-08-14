@@ -1,5 +1,14 @@
 # Coworker Agent
 
+> Local-first AI coding assistant desktop app — single-agent workflow, built with Electron, React, and LangGraph.
+
+![macOS](https://img.shields.io/badge/platform-macOS-006600?logo=apple)
+![Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)
+![Linux](https://img.shields.io/badge/platform-Linux-333?logo=linux)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+[![Release](https://github.com/leonjackman/coworker/actions/workflows/release.yml/badge.svg)](https://github.com/leonjackman/coworker/actions/workflows/release.yml)
+
 Coworker is a local-first Electron desktop agent app for coding assistance. The current product scope is a Codex-style single-agent workflow with local sessions, projects, provider configuration, streaming chat, workspace-restricted file tools, and a persistent long-term memory system (project/user scopes with optional LLM auto-extract).
 
 ## Current Status
@@ -23,17 +32,27 @@ Multi-agent company mode is explicitly out of scope for the current phase. The c
 coworker/
 ├── backend/
 │   ├── main.py                    # FastAPI API surface
+│   ├── pybackend.spec             # PyInstaller spec for backend binary
+│   ├── requirements.txt           # Python dependencies
 │   └── coworker/
 │       ├── agents.py              # LangChain/LangGraph single-agent runtime
+│       ├── atomicio.py            # Atomic file read/write helpers
+│       ├── changes.py             # File change tracking
+│       ├── checkpoints.py         # LangGraph checkpoint management
 │       ├── config.py              # Runtime settings
+│       ├── config_controller.py   # Config management controller
 │       ├── projects.py            # Local project grouping store
 │       ├── providers.py           # Provider config store and connection checks
+│       ├── secrets.py             # Secret handling utilities
 │       ├── sessions.py            # Durable local chat session store
+│       ├── traces.py              # Runtime trace recording
 │       ├── workspace.py           # Workspace path guard and file preview helpers
+│       ├── workspace_controller.py # Workspace manager
+│       ├── mcp/                   # MCP protocol support
+│       ├── skills/                # Skills catalog and management
 │       └── memory/                # Long-term memory subsystem
 │           ├── memory_manager.py  # Global manager + auto-extract dispatch
 │           ├── memory_store.py    # Scope files (project/user) CRUD
-│           ├── memory_scanner.py  # Memory file discovery + scan
 │           ├── memory_middleware.py # Session read injection into the prompt
 │           ├── auto_extract.py    # Phase 2: LLM extraction + proposals
 │           └── selftest.py        # Offline test suite (21+ checks)
@@ -49,12 +68,27 @@ coworker/
 │   ├── index.html
 │   └── vite.config.ts
 ├── assets/brand/                  # App and tray icons
+├── docs/                          # Design docs and task tracking
+├── .github/workflows/             # CI/CD (build & release)
 ├── coworker_desktop.command       # One-click local launcher
-├── PROJECT_PLAN.md
 └── README.md
 ```
 
-## One-Click Run
+## Getting Started
+
+### Download (Release Builds)
+
+Pre-built installers are available from the [GitHub Releases](https://github.com/leonjackman/coworker/releases) page:
+
+| Platform | File | Notes |
+|----------|------|-------|
+| macOS (Apple Silicon) | `Coworker-*.dmg` | Universal build (ARM64) |
+| Windows 10+ | `Coworker Setup *.exe` | x64 installer (NSIS) |
+| Linux | `Coworker-*.AppImage` | AppImage, requires FUSE |
+
+> **Note:** macOS builds are unsigned and un-notarized in the current release cycle. On first launch you may need to right-click → Open, or run `xattr -d com.apple.quarantine /Applications/Coworker.app` after moving the app. Windows builds may trigger SmartScreen warnings until code signing is added.
+
+### Development Setup
 
 From the project root:
 
@@ -77,7 +111,7 @@ For smoke testing without opening the desktop window:
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
 
-## Backend Development
+### Backend
 
 ```bash
 cd backend
@@ -96,7 +130,7 @@ export OPENAI_API_KEY="your_openai_api_key_here"
 
 Provider configuration can also be managed in the app settings. Provider records are stored under the app data directory, not in git.
 
-## Frontend Development
+### Frontend
 
 ```bash
 cd frontend
@@ -144,7 +178,6 @@ NODE_ENV=development npx electron . --no-sandbox
 - Provider API keys are stored in the macOS Keychain (falling back to a 0600 file when Keychain is unavailable); MCP env/header secrets stay in the (0600-protected) local config.
 - Agent trace and tool audit logs are rolling JSONL with user-configurable retention (Settings → Runtime Observability), exportable and clearable from the same panel.
 - The file-staleness guard ("File changed since it was last read") persists per workspace across turns, sessions and restarts: writing over content the agent has not seen (because the file changed since its last read) is rejected until it re-reads the file.
-- Packaging/distribution is not complete.
 - Plan/Build and Default/Full Access gating is still Coworker-owned runtime policy.
 
 ## Verification
@@ -161,9 +194,8 @@ git diff --check
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
 
-## Next Development Phase
+## Roadmap
 
 1. Add a real multi-file patch/diff tool if exact structured text edits are not enough.
-2. Add packaging, updater, and release evidence.
-3. Add checkpoint retention/export controls if long-running sessions need operational management.
-4. Optionally migrate to assistant-ui only if it replaces the current frontend chat runtime owner instead of wrapping the existing `App.tsx` message state.
+2. Add checkpoint retention/export controls if long-running sessions need operational management.
+3. Optionally migrate to assistant-ui only if it replaces the current frontend chat runtime owner instead of wrapping the existing `App.tsx` message state.

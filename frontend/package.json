@@ -11,8 +11,8 @@
     "preview": "vite preview"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "leonjackman",
+  "license": "MIT",
   "dependencies": {
     "@assistant-ui/react": "0.15.2",
     "@fontsource-variable/geist": "5.3.0",
