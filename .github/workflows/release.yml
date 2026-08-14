@@ -35,10 +35,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install pyinstaller -r backend/requirements.txt
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
           npm run build:frontend
-          cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
+          cd backend && python -m PyInstaller --clean --noconfirm pybackend.spec && cd ..
           npx electron-builder --mac --config electron-builder.config.json
 
       - uses: actions/upload-artifact@v4
@@ -72,10 +73,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           py -m venv .venv
-          .venv\Scripts\python -m pip install --upgrade pip
-          .venv\Scripts\python -m pip install pyinstaller -r backend\requirements.txt
+          call .venv\Scripts\activate
+          python -m pip install --upgrade pip
+          python -m pip install -r backend\requirements.txt
           npm run build:frontend
-          cd backend && rm -rf dist build && .venv\Scripts\python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
+          cd backend && python -m PyInstaller --clean --noconfirm pybackend.spec && cd ..
           npx electron-builder --win --config electron-builder.config.json
         shell: cmd
 
@@ -117,10 +119,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -m venv .venv
-          python3 -m pip install --upgrade pip
-          .venv/bin/python -m pip install pyinstaller -r backend/requirements.txt
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt
           npm run build:frontend
-          cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
+          cd backend && python -m PyInstaller --clean --noconfirm pybackend.spec && cd ..
           npx electron-builder --linux AppImage --config electron-builder.config.json
 
       - uses: actions/upload-artifact@v4
