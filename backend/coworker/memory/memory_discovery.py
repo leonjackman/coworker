@@ -3,8 +3,7 @@
 Mirrors ``coworker.skills.skill_discovery``: project-level memory (the
 workspace) precedes user-level memory, and each root is only scanned once.
 Unlike skills, memory is *not* first-match-only — user-level and project-level
-are both injected so global preferences survive across projects (opencode
-loads global + project instructions together). At most one file per root.
+are both injected so global preferences survive across projects. At most one file per root.
 """
 
 from __future__ import annotations

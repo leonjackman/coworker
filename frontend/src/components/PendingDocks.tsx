@@ -287,7 +287,7 @@ function QuestionDock({ request, total, onResolve, onStop }: { request: PendingR
     el.style.height = `${el.scrollHeight}px`;
   }, [customAnswer]);
 
-  // 参考 opencode 的 `custom` 模型：默认允许"其他（自由文本）"作为最后一个显式选项，
+  // 默认允许"其他（自由文本）"作为最后一个显式选项，
   // 但必须先选中该选项才能填写，杜绝"不选任何选项只填空"绕过选择。
   const allowCustom = request.allowCustom !== false;
   const otherIndex = request.options?.length ?? 0;
