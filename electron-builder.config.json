@@ -6,6 +6,7 @@
   },
   "files": [
     "electron/**/*",
+    "assets/**/*",
     "frontend/dist/**/*"
   ],
   "extraResources": [

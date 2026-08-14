@@ -1422,6 +1422,8 @@ def format_user_message(
       自行决定是否解析。超体积的二进制不内联字节，仅在文本中如实说明。
     """
     blocks: list[dict[str, Any]] = []
+    if max_attachment_bytes is None:
+        max_attachment_bytes = 25 * 1024 * 1024
 
     if references:
         ref_lines = ["Referenced sessions (readable via the read_session tool):"]
