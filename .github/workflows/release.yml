@@ -44,7 +44,7 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --mac --config electron-builder.config.json -c.version="${APP_VERSION#v}"
+          npx electron-builder --mac --config electron-builder.config.json -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -78,13 +78,13 @@ jobs:
           APP_VERSION: ${{ github.ref_name }}
         run: |
           python -m venv .venv
-          call .venv\Scripts\activate
+          source .venv/Scripts/activate
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller -r backend\requirements.txt
+          python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
-          python -m PyInstaller --clean --noconfirm --distpath backend\dist --workpath backend\build backend\pybackend.spec
-          npx electron-builder --win --config electron-builder.config.json -c.version=%APP_VERSION:~1%
-        shell: cmd
+          python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
+          npx electron-builder --win --config electron-builder.config.json -c.extraMetadata.version="${APP_VERSION#v}"
+        shell: bash
 
       - uses: actions/upload-artifact@v4
         with:
@@ -130,7 +130,7 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --linux AppImage --config electron-builder.config.json -c.version="${APP_VERSION#v}"
+          npx electron-builder --linux AppImage --config electron-builder.config.json -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
