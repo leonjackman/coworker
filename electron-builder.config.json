@@ -1,6 +1,6 @@
 {
   "appId": "com.coworker.app",
-  "productName": "Coworker",
+  "productName": "CoWorker",
   "directories": {
     "output": "release/"
   },

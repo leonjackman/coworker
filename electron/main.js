@@ -269,7 +269,7 @@ function showStartupError(details) {
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Coworker 启动失败</title>
+      <title>CoWorker 启动失败</title>
       <style>
         :root {
           color-scheme: dark;
@@ -328,7 +328,7 @@ function showStartupError(details) {
     </head>
     <body>
       <main>
-        <h1>Coworker 前端未能正常加载</h1>
+        <h1>CoWorker 前端未能正常加载</h1>
         <p>当前没有再让窗口静默停在空白页。请根据下面的正式诊断信息继续排查启动链。</p>
         <table>${detailRows}</table>
       </main>
@@ -345,12 +345,12 @@ function createTray() {
   }
 
   tray = new Tray(createTrayIcon());
-  tray.setToolTip('Coworker');
+  tray.setToolTip('CoWorker');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show Coworker', click: showMainWindow },
+    { label: 'Show CoWorker', click: showMainWindow },
     { label: 'Hide Window', click: hideMainWindow },
     { type: 'separator' },
-    { label: 'Quit Coworker', click: quitApp },
+    { label: 'Quit CoWorker', click: quitApp },
   ]));
   tray.on('click', showMainWindow);
 }
