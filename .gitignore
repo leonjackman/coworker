@@ -44,6 +44,12 @@ out/
 *.dmg
 *.zip
 
+# Electron build cache
+.electron-builder/
+
+# Python build cache from PyInstaller
+pyinstaller_cache/
+
 .workbuddy/
 
 # Project-level long-term memory (app data, per-project)
