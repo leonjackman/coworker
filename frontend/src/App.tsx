@@ -1573,7 +1573,7 @@ function App() {
     if (!rollbackTarget) return;
     try {
       const response = await chatService.rollbackMessage(rollbackTarget.sessionId, rollbackTarget.messageId, withCode);
-      const remaining = response.messages.map((m) =>
+      const rollbackMessages = response.messages.map((m) =>
         createMessage(m.role as 'user' | 'assistant', m.content, {
           id: m.id,
           status: 'done',
@@ -1581,7 +1581,11 @@ function App() {
           parts: (m.parts as MessagePart[]) ?? [],
         }),
       );
-      setMessages(remaining);
+      setMessages((current) => {
+        // 只替换目标会话的消息，保留所有其他会话（含后台 streaming）的消息。
+        const others = current.filter((m) => !m.sessionId || m.sessionId !== rollbackTarget.sessionId);
+        return [...others, ...rollbackMessages];
+      });
       await refreshSessions();
       await refreshProjects();
       setChangesRefreshKey((value) => value + 1);
@@ -1905,6 +1909,8 @@ function App() {
     // 只切换当前视图，各会话的流由 per-session 的 controller 独立管理。
     setActiveView('chat');
     setDraftMode(false);
+    // 保存当前 sessionId，供 fetch 失败时回滚。
+    const prevSessionId = sessionIdRef.current;
     try {
       const response = await chatService.getSession(sessionIdToOpen);
       const records = response.session.messages ?? [];
@@ -1976,15 +1982,28 @@ function App() {
       // 切回时若目标会话仍在前台或后台流式中，loaded 不含该消息，running 会被保留；
       // 若后端已完成并持久化（同 id），则用持久化版本（内容完整），这是正确收尾。
       setMessages((current) => {
-        const running = current.filter((m) => m.status === 'running' && m.sessionId === sessionIdToOpen);
-        if (running.length === 0) return loaded;
+        // 归而非覆盖：只替换目标会话的消息，其余所有会话（含后台
+        // streaming 的）原样保留，避免切换会话时抹掉其他会话正在进行的流。
+        // 后端仅在流终结时才持久化 assistant 消息，切回时若目标会话仍
+        // 在流式中，loaded 不含该消息，running 会被保留；若后端已完成
+        // 并持久化（同 id），则用持久化版本（内容完整），这是正确收尾。
         const loadedIds = new Set(loaded.map((m) => m.id));
-        const preserved = running.filter((m) => !loadedIds.has(m.id));
-        return [...loaded, ...preserved];
+        // 所有非目标 session 的消息：ambient + 其他 session 的已发送
+        // + 其他 session 的 running（后台续流）
+        const others = current.filter((m) => !m.sessionId || m.sessionId !== sessionIdToOpen);
+        // 目标 session 的 running 消息：若 loaded 已覆盖则丢弃（后
+        // 端已完成），否则保留（后端未 commit，继续流式更新）
+        const thisRunning = current.filter(
+          (m) => m.sessionId === sessionIdToOpen && m.status === 'running' && !loadedIds.has(m.id),
+        );
+        return [...loaded, ...others, ...thisRunning];
       });
       setAttachments([]);
     } catch (error) {
       console.error('Failed to open session:', error);
+      // 回滚已修改的 state，避免目标会话处于半加载状态。
+      setSessionId(prevSessionId);
+      sessionIdRef.current = prevSessionId;
     }
   };
 
@@ -2212,6 +2231,8 @@ function App() {
     } finally {
       if (streamControllersRef.current[key] === controller) {
         delete streamControllersRef.current[key];
+        delete activeAssistantMessageIdsRef.current[key];
+        delete streamStartAtsRef.current[key];
       }
       // Reconcile with the backend: if the stream ended WITHOUT a terminal
       // goal_done/goal_paused (e.g. the backend restarted mid-loop), the goal
@@ -2353,9 +2374,16 @@ function App() {
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
     } else if (event.type === 'delta') {
-      // Append streaming deltas to the last assistant message in goal context
+      // Append streaming deltas to the last assistant message in goal context.
+      // Only search within the current session's messages — a background session's
+      // streaming message must not be clobbered with this goal's delta.
       setMessages((current) => {
-        const last = [...current].reverse().find((m) => m.role === 'assistant' && !m.content.includes('目标已更新'));
+        const last = [...current].reverse().find(
+          (m) =>
+            m.role === 'assistant' &&
+            !m.content.includes('目标已更新') &&
+            (!m.sessionId || m.sessionId === sessionIdRef.current),
+        );
         if (last) {
           return current.map((m) => m.id === last.id ? { ...m, content: m.content + event.content } : m);
         }
