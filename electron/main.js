@@ -148,7 +148,7 @@ function refreshBrandIcons() {
 async function startBundledBackend() {
   if (IS_DEV) return;
 
-  const backendName = 'bin/pybackend';
+  const backendName = 'bin/pybackend' + (process.platform === 'win32' ? '.exe' : '');
   const backendPath = path.join(process.resourcesPath, backendName);
 
   // Check if bundled backend exists

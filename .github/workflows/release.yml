@@ -37,9 +37,9 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements.txt
+          python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
-          cd backend && python -m PyInstaller --clean --noconfirm pybackend.spec && cd ..
+          python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           npx electron-builder --mac --config electron-builder.config.json
 
       - uses: actions/upload-artifact@v4
@@ -75,9 +75,9 @@ jobs:
           py -m venv .venv
           call .venv\Scripts\activate
           python -m pip install --upgrade pip
-          python -m pip install -r backend\requirements.txt
+          python -m pip install pyinstaller -r backend\requirements.txt
           npm run build:frontend
-          cd backend && python -m PyInstaller --clean --noconfirm pybackend.spec && cd ..
+          python -m PyInstaller --clean --noconfirm --distpath backend\dist --workpath backend\build backend\pybackend.spec
           npx electron-builder --win --config electron-builder.config.json
         shell: cmd
 
@@ -121,9 +121,9 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements.txt
+          python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
-          cd backend && python -m PyInstaller --clean --noconfirm pybackend.spec && cd ..
+          python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           npx electron-builder --linux AppImage --config electron-builder.config.json
 
       - uses: actions/upload-artifact@v4

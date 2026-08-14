@@ -10,8 +10,12 @@
   ],
   "extraResources": [
     {
-      "from": "backend/dist/pybackend",
-      "to": "bin/pybackend"
+      "from": "backend/dist",
+      "to": "bin",
+      "filter": [
+        "pybackend",
+        "pybackend*"
+      ]
     }
   ],
   "publish": {
@@ -20,6 +24,12 @@
     "repo": "coworker",
     "private": false,
     "releaseType": "release"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": false
   },
   "mac": {
     "target": [
@@ -40,13 +50,7 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "assets/brand/cw-icon-blue-white-background.png",
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartupShortcut": false
-    }
+    "icon": "assets/brand/cw-icon-blue-white-background.png"
   },
   "linux": {
     "target": [
