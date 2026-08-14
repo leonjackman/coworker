@@ -1,6 +1,6 @@
 import { t } from '../lib/i18n';
-import coworkerLogoBlack from '../assets/brand/coworker-logo-black.png';
-import coworkerLogoWhite from '../assets/brand/coworker-logo-white.png';
+import coworkerLogoBlack from '../../../assets/brand/png/coworker-logo-black.png';
+import coworkerLogoWhite from '../../../assets/brand/png/coworker-logo-white.png';
 
 interface NewChatHeroProps {
   workspaceName?: string;

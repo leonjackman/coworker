@@ -7,8 +7,8 @@ import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { Tooltip } from './ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
-import coworkerLogoBlack from '../assets/brand/coworker-logo-black.png';
-import coworkerLogoWhite from '../assets/brand/coworker-logo-white.png';
+import coworkerLogoBlack from '../../../assets/brand/png/coworker-logo-black.png';
+import coworkerLogoWhite from '../../../assets/brand/png/coworker-logo-white.png';
 
 interface WorkspaceSidebarProps {
   sessions: SessionSummary[];

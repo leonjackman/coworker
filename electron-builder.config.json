@@ -14,12 +14,32 @@
       "to": "bin/pybackend"
     }
   ],
+  "publish": {
+    "provider": "github",
+    "owner": "REPLACE_ME",
+    "repo": "REPLACE_ME",
+    "private": false,
+    "releaseType": "release"
+  },
   "mac": {
     "target": "dmg",
     "icon": "assets/brand/cw-icon-white.png",
     "category": "public.app-category.developer-tools",
     "hardenedRuntime": false,
-    "identity": "-",
-    "gatekeeperAssess": false
+    "identity": "-"
+  },
+  "win": {
+    "target": "nsis",
+    "icon": "assets/brand/cw-icon-white.png"
+  },
+  "linux": {
+    "target": "AppImage",
+    "icon": "assets/brand/cw-icon-white.png"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartupShortcut": false
   }
 }
