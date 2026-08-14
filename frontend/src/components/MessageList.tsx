@@ -14,6 +14,7 @@ import { ToolGroup, ToolGroupTrigger, ToolGroupContent } from './assistant-ui/to
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
 const STICK_THRESHOLD = 80;
+const IGNORED_TOOLS = new Set(['ask_user']);
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -52,8 +53,9 @@ interface ToolGroupNode {
   tools: Extract<MessagePart, { type: 'tool' }>[];
 }
 
-function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): ToolGroupNode[] {
+function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): { groups: ToolGroupNode[]; ignored: Extract<MessagePart, { type: 'tool' }>[] } {
   const groups: ToolGroupNode[] = [];
+  const ignored: Extract<MessagePart, { type: 'tool' }>[] = [];
   let current: Extract<MessagePart, { type: 'tool' }>[] = [];
   const flush = () => {
     if (current.length > 0) {
@@ -62,7 +64,9 @@ function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): T
     }
   };
   for (const part of toolParts) {
-    if (CONTEXT_TOOLS.has(part.name)) {
+    if (IGNORED_TOOLS.has(part.name)) {
+      ignored.push(part);
+    } else if (CONTEXT_TOOLS.has(part.name)) {
       current.push(part);
     } else {
       flush();
@@ -70,7 +74,7 @@ function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): T
     }
   }
   flush();
-  return groups;
+  return { groups, ignored };
 }
 
 function ToolChain({ toolParts, running }: { toolParts: Extract<MessagePart, { type: 'tool' }>[]; running?: boolean }) {
@@ -79,23 +83,32 @@ function ToolChain({ toolParts, running }: { toolParts: Extract<MessagePart, { t
   // While streaming, render individual live cards so the user can follow which
   // tool is executing right now.
   if (!running) {
+    const visibleTools = toolParts.filter((t) => !IGNORED_TOOLS.has(t.name));
     const active = toolParts.some((part) => part.status === 'running');
     return (
       <div className="tool-chain">
-        <ToolGroup.Root variant="ghost">
-          <ToolGroupTrigger count={toolParts.length} active={active} />
-          <ToolGroupContent>
-            {toolParts.map((part) => (
-              <ToolCallCard key={part.id} tool={part} />
-            ))}
-          </ToolGroupContent>
-        </ToolGroup.Root>
+        {toolParts.filter((part) => IGNORED_TOOLS.has(part.name)).map((part) => (
+          <ToolCallCard key={part.id} tool={part} />
+        ))}
+        {visibleTools.length > 0 && (
+          <ToolGroup.Root variant="ghost">
+            <ToolGroupTrigger count={visibleTools.length} active={active} />
+            <ToolGroupContent>
+              {visibleTools.map((part) => (
+                <ToolCallCard key={part.id} tool={part} />
+              ))}
+            </ToolGroupContent>
+          </ToolGroup.Root>
+        )}
       </div>
     );
   }
-  const groups = buildToolGroups(toolParts);
+  const { groups, ignored } = buildToolGroups(toolParts);
   return (
     <div className="tool-chain">
+      {ignored.map((part) => (
+        <ToolCallCard key={part.id} tool={part} />
+      ))}
       {groups.map((group) => {
         if (group.tools.length === 1) {
           const single = group.tools[0]!;
