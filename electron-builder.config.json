@@ -1,0 +1,25 @@
+{
+  "appId": "com.coworker.app",
+  "productName": "Coworker",
+  "directories": {
+    "output": "release/"
+  },
+  "files": [
+    "electron/**/*",
+    "frontend/dist/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "backend/dist/pybackend",
+      "to": "bin/pybackend"
+    }
+  ],
+  "mac": {
+    "target": "dmg",
+    "icon": "assets/brand/cw-icon-white.png",
+    "category": "public.app-category.developer-tools",
+    "hardenedRuntime": false,
+    "identity": "-",
+    "gatekeeperAssess": false
+  }
+}

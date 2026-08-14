@@ -41,6 +41,7 @@
 const { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage, nativeTheme, shell } = require('electron');
 const path = require('path');
 const http = require('http');
+const { spawn } = require('child_process');
 
 // `app.isPackaged` is the only reliable packaged/dev signal in Electron —
 // NODE_ENV and IS_PACKAGED are not set automatically.
@@ -62,7 +63,7 @@ if (IS_DEV && process.env.COWORKER_REMOTE_DEBUG_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.COWORKER_REMOTE_DEBUG_PORT);
 }
 
-const BACKEND_HOST = process.env.COWORKER_BACKEND_HOST || 'localhost';
+const BACKEND_HOST = process.env.COWORKER_BACKEND_HOST || (IS_DEV ? 'localhost' : '127.0.0.1');
 const BACKEND_PORT = Number(process.env.COWORKER_BACKEND_PORT || 9527);
 const FRONTEND_URL = process.env.COWORKER_FRONTEND_URL || null;
 const FRONTEND_DIST_ENTRY = path.join(__dirname, '../frontend/dist/index.html');
@@ -70,6 +71,7 @@ const FRONTEND_DIST_ENTRY = path.join(__dirname, '../frontend/dist/index.html');
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
+let backendProcess = null;
 
 const BRAND_ASSET_DIR = path.join(__dirname, '../assets/brand/png');
 
@@ -100,6 +102,85 @@ function refreshBrandIcons() {
     tray.setImage(createTrayIcon());
   }
   applyAppIcon();
+}
+
+// ---------------------------------------------------------------------------
+// Bundled Python backend management (packaged builds only)
+// ---------------------------------------------------------------------------
+
+async function startBundledBackend() {
+  if (IS_DEV) return;
+
+  const backendName = 'bin/pybackend';
+  const backendPath = path.join(process.resourcesPath, backendName);
+
+  // Check if bundled backend exists
+  if (!require('fs').existsSync(backendPath)) {
+    dialog.showErrorBox(
+      'Missing Backend',
+      `Could not find the bundled backend at:\n${backendPath}\n\n` +
+      'The application requires the Python backend to function.'
+    );
+    app.quit();
+    return;
+  }
+
+  console.log('Starting bundled backend:', backendPath);
+
+  backendProcess = spawn(backendPath, [], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    shell: process.platform === 'win32',
+    env: { ...process.env, PYTHONNOUSERSITE: '1' },
+  });
+
+  backendProcess.stdout.on('data', (data) => {
+    const text = data.toString().trim();
+    if (text) console.log('[backend]', text);
+  });
+
+  backendProcess.stderr.on('data', (data) => {
+    const text = data.toString().trim();
+    if (text) console.error('[backend]', text);
+  });
+
+  backendProcess.on('error', (err) => {
+    console.error('Failed to start bundled backend:', err.message);
+    dialog.showErrorBox('Backend Error', `Failed to start the bundled backend:\n${err.message}`);
+    app.quit();
+  });
+
+  backendProcess.on('exit', (code, signal) => {
+    console.log(`Backend exited: code=${code} signal=${signal}`);
+    backendProcess = null;
+    if (code !== 0 && code !== null) {
+      dialog.showErrorBox('Backend Error', `Backend process exited unexpectedly with code ${code}`);
+      app.quit();
+    }
+  });
+
+  // Wait for backend to be ready
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      await requestBackend('/health', 'GET', null, 1000);
+      console.log('Backend is ready');
+      return;
+    } catch {
+      // Not ready yet
+    }
+  }
+
+  console.error('Backend failed to start within 30 seconds');
+  dialog.showErrorBox('Backend Error', 'Backend failed to start within 30 seconds.');
+  app.quit();
+}
+
+function stopBundledBackend() {
+  if (backendProcess) {
+    console.log('Stopping bundled backend...');
+    backendProcess.kill('SIGTERM');
+    backendProcess = null;
+  }
 }
 
 function showMainWindow() {
@@ -349,7 +430,12 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (!IS_DEV) {
+    await startBundledBackend();
+    if (backendProcess === null && !IS_DEV) return;
+  }
+
   createTray();
   createWindow();
   nativeTheme.on('updated', refreshBrandIcons);
@@ -376,6 +462,9 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  if (!IS_DEV) {
+    stopBundledBackend();
+  }
 });
 
 function requestBackend(pathname, method = 'GET', payload = undefined, timeoutMs = 10000) {

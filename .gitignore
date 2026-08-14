@@ -38,6 +38,10 @@ workspace/
 .ruff_cache/
 .vite/
 
+# Python build output
+backend/dist/
+backend/build/
+
 # Packaging output
 release/
 out/

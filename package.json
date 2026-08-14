@@ -5,13 +5,19 @@
   "main": "electron/main.js",
   "scripts": {
     "desktop": "electron .",
-    "build:frontend": "npm --prefix frontend run build"
+    "build:frontend": "npm --prefix frontend run build",
+    "build:pybackend": "cd backend && rm -rf dist build && /Users/leon/Documents/CodeProjects/coworker/backend/venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..",
+    "build:windows": "npm run build:frontend && npm run build:pybackend && npx electron-builder --win --config electron-builder.config.json",
+    "build:macos": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac --config electron-builder.config.json",
+    "build:macos-universal": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac universal --config electron-builder.config.json",
+    "build": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac universal --config electron-builder.config.json"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "electron": "43.2.0"
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3"
   },
   "dependencies": {
     "react": "19.2.8",
