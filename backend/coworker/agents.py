@@ -2879,6 +2879,22 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 workspace=self.workspace,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
+            # If a question was rejected, stop the turn immediately instead of
+            # re-entering the agent graph.
+            if any(d.get("type") == "_stop_turn" for d in decisions):
+                mode = work_mode
+                if not mode:
+                    mode = normalize_work_mode("build") if work_mode is None else work_mode
+                yield {
+                    "type": "done",
+                    "content": "",
+                    "mode": mode.value if hasattr(mode, "value") else str(mode),
+                    "autonomy": autonomy or "guarded",
+                    "provider": self.provider_name,
+                    "model": self.model_name,
+                    "parts": [],
+                }
+                return
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
             tool_state: dict[str, dict[str, Any]] = {}
             try:

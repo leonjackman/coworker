@@ -2529,6 +2529,15 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
         key=lambda item: int(item.get("context", {}).get("action_index") or 0),
     )
     decisions = [item.get("decision") for item in ordered if item.get("decision")]
+    # If any question is rejected, inject a stop signal so the resume
+    # path does NOT re-enter the agent graph — the turn ends.
+    _has_question_reject = any(
+        item.get("decision", {}).get("type") == "reject"
+        and item.get("context", {}).get("kind") == "question"
+        for item in ordered
+    )
+    if _has_question_reject:
+        decisions.insert(0, {"type": "_stop_turn"})
     context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
     session_id = str(context.get("session_id") or "")
     try:
