@@ -5530,6 +5530,84 @@ body.bottom-panel-resizing {
   border-top: 1px solid var(--material-border);
 }
 
+/* File changes list (per-file cards) */
+.file-changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.file-changes-list__item-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: var(--material-control);
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 100ms ease;
+}
+.file-changes-list__item-trigger:hover {
+  background: var(--material-panel);
+}
+.file-changes-list__icon,
+.file-changes-list__sign {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.file-changes-list__sign {
+  opacity: 0.6;
+}
+.file-changes-list__path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 12px;
+}
+.file-changes-list__too-large {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+.file-changes-list__edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 6px 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  background: var(--control);
+  border: 1px solid var(--material-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.file-changes-list__edit-btn:hover {
+  background: var(--material-control);
+  color: var(--foreground);
+}
+.file-changes-list__diff {
+  border-top: 1px solid var(--material-border);
+  padding: 4px 8px 8px 8px;
+  background: var(--control);
+}
+.file-changes-list__no-diff {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
 /* Agent activity indicator */
 .agent-activity {
   display: inline-flex;
