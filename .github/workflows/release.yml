@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build-mac:
     name: macOS (arm64)
@@ -72,7 +75,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          py -m venv .venv
+          python -m venv .venv
           call .venv\Scripts\activate
           python -m pip install --upgrade pip
           python -m pip install pyinstaller -r backend\requirements.txt
