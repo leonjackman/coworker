@@ -36,6 +36,7 @@ jobs:
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ github.ref_name }}
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
@@ -43,7 +44,7 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --mac --config electron-builder.config.json
+          npx electron-builder --mac --config electron-builder.config.json -c.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,6 +75,7 @@ jobs:
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ github.ref_name }}
         run: |
           python -m venv .venv
           call .venv\Scripts\activate
@@ -81,7 +83,7 @@ jobs:
           python -m pip install pyinstaller -r backend\requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend\dist --workpath backend\build backend\pybackend.spec
-          npx electron-builder --win --config electron-builder.config.json
+          npx electron-builder --win --config electron-builder.config.json -c.version=%APP_VERSION:~1%
         shell: cmd
 
       - uses: actions/upload-artifact@v4
@@ -120,6 +122,7 @@ jobs:
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ github.ref_name }}
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
@@ -127,7 +130,7 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --linux AppImage --config electron-builder.config.json
+          npx electron-builder --linux AppImage --config electron-builder.config.json -c.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
