@@ -9,6 +9,7 @@ interface PendingDocksProps {
   requests: PendingRequest[];
   onResolve: (request: PendingRequest, decision: ApprovalDecisionPayload) => Promise<void>;
   onDismiss?: (request: PendingRequest) => void;
+  onStop?: () => void;
 }
 
 /**
@@ -100,7 +101,7 @@ function describeCommand(argv: string[] | undefined, _cwd?: string): string {
   return `执行命令：${bin}`;
 }
 
-function ApprovalDock({ request, onResolve }: { request: PendingRequest & { kind: 'command' }; onResolve: (req: PendingRequest & { kind: 'command' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
+function ApprovalDock({ request, onResolve, onStop }: { request: PendingRequest & { kind: 'command' }; onResolve: (req: PendingRequest & { kind: 'command' }, decision: ApprovalDecisionPayload) => Promise<void>; onStop?: () => void }) {
   const [resolving, setResolving] = useState(false);
 
   const dispatch = useCallback(async (decision: ApprovalDecisionPayload) => {
@@ -140,7 +141,10 @@ function ApprovalDock({ request, onResolve }: { request: PendingRequest & { kind
         <button
           type="button"
           className="button-ghost"
-          onClick={() => dispatch({ type: 'reject' })}
+          onClick={() => {
+            onStop?.();
+            dispatch({ type: 'reject' });
+          }}
           disabled={resolving}
         >
           {t('chat.approval_disagree')}
@@ -183,7 +187,7 @@ function formatToolArgs(args: Record<string, unknown> | undefined): string {
  * remote tool explicitly instead of showing an argv line, and "always allow"
  * is scoped to that one server+tool pair.
  */
-function McpApprovalDock({ request, onResolve }: { request: PendingRequest & { kind: 'mcp' }; onResolve: (req: PendingRequest & { kind: 'mcp' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
+function McpApprovalDock({ request, onResolve, onStop }: { request: PendingRequest & { kind: 'mcp' }; onResolve: (req: PendingRequest & { kind: 'mcp' }, decision: ApprovalDecisionPayload) => Promise<void>; onStop?: () => void }) {
   const [resolving, setResolving] = useState(false);
 
   const dispatch = useCallback(async (decision: ApprovalDecisionPayload) => {
@@ -224,7 +228,10 @@ function McpApprovalDock({ request, onResolve }: { request: PendingRequest & { k
         <button
           type="button"
           className="button-ghost"
-          onClick={() => dispatch({ type: 'reject' })}
+          onClick={() => {
+            onStop?.();
+            dispatch({ type: 'reject' });
+          }}
           disabled={resolving}
         >
           {t('chat.approval_disagree')}
@@ -250,7 +257,7 @@ function McpApprovalDock({ request, onResolve }: { request: PendingRequest & { k
   );
 }
 
-function QuestionDock({ request, total, onResolve }: { request: PendingRequest & { kind: 'question' }; total?: number; onResolve: (req: PendingRequest & { kind: 'question' }, decision: ApprovalDecisionPayload) => Promise<void> }) {
+function QuestionDock({ request, total, onResolve, onStop }: { request: PendingRequest & { kind: 'question' }; total?: number; onResolve: (req: PendingRequest & { kind: 'question' }, decision: ApprovalDecisionPayload) => Promise<void>; onStop?: () => void }) {
   const [resolving, setResolving] = useState(false);
   // Use refs to preserve form state across view switches (component unmount/remount)
   const pickedRef = useRef<number[]>([]);
@@ -443,7 +450,10 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
         <button
           type="button"
           className="button-ghost"
-          onClick={() => dispatch({ type: 'reject' })}
+          onClick={() => {
+            onStop?.();
+            dispatch({ type: 'reject' });
+          }}
           disabled={resolving}
         >
           {t('chat.approval_disagree')}
@@ -461,7 +471,7 @@ function QuestionDock({ request, total, onResolve }: { request: PendingRequest &
   );
 }
 
-export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksProps) {
+export function PendingDocks({ requests, onResolve, onDismiss, onStop }: PendingDocksProps) {
   const front = requests[0];
   if (!front) return null;
 
@@ -503,7 +513,10 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
               <button
                 type="button"
                 className="pending-action-button button-ghost"
-                onClick={() => onDismiss?.(front)}
+                onClick={() => {
+                  onStop?.();
+                  onDismiss?.(front);
+                }}
                 disabled={isResolving}
                 aria-label={t('chat.approval_reject_close')}
               >
@@ -513,11 +526,11 @@ export function PendingDocks({ requests, onResolve, onDismiss }: PendingDocksPro
           </div>
         </div>
         {front.kind === 'command' ? (
-          <ApprovalDock request={front as PendingRequest & { kind: 'command' }} onResolve={onResolve} />
+          <ApprovalDock request={front as PendingRequest & { kind: 'command' }} onResolve={onResolve} {...(onStop ? { onStop } : {})} />
         ) : front.kind === 'mcp' ? (
-          <McpApprovalDock request={front as PendingRequest & { kind: 'mcp' }} onResolve={onResolve} />
+          <McpApprovalDock request={front as PendingRequest & { kind: 'mcp' }} onResolve={onResolve} {...(onStop ? { onStop } : {})} />
         ) : front.kind === 'question' ? (
-          <QuestionDock request={front as PendingRequest & { kind: 'question' }} total={questionTotal} onResolve={onResolve} />
+          <QuestionDock request={front as PendingRequest & { kind: 'question' }} total={questionTotal} onResolve={onResolve} {...(onStop ? { onStop } : {})} />
         ) : null}
       </CardSlot>
     </div>

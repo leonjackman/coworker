@@ -2630,6 +2630,7 @@ function App() {
                             onDismiss={(request) => {
                               void resolvePendingRequest(request, { type: 'reject' });
                             }}
+                            onStop={stopMessage}
                           />
                         </div>
                       ) : (
