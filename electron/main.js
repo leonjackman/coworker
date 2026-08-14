@@ -87,7 +87,7 @@ function createTrayIcon() {
 }
 
 function applyAppIcon(targetWindow = mainWindow) {
-  const iconPath = themedMonochromeAssetPath('cw-icon');
+  const iconPath = path.join(BRAND_ASSET_DIR, 'cw-icon-blue-white-background.png');
   const icon = nativeImage.createFromPath(iconPath);
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(icon);

@@ -23,18 +23,18 @@
   },
   "mac": {
     "target": "dmg",
-    "icon": "assets/brand/cw-icon-white.png",
+    "icon": "assets/brand/cw-icon-blue-white-background.png",
     "category": "public.app-category.developer-tools",
     "hardenedRuntime": false,
     "identity": "-"
   },
   "win": {
     "target": "nsis",
-    "icon": "assets/brand/cw-icon-white.png"
+    "icon": "assets/brand/cw-icon-blue-white-background.png"
   },
   "linux": {
     "target": "AppImage",
-    "icon": "assets/brand/cw-icon-white.png"
+    "icon": "assets/brand/cw-icon-blue-white-background.png"
   },
   "nsis": {
     "oneClick": false,
