@@ -35,7 +35,6 @@ jobs:
 
       - name: Build
         env:
-          GH_TOKEN: ${{ github.token }}
           APP_VERSION: ${{ github.ref_name }}
         run: |
           python3 -m venv .venv
@@ -44,12 +43,15 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --mac --config electron-builder.config.json -c.extraMetadata.version="${APP_VERSION#v}"
+          npx electron-builder --mac --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: mac-arm64
-          path: release/*.dmg
+          path: |
+            release/*.dmg
+            release/*.dmg.blockmap
+            release/latest-mac.yml
           retention-days: 7
 
   build-win:
@@ -74,7 +76,6 @@ jobs:
 
       - name: Build
         env:
-          GH_TOKEN: ${{ github.token }}
           APP_VERSION: ${{ github.ref_name }}
         run: |
           python -m venv .venv
@@ -83,7 +84,7 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --win --config electron-builder.config.json -c.extraMetadata.version="${APP_VERSION#v}"
+          npx electron-builder --win --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
         shell: bash
 
       - uses: actions/upload-artifact@v4
@@ -91,6 +92,8 @@ jobs:
           name: win-x64
           path: |
             release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
           retention-days: 7
 
   build-linux:
@@ -121,7 +124,6 @@ jobs:
 
       - name: Build
         env:
-          GH_TOKEN: ${{ github.token }}
           APP_VERSION: ${{ github.ref_name }}
         run: |
           python3 -m venv .venv
@@ -130,10 +132,29 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --linux AppImage --config electron-builder.config.json -c.extraMetadata.version="${APP_VERSION#v}"
+          npx electron-builder --linux AppImage --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-appimage
-          path: release/*.AppImage
+          path: |
+            release/*.AppImage
+            release/latest-linux.yml
           retention-days: 7
+
+  release:
+    name: Publish Release
+    needs: [build-mac, build-win, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -R release-artifacts
+          mapfile -t FILES < <(find release-artifacts -type f)
+          gh release create "${{ github.ref_name }}" "${FILES[@]}" --generate-notes --title "Coworker ${{ github.ref_name }}"
