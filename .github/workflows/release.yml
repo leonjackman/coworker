@@ -30,7 +30,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -m venv .venv
-          .venv/bin/python -m pip install pyinstaller httpx uvicorn fastapi sse-starlette langchain langchain-openai langgraph langgraph-checkpoint-safely-persistent
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install pyinstaller -r backend/requirements.txt
           npm ci
           npm run build:frontend
           cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
@@ -62,7 +63,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           py -m venv .venv
-          .venv\Scripts\python -m pip install pyinstaller httpx uvicorn fastapi sse-starlette langchain langchain-openai langgraph langgraph-checkpoint-safely-persistent
+          .venv\Scripts\python -m pip install --upgrade pip
+          .venv\Scripts\python -m pip install pyinstaller -r backend\requirements.txt
           npm ci
           npm run build:frontend
           cd backend && rm -rf dist build && .venv\Scripts\python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
@@ -102,7 +104,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -m venv .venv
-          .venv/bin/python -m pip install pyinstaller httpx uvicorn fastapi sse-starlette langchain langchain-openai langgraph langgraph-checkpoint-safely-persistent
+          python3 -m pip install --upgrade pip
+          .venv/bin/python -m pip install pyinstaller -r backend/requirements.txt
           npm ci
           npm run build:frontend
           cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
