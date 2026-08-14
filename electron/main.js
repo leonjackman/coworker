@@ -47,6 +47,10 @@ const { autoUpdater } = require('electron-updater');
 autoUpdater.autoDownload = false;
 autoUpdater.allowDowngrade = false;
 
+// `app.isPackaged` is the only reliable packaged/dev signal in Electron —
+// NODE_ENV and IS_PACKAGED are not set automatically.
+const IS_DEV = !app.isPackaged || process.env.COWORKER_DEV === '1';
+
 // Only enable auto-updater in packaged builds (not in dev)
 if (!IS_DEV) {
   autoUpdater.on('update-available', (info) => {
@@ -79,10 +83,6 @@ if (!IS_DEV) {
     console.error('Failed to check for updates:', err);
   });
 }
-
-// `app.isPackaged` is the only reliable packaged/dev signal in Electron —
-// NODE_ENV and IS_PACKAGED are not set automatically.
-const IS_DEV = !app.isPackaged || process.env.COWORKER_DEV === '1';
 
 // Disable GPU to avoid IMKCFRunLoopWakeUpReliable crash on macOS
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
