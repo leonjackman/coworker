@@ -30,7 +30,8 @@ export function FileChangesInline({ files }: { files: PartFileChange[] }) {
 
 function SingleFileChangesCard({ file }: { file: PartFileChange }) {
   const [open, setOpen] = useState(true);
-  const hasDiff = !!(file.hunks && file.hunks.length > 0);
+  const hunks = file.hunks ?? [];
+  const hasDiff = hunks.length > 0;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -60,7 +61,7 @@ function SingleFileChangesCard({ file }: { file: PartFileChange }) {
             <FileDiffViewer
               path={file.path}
               kind={file.kind}
-              hunks={file.hunks}
+              hunks={hunks}
             />
           </div>
         ) : (
