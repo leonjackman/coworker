@@ -1,115 +1,90 @@
 # Coworker Agent
 
-> Local-first AI coding assistant desktop app — single-agent workflow, built with Electron, React, and LangGraph.
+> Local-first AI coding assistant desktop app — multi-provider, single-agent with HITL, memory, and extensible skills.
 
-![macOS](https://img.shields.io/badge/platform-macOS-006600?logo=apple)
-![Windows](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows)
-![Linux](https://img.shields.io/badge/platform-Linux-333?logo=linux)
+| macOS | Windows | Linux |
+|---|---|---|
+| [Download .dmg](https://github.com/leonjackman/coworker/releases) | [Download .exe](https://github.com/leonjackman/coworker/releases) | [Download .AppImage](https://github.com/leonjackman/coworker/releases) |
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/leonjackman/coworker/actions/workflows/release.yml/badge.svg)](https://github.com/leonjackman/coworker/actions/workflows/release.yml)
+[![npm](https://img.shields.io/badge/dynamic/json?label=github&url=https%3A%2F%2Fapi.github.com%2Frepos%2Fleonjackman%2Fcoworker%2Freleases%2Flatest&query=%24.tag_name&style=flat-square)](https://github.com/leonjackman/coworker/releases/latest)
 
-[![Release](https://github.com/leonjackman/coworker/actions/workflows/release.yml/badge.svg)](https://github.com/leonjackman/coworker/actions/workflows/release.yml)
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-Coworker is a local-first Electron desktop agent app for coding assistance. The current product scope is a Codex-style single-agent workflow with local sessions, projects, provider configuration, streaming chat, workspace-restricted file tools, and a persistent long-term memory system (project/user scopes with optional LLM auto-extract).
+![Coworker Screenshot](docs/screenshots/coworker-screenshot.png)
+> _Replace with actual app screenshot — capture after running the build and place at `docs/screenshots/coworker-screenshot.png`._
 
-## Current Status
+---
 
-Coworker is no longer just a scaffold. The desktop launcher builds the Vite frontend, starts the FastAPI backend on `127.0.0.1:9527`, opens Electron, and stops the backend when the whole app exits. Closing the main window keeps the app alive through the system tray; quitting Coworker exits both frontend and backend.
+## Features
 
-Multi-agent company mode is explicitly out of scope for the current phase. The current shipped runtime surface is single-agent only.
+| Category | What it does |
+|---|---|
+| 🧠 **Long-Term Memory** | Project- and user-scoped memory with LLM auto-extract proposals that humans review. Drift-protected store with atomic writes. |
+| 🔄 **Goal Mode** | Persistent multi-turn autonomous execution with pause, resume, edit, and stop — the agent loops across thousands of tool calls. |
+| 🔒 **HITL by Default** | Human-in-the-loop approval before commands, file writes, MCP calls, and memory changes. Three autonomy levels: supervised, guarded, autonomous. |
+| 🔌 **MCP + Skills** | Full Model Context Protocol integration with auto-discovery, persistent sessions, and OAuth. Skill marketplace (Tencent SkillHub / ClawHub). |
+| 🌐 **Multi-Provider** | Any OpenAI-compatible API, Ollama, custom endpoints — not tied to any single vendor. |
+| 📦 **Truly Local** | All data on your machine. API keys in Keychain, sessions as JSON, no cloud dependency. MIT licensed. |
+| 📓 **Change Tracking & Rollback** | Every file change recorded with full before/after. Revert workspace to any past message with hunk-level conflict-safe undo. |
+| 🎨 **i18n + Theme** | Chinese/English interface. Dark/light themes with custom accent color and translucent glass effect. |
 
-## Technology Stack
+---
 
-- **Desktop**: Electron main process, preload IPC bridge, system tray, backend process binding
-- **Frontend**: React, TypeScript, Vite, Radix/shadcn-style local UI primitives
-- **Backend**: Python, FastAPI, Pydantic, JSON-file local stores, SQLite LangGraph checkpoints
-- **Agent Runtime**: Coworker LangGraph planner -> executor -> verifier -> summarizer runtime; executor uses LangChain `create_agent` for tool ReAct execution
-- **LLM Providers**: OpenAI-compatible providers, including OpenAI, Ollama-compatible `/v1`, and custom base URLs
-- **Communication**: Renderer -> Electron IPC -> FastAPI HTTP/SSE -> Renderer stream updates
+## Install
 
-## Project Structure
+Pre-built installers are available from [GitHub Releases](https://github.com/leonjackman/coworker/releases).
 
-```text
-coworker/
-├── backend/
-│   ├── main.py                    # FastAPI API surface
-│   ├── pybackend.spec             # PyInstaller spec for backend binary
-│   ├── requirements.txt           # Python dependencies
-│   └── coworker/
-│       ├── agents.py              # LangChain/LangGraph single-agent runtime
-│       ├── atomicio.py            # Atomic file read/write helpers
-│       ├── changes.py             # File change tracking
-│       ├── checkpoints.py         # LangGraph checkpoint management
-│       ├── config.py              # Runtime settings
-│       ├── config_controller.py   # Config management controller
-│       ├── projects.py            # Local project grouping store
-│       ├── providers.py           # Provider config store and connection checks
-│       ├── secrets.py             # Secret handling utilities
-│       ├── sessions.py            # Durable local chat session store
-│       ├── traces.py              # Runtime trace recording
-│       ├── workspace.py           # Workspace path guard and file preview helpers
-│       ├── workspace_controller.py # Workspace manager
-│       ├── mcp/                   # MCP protocol support
-│       ├── skills/                # Skills catalog and management
-│       └── memory/                # Long-term memory subsystem
-│           ├── memory_manager.py  # Global manager + auto-extract dispatch
-│           ├── memory_store.py    # Scope files (project/user) CRUD
-│           ├── memory_middleware.py # Session read injection into the prompt
-│           ├── auto_extract.py    # Phase 2: LLM extraction + proposals
-│           └── selftest.py        # Offline test suite (21+ checks)
-├── electron/
-│   ├── main.js                    # Window, tray, IPC, backend process lifecycle
-│   └── preload.js                 # Renderer-safe API bridge
-├── frontend/
-│   ├── src/
-│   │   ├── App.tsx                # App state, streaming chat, sessions/projects
-│   │   ├── components/            # Reusable UI, chat, sidebar, settings, providers, memory
-│   │   ├── lib/                   # i18n, theme, provider registry
-│   │   └── services/              # Electron/HTTP chat service boundary
-│   ├── index.html
-│   └── vite.config.ts
-├── assets/brand/                  # App and tray icons
-├── docs/                          # Design docs and task tracking
-├── .github/workflows/             # CI/CD (build & release)
-├── coworker_desktop.command       # One-click local launcher
-└── README.md
-```
+| Platform | What to download | Notes |
+|----------|-----------------|-------|
+| **macOS (Apple Silicon)** | `Coworker-*.dmg` | Universal build (ARM64). Unsigned / un-notarized. First launch may need `xattr -d com.apple.quarantine /Applications/Coworker.app`. |
+| **Windows 10+** | `Coworker Setup *.exe` | x64 NSIS installer. May trigger SmartScreen warnings until code signing is added. |
+| **Linux (x64)** | `Coworker-*.AppImage` | Requires FUSE. Make executable first (`chmod +x`). |
 
-## Getting Started
+---
 
-### Download (Release Builds)
+## Quick Start
 
-Pre-built installers are available from the [GitHub Releases](https://github.com/leonjackman/coworker/releases) page:
-
-| Platform | File | Notes |
-|----------|------|-------|
-| macOS (Apple Silicon) | `Coworker-*.dmg` | Universal build (ARM64) |
-| Windows 10+ | `Coworker Setup *.exe` | x64 installer (NSIS) |
-| Linux | `Coworker-*.AppImage` | AppImage, requires FUSE |
-
-> **Note:** macOS builds are unsigned and un-notarized in the current release cycle. On first launch you may need to right-click → Open, or run `xattr -d com.apple.quarantine /Applications/Coworker.app` after moving the app. Windows builds may trigger SmartScreen warnings until code signing is added.
-
-### Development Setup
-
-From the project root:
+### Desktop App
 
 ```bash
 ./coworker_desktop.command
 ```
 
-The launcher will:
+This launcher script does everything:
 
-1. Create or reuse `backend/venv`.
-2. Install Python and Node dependencies when needed.
-3. Build the Vite frontend into `frontend/dist`.
-4. Start FastAPI on `127.0.0.1:9527`.
-5. Launch the Electron app.
-6. Stop the backend when Coworker quits.
+1. Creates or reuses `backend/venv`
+2. Installs Python and Node dependencies
+3. Builds the Vite frontend
+4. Starts FastAPI on `127.0.0.1:9527`
+5. Launches the Electron app
 
 For smoke testing without opening the desktop window:
 
 ```bash
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
+
+### Configure a Provider
+
+Open **Settings → Providers** in the app UI to add an OpenAI-compatible provider:
+
+- Set the base URL, model name, and API key
+- The key is stored in the OS Keychain (macOS) or a 0600-protected file (fallback)
+- Test connectivity with the built-in "Test" button
+
+For local models via Ollama:
+
+```bash
+# In Settings > Providers:
+Base URL: http://localhost:11434/v1
+Model: your_model_name
+```
+
+---
+
+## Development
 
 ### Backend
 
@@ -121,15 +96,6 @@ pip install -r requirements.txt
 uvicorn main:app --host 127.0.0.1 --port 9527
 ```
 
-Without a configured provider, Coworker uses the explicit simulated single-agent provider for local smoke tests. For environment-based OpenAI usage:
-
-```bash
-export COWORKER_AGENT_PROVIDER=openai
-export OPENAI_API_KEY="your_openai_api_key_here"
-```
-
-Provider configuration can also be managed in the app settings. Provider records are stored under the app data directory, not in git.
-
 ### Frontend
 
 ```bash
@@ -138,64 +104,57 @@ npm install
 npm run dev
 ```
 
-In development mode, Electron can load the Vite dev server:
+### Full Dev Mode
 
 ```bash
+# In terminal 1 — start FastAPI
+cd backend && source venv/bin/activate && uvicorn main:app --host 127.0.0.1 --port 9527
+
+# In terminal 2 — start Vite dev server
+cd frontend && npm run dev
+
+# In terminal 3 — launch Electron with Vite dev server
 NODE_ENV=development npx electron . --no-sandbox
 ```
 
-## Implemented Features
-
-- Streaming chat through FastAPI SSE and Electron IPC.
-- LangGraph-backed single-agent runtime built with LangChain `create_agent`, gated by phase/autonomy middleware (Plan/Build, goal loop, plan approval, HITL approval, MCP tool policy, skills catalog, long-term memory). Tools: `search_files`, `read_file`, `git_status`, gated `replace_in_file` / `apply_text_edits` / `write_file` / `run_command`, and `install_skill` / `load_skill` / `memory`.
-- LangGraph SQLite checkpointing owns durable runtime message state for real provider sessions; persisted `SessionStore` remains the UI transcript owner and only bootstraps runtime state when no checkpoint exists.
-- LangChain/LangGraph invocations carry standard Runnable `run_name`, `tags`, `metadata`, and `thread_id` config so LangSmith/LangChain tracing can observe the agent run when tracing environment variables are enabled.
-- Local Agent trace records for run start/done/error, stage completion, and HITL interrupt state, exposed through the Runtime Observability settings panel.
-- JSONL audit records and settings-page review UI for file writes, exact replacements, atomic structured text edits, and command execution.
-- LangGraph human-in-the-loop middleware owns agent `run_command` approval and resumes the same checkpoint after approve/reject; bottom-panel terminal commands keep a separate one-time approval queue because they do not run inside the Agent graph.
-- Plan/Build toggle and Default/Full Access toggle.
-- Provider management with add/edit/delete/default provider, model fetch, and connection test.
-- Durable local sessions and project grouping.
-- Standalone sessions plus project sessions in the sidebar.
-- Markdown rendering, code highlighting, code copy button, and lazy-loaded Shiki highlighter.
-- Text attachment ingestion, attachment-only sending, attachment persistence in session history.
-- Slash commands: `/help`, `/new`, `/clear`, `/providers`, `/settings`, `/skills`, `/memory`, `/goal` (Plan/Build are composer buttons, not slash commands).
-- Long-term memory: project/user scopes stored as markdown files, injected into every chat prompt; editable in a Memory panel (`/memory` or sidebar); optional Phase 2 LLM auto-extract proposes memory entries from recent turns, reviewable in the same panel.
-- Chinese/English i18n.
-- Theme settings with presets, user color customization, light/dark mode, and translucent glass effect.
-- Electron tray behavior: close window keeps app running; quit exits frontend and backend.
-- Startup diagnostics instead of silent white screen.
-- True background streams: switching sessions keeps the original session's reply streaming to completion; per-session `/clear` never wipes other sessions' in-progress messages.
-- Runtime observability retention/export: Agent trace and tool audit logs can be exported, cleared, and their retention (line caps) configured from Settings.
-- Provider API keys stored in the macOS Keychain (0600-file fallback), keeping secrets out of plaintext JSON.
-
-## Current Limitations
-
-- Agent mode is currently single-agent only.
-- Toolset is intentionally small: search/read files by default; exact replace, atomic structured text edits, full write, and allowlisted command execution only in Build + Full Access.
-- Agent command execution pauses at a LangGraph human-in-the-loop interrupt before the process is started; approval resumes the same checkpoint. Bottom-panel terminal command execution still requires a settings-page one-time approval.
-- Default provider remains simulated until a real provider is configured.
-- Provider API keys are stored in the macOS Keychain (falling back to a 0600 file when Keychain is unavailable); MCP env/header secrets stay in the (0600-protected) local config.
-- Agent trace and tool audit logs are rolling JSONL with user-configurable retention (Settings → Runtime Observability), exportable and clearable from the same panel.
-- The file-staleness guard ("File changed since it was last read") persists per workspace across turns, sessions and restarts: writing over content the agent has not seen (because the file changed since its last read) is rejected until it re-reads the file.
-- Plan/Build and Default/Full Access gating is still Coworker-owned runtime policy.
+---
 
 ## Verification
 
-Useful local checks:
-
 ```bash
 cd frontend && npx tsc --noEmit
-cd frontend && npm run build
 backend/venv/bin/python -m compileall backend/main.py backend/coworker
 backend/venv/bin/python -m coworker.memory.selftest
-node --check electron/preload.js && node --check electron/main.js
-git diff --check
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
 
-## Roadmap
+---
 
-1. Add a real multi-file patch/diff tool if exact structured text edits are not enough.
-2. Add checkpoint retention/export controls if long-running sessions need operational management.
-3. Optionally migrate to assistant-ui only if it replaces the current frontend chat runtime owner instead of wrapping the existing `App.tsx` message state.
+## Technology Stack
+
+| Layer | Technologies |
+|-------|-------------|
+| **Desktop** | Electron 43 · contextBridge · system tray · electron-updater |
+| **Frontend** | React 19 · Vite 8 · Zustand · assistant-ui · Tailwind CSS 4 · Shiki · xterm.js |
+| **Backend** | Python 3 · FastAPI · Uvicorn · Pydantic · SQLite |
+| **Agent Runtime** | LangChain · LangGraph · SqliteSaver checkpointer · HumanInTheLoopMiddleware |
+| **LLM Support** | OpenAI-compatible APIs · Ollama · custom base URLs |
+| **Extensibility** | MCP servers (stdio/HTTP/SSE/WebSocket) · SKILL.md skills · Skill marketplace |
+| **i18n** | English / Chinese (zh) |
+
+---
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a PR.
+
+- Report bugs and request features on [Issues](https://github.com/leonjackman/coworker/issues)
+- Check [docs/tasklist/DEV-TASKS.md](docs/tasklist/DEV-TASKS.md) for the current development plan
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Built by [Coworker Contributors](https://github.com/leonjackman/coworker).
