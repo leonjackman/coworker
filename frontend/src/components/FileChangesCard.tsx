@@ -29,7 +29,7 @@ export function FileChangesInline({ files }: { files: PartFileChange[] }) {
 }
 
 function SingleFileChangesCard({ file }: { file: PartFileChange }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const hunks = file.hunks ?? [];
   const hasDiff = hunks.length > 0;
 
