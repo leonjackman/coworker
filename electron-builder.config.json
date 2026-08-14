@@ -30,16 +30,16 @@
   },
   "win": {
     "target": "nsis",
-    "icon": "assets/brand/cw-icon-blue-white-background.png"
+    "icon": "assets/brand/cw-icon-blue-white-background.png",
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartupShortcut": false
+    }
   },
   "linux": {
     "target": "AppImage",
     "icon": "assets/brand/cw-icon-blue-white-background.png"
-  },
-  "nsis": {
-    "oneClick": false,
-    "allowToChangeInstallationDirectory": true,
-    "createDesktopShortcut": true,
-    "createStartupShortcut": false
   }
 }
