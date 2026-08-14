@@ -25,6 +25,11 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd frontend && npm ci
+
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -32,7 +37,6 @@ jobs:
           python3 -m venv .venv
           .venv/bin/python -m pip install --upgrade pip
           .venv/bin/python -m pip install pyinstaller -r backend/requirements.txt
-          npm ci
           npm run build:frontend
           cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
           npx electron-builder --mac --config electron-builder.config.json
@@ -58,6 +62,11 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd frontend && npm ci
+
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,7 +74,6 @@ jobs:
           py -m venv .venv
           .venv\Scripts\python -m pip install --upgrade pip
           .venv\Scripts\python -m pip install pyinstaller -r backend\requirements.txt
-          npm ci
           npm run build:frontend
           cd backend && rm -rf dist build && .venv\Scripts\python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
           npx electron-builder --win --config electron-builder.config.json
@@ -99,6 +107,11 @@ jobs:
           sudo apt-get install -y libarchive-tools appstream
           sudo apt-get install -y fakeroot rpm libdbus-1-dev libglib2.0-dev libgl1-mesa-glx libwebp-dev
 
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd frontend && npm ci
+
       - name: Build
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,7 +119,6 @@ jobs:
           python3 -m venv .venv
           python3 -m pip install --upgrade pip
           .venv/bin/python -m pip install pyinstaller -r backend/requirements.txt
-          npm ci
           npm run build:frontend
           cd backend && rm -rf dist build && .venv/bin/python -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20 && cd ..
           npx electron-builder --linux AppImage --config electron-builder.config.json
