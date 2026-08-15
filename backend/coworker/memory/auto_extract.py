@@ -73,7 +73,7 @@ class MemoryProposalStore:
             for text in candidates:
                 if not text or not text.strip():
                     continue
-                if any(r.get("status") == "pending" and r.get("text") == text for r in existing):
+                if any(r.get("text") == text for r in existing):
                     continue
                 record = {
                     "id": uuid.uuid4().hex,
