@@ -169,7 +169,7 @@ NODE_ENV=development npx electron . --no-sandbox
 
 > **Bug 报告 & 反馈** — Coworker 是持续迭代的项目。遇到问题请 [提交 Issue](https://github.com/leonjackman/coworker/issues) 并附上复现步骤，我们会修复。
 
-欢迎贡献！提交 PR 前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+欢迎贡献！提交 PR 前请先阅读 [CONTRIBUTING](CONTRIBUTING.zh-CN.md) · [Contributing](CONTRIBUTING.md)。
 
 - [报告 Bug](https://github.com/leonjackman/coworker/issues) · [功能建议](https://github.com/leonjackman/coworker/issues)
 

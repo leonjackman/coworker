@@ -170,7 +170,7 @@ NODE_ENV=development npx electron . --no-sandbox
 
 > **Bug reports & feedback** — Coworker is an evolving project. If something doesn't work, please [open an issue](https://github.com/leonjackman/coworker/issues) with steps to reproduce. We'll fix it.
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome! Please read [CONTRIBUTING](CONTRIBUTING.md) · [贡献指南](CONTRIBUTING.zh-CN.md).
 
 - [Report bugs](https://github.com/leonjackman/coworker/issues) · [Request features](https://github.com/leonjackman/coworker/issues)
 

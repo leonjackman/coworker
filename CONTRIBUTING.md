@@ -24,7 +24,7 @@ See the [README](README.md) for full development instructions.
 |-----------|---------|
 | `frontend/` | React UI, chat, settings, and all renderer code |
 | `backend/` | FastAPI server, agent runtime, memory system |
-| `electron/` | Mac / Electron main process, preload, tray, updater |
+| `electron/` | Electron main process, preload, tray, updater |
 | `assets/` | App icons, logo assets |
 | `docs/` | Design docs, task tracking |
 | `.github/` | CI/CD workflows |
@@ -60,11 +60,6 @@ See the [README](README.md) for full development instructions.
 - Never commit API keys, tokens, or secrets
 - Use environment variables or the app's Keychain integration for sensitive data
 - Report security issues privately
-
-## What to Work On
-
-- [Open issues](https://github.com/leonjackman/coworker/issues)
-- [Development task list](docs/tasklist/DEV-TASKS.md)
 
 ## Need Help?
 
