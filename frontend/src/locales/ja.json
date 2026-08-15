@@ -171,7 +171,7 @@
   "chat.empty_hint_plan": "計画：変更前に理由を説明",
   "chat.empty_hint_build": "ビルド：変更を実装",
   "chat.empty_hint_slash": "/: コマンドメニューを開く",
-  "language.zh": "簡体中国語",
+  "language.zh": "简体中文",
   "language.en": "English",
   "language.switch_label": "表示言語",
   "theme.light": "ライト",
@@ -708,7 +708,7 @@
   "update.toast_details": "詳細",
   "update.close": "閉じる",
   "update.version_unknown": "未知",
-  "language.zh-TW": "繁体中国語",
+  "language.zh-TW": "繁体中文",
   "language.ko": "한국어",
   "language.fr": "français",
   "language.de": "Deutsch",
@@ -716,5 +716,5 @@
   "language.pt-BR": "português (Brasil)",
   "language.ru": "русский",
   "language.ja": "日本語",
-  "language.zh-HK": "広東語（繁体）"
+  "language.zh-HK": "粤语"
 }

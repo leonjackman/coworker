@@ -187,8 +187,8 @@
   "language.ko": "한국어",
   "language.name": "한국어",
   "language.switch_label": "표시 언어",
-  "language.zh": "간체 중국어",
-  "language.zh-TW": "번체 중국어",
+  "language.zh": "简体中文",
+  "language.zh-TW": "繁体中文",
   "mcp.add_server": "서버 추가",
   "mcp.add_title": "서버 추가",
   "mcp.advanced_settings": "고급 설정",
@@ -716,5 +716,5 @@
   "language.es": "español",
   "language.pt-BR": "português (Brasil)",
   "language.ru": "русский",
-  "language.zh-HK": "광둥어(번체)"
+  "language.zh-HK": "粤语"
 }
