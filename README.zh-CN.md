@@ -37,6 +37,8 @@
 
 > **前置预览版** — Coworker 正在积极开发中，功能持续迭代完善。下载试用，发现 bug 并报告，帮助我们共同打造更好产品。
 
+### 从 Releases 下载安装（推荐）
+
 预构建安装包可从 [GitHub Releases](https://github.com/leonjackman/coworker/releases) 下载：
 
 | 平台 | 下载 |
@@ -47,11 +49,15 @@
 
 > macOS 构建未签名/未公证。首次运行可能需要 `xattr -d com.apple.quarantine /Applications/Coworker.app`。
 
+### 从源码安装
+
+克隆仓库后用开发环境运行（见下方[开发](#开发)）。
+
 ## 快速开始
 
-### 桌面应用 (macOS)
+### 桌面应用 (macOS, 从源码)
 
-项目提供了一个 macOS 启动器脚本，可从源码运行应用：
+项目提供了一个 macOS 启动器脚本，可从源码运行完整应用：
 
 ```bash
 ./coworker_desktop.command
@@ -65,9 +71,7 @@
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
 
-启动器目前仅支持 macOS。Windows 和 Linux 可能可用但不保证。
-
-**所有平台均可**通过 [GitHub Releases](https://github.com/leonjackman/coworker/releases) 下载预构建安装包使用。
+> 启动器目前仅支持 macOS。Windows 和 Linux 可能可用但不保证。
 
 ### 配置模型
 

@@ -37,6 +37,8 @@
 
 > **Pre-release** — Coworker is under active development and improvements are added regularly. Download to try it out, report bugs, and shape the road ahead.
 
+### Install from Releases (recommended)
+
 Pre-built desktop installers are available from [GitHub Releases](https://github.com/leonjackman/coworker/releases):
 
 | Platform | Download |
@@ -47,11 +49,15 @@ Pre-built desktop installers are available from [GitHub Releases](https://github
 
 > macOS builds are unsigned / un-notarized. First launch may need `xattr -d com.apple.quarantine /Applications/Coworker.app`.
 
+### Install from source
+
+Clone the repo and run the dev environment (see [Development](#development) below).
+
 ## Quick Start
 
-### Desktop App (macOS)
+### Desktop App (macOS, from source)
 
-The project includes a launcher script for macOS to run the app from source:
+The project includes a launcher script for macOS to run the full app from source:
 
 ```bash
 ./coworker_desktop.command
@@ -59,15 +65,13 @@ The project includes a launcher script for macOS to run the app from source:
 
 This script installs dependencies, builds the frontend, starts the backend (FastAPI), and launches the Electron app.
 
-For smoke-testing without opening the desktop:
+For smoke-testing without the desktop window:
 
 ```bash
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
 
-The launcher currently supports macOS only. Windows and Linux may work but are not guaranteed.
-
-**For all platforms**, download the pre-built installer from [GitHub Releases](https://github.com/leonjackman/coworker/releases).
+> The launcher currently supports macOS only. Windows and Linux may work but are not guaranteed.
 
 ### Configure an LLM Provider
 
