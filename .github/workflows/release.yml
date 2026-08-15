@@ -167,8 +167,7 @@ jobs:
       - name: Install Linux deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-tools appstream
-          sudo apt-get install -y fakeroot rpm libdbus-1-dev libglib2.0-dev libgl1-mesa-glx libwebp-dev
+          sudo apt-get install -y libarchive-tools appstream libgl1 libwebp-dev libglib2.0-dev libdbus-1-dev rpm fakeroot
 
       - name: Install dependencies
         run: |
@@ -221,8 +220,7 @@ jobs:
       - name: Install Linux deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-tools appstream
-          sudo apt-get install -y fakeroot rpm libdbus-1-dev libglib2.0-dev libgl1-mesa-glx libwebp-dev libfuse2t64
+          sudo apt-get install -y libarchive-tools appstream libgl1 libwebp-dev libfuse2t64 libglib2.0-dev libdbus-1-dev rpm fakeroot
 
       - name: Install dependencies
         run: |
