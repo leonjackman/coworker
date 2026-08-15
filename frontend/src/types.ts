@@ -1,5 +1,6 @@
+import type { Language } from './lib/i18n';
+
 export type AgentMode = 'single';
-export type Language = 'zh' | 'en';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
 export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory';

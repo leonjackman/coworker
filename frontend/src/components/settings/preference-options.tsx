@@ -1,6 +1,7 @@
 import { Languages, Moon, Monitor, ShieldCheck, Sun, UserCheck, Zap } from 'lucide-react';
 import { t } from '../../lib/i18n';
-import type { Autonomy, Language } from '../../types';
+import type { Autonomy } from '../../types';
+import type { Language } from '../../lib/i18n';
 import type { ThemeMode } from '../../lib/theme';
 import type { SettingsToggleOption } from './SettingsList';
 
@@ -22,7 +23,15 @@ export function themeOptions(): SettingsToggleOption<ThemeMode>[] {
 
 export function languageOptions(): SettingsToggleOption<Language>[] {
   return [
-    { value: 'zh', label: <><Languages size={14} />{t('language.zh')}</>, title: t('language.zh') },
-    { value: 'en', label: <><Languages size={14} />{t('language.en')}</>, title: t('language.en') },
+    { value: 'zh', label: t('language.zh'), title: t('language.zh') },
+    { value: 'en', label: t('language.en'), title: t('language.en') },
+    { value: 'zh-TW', label: t('language.zh-TW'), title: t('language.zh-TW') },
+    { value: 'ja', label: t('language.ja'), title: t('language.ja') },
+    { value: 'ko', label: t('language.ko'), title: t('language.ko') },
+    { value: 'fr', label: t('language.fr'), title: t('language.fr') },
+    { value: 'de', label: t('language.de'), title: t('language.de') },
+    { value: 'es', label: t('language.es'), title: t('language.es') },
+    { value: 'pt-BR', label: t('language.pt-BR'), title: t('language.pt-BR') },
+    { value: 'ru', label: t('language.ru'), title: t('language.ru') },
   ];
 }

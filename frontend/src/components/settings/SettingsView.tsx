@@ -49,7 +49,8 @@ export function SettingsView({
   const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit' | 'memory_proposals'>('main');
 
   async function selectLanguage(language: string) {
-    if (language !== 'zh' && language !== 'en') return;
+    const allowed = ['zh', 'en', 'zh-TW', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
+    if (!allowed.includes(language)) return;
     if (language === getLanguage()) return;
     await setLanguage(language as Language);
     // No need to trigger re-render — useLanguage() hook handles it automatically
@@ -118,11 +119,11 @@ export function SettingsView({
             items: [
               {
                 id: 'language',
-                type: 'toggle',
+                type: 'select',
                 label: t('settings.language'),
                 description: t('settings.language_desc'),
                 value: getLanguage(),
-                options: languageOptions(),
+                options: languageOptions().map((opt) => ({ value: opt.value, label: opt.title })),
                 onChange: selectLanguage,
               },
               {
