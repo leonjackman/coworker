@@ -24,8 +24,8 @@ export function themeOptions(): SettingsToggleOption<ThemeMode>[] {
 export function languageOptions(): SettingsToggleOption<Language>[] {
   return [
     { value: 'zh', label: t('language.zh'), title: t('language.zh') },
-    { value: 'en', label: t('language.en'), title: t('language.en') },
     { value: 'zh-TW', label: t('language.zh-TW'), title: t('language.zh-TW') },
+    { value: 'en', label: t('language.en'), title: t('language.en') },
     { value: 'ja', label: t('language.ja'), title: t('language.ja') },
     { value: 'ko', label: t('language.ko'), title: t('language.ko') },
     { value: 'fr', label: t('language.fr'), title: t('language.fr') },

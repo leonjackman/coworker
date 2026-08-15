@@ -707,5 +707,13 @@
   "update.toast_subtitle": "Version {version} has been downloaded.",
   "update.toast_details": "Details",
   "update.close": "Close",
-  "update.version_unknown": "Unknown"
+  "update.version_unknown": "Unknown",
+  "language.zh-TW": "Traditional Chinese",
+  "language.ja": "Japanese",
+  "language.ko": "Korean",
+  "language.fr": "French",
+  "language.de": "German",
+  "language.es": "Spanish",
+  "language.pt-BR": "Portuguese (Brazil)",
+  "language.ru": "Russian"
 }

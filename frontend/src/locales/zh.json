@@ -707,5 +707,13 @@
   "update.toast_subtitle": "版本 {version} 已下载。",
   "update.toast_details": "详情",
   "update.close": "关闭",
-  "update.version_unknown": "未知"
+  "update.version_unknown": "未知",
+  "language.zh-TW": "繁體中文",
+  "language.ja": "日语",
+  "language.ko": "韩语",
+  "language.fr": "法语",
+  "language.de": "德语",
+  "language.es": "西班牙语",
+  "language.pt-BR": "葡萄牙语（巴西）",
+  "language.ru": "俄语"
 }
