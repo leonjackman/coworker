@@ -172,7 +172,6 @@ NODE_ENV=development npx electron . --no-sandbox
 欢迎贡献！提交 PR 前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 - [报告 Bug](https://github.com/leonjackman/coworker/issues) · [功能建议](https://github.com/leonjackman/coworker/issues)
-- [当前开发计划](docs/tasklist/DEV-TASKS.md)
 
 ---
 

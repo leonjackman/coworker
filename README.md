@@ -173,7 +173,6 @@ NODE_ENV=development npx electron . --no-sandbox
 Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - [Report bugs](https://github.com/leonjackman/coworker/issues) · [Request features](https://github.com/leonjackman/coworker/issues)
-- [Current development plan](docs/tasklist/DEV-TASKS.md)
 
 ---
 
