@@ -94,8 +94,8 @@ jobs:
             release/latest.yml
           retention-days: 7
 
-  build-linux:
-    name: Linux (AppImage)
+  build-linux-x64:
+    name: Linux (x64)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -130,19 +130,67 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --linux AppImage --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
+          npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-appimage
+          name: linux-x64
           path: |
             release/*.AppImage
+            release/*.deb
+            release/latest-linux.yml
+          retention-days: 7
+
+  build-linux-arm64:
+    name: Linux (arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools appstream
+          sudo apt-get install -y fakeroot rpm libdbus-1-dev libglib2.0-dev libgl1-mesa-glx libwebp-dev libfuse2t64
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd frontend && npm ci
+
+      - name: Build
+        env:
+          APP_VERSION: ${{ github.ref_name }}
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller -r backend/requirements.txt
+          npm run build:frontend
+          python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
+          npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: |
+            release/*.AppImage
+            release/*.deb
             release/latest-linux.yml
           retention-days: 7
 
   release:
     name: Publish Release
-    needs: [build-mac, build-win, build-linux]
+    needs: [build-mac, build-win, build-linux-x64, build-linux-arm64]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
