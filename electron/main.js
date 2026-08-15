@@ -267,22 +267,10 @@ function createTrayIcon() {
   return image;
 }
 
-function applyAppIcon(targetWindow = mainWindow) {
-  const iconPath = path.join(BRAND_ASSET_DIR, 'cw-icon-blue-white-background.png');
-  const icon = nativeImage.createFromPath(iconPath);
-  if (process.platform === 'darwin' && app.dock) {
-    app.dock.setIcon(icon);
-  }
-  if (targetWindow && !targetWindow.isDestroyed()) {
-    targetWindow.setIcon(icon);
-  }
-}
-
 function refreshBrandIcons() {
   if (tray && !tray.isDestroyed()) {
     tray.setImage(createTrayIcon());
   }
-  applyAppIcon();
 }
 
 // ---------------------------------------------------------------------------
@@ -522,8 +510,6 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-
-  applyAppIcon(mainWindow);
 
   if (FRONTEND_URL) {
     // Load from dev server when COWORKER_FRONTEND_URL is set
