@@ -47,7 +47,6 @@
     "icon": "assets/brand/cw-icon-blue-white-background.png",
     "category": "public.app-category.developer-tools",
     "hardenedRuntime": true,
-    "identity": "Developer ID Application: Blackbubble Records(Guangzhou)entertainment development co. LTD (K4B9JCX83M)",
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.inherit.plist"
   },
