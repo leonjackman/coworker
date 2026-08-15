@@ -16,6 +16,9 @@ jobs:
   build-mac:
     name: macOS (arm64)
     runs-on: macos-latest
+    env:
+      TEAM_ID: K4B9JCX83M
+      APP_VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +31,41 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Set up signing and notarization
+        run: |
+          # Create a temporary keychain for signing
+          SECURITY_DIR="$HOME/signing-security"
+          mkdir -p "$SECURITY_DIR"
+          echo "${{ secrets.CERT_PASSWORD }}" | security create-keychain -p "${{ secrets.CERT_PASSWORD }}" "$SECURITY_DIR/build.keychain"
+          security set-keychain-settings -lut 21600 "$SECURITY_DIR/build.keychain"
+          security unlock-keychain -p "${{ secrets.CERT_PASSWORD }}" "$SECURITY_DIR/build.keychain"
+          security default-keychain -s "$SECURITY_DIR/build.keychain"
+          security list-keychains -s "$SECURITY_DIR/build.keychain" ~/Library/Keychains/login.keychain-db
+
+          # Decode and install the Developer ID certificate (p12, encrypted with CERT_PASSWORD)
+          echo "${{ secrets.CERT_FILE }}" | base64 --decode > "$SECURITY_DIR/cert.p12"
+          security import "$SECURITY_DIR/cert.p12" \
+            -k "$SECURITY_DIR/build.keychain" \
+            -P "${{ secrets.CERT_PASSWORD }}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /bin/sh \
+            && echo "Certificate installed successfully"
+
+          # Verify the cert was installed correctly
+          security find-identity -v -p codesigning "$SECURITY_DIR/build.keychain"
+
+          # Export the api key p8 file for notarization
+          echo "${{ secrets.APPLE_API_KEY }}" > "$SECURITY_DIR/api-key.p8"
+
+      - name: Grant permission to access certs
+        run: |
+          # The keychain directory and all files in it need to be accessible
+          chmod -R 700 "$HOME/signing-security"
+          xattr -dr com.apple.quarantine "$HOME/signing-security" || true
+          security set-key-part-list "$HOME/signing-security/build.keychain" "$TEAM_ID" || true
+          security set-partition-list -D "Developer ID" -s -x acss "$HOME/signing-security/build.keychain"
+
       - name: Install dependencies
         run: |
           npm ci
@@ -35,7 +73,10 @@ jobs:
 
       - name: Build
         env:
-          APP_VERSION: ${{ github.ref_name }}
+          APPLE_API_KEY: $(cat "$HOME/signing-security/api-key.p8")
+          APPLE_API_KEY_ID: ZA2SG3QFCA
+          APPLE_API_ISSUER: 069bd8fa-9fbb-4e3d-a03b-96078cfba4e4
+
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
@@ -44,9 +85,6 @@ jobs:
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           CHANNEL_FLAG=""
-          # Prerelease tags (e.g. v1.1.0-beta.1, v1.1.0-rc.1) build into their
-          # own channel files (beta-mac.yml, rc-mac.yml); stable tags keep the
-          # default latest channel.
           if [[ "$APP_VERSION" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
             CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
           fi

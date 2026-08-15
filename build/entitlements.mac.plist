@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- JIT is required for arm64 builds and some Node.js/V8 features -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- Allow unsigned binaries (needed for PyInstaller bundled Python binaries like tiktoken) -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- Allow the app to disable library validation -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- Allow dyld inspection (required for some native modules) -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
