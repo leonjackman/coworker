@@ -41,7 +41,7 @@
 | 🔄 **MCP 集成** | Model Context Protocol 支持（自动发现、持久会话） |
 | 📦 **技能系统** | SKILL.md 标准技能，支持市场浏览与安装 |
 | 📓 **变更追踪** | 每次文件修改记录完整审计信息，支持历史回滚 |
-| 🌎 **国际化** | 完整的中文 / 英文界面 |
+| 🌎 **国际化** | 支持 11 种语言 — 英文、中文、日文、韩文、法文、德文、西班牙文、葡萄牙文、俄文等 |
 | 🎨 **主题** | 明暗模式，自定义强调色 |
 
 ---
@@ -161,7 +161,7 @@ NODE_ENV=development npx electron . --no-sandbox
 | **Agent 运行时** | LangChain · LangGraph · HumanInTheLoopMiddleware |
 | **模型支持** | OpenAI 兼容 API · Ollama · 自定义基础 URL |
 | **可扩展性** | MCP 服务器 · SKILL.md 技能 · 技能市场 |
-| **国际化** | 英文 / 中文 (zh) |
+| **国际化** | en · zh · zh-TW · zh-HK · ja · ko · fr · de · es · pt-BR · ru |
 
 ---
 

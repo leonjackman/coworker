@@ -42,7 +42,7 @@
 | 🔄 **MCP Integration** | Model Context Protocol with auto-discovery and persistent sessions |
 | 📦 **Skills** | SKILL.md-based skills with marketplace browsing |
 | 📓 **Change Tracking** | Every file change logged with rollback to any past state |
-| 🌎 **i18n** | Full Chinese / English interface |
+| 🌎 **i18n** | 11 languages — English, Chinese, Japanese, Korean, French, German, Spanish, Portuguese, Russian, and more |
 | 🎨 **Theme** | Dark / light with custom accent colors |
 
 ---
@@ -162,7 +162,7 @@ NODE_ENV=development npx electron . --no-sandbox
 | **Agent** | LangChain · LangGraph · HumanInTheLoopMiddleware |
 | **Models** | OpenAI-compatible APIs · Ollama · custom base URLs |
 | **Extensibility** | MCP servers · SKILL.md skills · Skill marketplace |
-| **i18n** | English / Chinese (zh) |
+| **i18n** | en · zh · zh-TW · zh-HK · ja · ko · fr · de · es · pt-BR · ru |
 
 ---
 
