@@ -1,5 +1,5 @@
 {
-  "language.name": "繁體中文",
+  "language.name": "繁體中文（粵）",
   "app.title": "CoWorker",
   "app.eyebrow": "本地程式碼助理",
   "app.subtitle": "提出程式碼問題或要求在目前工作區進行聚焦式更動。",
@@ -171,7 +171,7 @@
   "chat.empty_hint_plan": "計畫：更動前講究理由",
   "chat.empty_hint_build": "建構：實作更動",
   "chat.empty_hint_slash": "/：開啟指令選單",
-  "language.en": "英文",
+  "language.en": "English",
   "language.switch_label": "顯示語言",
   "theme.light": "淺色",
   "theme.dark": "深色",
@@ -707,13 +707,13 @@
   "update.toast_details": "詳細資料",
   "update.close": "關閉",
   "update.version_unknown": "未知",
-  "language.zh": "簡體中文",
-  "language.zh-TW": "繁體中文",
-  "language.ja": "日語",
-  "language.ko": "韓語",
-  "language.fr": "法語",
-  "language.de": "德語",
-  "language.es": "西班牙語",
-  "language.pt-BR": "葡萄牙語（巴西）",
-  "language.ru": "俄語"
+  "language.zh": "中文",
+  "language.zh-TW": "繁體中文（粵）",
+  "language.ja": "日本語",
+  "language.ko": "한국어",
+  "language.fr": "français",
+  "language.de": "Deutsch",
+  "language.es": "español",
+  "language.pt-BR": "português (Brasil)",
+  "language.ru": "русский"
 }

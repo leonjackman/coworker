@@ -708,12 +708,12 @@
   "update.toast_details": "Details",
   "update.close": "Close",
   "update.version_unknown": "Unknown",
-  "language.zh-TW": "Traditional Chinese",
-  "language.ja": "Japanese",
-  "language.ko": "Korean",
-  "language.fr": "French",
-  "language.de": "German",
-  "language.es": "Spanish",
-  "language.pt-BR": "Portuguese (Brazil)",
-  "language.ru": "Russian"
+  "language.zh-TW": "繁體中文（粵）",
+  "language.ja": "日本語",
+  "language.ko": "한국어",
+  "language.fr": "français",
+  "language.de": "Deutsch",
+  "language.es": "español",
+  "language.pt-BR": "português (Brasil)",
+  "language.ru": "русский"
 }
