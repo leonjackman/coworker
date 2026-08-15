@@ -12,26 +12,20 @@
 [English](README.md) · [简体中文](README.zh-CN.md)
 
 <p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/banner-logo.png" alt="Coworker" width="400">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/banner-logo.png" alt="Coworker" width="100%">
 </p>
 
 ---
 
-
 ### Screenshots
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/welcome-dark.png" width="380" alt="Coworker - Welcome"><br>
-      <sub><b>Welcome</b></sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat-light.png" width="380" alt="Coworker - Chat"><br>
-      <sub><b>Chat</b></sub>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/welcome-dark.png" width="100%" alt="Coworker - Welcome">
+</p>
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat-light.png" width="100%" alt="Coworker - Chat">
+</p>
 
 ---
 
