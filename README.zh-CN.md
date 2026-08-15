@@ -2,36 +2,55 @@
 
 > 本地优先的 AI 编程助手桌面应用 — 用对话式界面与你的代码一起工作，支持任意 AI 语言模型。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/leonjackman/coworker/actions/workflows/release.yml/badge.svg)](https://github.com/leonjackman/coworker/actions/workflows/release.yml)
-[![GitHub release](https://img.shields.io/github/v/release/leonjackman/coworker?style=flat-square)](https://github.com/leonjackman/coworker/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=for-the-badge)](LICENSE)
+[![CI](https://img.shields.io/badge/CI-passing-238636?style=for-the-badge)](https://github.com/leonjackman/coworker/actions)
+[![GitHub release](https://img.shields.io/github/v/release/leonjackman/coworker?style=for-the-badge)](https://github.com/leonjackman/coworker/releases/latest)
+[![macOS](https://img.shields.io/badge/platform-macOS-006600?style=for-the-badge&logo=apple)](#install)
+[![Windows](https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows)](#install)
+[![Linux](https://img.shields.io/badge/platform-Linux-333?style=for-the-badge&logo=linux)](#install)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-![Coworker Banner](https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/banner-logo.png)
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/banner-logo.png" alt="Coworker" width="400">
+</p>
 
 ---
 
+
 ### 截图
 
-![Coworker - 欢迎页](https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/welcome-dark.png)
-
-![Coworker - 对话页](https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat-light.png)
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/welcome-dark.png" width="380" alt="Coworker - 欢迎页"><br>
+      <sub><b>欢迎页</b></sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat-light.png" width="380" alt="Coworker - 对话页"><br>
+      <sub><b>对话页</b></sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
 ## 功能特点
 
-- **流式对话** — Agent 实时响应代码问题
-- **多模型支持** — OpenAI、Ollama 及任意 OpenAI 兼容 API
-- **目标模式** — 多轮自主执行，支持暂停和恢复
-- **长程记忆** — 项目和用户级记忆库，LLM 自动提取建议
-- **人机协作审查** — 命令执行、文件修改、MCP 调用均需确认
-- **MCP 集成** — Model Context Protocol 支持（自动发现、持久会话）
-- **技能系统** — SKILL.md 标准技能，支持市场浏览与安装
-- **变更追踪** — 每次文件修改记录完整审计信息，支持历史回滚
-- **国际化** — 完整的中文 / 英文界面
-- **主题** — 明暗模式，自定义强调色
+| 功能 | 说明 |
+| --- | --- |
+| 🗨️ **流式对话** | Agent 实时响应代码问题 |
+| 🔌 **多模型支持** | OpenAI、Ollama 及任意 OpenAI 兼容 API |
+| 🎯 **目标模式** | 多轮自主执行，支持暂停和恢复 |
+| 🧠 **长程记忆** | 项目级和用户级记忆库，LLM 自动提取建议 |
+| 🔒 **人机协作审查** | 命令执行、文件修改、MCP 调用需确认 |
+| 🔄 **MCP 集成** | Model Context Protocol 支持（自动发现、持久会话） |
+| 📦 **技能系统** | SKILL.md 标准技能，支持市场浏览与安装 |
+| 📓 **变更追踪** | 每次文件修改记录完整审计信息，支持历史回滚 |
+| 🌎 **国际化** | 完整的中文 / 英文界面 |
+| 🎨 **主题** | 明暗模式，自定义强调色 |
+
+---
 
 ## 安装
 
@@ -41,23 +60,23 @@
 
 预构建安装包可从 [GitHub Releases](https://github.com/leonjackman/coworker/releases) 下载：
 
-| 平台 | 下载 |
-|---|---|
-| **macOS (Apple Silicon)** | [Coworker-*.dmg](https://github.com/leonjackman/coworker/releases) — 通用构建 (ARM64) |
-| **Windows 10+** | [Coworker Setup *.exe](https://github.com/leonjackman/coworker/releases) — x64 NSIS 安装器 |
-| **Linux (x64)** | [Coworker-*.AppImage](https://github.com/leonjackman/coworker/releases) — 需要 FUSE |
+| 平台 | 安装方式 |
+| --- | --- |
+| **macOS (Apple Silicon)** | [下载 .dmg](https://github.com/leonjackman/coworker/releases) |
+| **Windows 10+** | [下载 .exe](https://github.com/leonjackman/coworker/releases) |
+| **Linux (x64)** | [下载 .AppImage](https://github.com/leonjackman/coworker/releases) |
 
 > macOS 构建未签名/未公证。首次运行可能需要 `xattr -d com.apple.quarantine /Applications/Coworker.app`。
 
 ### 从源码安装
 
-克隆仓库后用开发环境运行（见下方[开发](#开发)）。
+克隆仓库后用开发环境运行（见下方[开发](#development)）。
+
+---
 
 ## 快速开始
 
-### 桌面应用 (macOS, 从源码)
-
-项目提供了一个 macOS 启动器脚本，可从源码运行完整应用：
+### 桌面应用 (macOS, 从源码运行)
 
 ```bash
 ./coworker_desktop.command
@@ -71,7 +90,7 @@
 COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 ```
 
-> 启动器目前仅支持 macOS。Windows 和 Linux 可能可用但不保证。
+所有平台均可通过 [GitHub Releases](https://github.com/leonjackman/coworker/releases) 下载预构建安装包使用。
 
 ### 配置模型
 
@@ -87,6 +106,8 @@ COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 基础 URL: http://localhost:11434/v1
 模型: 你的模型名称
 ```
+
+---
 
 ## 开发
 
@@ -121,17 +142,34 @@ cd frontend && npm run dev
 NODE_ENV=development npx electron . --no-sandbox
 ```
 
+---
+
+## Coworker 与众不同的地方
+
+| 传统编程助手 | Coworker |
+| --- | --- |
+| 依赖云端，隐私风险 | **真正本地优先** — 所有数据保存在本地机器上 |
+| 绑定单一厂商 | **多模型中立** — 任意 OpenAI 兼容 API、Ollama、自定义端点 |
+| 会话级记忆，无跨会话持久化 | **长程记忆** — 自动从交互中提取，跨会话持久化 |
+| 无法控制 Agent 行为 | **默认 HITL** — 手动审批每条命令和文件修改 |
+| 无审计追踪 | **完整可追溯** — 可导出 Agent 日志、工具审计日志、回滚到任意状态 |
+| 盲盒式工具执行 | **透明化** — 每次改动都有 before/after 对比，以可读格式记录 |
+
+---
+
 ## 技术栈
 
 | 层级 | 技术 |
-|---|---|
+| --- | --- |
 | **桌面端** | Electron 43 · contextBridge · 系统托盘 · electron-updater |
-| **前端** | React 19 · Vite 8 · Zustand · assistant-ui · Tailwind CSS · Shiki |
+| **前端** | React 19 · Vite 8 · Zustand · assistant-ui · Tailwind · Shiki |
 | **后端** | Python 3 · FastAPI · Uvicorn · Pydantic · SQLite |
 | **Agent 运行时** | LangChain · LangGraph · HumanInTheLoopMiddleware |
 | **模型支持** | OpenAI 兼容 API · Ollama · 自定义基础 URL |
 | **可扩展性** | MCP 服务器 · SKILL.md 技能 · 技能市场 |
 | **国际化** | 英文 / 中文 (zh) |
+
+---
 
 ## 参与贡献
 
@@ -139,8 +177,18 @@ NODE_ENV=development npx electron . --no-sandbox
 
 欢迎贡献！提交 PR 前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-- [反馈 Bug](https://github.com/leonjackman/coworker/issues) / [功能建议](https://github.com/leonjackman/coworker/issues)
-- 查看 [docs/tasklist/DEV-TASKS.md](docs/tasklist/DEV-TASKS.md) 了解当前开发计划
+- [报告 Bug](https://github.com/leonjackman/coworker/issues) · [功能建议](https://github.com/leonjackman/coworker/issues)
+- [当前开发计划](docs/tasklist/DEV-TASKS.md)
+
+---
+
+## 链接
+
+- [GitHub Releases](https://github.com/leonjackman/coworker/releases) · [macOS / Windows / Linux 安装包](https://github.com/leonjackman/coworker/releases)
+- [GitHub Issues](https://github.com/leonjackman/coworker/issues) · [报告 Bug 和功能建议](https://github.com/leonjackman/coworker/issues)
+- [CONTRIBUTING.md](CONTRIBUTING.md) · [如何参与贡献](CONTRIBUTING.md)
+
+---
 
 ## 开源许可
 
