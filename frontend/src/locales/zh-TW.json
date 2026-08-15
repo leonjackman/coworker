@@ -1,5 +1,5 @@
 {
-  "language.name": "繁體中文（粵）",
+  "language.name": "繁體中文",
   "app.title": "CoWorker",
   "app.eyebrow": "本地程式碼助理",
   "app.subtitle": "提出程式碼問題或要求在目前工作區進行聚焦式更動。",
@@ -708,7 +708,7 @@
   "update.close": "關閉",
   "update.version_unknown": "未知",
   "language.zh": "中文",
-  "language.zh-TW": "繁體中文（粵）",
+  "language.zh-TW": "繁體中文",
   "language.ja": "日本語",
   "language.ko": "한국어",
   "language.fr": "français",
