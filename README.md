@@ -12,8 +12,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-![Coworker Screenshot](docs/screenshots/coworker-screenshot.png)
-> _Replace with actual app screenshot — capture after running the build and place at `docs/screenshots/coworker-screenshot.png`._
+[![Coworker Screenshot - Dark Welcome](docs/screenshots/welcome-dark.png)](docs/screenshots/welcome-dark.png)
 
 ---
 

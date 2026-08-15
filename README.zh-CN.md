@@ -12,8 +12,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-![Coworker 截图](docs/screenshots/coworker-screenshot.png)
-> _替换为实际应用截图 — 打包后运行 App 并截图，放在 `docs/screenshots/coworker-screenshot.png`。_
+[![Coworker Screenshot - Dark Welcome](docs/screenshots/welcome-dark.png)](docs/screenshots/welcome-dark.png)
 
 ---
 
