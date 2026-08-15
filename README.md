@@ -12,7 +12,15 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-[![Coworker Screenshot - Dark Welcome](docs/screenshots/welcome-dark.png)](docs/screenshots/welcome-dark.png)
+![Coworker Banner](docs/screenshots/banner-logo.png)
+
+---
+
+### Screenshots
+
+| Dark Theme | Light Theme |
+|---|---|
+| ![Welcome (dark)](docs/screenshots/welcome-dark.png) | ![Chat (light)](docs/screenshots/chat-light.png) |
 
 ---
 
