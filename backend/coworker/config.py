@@ -57,7 +57,7 @@ def load_settings() -> BackendSettings:
         "0", "false", "no", "off",
     }
     memory_char_limit = _env_int("COWORKER_MEMORY_CHAR_LIMIT", 2000)
-    memory_auto_extract = os.getenv("COWORKER_MEMORY_AUTO_EXTRACT", "0").strip().lower() not in {
+    memory_auto_extract = os.getenv("COWORKER_MEMORY_AUTO_EXTRACT", "1").strip().lower() not in {
         "0", "false", "no", "off",
     }
     memory_nudge_interval = _env_int("COWORKER_MEMORY_NUDGE_INTERVAL", 10)

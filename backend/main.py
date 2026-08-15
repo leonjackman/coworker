@@ -1211,7 +1211,7 @@ class SettingsUpdate(BaseModel):
     max_attachment_mb: int = 25
 
 
-SETTING_FILE = os.path.join(os.path.dirname(__file__), '..', '.coworker_settings.json')
+SETTING_FILE = str(settings.data_dir / ".coworker_settings.json")
 
 DEFAULT_MAX_ATTACHMENT_MB = 25
 MIN_MAX_ATTACHMENT_MB = 1

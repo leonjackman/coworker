@@ -3,9 +3,10 @@
 Unlike skills (which are hidden entirely in the ``discuss`` phase — planning is
 read-only), memory is *injected in every phase*: planning is exactly when the
 model needs the user's background preferences and project conventions. The
-write side is gated separately by the phase tool gate (the ``memory`` tool is
-only exposed in the ``execute`` phase), so "read everywhere, write only on
-approval during execution" holds structurally.
+write side is available in every phase too — the ``memory`` tool is exposed by
+the phase gate in both ``discuss`` and ``execute``, and writes pause for the
+user's approval via the HITL middleware (supervised/guarded) or pass directly
+(autonomous). Only file/system mutation stays execute-gated.
 
 Files are read directly from the backend through the MemoryManager — never via
 the workspace ``resolve_path`` guard — so the workspace boundary invariant is

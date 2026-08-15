@@ -2497,7 +2497,7 @@ function App() {
       const base: MemorySettings = cur ?? {
         enabled: true,
         char_limit: 2000,
-        auto_extract: false,
+        auto_extract: true,
         nudge_interval: 10,
         extract_model: '',
         proposals_pending: 0,

@@ -283,6 +283,8 @@ def phase_system_prompt(language: Language, phase: Phase, autonomy: Autonomy) ->
             "You are planning (read-only). Use the read-only tools to research the workspace and "
             "gather context (auditing, investigating, or breaking down the task). Use write_todos "
             "to present the plan as a checklist of what you will do. "
+            "You may write durable long-term facts with the memory tool (user preferences, project "
+            "conventions) — those are welcome even during planning. "
             "Do NOT modify files or run commands — execution is deferred until the user switches "
             "to build mode. Finish by summarizing your findings and the planned steps."
         )
@@ -667,7 +669,8 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "load_skill", "git_status"}
 _PLAN_TOOLS = {"ask_user"}
-_EXEC_TOOLS = {"run_command", "install_skill", "memory"}
+_MEMORY_TOOLS = {"memory"}
+_EXEC_TOOLS = {"run_command", "install_skill"}
 
 
 def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
@@ -864,10 +867,10 @@ def command_approval_middleware(
 
     def _needs_sensitive_approval(req: Any) -> bool:
         state = req.state
-        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
-            return False
         autonomy = normalize_autonomy(state.get("autonomy"))
-        # memory + install_skill: HITL for supervised + guarded, direct pass for autonomous
+        # memory + install_skill: HITL for supervised + guarded, direct pass for
+        # autonomous. No phase gate here: memory may be written from any phase
+        # (planning included); install_skill stays execute-only via the phase gate.
         return autonomy != "autonomous"
 
     def _needs_ask_user(req: Any) -> bool:
@@ -1777,7 +1780,8 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     model only ever sees the tools the current phase allows:
 
     * ``discuss`` (plan mode before approval): read-only + ``ask_user`` +
-      the agent cannot touch the filesystem.
+      the agent cannot touch the filesystem, but can still write long-term
+      memory (the ``memory`` tool) — durable facts belong in planning too.
     * ``execute``: read + write + ``run_command``; ``ask_user`` stays available
       unless autonomy is ``autonomous`` (physical removal — the model cannot
       interrupt the user at all in full-autonomy mode).
@@ -1798,7 +1802,7 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         work_mode = normalize_work_mode(state.get("work_mode"))
         phase = normalize_phase(state.get("phase"), work_mode)
         autonomy = normalize_autonomy(state.get("autonomy"))
-        allowed = set(_READ_ONLY_TOOLS)
+        allowed = set(_READ_ONLY_TOOLS) | _MEMORY_TOOLS
         if phase == "discuss":
             allowed |= _PLAN_TOOLS
         else:
