@@ -75,7 +75,7 @@ jobs:
 
       - name: Build
         env:
-          APPLE_API_KEY: $(cat "$HOME/signing-security/api-key.p8")
+          APPLE_API_KEY: /Users/runner/signing-security/api-key.p8
           APPLE_API_KEY_ID: ZA2SG3QFCA
           APPLE_API_ISSUER: 069bd8fa-9fbb-4e3d-a03b-96078cfba4e4
 
