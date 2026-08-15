@@ -27,6 +27,7 @@ class BackendSettings:
     project_root: Path
     data_dir: Path
     workspace_dir: Path
+    memory_dir: Path
     agent_provider: str
     openai_model: str
     checkpoint_cap_per_session: int
@@ -65,11 +66,14 @@ def load_settings() -> BackendSettings:
 
     data_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir = (data_dir / "memory").resolve()
+    memory_dir.mkdir(parents=True, exist_ok=True)
 
     return BackendSettings(
         project_root=project_root,
         data_dir=data_dir,
         workspace_dir=workspace_dir,
+        memory_dir=memory_dir,
         agent_provider=agent_provider,
         openai_model=openai_model,
         checkpoint_cap_per_session=checkpoint_cap_per_session,

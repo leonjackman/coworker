@@ -1,26 +1,29 @@
-"""Self-contained sanity checks for the memory subsystem.
+"""Self-contained sanity checks for the memory subsystem (v2 library tree).
 
 Runs with the venv python directly (no pytest needed)::
 
     cd backend && ./venv/bin/python coworker/memory/selftest.py
 
-Covers parsing/render round-trip, duplicate rejection, replace/remove,
-clear, discovery precedence, budget warning injection, and drift/verification
-behaviour. Exits non-zero on the first failure.
+Covers layout path safety, registry skeletons, Markdown-block CRUD, discovery
+injection order, prompt budget warning, and the v1 → v2 migration. Exits
+non-zero on the first failure.
 """
 
 from __future__ import annotations
 
-import sys
 import tempfile
 from pathlib import Path
+import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from coworker.memory.memory_file import HEADER, render_file, split_entries
-from coworker.memory.memory_discovery import MemoryScanner
+from coworker.memory.layout import memory_dir_from_created_at, resolve_rel_path, sanitize_name
+from coworker.memory.memory_file import render_blocks, split_blocks
 from coworker.memory.memory_prompt import format_memory_prompt
 from coworker.memory.memory_store import MemoryError, MemoryStore
+from coworker.memory.memory_discovery import MemoryScanner
+from coworker.memory.registry import MemoryRegistry
+from coworker.projects import ProjectStore
 
 CHECKS: list[str] = []
 
@@ -33,82 +36,170 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 
 def main() -> int:
-    # --- parse / render round trip ---------------------------------------
-    entries = ["user prefers Chinese replies", "frontend builds with npm run build only"]
-    text = render_file(entries)
-    check("render includes header", text.startswith(HEADER))
-    check("render separators", text.count("§") == 1)
-    parsed = split_entries(text)
-    check("parse round-trip", parsed == entries, f"{parsed!r} != {entries!r}")
-    check("empty render", render_file([]).strip() == HEADER)
+    # --- layout: timestamps, sanitize, path safety -------------------------
+    check(
+        "timestamp from iso",
+        memory_dir_from_created_at("2026-08-12T10:00:00+00:00") == "20260812100000",
+        memory_dir_from_created_at("2026-08-12T10:00:00+00:00"),
+    )
+    check("timestamp fallback", len(memory_dir_from_created_at("garbage")) == 14)
+    check("sanitize spaces", sanitize_name("  my project!  ") == "my_project_")
+    check("sanitize empty", sanitize_name("") == "untitled")
 
-    # manual multi-entry edit by a user must also parse
-    manual = f"{HEADER}\n\na\n§\n\nb\n\n§\n\nc\n"
-    check("manual format parse", split_entries(manual) == ["a", "b", "c"])
-
-    # --- store CRUD --------------------------------------------------------
     with tempfile.TemporaryDirectory() as tmp:
-        ws = Path(tmp) / "ws"
-        ws.mkdir()
-        scanner = MemoryScanner(workspace_root=ws, user_home=Path(tmp))
-        store = MemoryStore(scanner)
-        project = store.add("project", "port 9527 is the backend")
-        check("add creates project file", project.path.is_file())
-        check("add entry count", len(store.list_scope("project").entries) == 1)
-        store.add("project", "agent binds 0.0.0.0 for tests")
+        root = Path(tmp) / "memory"
+        root.mkdir()
         try:
-            store.add("project", "port 9527 is the backend")
+            resolve_rel_path(root, "../evil.md")
+            check("escape rejected", False, "no exception on .. escape")
+        except ValueError:
+            check("escape rejected", True)
+        try:
+            resolve_rel_path(root, "a/../../evil.md")
+            check("nested escape rejected", False)
+        except ValueError:
+            check("nested escape rejected", True)
+        ok = resolve_rel_path(root, "proj/BASE/note.md")
+        check("valid rel resolves", str(ok) == str((root / "proj" / "BASE" / "note.md").resolve()))
+
+    # --- blocks: split/render round trip -----------------------------------
+    blocks = ["first block", "second block"]
+    rendered = render_blocks(blocks)
+    check("render joins with blank line", rendered == "first block\n\nsecond block\n")
+    check("split round-trip", split_blocks(rendered) == blocks, str(split_blocks(rendered)))
+    check("split skips blanks", split_blocks("a\n\n\n\nb\n") == ["a", "b"])
+
+    # --- registry skeletons -------------------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        registry = MemoryRegistry(data_dir)
+        registry.ensure_root()
+        check("root created", (data_dir / "memory").is_dir())
+        for name in ("MEMORY.md", "USER.md", "AGENT.md"):
+            check(f"system file {name}", (data_dir / "memory" / name).is_file())
+
+        project_path = registry.ensure_project("20260812100000")
+        check("BASE exists", (project_path / "BASE").is_dir())
+        check(
+            "PROJECT subdir exists",
+            (project_path / "BASE" / "PROJECT" / "goals.md").is_file(),
+        )
+        agent_path = registry.ensure_agent(project_path, "default_agent")
+        for name in ("SOUL.md", "AGENT.md", "MEMORY.md"):
+            check(f"agent file {name}", (agent_path / name).is_file())
+        check("SESSIONS dir", (agent_path / "SESSIONS").is_dir())
+        check("registry idempotent", registry.ensure_root() == registry.ensure_root())
+
+        store = MemoryStore(data_dir / "memory")
+
+        # --- store block CRUD ------------------------------------------------
+        rel = "20260812100000/default_agent/MEMORY.md"
+        check("write_file creates parent", store.write_file(rel, "# M\n").path.is_file())
+        store.write_file(rel, "# M\n")
+        added = store.add_block(rel, "port 9527 is the backend")
+        check("add_block appended", "port 9527 is the backend" in added, str(added))
+        store.add_block(rel, "agent binds 0.0.0.0")
+        try:
+            store.add_block(rel, "port 9527 is the backend")
             check("duplicate rejected", False, "no exception on duplicate")
         except MemoryError:
             check("duplicate rejected", True)
-        m = store.replace("project", "port 9527", "port 9527 (FastAPI) is the backend")
-        check("replace swapped entry", any("FastAPI" in e for e in m.entries), str(m.entries))
+        replaced = store.replace_block(rel, "port 9527", "port 9527 (FastAPI) is the backend")
+        check("replace_block swapped", any("FastAPI" in b for b in replaced), str(replaced))
         try:
-            store.replace("project", "no-such-target", "x")
+            store.replace_block(rel, "no-such-target", "x")
             check("replace missing raises", False)
         except MemoryError:
             check("replace missing raises", True)
-        m = store.remove("project", "0.0.0.0")
-        check("remove works", len(m.entries) == 1, str(m.entries))
-        store.clear("project")
-        check("clear empties", len(store.list_scope("project").entries) == 0)
+        removed = store.remove_block(rel, "0.0.0.0")
+        check("remove_block works", "port 9527 (FastAPI) is the backend" in removed, str(removed))
+        check("clear empties", store.clear_file(rel) == [])
 
-        # --- user scope + discovery precedence -----------------------------
-        store.add("user", "global preference: reply in Chinese")
-        scan = scanner.scan(include_missing=True)
-        check("project scope found", scan.project is not None)
-        check("user scope found", scan.user is not None)
-        check(
-            "project precedes user",
-            scan.files()[0].scope == "project",
-            f"{[f.scope for f in scan.files()]}",
-        )
-        # project path lives under workspace .coworker
-        check(
-            "project path convention",
-            str(scan.project.path.resolve()) == str((ws / ".coworker" / "MEMORY.md").resolve()),
-            str(scan.project.path),
-        )
+        # --- whole-file write + read ------------------------------------------
+        store.write_file("USER.md", "语言偏好：中文\n\n项目类型：全栈\n")
+        mf = store.read_file("USER.md")
+        check("read_file round-trip", mf.content == "语言偏好：中文\n\n项目类型：全栈\n")
+        check("remove_file deletes", store.remove_file("USER.md") is True)
+        check("remove_file missing", store.remove_file("USER.md") is False)
 
-        # --- budget warning ------------------------------------------------
-        small = format_memory_prompt(
-            [("project", "/p (updated 2026-08-12 10:00)", ["a"] * 10)],
-            char_limit=5,
-        )
-        check("budget warning present", "<budget_warning>" in small)
-        empty = format_memory_prompt([], char_limit=2000)
-        check("empty prompt is empty", empty == "")
+        # --- discovery + injection precedence --------------------------------
+        store.write_file("MEMORY.md", "system fact\n")
+        store.add_block(rel, "agent fact")
+        scanner = MemoryScanner(data_dir / "memory")
+        library = scanner.scan(include_missing=True)
+        check("system nodes found", len(library.system) == 3, str(len(library.system)))
+        check("project found", len(library.projects) == 1, str(len(library.projects)))
+        project = library.projects[0]
+        check("project BASE nodes", len(project.base) >= 1, str(len(project.base)))
+        check("project context nodes", len(project.project) == 2, str(len(project.project)))
+        check("project agent found", len(project.agents) == 1, str(len(project.agents)))
+        agent = project.agents[0]
+        check("agent memory node", agent.memory is not None)
+        check("agent sessions empty", agent.sessions == [])
 
-        # --- budget is SOFT: never blocks writes or reads ------------------
-        store.clear("project")
-        store.add("project", "z" * 5000)  # far past any budget
-        check("write beyond budget accepted", len(store.list_scope("project").entries) == 1)
-        over = format_memory_prompt(
-            [("project", "/p (updated 2026-08-12 10:00)", store.list_scope("project").entries)],
-            char_limit=100,
+        injected = library.injected(project_dir="20260812100000", agent="default_agent")
+        kinds = [n.kind for n in injected]
+        check("system injected", kinds[0] == "system", str(kinds))
+        check("base before project_context", kinds.index("base_file") < kinds.index("project_file"), str(kinds))
+        check("agent memory injected", "agent_file" in kinds, str(kinds))
+        check("agent memory content", any("agent fact" in n.content for n in injected))
+
+        # --- prompt budget + ordering ----------------------------------------
+        prompt = format_memory_prompt(injected, char_limit=5)
+        check("budget warning present", "<budget_warning>" in prompt)
+        check("files rendered", "<file kind=" in prompt)
+        check("empty prompt", format_memory_prompt([], char_limit=2000) == "")
+
+        # --- budget is SOFT: writes never blocked -----------------------------
+        store.clear_file(rel)
+        store.add_block(rel, "z" * 5000)
+        over = format_memory_prompt(library.injected(project_dir="20260812100000", agent="default_agent"), char_limit=100)
+        check("budget warns but does not truncate", "<budget_warning>" in over)
+
+        # --- migration --------------------------------------------------------
+        home = Path(tmp) / "home"
+        (home / ".coworker").mkdir(parents=True)
+        (home / ".coworker" / "MEMORY.md").write_text(
+            "# Coworker 记忆\n\n语言偏好：中文\n§\n\n项目类型：全栈\n§\n",
+            encoding="utf-8",
         )
-        check("budget does not truncate entries", over.count("<memory_item>") == 1, over)
-        check("budget still warns", "<budget_warning>" in over)
+        ws = Path(tmp) / "ws"
+        (ws / ".coworker").mkdir(parents=True)
+        (ws / ".coworker" / "MEMORY.md").write_text(
+            "项目约束：必须测试\n§\n\n部署：本地\n",
+            encoding="utf-8",
+        )
+        ps = ProjectStore(data_dir / "projects.json")
+        project_rec = ps.create("demo", str(ws))
+        from coworker.memory.migrate_v1 import run_migration
+
+        result = run_migration(
+            data_dir=data_dir,
+            registry=registry,
+            project_store=ps,
+            memory_root=data_dir / "memory",
+            store=store,
+            old_user_path=home / ".coworker" / "MEMORY.md",
+        )
+        check("migration migrated", result.get("migrated") is True, str(result))
+        check("migration no errors", result.get("errors") == [], str(result))
+        check("migration backup marker", (data_dir / "memory" / ".migrate_backup" / "migrated.marker").is_file())
+        user_text = store.read_raw("USER.md")
+        check("user memory imported", "语言偏好：中文" in user_text and "项目类型：全栈" in user_text, user_text)
+        md = ps.memory_dir_for(project_rec.id)
+        proj_text = store.read_raw(f"{md}/default_agent/MEMORY.md")
+        check("project memory imported", "项目约束：必须测试" in proj_text and "部署：本地" in proj_text, proj_text)
+        check("old user file moved", not (home / ".coworker" / "MEMORY.md").exists())
+        check("old project file moved", not (ws / ".coworker" / "MEMORY.md").exists())
+        again = run_migration(
+            data_dir=data_dir,
+            registry=registry,
+            project_store=ps,
+            memory_root=data_dir / "memory",
+            store=store,
+            old_user_path=home / ".coworker" / "MEMORY.md",
+        )
+        check("migration idempotent", again.get("migrated") is False, str(again))
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]

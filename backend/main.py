@@ -42,7 +42,7 @@ from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
 from coworker.skills.skill_manager import SkillManager
 from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
-from coworker.memory.memory_manager import MemoryConfig, MemoryManager
+from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
 from coworker.memory.auto_extract import MemoryProposalStore
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
@@ -74,7 +74,7 @@ tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
 memory_manager = MemoryManager(
     settings.data_dir,
-    settings.workspace_dir,
+    memory_dir=settings.memory_dir,
     config=MemoryConfig(
         enabled=settings.memory_enabled,
         char_limit=settings.memory_char_limit,
@@ -85,7 +85,7 @@ memory_manager = MemoryManager(
 )
 memory_proposal_store = MemoryProposalStore(settings.data_dir)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
-agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager)
+agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
 
 # Persistent MCP sessions: start the background loop, pre-warm connections so
 # the first chat is instant, and tear sessions down on exit.
@@ -534,24 +534,24 @@ class CommandApprovalResolve(BaseModel):
 # Long-term memory helpers (read injection; Phase 2 auto-extract dispatch)
 # --------------------------------------------------------------------------- #
 
-def _memory_scope_store(scope: str, project_id: str = "") -> Any:
-    """Return a MemoryStore for the given scope.
+def _project_memory_dir(project_id: str) -> str:
+    """Resolve a project's memory_dir (auto-generating for legacy projects)."""
+    if not project_id:
+        return ""
+    try:
+        return project_store.memory_dir_for(project_id)
+    except (KeyError, ValueError):
+        return ""
 
-    Resolves the project's workspace when ``project_id`` is given so the memory
-    UI targets the *active* project (agents already write to the session's
-    project workspace). Falls back to the default workspace otherwise.
-    """
-    workspace_dir = settings.workspace_dir
-    if project_id:
-        try:
-            workspace = workspace_controller.workspace_for_project(project_id)
-            workspace_dir = workspace.root
-        except Exception:  # noqa: BLE001 - unknown project -> default workspace
-            pass
-    manager = memory_manager.for_workspace(workspace_dir)
-    if scope in ("project", "user"):
-        return manager.store
-    raise HTTPException(status_code=400, detail=f"unknown memory scope: {scope}")
+
+def _ensure_agent_skeleton(project_dir: str, agent: str = DEFAULT_AGENT) -> str:
+    """Materialize the agent skeleton for a project; returns the agent rel dir."""
+    project_path = memory_manager.registry.ensure_project(project_dir)
+    agent_path = memory_manager.registry.ensure_agent(project_path, agent)
+    try:
+        return agent_path.relative_to(memory_manager.root).as_posix()
+    except ValueError:
+        return f"{project_dir}/{agent}"
 
 
 def _memory_extract_llm() -> Any | None:
@@ -717,14 +717,15 @@ async def chat(request: ChatRequest):
 
 
 # --------------------------------------------------------------------------- #
-# Long-term memory API (read/write/status + Phase 2 proposals)
+# Long-term memory API (library tree + proposals + settings)
 # --------------------------------------------------------------------------- #
 
 class MemoryWriteRequest(BaseModel):
-    scope: str = "project"
+    action: str = "add"        # add | replace | remove
     content: str = ""
     target: str = ""
     project_id: str = ""
+    agent: str = DEFAULT_AGENT
 
 
 class MemoryProposalResolveRequest(BaseModel):
@@ -732,82 +733,145 @@ class MemoryProposalResolveRequest(BaseModel):
     status: str = "approved"  # approved | rejected
 
 
-@app.get("/api/memory/status")
-async def memory_status(project_id: str = ""):
-    """Full memory overview: entries per scope, sizes, budget, enabled flags."""
-    workspace_dir = settings.workspace_dir
-    if project_id:
-        try:
-            workspace = workspace_controller.workspace_for_project(project_id)
-            workspace_dir = workspace.root
-        except Exception:  # noqa: BLE001 - unknown project -> default workspace
-            pass
-    manager = memory_manager.for_workspace(workspace_dir)
-    scan = manager.scanner.scan(include_missing=True)
-    payload: dict[str, Any] = {
-        "enabled": memory_manager.enabled,
-        "auto_extract": memory_manager.auto_extract,
-        "nudge_interval": memory_manager.config.nudge_interval,
-        "char_limit": memory_manager.char_limit,
-        "scopes": {},
-        "proposals_pending": len(memory_proposal_store.list_pending()),
+class MemoryFileRequest(BaseModel):
+    rel: str = ""
+    content: str = ""
+
+
+class MemorySettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    char_limit: int | None = None
+    auto_extract: bool | None = None
+    nudge_interval: int | None = None
+    extract_model: str | None = None
+
+
+@app.get("/api/memory/discover")
+async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
+    """Memory library tree: system files + project views (BASE/PROJECT/agents)."""
+    project_dir = _project_memory_dir(project_id)
+    if project_dir:
+        _ensure_agent_skeleton(project_dir, agent)
+    library = memory_manager.scanner.scan(include_missing=True)
+    return {
+        "root": str(library.root),
+        "system": [n.to_dict() for n in library.system],
+        "projects": [p.to_dict() for p in library.projects],
     }
-    for memory in scan.files():
-        payload["scopes"][memory.scope] = {
-            "path": str(memory.path),
-            "mtime": memory.mtime,
-            "entries": memory.entries,
-            "char_count": sum(len(e) for e in memory.entries),
-            "entry_count": len(memory.entries),
-        }
-    payload["scopes"].setdefault("project", {"path": "", "mtime": 0.0, "entries": [], "char_count": 0, "entry_count": 0})
-    payload["scopes"].setdefault("user", {"path": str(manager.scanner.user_path()), "mtime": 0.0, "entries": [], "char_count": 0, "entry_count": 0})
-    return payload
+
+
+@app.get("/api/memory/file")
+async def get_memory_file(rel: str = ""):
+    """Read one memory file by memory-root-relative path."""
+    if not rel:
+        raise HTTPException(status_code=400, detail="rel is required")
+    try:
+        memory = memory_manager.store.read_file(rel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "path": str(memory.path),
+        "rel": rel,
+        "content": memory.content,
+        "mtime": memory.mtime,
+        "blocks": list(memory.blocks),
+    }
+
+
+@app.post("/api/memory/file")
+async def save_memory_file(request: MemoryFileRequest):
+    """Replace one memory file's full content (raw Markdown)."""
+    if not memory_manager.enabled:
+        raise HTTPException(status_code=400, detail="memory is disabled")
+    if not request.rel:
+        raise HTTPException(status_code=400, detail="rel is required")
+    try:
+        memory = memory_manager.store.write_file(request.rel, request.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"rel": request.rel, "content": memory.content}
+
+
+@app.post("/api/memory/delete")
+async def delete_memory(request: MemoryFileRequest):
+    """Delete a file (or empty directory) under the memory root."""
+    if not request.rel:
+        raise HTTPException(status_code=400, detail="rel is required")
+    try:
+        deleted = memory_manager.store.remove_file(request.rel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="file not found")
+    return {"status": "ok", "rel": request.rel}
 
 
 @app.post("/api/memory/write")
 async def memory_write(request: MemoryWriteRequest):
-    """Backend-direct memory write (UI path; bypasses the workspace guard).
+    """Backend-direct memory write to the current agent's memory file.
 
-    ``target`` empty = add; ``target`` + ``content`` = replace.
+    ``action`` add/replace/remove; ``target`` only meaningful for replace/remove.
     """
     if not memory_manager.enabled:
         raise HTTPException(status_code=400, detail="memory is disabled")
-    store = _memory_scope_store(request.scope, request.project_id)
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    agent_rel = _ensure_agent_skeleton(project_dir, request.agent) + "/MEMORY.md"
+    store = memory_manager.store
     try:
-        if request.target:
+        if request.action == "replace":
             if not request.content:
                 raise ValueError("content is required for replace")
-            memory = store.replace(request.scope, request.target, request.content)
-        elif request.content:
-            memory = store.add(request.scope, request.content)
+            blocks = store.replace_block(agent_rel, request.target, request.content)
+        elif request.action == "remove":
+            if not request.target:
+                raise ValueError("target is required for remove")
+            blocks = store.remove_block(agent_rel, request.target)
+        elif request.action == "add":
+            if not request.content:
+                raise ValueError("content is required for add")
+            blocks = store.add_block(agent_rel, request.content)
         else:
-            raise ValueError("content is required for add")
+            raise ValueError(f"unsupported memory action: {request.action}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"scope": request.scope, "entries": memory.entries}
+    return {"rel": agent_rel, "blocks": blocks}
 
 
-@app.post("/api/memory/remove")
-async def memory_remove(request: MemoryWriteRequest):
-    """Remove a memory entry identified by ``target`` (substring match)."""
-    if not memory_manager.enabled:
-        raise HTTPException(status_code=400, detail="memory is disabled")
-    store = _memory_scope_store(request.scope, request.project_id)
-    if not request.target:
-        raise HTTPException(status_code=400, detail="target is required for remove")
-    try:
-        memory = store.remove(request.scope, request.target)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"scope": request.scope, "entries": memory.entries}
+@app.post("/api/memory/register-project")
+async def memory_register_project(request: MemoryWriteRequest):
+    """Materialize the project memory skeleton (BASE/ + BASE/PROJECT/)."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    memory_manager.registry.ensure_project(project_dir)
+    return {"status": "ok", "project_dir": project_dir}
 
 
-@app.post("/api/memory/clear")
-async def memory_clear(request: MemoryWriteRequest):
-    store = _memory_scope_store(request.scope, request.project_id)
-    memory = store.clear(request.scope)
-    return {"scope": request.scope, "entries": memory.entries}
+@app.post("/api/memory/register-agent")
+async def memory_register_agent(request: MemoryWriteRequest):
+    """Materialize an agent skeleton under a project."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    agent_dir = _ensure_agent_skeleton(project_dir, request.agent or DEFAULT_AGENT)
+    return {"status": "ok", "agent_dir": agent_dir}
+
+
+@app.post("/api/memory/migrate")
+async def memory_migrate():
+    """Run the v1 → v2 memory migration (idempotent, backs up first)."""
+    from coworker.memory.migrate_v1 import run_migration
+
+    result = run_migration(
+        data_dir=settings.data_dir,
+        registry=memory_manager.registry,
+        project_store=project_store,
+        memory_root=memory_manager.root,
+        store=memory_manager.store,
+    )
+    return {"status": "ok", **result}
 
 
 @app.get("/api/memory/proposals")
@@ -821,63 +885,38 @@ async def resolve_memory_proposal(request: MemoryProposalResolveRequest):
     if record is None:
         raise HTTPException(status_code=404, detail="proposal not found")
     if request.status == "approved":
-        workspace_path = record.get("workspace_path") or ""
-        view = memory_manager.for_workspace(Path(workspace_path) if workspace_path else None)
+        project_dir = record.get("project_dir") or ""
+        agent = record.get("agent") or DEFAULT_AGENT
         try:
-            view.store.add("project", record.get("text", ""))
+            if project_dir:
+                agent_rel = _ensure_agent_skeleton(project_dir, agent) + "/MEMORY.md"
+                memory_manager.store.add_block(agent_rel, record.get("text", ""))
+            else:
+                memory_manager.store.add_block("USER.md", record.get("text", ""))
         except ValueError as exc:
             # Duplicate or already-saved: treat as resolved regardless.
             logger.info("approve proposal %s: %s", request.proposal_id, exc)
     return {"status": "ok", "record": record}
 
 
-class MemoryFileRequest(BaseModel):
-    scope: str = "project"
-    content: str = ""
-    project_id: str = ""
-
-
-class MemorySettingsUpdate(BaseModel):
-    enabled: bool | None = None
-    char_limit: int | None = None
-    auto_extract: bool | None = None
-    nudge_interval: int | None = None
-    extract_model: str | None = None
-
-
-@app.get("/api/memory")
-async def list_memory_files(project_id: str = ""):
-    """Memory library: every memory file (project + user) with parsed metadata."""
-    workspace_dir = settings.workspace_dir
-    if project_id:
-        try:
-            workspace = workspace_controller.workspace_for_project(project_id)
-            workspace_dir = workspace.root
-        except Exception:  # noqa: BLE001 - unknown project -> default workspace
-            pass
-    manager = memory_manager.for_workspace(workspace_dir)
-    scan = manager.scanner.scan(include_missing=True)
-    return {"files": [memory.to_dict() for memory in scan.files()]}
-
-
-@app.get("/api/memory/file")
-async def get_memory_file(scope: str = "project", project_id: str = ""):
-    """Full raw body of one memory file for editing."""
-    if scope not in ("project", "user"):
-        raise HTTPException(status_code=400, detail=f"unknown memory scope: {scope}")
-    store = _memory_scope_store(scope, project_id)
-    memory = store.list_scope(scope)
-    return {"scope": scope, "path": str(memory.path), "content": store.read_file_text(scope)}
-
-
-@app.post("/api/memory/file")
-async def save_memory_file(request: MemoryFileRequest):
-    """Replace one memory file's full content (re-parsed into entries)."""
-    if not memory_manager.enabled:
-        raise HTTPException(status_code=400, detail="memory is disabled")
-    store = _memory_scope_store(request.scope, request.project_id)
-    memory = store.write_file_text(request.scope, request.content)
-    return {"scope": request.scope, "entries": memory.entries}
+@app.get("/api/memory/status")
+async def memory_status(project_id: str = ""):
+    """Full memory overview: file counts, sizes, budget, enabled flags."""
+    project_dir = _project_memory_dir(project_id)
+    library = memory_manager.scanner.scan(include_missing=True)
+    nodes = library.injected(project_dir=project_dir or None, agent=DEFAULT_AGENT)
+    char_total = sum(len(n.content) for n in nodes)
+    return {
+        "enabled": memory_manager.enabled,
+        "auto_extract": memory_manager.auto_extract,
+        "nudge_interval": memory_manager.config.nudge_interval,
+        "char_limit": memory_manager.char_limit,
+        "root": str(library.root),
+        "file_count": len(nodes),
+        "char_count": char_total,
+        "over_budget": char_total > memory_manager.char_limit,
+        "proposals_pending": len(memory_proposal_store.list_pending()),
+    }
 
 
 @app.get("/api/memory/settings")
@@ -919,9 +958,15 @@ async def save_memory_settings(request: MemorySettingsUpdate):
                 "extract_model": updated.extract_model,
             }
         )
-    except Exception as exc:
-        logger.warning("memory settings persisted but not saved: %s", exc)
-    return await get_memory_settings()
+    except OSError as exc:  # noqa: BLE001 - settings persistence must not fail the request
+        logger.warning("Failed to persist memory settings: %s", exc)
+    return {
+        "enabled": updated.enabled,
+        "char_limit": updated.char_limit,
+        "auto_extract": updated.auto_extract,
+        "nudge_interval": updated.nudge_interval,
+        "extract_model": updated.extract_model,
+    }
 
 from fastapi.responses import StreamingResponse
 
@@ -2141,7 +2186,16 @@ async def list_projects():
 async def create_project(request: ProjectCreateRequest):
     try:
         workspace_path = workspace_controller.validate_workspace_path(request.workspace_path)
-        project = project_store.create(request.name, workspace_path)
+        from coworker.memory.layout import memory_dir_from_created_at
+
+        from datetime import datetime, timezone
+
+        memory_dir = memory_dir_from_created_at(datetime.now(timezone.utc).isoformat())
+        project = project_store.create(request.name, workspace_path, memory_dir=memory_dir)
+        try:
+            memory_manager.registry.ensure_project(project.memory_dir)
+        except Exception:  # noqa: BLE001 - memory scaffold must not block project creation
+            pass
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

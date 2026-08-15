@@ -1324,20 +1324,18 @@ ipcMain.handle('delete-skill', (event, name) =>
 ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));
 ipcMain.handle('get-memory-status', () => requestBackend('/api/memory/status', 'GET'));
-ipcMain.handle('write-memory-entry', (event, payload = {}) => requestBackend('/api/memory/write', 'POST', payload));
-ipcMain.handle('remove-memory-entry', (event, payload = {}) => requestBackend('/api/memory/remove', 'POST', payload));
-ipcMain.handle('clear-memory-scope', (event, payload = {}) => requestBackend('/api/memory/clear', 'POST', payload));
+ipcMain.handle('discover-memory', (event, projectId = '') => {
+  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+  return requestBackend(`/api/memory/discover${query}`, 'GET');
+});
+ipcMain.handle('get-memory-file', (event, rel = '') =>
+  requestBackend(`/api/memory/file?rel=${encodeURIComponent(rel)}`, 'GET'),
+);
+ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api/memory/file', 'POST', payload));
+ipcMain.handle('delete-memory-file', (event, payload = {}) => requestBackend('/api/memory/delete', 'POST', payload));
+ipcMain.handle('migrate-memory', () => requestBackend('/api/memory/migrate', 'POST', {}));
 ipcMain.handle('list-memory-proposals', () => requestBackend('/api/memory/proposals', 'GET'));
 ipcMain.handle('resolve-memory-proposal', (event, payload = {}) => requestBackend('/api/memory/proposals/resolve', 'POST', payload));
-  ipcMain.handle('get-memory-files', (event, projectId = '') => {
-    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-    return requestBackend(`/api/memory${query}`, 'GET');
-  });
-  ipcMain.handle('get-memory-file', (event, scope = 'project', projectId = '') => {
-    const query = projectId ? `&project_id=${encodeURIComponent(projectId)}` : '';
-    return requestBackend(`/api/memory/file?scope=${encodeURIComponent(scope)}${query}`, 'GET');
-  });
-ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api/memory/file', 'POST', payload));
 ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings', 'GET'));
 ipcMain.handle('save-memory-settings', (event, payload = {}) => requestBackend('/api/memory/settings', 'POST', payload));
 ipcMain.handle('reveal-in-folder', async (event, filePath) => {

@@ -1,90 +1,70 @@
-"""Memory entry model and Markdown ``§``-delimited serialization.
+"""Memory file model: a plain Markdown file plus parsed block view.
 
-The on-disk format is deliberately simple so users can read and edit it with
-any editor while the tool layer can still parse entries reliably:
-
-.. code-block:: markdown
-
-    # Coworker 记忆
-
-    <entry text one>
-    §
-    <entry text two>
-    §
-    ...
-
-Each entry is a single block of free text; ``§`` on its own line separates
-entries. Trailing/leading whitespace is trimmed. There is no frontmatter and
-no per-entry metadata — freshness comes from the file mtime (Claude's lesson:
-use timestamps, not importance scoring).
+The memory library is directory-based; every file is a standalone Markdown
+document the user can open and edit in any editor. ``agent/MEMORY.md`` and
+``SESSIONS/*.md`` carry *blocks* (paragraphs separated by blank lines) so the
+memory tool can add/replace/remove individual entries while the file stays
+human-readable Markdown.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-HEADER = "# Coworker 记忆"
-
-ENTRY_DELIMITER = "§"
-
-MEMORY_FILE_NAME = "MEMORY.md"
-
-# Matches a ``§`` delimiter on its own line (allowing surrounding blank lines).
-_ENTRY_SPLIT_RE = re.compile(r"\n*\s*§\s*\n+")
-
 
 @dataclass(frozen=True)
 class MemoryFile:
-    """One discovered memory file plus a parsed entry view."""
+    """One memory file plus a lazy block view."""
 
-    scope: str  # "project" | "user"
     path: Path
-    mtime: float
-    entries: list[str]
+    content: str = ""
+    mtime: float = 0.0
+    blocks: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "scope": self.scope,
             "path": str(self.path),
             "mtime": self.mtime,
-            "entries": self.entries,
-            "char_count": sum(len(e) for e in self.entries),
-            "entry_count": len(self.entries),
+            "content": self.content,
+            "blocks": list(self.blocks),
+            "char_count": len(self.content),
+            "block_count": len(self.blocks),
         }
 
 
-def split_entries(text: str) -> list[str]:
-    """Split raw file content into trimmed entries, dropping the header."""
-    body = text
-    header_idx = body.find(HEADER)
-    if header_idx != -1:
-        body = body[header_idx + len(HEADER):]
-    parts = _ENTRY_SPLIT_RE.split(body)
-    entries: list[str] = []
-    for part in parts:
-        entry = part.strip().strip("\n")
-        if entry:
-            entries.append(entry)
-    return entries
+def split_blocks(text: str) -> list[str]:
+    """Split Markdown into trimmed blocks separated by blank lines.
+
+    A block is a non-empty run of lines. Markdown headings and list items are
+    preserved verbatim. Blank lines separate blocks.
+    """
+    out: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        if not line.strip():
+            if current:
+                out.append("\n".join(current).strip())
+                current = []
+            continue
+        current.append(line)
+    if current:
+        out.append("\n".join(current).strip())
+    return [b for b in out if b]
 
 
-def render_file(entries: list[str]) -> str:
-    """Render entries back into canonical file content."""
-    if not entries:
-        return f"{HEADER}\n"
-    body = f"\n{ENTRY_DELIMITER}\n\n".join(e.strip() for e in entries if e.strip())
-    return f"{HEADER}\n\n{body}\n"
+def render_blocks(blocks: list[str]) -> str:
+    """Rejoin blocks back into canonical file content."""
+    return "\n\n".join(b.strip() for b in blocks if b.strip()) + ("\n" if blocks else "")
 
 
-def load_file(path: Path, scope: str) -> MemoryFile:
-    """Read a memory file into a MemoryFile (empty entries if missing/unreadable)."""
+def load_file(path: Path) -> MemoryFile:
+    """Read a memory file into a MemoryFile (empty if missing/unreadable)."""
     try:
         stat = path.stat()
         text = path.read_text(encoding="utf-8", errors="replace")
         mtime = stat.st_mtime
     except OSError:
-        return MemoryFile(scope=scope, path=path, mtime=0.0, entries=[])
-    return MemoryFile(scope=scope, path=path, mtime=mtime, entries=split_entries(text))
+        return MemoryFile(path=path, content="", mtime=0.0, blocks=())
+    return MemoryFile(path=path, content=text, mtime=mtime, blocks=tuple(split_blocks(text)))

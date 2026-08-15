@@ -64,6 +64,8 @@ class WorkspaceController:
 
     def public_project(self, project_id: str, session_count: int) -> dict[str, Any]:
         project = self.project_store.require(project_id)
+        if not project.memory_dir:
+            project.memory_dir = self.project_store.memory_dir_for(project_id)
         return {
             "id": project.id,
             "name": project.name,
@@ -72,4 +74,5 @@ class WorkspaceController:
             "created_at": project.created_at,
             "updated_at": project.updated_at,
             "session_count": session_count,
+            "memory_dir": project.memory_dir,
         }

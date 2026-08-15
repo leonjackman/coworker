@@ -65,7 +65,7 @@ class MemoryProposalStore:
             records = [r for r in self._read() if r.get("status") == "pending"]
         return records[-limit:]
 
-    def add(self, *, session_id: str, provider: str, model: str, candidates: list[str], workspace_path: str = "") -> list[dict[str, Any]]:
+    def add(self, *, session_id: str, provider: str, model: str, candidates: list[str], workspace_path: str = "", project_dir: str = "", agent: str = "") -> list[dict[str, Any]]:
         created_at = datetime.now(timezone.utc).isoformat()
         added: list[dict[str, Any]] = []
         with self._lock:
@@ -84,6 +84,8 @@ class MemoryProposalStore:
                     "provider": provider,
                     "model": model,
                     "workspace_path": workspace_path,
+                    "project_dir": project_dir,
+                    "agent": agent or "default_agent",
                     "created_at": created_at,
                 }
                 existing.append(record)
@@ -230,6 +232,8 @@ async def run_auto_extract(
     provider_name: str,
     model_name: str,
     workspace_path: str = "",
+    project_dir: str = "",
+    agent: str = "",
 ) -> dict[str, Any]:
     """Extract candidate memories from recent messages and propose them.
 
@@ -268,6 +272,8 @@ async def run_auto_extract(
         model=model_name,
         candidates=candidates,
         workspace_path=workspace_path,
+        project_dir=project_dir,
+        agent=agent,
     )
     if proposed:
         logger.info("auto-extract proposed %d memories for %s", len(proposed), session_id)

@@ -48,12 +48,11 @@ import type {
   MemoryProposalRecord,
   MemoryProposalResolveRequest,
   MemoryProposalsResponse,
-  MemoryScope,
   MemoryStatusResponse,
-  MemoryWriteRequest,
-  MemoryWriteResponse,
+  MemoryDiscoverResponse,
+  MemoryDeleteResponse,
+  MemoryMigrateResponse,
   MemoryFileContentResponse,
-  MemoryFileListResponse,
   MemoryFileSaveResponse,
   MemorySettings,
   MemorySettingsPatch,
@@ -168,14 +167,13 @@ export interface ChatService {
   listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
   getMemoryStatus: () => Promise<MemoryStatusResponse>;
-  writeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
-  removeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
-  clearMemoryScope: (scope: MemoryScope) => Promise<MemoryWriteResponse>;
+  discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
+  getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
+  saveMemoryFile: (rel: string, content: string) => Promise<MemoryFileSaveResponse>;
+  deleteMemoryFile: (rel: string) => Promise<MemoryDeleteResponse>;
+  migrateMemory: () => Promise<MemoryMigrateResponse>;
   listMemoryProposals: () => Promise<MemoryProposalsResponse>;
   resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
-  getMemoryFiles: (projectId?: string) => Promise<MemoryFileListResponse>;
-  getMemoryFileContent: (scope: MemoryScope, projectId?: string) => Promise<MemoryFileContentResponse>;
-  saveMemoryFile: (scope: MemoryScope, content: string, projectId?: string) => Promise<MemoryFileSaveResponse>;
   getMemorySettings: () => Promise<MemorySettings>;
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
   revealInFolder: (path: string) => Promise<{ status: string }>;
@@ -396,19 +394,29 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.getMemoryStatus();
   }
 
-  async writeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
+  async discoverMemory(projectId?: string): Promise<MemoryDiscoverResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.writeMemoryEntry(request);
+    return window.electronAPI.discoverMemory(projectId);
   }
 
-  async removeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
+  async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.removeMemoryEntry(request);
+    return window.electronAPI.getMemoryFile(rel);
   }
 
-  async clearMemoryScope(scope: MemoryScope): Promise<MemoryWriteResponse> {
+  async saveMemoryFile(rel: string, content: string): Promise<MemoryFileSaveResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.clearMemoryScope({ scope });
+    return window.electronAPI.saveMemoryFile({ rel, content });
+  }
+
+  async deleteMemoryFile(rel: string): Promise<MemoryDeleteResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.deleteMemoryFile({ rel });
+  }
+
+  async migrateMemory(): Promise<MemoryMigrateResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.migrateMemory();
   }
 
   async listMemoryProposals(): Promise<MemoryProposalsResponse> {
@@ -419,21 +427,6 @@ class ElectronChatService implements ChatService {
   async resolveMemoryProposal(request: MemoryProposalResolveRequest): Promise<{ status: string; record?: MemoryProposalRecord }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.resolveMemoryProposal(request);
-  }
-
-  async getMemoryFiles(projectId?: string): Promise<MemoryFileListResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getMemoryFiles(projectId);
-  }
-
-  async getMemoryFileContent(scope: MemoryScope, projectId?: string): Promise<MemoryFileContentResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getMemoryFile(scope, projectId);
-  }
-
-  async saveMemoryFile(scope: MemoryScope, content: string, projectId?: string): Promise<MemoryFileSaveResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.saveMemoryFile({ scope, content, project_id: projectId || '' });
   }
 
   async getMemorySettings(): Promise<MemorySettings> {
@@ -1311,27 +1304,36 @@ class HttpChatService implements ChatService {
     return this.request<MemoryStatusResponse>('/api/memory/status');
   }
 
-  async writeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
-    return this.request<MemoryWriteResponse>('/api/memory/write', {
+  async discoverMemory(projectId?: string): Promise<MemoryDiscoverResponse> {
+    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+    return this.request<MemoryDiscoverResponse>(`/api/memory/discover${query}`);
+  }
+
+  async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
+    return this.request<MemoryFileContentResponse>(`/api/memory/file?rel=${encodeURIComponent(rel)}`);
+  }
+
+  async saveMemoryFile(rel: string, content: string): Promise<MemoryFileSaveResponse> {
+    return this.request<MemoryFileSaveResponse>('/api/memory/file', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ rel, content }),
     });
   }
 
-  async removeMemoryEntry(request: MemoryWriteRequest): Promise<MemoryWriteResponse> {
-    return this.request<MemoryWriteResponse>('/api/memory/remove', {
+  async deleteMemoryFile(rel: string): Promise<MemoryDeleteResponse> {
+    return this.request<MemoryDeleteResponse>('/api/memory/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ rel }),
     });
   }
 
-  async clearMemoryScope(scope: MemoryScope): Promise<MemoryWriteResponse> {
-    return this.request<MemoryWriteResponse>('/api/memory/clear', {
+  async migrateMemory(): Promise<MemoryMigrateResponse> {
+    return this.request<MemoryMigrateResponse>('/api/memory/migrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope }),
+      body: JSON.stringify({}),
     });
   }
 
@@ -1344,24 +1346,6 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
-    });
-  }
-
-  async getMemoryFiles(projectId?: string): Promise<MemoryFileListResponse> {
-    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-    return this.request<MemoryFileListResponse>(`/api/memory${query}`);
-  }
-
-  async getMemoryFileContent(scope: MemoryScope, projectId?: string): Promise<MemoryFileContentResponse> {
-    const query = projectId ? `&project_id=${encodeURIComponent(projectId)}` : '';
-    return this.request<MemoryFileContentResponse>(`/api/memory/file?scope=${encodeURIComponent(scope)}${query}`);
-  }
-
-  async saveMemoryFile(scope: MemoryScope, content: string, projectId?: string): Promise<MemoryFileSaveResponse> {
-    return this.request<MemoryFileSaveResponse>('/api/memory/file', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, content, project_id: projectId || '' }),
     });
   }
 

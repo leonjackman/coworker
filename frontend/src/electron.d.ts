@@ -46,12 +46,10 @@ import type {
   MemoryProposalRecord,
   MemoryProposalResolveRequest,
   MemoryProposalsResponse,
-  MemoryScope,
   MemoryStatusResponse,
-  MemoryWriteRequest,
-  MemoryWriteResponse,
-  MemoryFileInfo,
-  MemoryFileListResponse,
+  MemoryDiscoverResponse,
+  MemoryDeleteResponse,
+  MemoryMigrateResponse,
   MemoryFileContentResponse,
   MemoryFileSaveResponse,
   MemorySettings,
@@ -136,14 +134,13 @@ declare global {
       listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
       getMemoryStatus: () => Promise<MemoryStatusResponse>;
-      writeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
-      removeMemoryEntry: (request: MemoryWriteRequest) => Promise<MemoryWriteResponse>;
-      clearMemoryScope: (payload: { scope: MemoryScope }) => Promise<MemoryWriteResponse>;
+      discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
+      getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
+      saveMemoryFile: (payload: { rel: string; content: string }) => Promise<MemoryFileSaveResponse>;
+      deleteMemoryFile: (payload: { rel: string }) => Promise<MemoryDeleteResponse>;
+      migrateMemory: () => Promise<MemoryMigrateResponse>;
       listMemoryProposals: () => Promise<MemoryProposalsResponse>;
       resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
-      getMemoryFiles: (projectId?: string) => Promise<MemoryFileListResponse>;
-      getMemoryFile: (scope: MemoryScope, projectId?: string) => Promise<MemoryFileContentResponse>;
-      saveMemoryFile: (payload: { scope: MemoryScope; content: string; project_id?: string }) => Promise<MemoryFileSaveResponse>;
       getMemorySettings: () => Promise<MemorySettings>;
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
       revealInFolder: (path: string) => Promise<{ status: string }>;

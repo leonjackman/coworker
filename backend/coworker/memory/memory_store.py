@@ -1,16 +1,21 @@
 """MemoryStore: thread-safe, drift-protected read/write of memory files.
 
-Writing long-term memory is the riskiest surface of the feature (a corrupt
-or silently-lost write is worse than no write). We harden it three ways,
-following the hermes implementation the audit called out:
+The memory library is directory-based; ``MemoryStore`` operates on file paths
+within the memory root (validated by ``layout.resolve_rel_path``). Two write
+shapes exist:
 
-1. ``fcntl``/``msvcrt`` file lock around every read-modify-write so concurrent
-   agent turns (and the auto-extract worker) cannot interleave.
-2. Round-trip verification: after writing we re-read the file and confirm the
-   entries we intended are present; mismatch means a concurrent external edit
-   won — we refuse the write and keep a ``.bak`` of our intended content.
-3. Exact-duplicate rejection and substring-based replace/remove so a stale
-   entry cannot be silently duplicated past the char budget.
+- **Whole-file** writes (``write_file``) replace an entire Markdown file.
+- **Block** writes (``add_block`` / ``replace_block`` / ``remove_block``) edit
+  the individual paragraphs of ``agent/MEMORY.md`` / ``SESSIONS/*.md`` while
+  keeping the file human-readable Markdown.
+
+The concurrency hardening from the original ``§``-delimited store is preserved:
+
+1. ``fcntl``/``msvcrt`` file lock around every read-modify-write.
+2. Round-trip verification: after writing we re-read and confirm the intended
+   content is present; mismatch means a concurrent external edit won — we merge
+   rather than overwrite.
+3. Duplicate rejection for blocks; substring-based replace/remove.
 """
 
 from __future__ import annotations
@@ -20,12 +25,9 @@ import os
 import threading
 from pathlib import Path
 
-from .memory_discovery import MemoryScanner
-from .memory_file import ENTRY_DELIMITER, HEADER, MemoryFile, render_file, split_entries
+from .memory_file import MemoryFile, load_file, render_blocks, split_blocks
 
 logger = logging.getLogger(__name__)
-
-_SCOPES = ("project", "user")
 
 
 class MemoryError(ValueError):
@@ -33,82 +35,172 @@ class MemoryError(ValueError):
 
 
 class MemoryStore:
-    """Owns both memory files and guarantees serialized, verified writes."""
+    """Owns memory files under a root and guarantees serialized, verified writes."""
 
-    def __init__(self, scanner: MemoryScanner):
-        self.scanner = scanner
+    def __init__(self, root: Path):
+        self.root = Path(root).resolve()
         self._lock = threading.RLock()
 
-    # -- paths ------------------------------------------------------------
+    # -- path helpers ------------------------------------------------------
 
-    def path_for(self, scope: str) -> Path:
-        if scope not in _SCOPES:
-            raise MemoryError(f"unknown memory scope: {scope!r}")
-        if scope == "project":
-            path = self.scanner.project_path()
-            if path is None:
-                raise MemoryError("no workspace: project memory is unavailable")
-            return path
-        return self.scanner.user_path()
+    def _resolve(self, rel: str) -> Path:
+        from .layout import resolve_rel_path
 
-    # -- helpers ----------------------------------------------------------
+        return resolve_rel_path(self.root, rel)
 
-    def _read_locked(self, scope: str) -> tuple[MemoryFile, Path]:
-        """Read a scope under the RLock (callers already hold ``self._lock``)."""
-        path = self.path_for(scope)
-        if not path.is_file():
-            return MemoryFile(scope=scope, path=path, mtime=0.0, entries=[]), path
-        return _read_file_with_retry(path, scope), path
+    # -- read API ----------------------------------------------------------
 
-    def _update_locked(self, scope: str, updater) -> MemoryFile:
+    def read_file(self, rel: str) -> MemoryFile:
+        path = self._resolve(rel)
+        return load_file(path)
+
+    def read_raw(self, rel: str) -> str:
+        path = self._resolve(rel)
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    def file_exists(self, rel: str) -> bool:
+        return self._resolve(rel).is_file()
+
+    # -- whole-file write --------------------------------------------------
+
+    def write_file(self, rel: str, content: str) -> MemoryFile:
+        """Replace a whole memory file from raw Markdown."""
+        if not content.strip():
+            content = ""
+        path = self._resolve(rel)
+        with self._lock:
+            return self._update_locked(path, lambda _raw: content)
+
+    def remove_file(self, rel: str) -> bool:
+        """Delete a file (or empty directory) under the memory root."""
+        path = self._resolve(rel)
+        with self._lock:
+            if path.is_dir():
+                try:
+                    path.rmdir()
+                    return True
+                except OSError:
+                    return False
+            if not path.exists():
+                return False
+            try:
+                path.unlink()
+                _cleanup_lock(path)
+                return True
+            except OSError:
+                return False
+
+    # -- block API (agent MEMORY.md / SESSIONS) ----------------------------
+
+    def list_blocks(self, rel: str) -> list[str]:
+        return list(load_file(self._resolve(rel)).blocks)
+
+    def add_block(self, rel: str, text: str) -> list[str]:
+        text = text.strip()
+        if not text:
+            raise MemoryError("cannot add empty memory")
+        path = self._resolve(rel)
+
+        def _add(_raw: str) -> str:
+            blocks = split_blocks(_raw)
+            if any(b == text for b in blocks):
+                raise MemoryError("duplicate memory entry (already exists)")
+            return render_blocks([*blocks, text])
+
+        with self._lock:
+            self._update_locked(path, _add)
+        return self.list_blocks(rel)
+
+    def replace_block(self, rel: str, target: str, text: str) -> list[str]:
+        text = text.strip()
+        target = target.strip()
+        if not text:
+            raise MemoryError("cannot replace with empty memory")
+        if not target:
+            raise MemoryError("replace target is empty")
+        path = self._resolve(rel)
+
+        def _replace(_raw: str) -> str:
+            blocks = split_blocks(_raw)
+            replaced = False
+            updated: list[str] = []
+            for block in blocks:
+                if not replaced and target in block:
+                    updated.append(text)
+                    replaced = True
+                else:
+                    updated.append(block)
+            if not replaced:
+                raise MemoryError("replace target not found")
+            return render_blocks(updated)
+
+        with self._lock:
+            self._update_locked(path, _replace)
+        return self.list_blocks(rel)
+
+    def remove_block(self, rel: str, target: str) -> list[str]:
+        target = target.strip()
+        if not target:
+            raise MemoryError("remove target is empty")
+        path = self._resolve(rel)
+
+        def _remove(_raw: str) -> tuple[str, set[str]]:
+            blocks = split_blocks(_raw)
+            removed = {b for b in blocks if target in b}
+            if not removed:
+                raise MemoryError("remove target not found")
+            kept = [b for b in blocks if target not in b]
+            return render_blocks(kept), removed
+
+        with self._lock:
+            self._update_locked(path, _remove)
+        return self.list_blocks(rel)
+
+    def clear_file(self, rel: str) -> list[str]:
+        path = self._resolve(rel)
+        with self._lock:
+            self._update_locked(path, lambda _raw: "")
+        return []
+
+    # -- core write pipeline ------------------------------------------------
+
+    def _update_locked(self, path: Path, updater) -> MemoryFile:
         """Atomically read-modify-write a memory file under a shared file lock.
 
-        Every write is a full ``read -> mutate -> render -> temp+rename`` cycle
-        guarded by an ``flock``/``msvcrt`` lock on a dedicated ``.lock`` file
-        (never renamed, so the lock is stable even across a rename of the target).
-        Concurrent agent turns and the auto-extract worker therefore cannot lose
-        each other's entries. A crash mid-write can never leave a truncated file
-        (atomic rename).
-
-        The updater may return ``(entries, removed_set)`` to declare which exact
-        entries it deliberately deleted. A post-write verification then detects
-        the one writer that never takes the lock — the user editing ``MEMORY.md``
-        directly in an editor — and MERGES both sides (decision ①=A). Entries the
-        operation explicitly removed are NOT resurrected by the merge; truly new
-        concurrent additions are preserved.
+        The updater receives the current raw text and returns either a new raw
+        text or ``(text, removed_set)``; ``removed_set`` is the set of blocks the
+        operation deliberately deleted so a concurrent external save cannot
+        resurrect them during the conflict merge.
         """
-        path = self.path_for(scope)
         if path.parent and not path.parent.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = _open_locked(path)
         try:
             with _file_lock(lock_fd):
-                current = _read_file_with_retry(path, scope) if path.is_file() else MemoryFile(
-                    scope=scope, path=path, mtime=0.0, entries=[]
-                )
-                result = updater(current.entries)
+                current_raw = _read_text(path)
+                result = updater(current_raw)
                 if isinstance(result, tuple):
-                    new_entries, removed_set = result
+                    new_raw, removed_set = result
                     removed_set = set(removed_set)
                 else:
-                    new_entries, removed_set = result, set()
-                payload = render_file(new_entries)
-                self._write_payload_atomic(path, payload)
+                    new_raw, removed_set = result, set()
+                self._write_payload_atomic(path, new_raw)
                 # Detect a non-cooperating writer (no lock held) that interleaved
-                # between our read and our write, and merge rather than overwrite.
+                # between our read and write, and merge rather than overwrite.
                 try:
                     disk_raw = path.read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     disk_raw = ""
-                if disk_raw != payload:
-                    disk = _read_file_with_retry(path, scope)
-                    merged = _merge_entries(disk.entries, new_entries, removed_set)
-                    merged_payload = render_file(merged)
-                    if merged_payload != payload:
-                        self._write_payload_atomic(path, merged_payload)
+                if disk_raw != new_raw:
+                    merged = _merge_text(disk_raw, new_raw, removed_set)
+                    if merged != new_raw:
+                        self._write_payload_atomic(path, merged)
         finally:
             _release_lock(lock_fd)
-        return _read_file_with_retry(path, scope)
+        return load_file(path)
 
     @staticmethod
     def _write_payload_atomic(path: Path, payload: str) -> None:
@@ -117,139 +209,43 @@ class MemoryStore:
         tmp.replace(path)
         path.touch(exist_ok=True)
 
-    # -- read API ----------------------------------------------------------
 
-    def read_file_text(self, scope: str) -> str:
-        """Return the raw on-disk body of a memory file (editable surface)."""
-        path = self.path_for(scope)
-        try:
-            return path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return f"{HEADER}\n"
-
-    def write_file_text(self, scope: str, text: str) -> MemoryFile:
-        """Replace a whole memory file from raw markdown.
-
-        The body is re-parsed into entries (``§``-delimited) and written with
-        the same lock + atomic rename as every other write path.
-        """
-        entries = split_entries(text)
-        for entry in entries:
-            self._validate_entry_text(entry)
-        with self._lock:
-            return self._update_locked(scope, lambda _entries: entries)
-
-    def list_scope(self, scope: str) -> MemoryFile:
-        with self._lock:
-            memory, _ = self._read_locked(scope)
-        return memory
-
-    # -- write API ---------------------------------------------------------
-
-    def _validate_entry_text(self, text: str) -> None:
-        """Reject text that would break the ``§``-delimited file format.
-
-        The ``§`` separator splits on lines that are exactly ``§`` (allowing
-        surrounding whitespace) AND on lines ending with ``§`` — the split regex
-        matches ``\n*\s*§\s*\n+`` with zero-width ``\n*``/``\s*``, so an entry
-        whose last line ends with ``§`` would be silently split on the next read.
-        """
-        for line in text.splitlines():
-            stripped = line.strip()
-            if stripped == ENTRY_DELIMITER or stripped.endswith(ENTRY_DELIMITER):
-                raise MemoryError(
-                    f"memory entry cannot contain a line that ends with or equals '{ENTRY_DELIMITER}'"
-                )
-
-    def add(self, scope: str, text: str) -> MemoryFile:
-        text = text.strip()
-        if not text:
-            raise MemoryError("cannot add empty memory")
-        self._validate_entry_text(text)
-        with self._lock:
-            def _add(entries: list[str]) -> list[str]:
-                if any(e == text for e in entries):
-                    raise MemoryError("duplicate memory entry (already exists)")
-                return [*entries, text]
-            return self._update_locked(scope, _add)
-
-    def replace(self, scope: str, target: str, text: str) -> MemoryFile:
-        text = text.strip()
-        target = target.strip()
-        if not text:
-            raise MemoryError("cannot replace with empty memory")
-        self._validate_entry_text(text)
-        with self._lock:
-            if not target:
-                raise MemoryError("replace target is empty")
-
-            def _replace(entries: list[str]) -> list[str]:
-                if not entries:
-                    raise MemoryError("replace target not found (memory is empty)")
-                # Replace only the first matching entry so a single replace cannot
-                # fabricate duplicate identical entries.
-                updated: list[str] = []
-                replaced = False
-                for entry in entries:
-                    if not replaced and target in entry:
-                        updated.append(text)
-                        replaced = True
-                    else:
-                        updated.append(entry)
-                if not replaced:
-                    raise MemoryError("replace target not found")
-                return updated
-
-            return self._update_locked(scope, _replace)
-
-    def remove(self, scope: str, target: str) -> MemoryFile:
-        target = target.strip()
-        if not target:
-            raise MemoryError("remove target is empty")
-        with self._lock:
-            def _remove(entries: list[str]):
-                kept = [e for e in entries if target not in e]
-                if len(kept) == len(entries):
-                    raise MemoryError("remove target not found")
-                removed = {e for e in entries if target in e}
-                return kept, removed
-            return self._update_locked(scope, _remove)
-
-    def clear(self, scope: str) -> MemoryFile:
-        with self._lock:
-            def _clear(entries: list[str]):
-                # Clear removes everything the store knew about; truly new
-                # concurrent additions survive the conflict merge.
-                return [], set(entries)
-            return self._update_locked(scope, _clear)
-
-
-def _read_file_with_retry(path: Path, scope: str, retries: int = 3) -> MemoryFile:
-    """Read + parse, re-reading if the file changed mid-read (concurrent write).
-
-    The stability check compares the raw BYTE count against ``st_size`` —
-    comparing against the re-encoded text length is wrong (``read_text`` strips
-    ``\\r`` and expands invalid UTF-8), which would loop forever on CRLF or
-    non-UTF-8 files. Bounded retries guarantee termination.
-    """
+def _read_text(path: Path) -> str:
+    """Read raw text with a bounded stability retry (concurrent-write safe)."""
     try:
         stat = path.stat()
-    except OSError as exc:  # pragma: no cover - defensive
-        logger.warning("Memory read failed for %s: %s", path, exc)
-        return MemoryFile(scope=scope, path=path, mtime=0.0, entries=[])
-    for _ in range(max(1, retries)):
+    except OSError:
+        return ""
+    for _ in range(3):
         try:
             raw = path.read_bytes()
             size_now = path.stat().st_size
-        except OSError as exc:  # pragma: no cover - defensive
-            logger.warning("Memory read failed for %s: %s", path, exc)
-            return MemoryFile(scope=scope, path=path, mtime=stat.st_mtime, entries=[])
+        except OSError:
+            return ""
         if len(raw) == size_now:
-            text = raw.decode("utf-8", errors="replace")
-            return MemoryFile(scope=scope, path=path, mtime=stat.st_mtime, entries=split_entries(text))
-    # Could not get a stable snapshot (file keeps growing); use the last read.
-    text = raw.decode("utf-8", errors="replace")
-    return MemoryFile(scope=scope, path=path, mtime=stat.st_mtime, entries=split_entries(text))
+            return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
+def _merge_text(disk_raw: str, ours: str, removed_set: set[str]) -> str:
+    """Merge a disk state with our just-written content.
+
+    Disk blocks keep their order except those our operation explicitly removed;
+    our blocks that are not already present are appended.
+    """
+    disk_blocks = split_blocks(disk_raw)
+    our_blocks = split_blocks(ours)
+    seen: set[str] = set()
+    merged: list[str] = []
+    for block in disk_blocks:
+        if block not in removed_set:
+            merged.append(block)
+            seen.add(block)
+    for block in our_blocks:
+        if block not in seen:
+            merged.append(block)
+            seen.add(block)
+    return render_blocks(merged)
 
 
 # -- platform lock helpers --------------------------------------------------
@@ -281,32 +277,22 @@ except ImportError:  # pragma: no cover - Windows branch
             msvcrt.locking(fd.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def _merge_entries(disk_entries: list[str], ours: list[str], removed_set: set[str]) -> list[str]:
-    """Merge a disk state with our just-written entries.
-
-    Disk entries keep their order (they may be newer) except those our operation
-    explicitly removed (``removed_set``) — a remove/clear must not have its
-    entries resurrected by a concurrent save. Our additions that are not already
-    present are appended.
-    """
-    seen = set(disk_entries)
-    merged = [e for e in disk_entries if e not in removed_set]
-    seen = set(merged)
-    for entry in ours:
-        if entry not in seen:
-            merged.append(entry)
-            seen.add(entry)
-    return merged
+def _cleanup_lock(path: Path) -> None:
+    """Remove the sibling ``.lock`` file left by a prior write, if any."""
+    lock_path = path.with_name(path.name + ".lock")
+    try:
+        if lock_path.exists():
+            lock_path.unlink()
+    except OSError:  # pragma: no cover - defensive
+        pass
 
 
 def _open_locked(path: Path):
     """Open a dedicated lock file for the memory target.
 
     A separate ``.lock`` sibling is used so the lock file is never replaced by
-    the atomic rename of the memory file itself (a rename would otherwise hand
-    the lock to a fresh inode and break cross-writer serialization). On Windows,
-    ``msvcrt.locking`` cannot lock a 0-byte file, so give the lock file a byte
-    to lock.
+    the atomic rename of the memory file itself. On Windows ``msvcrt.locking``
+    cannot lock a 0-byte file, so give the lock file a byte to lock.
     """
     lock_path = path.with_name(path.name + ".lock")
     fd = lock_path.open("a+", encoding="utf-8")

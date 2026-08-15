@@ -21,6 +21,7 @@ class Project:
     created_at: str
     updated_at: str
     workspace_path: str = ""
+    memory_dir: str = ""
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Project":
@@ -30,6 +31,7 @@ class Project:
             created_at=str(payload.get("created_at", _now())),
             updated_at=str(payload.get("updated_at", _now())),
             workspace_path=str(payload.get("workspace_path", "")),
+            memory_dir=str(payload.get("memory_dir", "")),
         )
 
 
@@ -97,7 +99,27 @@ class ProjectStore:
             raise KeyError(f"project {project_id} not found")
         return project
 
-    def create(self, name: str, workspace_path: str) -> Project:
+    def memory_dir_for(self, project_id: str) -> str:
+        """Return the project's memory_dir, generating + persisting it lazily.
+
+        Legacy projects created before the memory_dir field existed get one
+        derived from their ``created_at`` on first use, so the memory library
+        stays stable even without a stored value.
+        """
+        from coworker.memory.layout import memory_dir_from_created_at
+
+        config = self.load()
+        project = config.find(project_id)
+        if not project:
+            raise KeyError(f"project {project_id} not found")
+        if project.memory_dir:
+            return project.memory_dir
+        project.memory_dir = memory_dir_from_created_at(project.created_at)
+        project.updated_at = _now()
+        self.save(config)
+        return project.memory_dir
+
+    def create(self, name: str, workspace_path: str, memory_dir: str = "") -> Project:
         cleaned = name.strip()
         if not cleaned:
             raise ValueError("project name is required")
@@ -107,6 +129,9 @@ class ProjectStore:
         config = self.load()
         existing = config.find_by_workspace_path(cleaned_workspace)
         if existing:
+            if memory_dir and not existing.memory_dir:
+                existing.memory_dir = memory_dir
+                self.save(config)
             return existing
         now = _now()
         project = Project(
@@ -115,6 +140,7 @@ class ProjectStore:
             created_at=now,
             updated_at=now,
             workspace_path=cleaned_workspace,
+            memory_dir=memory_dir,
         )
         config.projects.append(project)
         self.save(config)
@@ -129,6 +155,8 @@ class ProjectStore:
         if not project:
             raise KeyError(f"project {project_id} not found")
         project.name = cleaned[:60]
+        # memory_dir is intentionally NOT recomputed: renaming a project must
+        # never invalidate its memory library directory.
         project.updated_at = _now()
         self.save(config)
         return project

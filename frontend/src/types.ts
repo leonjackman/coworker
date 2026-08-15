@@ -827,16 +827,41 @@ export interface MarketInstallResponse {
   message?: string;
 }
 
-// -- Long-term memory --------------------------------------------------------
+// -- Long-term memory (memory library tree) -------------------------------
 
-export type MemoryScope = 'project' | 'user';
+export type MemoryNodeKind = 'system' | 'base_file' | 'project_file' | 'agent_file' | 'session_file';
 
-export interface MemoryScopeInfo {
-  path: string;
+export interface MemoryNode {
+  kind: MemoryNodeKind;
+  name: string;
+  rel: string;
   mtime: number;
-  entries: string[];
+  content: string;
+  blocks: string[];
   char_count: number;
-  entry_count: number;
+}
+
+export interface MemoryAgentView {
+  name: string;
+  rel: string;
+  soul: MemoryNode | null;
+  agent: MemoryNode | null;
+  memory: MemoryNode | null;
+  sessions: MemoryNode[];
+}
+
+export interface MemoryProjectView {
+  name: string;
+  rel: string;
+  base: MemoryNode[];
+  project: MemoryNode[];
+  agents: MemoryAgentView[];
+}
+
+export interface MemoryDiscoverResponse {
+  root: string;
+  system: MemoryNode[];
+  projects: MemoryProjectView[];
 }
 
 export interface MemoryStatusResponse {
@@ -844,19 +869,24 @@ export interface MemoryStatusResponse {
   auto_extract: boolean;
   nudge_interval: number;
   char_limit: number;
-  scopes: Partial<Record<MemoryScope, MemoryScopeInfo>>;
+  root: string;
+  file_count: number;
+  char_count: number;
+  over_budget: boolean;
   proposals_pending: number;
 }
 
 export interface MemoryWriteRequest {
-  scope: MemoryScope;
+  action: 'add' | 'replace' | 'remove';
   content: string;
   target?: string;
+  project_id?: string;
+  agent?: string;
 }
 
 export interface MemoryWriteResponse {
-  scope: MemoryScope;
-  entries: string[];
+  rel: string;
+  blocks: string[];
 }
 
 export interface MemoryProposalRecord {
@@ -868,6 +898,8 @@ export interface MemoryProposalRecord {
   provider: string;
   model: string;
   workspace_path: string;
+  project_dir?: string;
+  agent?: string;
   created_at: string;
 }
 
@@ -880,28 +912,31 @@ export interface MemoryProposalResolveRequest {
   status: 'approved' | 'rejected';
 }
 
-export interface MemoryFileInfo {
-  scope: MemoryScope;
-  path: string;
-  mtime: number;
-  entries: string[];
-  char_count: number;
-  entry_count: number;
-}
-
-export interface MemoryFileListResponse {
-  files: MemoryFileInfo[];
-}
-
 export interface MemoryFileContentResponse {
-  scope: MemoryScope;
   path: string;
+  rel: string;
   content: string;
+  mtime: number;
+  blocks: string[];
 }
 
 export interface MemoryFileSaveResponse {
-  scope: MemoryScope;
-  entries: string[];
+  rel: string;
+  content: string;
+}
+
+export interface MemoryDeleteResponse {
+  status: string;
+  rel: string;
+}
+
+export interface MemoryMigrateResponse {
+  status: string;
+  migrated: boolean;
+  reason?: string;
+  migrated_files?: number;
+  errors?: string[];
+  backup?: string;
 }
 
 export interface MemorySettings {

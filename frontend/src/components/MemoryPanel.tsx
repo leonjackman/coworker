@@ -1,8 +1,27 @@
-import { ArrowLeft, Edit3, FolderOpen, Loader2, RefreshCw, Save, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  Edit3,
+  FileText,
+  Folder,
+  FolderOpen,
+  Loader2,
+  RefreshCw,
+  Save,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
-import type { MemoryFileInfo, MemoryScope } from '../types';
+import type {
+  MemoryAgentView,
+  MemoryDiscoverResponse,
+  MemoryFileContentResponse,
+  MemoryNode,
+  MemoryProjectView,
+} from '../types';
 import { Button } from './ui/button';
 import { WorkspacePage } from './ui/workspace-page';
 
@@ -12,11 +31,6 @@ interface MemoryPanelProps {
 }
 
 type Flash = { kind: 'ok' | 'error'; text: string } | null;
-
-const SCOPE_LABELS: Record<MemoryScope, string> = {
-  project: 'memory.scope.project',
-  user: 'memory.scope.user',
-};
 
 function formatMtime(mtime: number): string {
   if (!mtime) return '';
@@ -30,17 +44,18 @@ function formatMtime(mtime: number): string {
   }).format(date);
 }
 
-function splitEntriesLocal(text: string): string[] {
+function blockCount(text: string): number {
   return text
-    .split(/\n*\s*§\s*\n+/)
-    .map((part) => part.trim().replace(/^#\s*Coworker\s*记忆\s*$/m, '').trim())
-    .filter(Boolean);
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean).length;
 }
 
 export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
-  const [files, setFiles] = useState<MemoryFileInfo[]>([]);
+  const [library, setLibrary] = useState<MemoryDiscoverResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<MemoryScope | null>(null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [editingRel, setEditingRel] = useState<string | null>(null);
   const [editorPath, setEditorPath] = useState('');
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
@@ -56,8 +71,8 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await chatService.getMemoryFiles(projectId);
-      setFiles(res.files);
+      const res = await chatService.discoverMemory(projectId);
+      setLibrary(res);
     } catch (error) {
       notify('error', translateError(error));
     } finally {
@@ -69,29 +84,64 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
     void load();
   }, [load]);
 
-  const openEditor = async (scope: MemoryScope) => {
+  const toggle = (key: string) => {
+    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const isCollapsed = (key: string): boolean => collapsed[key] ?? false;
+
+  const openEditor = async (rel: string) => {
     try {
-      const res = await chatService.getMemoryFileContent(scope, projectId);
-      setEditorPath(res.path);
+      const res: MemoryFileContentResponse = await chatService.getMemoryFile(rel);
+      setEditorPath(res.rel);
       setContent(res.content);
-      setEditing(scope);
+      setEditingRel(res.rel);
     } catch (error) {
       notify('error', translateError(error));
     }
   };
 
   const saveEditor = async () => {
-    if (!editing) return;
+    if (!editingRel) return;
     setSaving(true);
     try {
-      await chatService.saveMemoryFile(editing, content, projectId);
+      await chatService.saveMemoryFile(editingRel, content);
       notify('ok', t('memory.saved'));
-      setEditing(null);
+      setEditingRel(null);
       await load();
     } catch (error) {
       notify('error', translateError(error));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteFile = async (rel: string) => {
+    const confirmed = window.confirm(`${t('common.delete')} ${rel}?`);
+    if (!confirmed) return;
+    try {
+      await chatService.deleteMemoryFile(rel);
+      notify('ok', t('memory.removed'));
+      if (editingRel === rel) setEditingRel(null);
+      await load();
+    } catch (error) {
+      notify('error', translateError(error));
+    }
+  };
+
+  const migrate = async () => {
+    try {
+      const res = await chatService.migrateMemory();
+      if (res.migrated) {
+        notify('ok', t('memory.migrate_ok'));
+      } else if (res.reason === 'already_migrated') {
+        notify('ok', t('memory.migrate_already'));
+      } else {
+        notify('error', t('memory.migrate_failed'));
+      }
+      await load();
+    } catch (error) {
+      notify('error', translateError(error));
     }
   };
 
@@ -104,15 +154,15 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
     }
   };
 
-  if (editing) {
-    const entries = splitEntriesLocal(content);
+  // ----------------------------------------------------------------- editor
+  if (editingRel) {
     return (
       <WorkspacePage
         eyebrow={t('memory.eyebrow')}
         title={t('memory.editor_title')}
         description={editorPath}
         action={(
-          <Button variant="ghost" onClick={() => setEditing(null)}>
+          <Button variant="ghost" onClick={() => setEditingRel(null)}>
             <ArrowLeft size={15} />
             {t('memory.back')}
           </Button>
@@ -124,7 +174,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
           </div>
         )}
         <div className="memory-editor__meta">
-          <span>{entries.length} {t('memory.entries_count')}</span>
+          <span>{blockCount(content)} {t('memory.entries_count')}</span>
           <span>{content.length} {t('memory.chars')}</span>
           <span className="memory-editor__hint">{t('memory.editor_hint')}</span>
         </div>
@@ -136,6 +186,16 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
           aria-label={t('memory.editor_title')}
         />
         <div className="memory-editor__actions">
+          {canReveal && (
+            <Button variant="outline" onClick={() => void reveal(editorPath)}>
+              <FolderOpen size={14} />
+              {t('memory.reveal')}
+            </Button>
+          )}
+          <Button variant="destructive" size="sm" onClick={() => void deleteFile(editingRel)}>
+            <Trash2 size={14} />
+            {t('common.delete')}
+          </Button>
           <Button variant="primary" disabled={saving} onClick={() => void saveEditor()}>
             {saving ? <Loader2 className="animate-spin" size={14} /> : <Save size={14} />}
             {t('memory.editor_save')}
@@ -145,6 +205,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
     );
   }
 
+  // ------------------------------------------------------------------- tree
   return (
     <WorkspacePage
       eyebrow={t('memory.eyebrow')}
@@ -164,56 +225,225 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
 
       <div className="memory-library__toolbar">
         <span className="memory-subheading">{t('memory.library_title')}</span>
-        <Button variant="outline" size="sm" onClick={() => void load()}>
-          <RefreshCw size={14} />
-          {t('common.refresh')}
-        </Button>
+        <div className="memory-library__actions">
+          <Button variant="outline" size="sm" onClick={() => void migrate()}>
+            <RefreshCw size={14} />
+            {t('memory.migrate')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void load()}>
+            {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+            {t('common.refresh')}
+          </Button>
+        </div>
       </div>
 
-      {loading && !files.length ? (
+      {loading && !library ? (
         <div className="memory-loading">
           <Loader2 className="animate-spin" size={18} />
           <span>{t('common.loading')}</span>
         </div>
       ) : (
-        <div className="memory-library">
-          {files.map((file) => (
-            <div key={file.scope} className="memory-file-card">
-              <div className="memory-file-card__header">
-                <div>
-                  <span className="memory-file-card__title">{t(SCOPE_LABELS[file.scope])}</span>
-                  <span className="memory-file-card__meta">
-                    {file.entry_count} {t('memory.entries_count')} · {file.char_count} {t('memory.chars')}
-                    {formatMtime(file.mtime) ? ` · ${t('memory.updated')} ${formatMtime(file.mtime)}` : ''}
-                  </span>
-                </div>
-                <div className="memory-file-card__actions">
-                  {canReveal && (
-                    <Button variant="ghost" size="sm" onClick={() => void reveal(file.path)}>
-                      <FolderOpen size={14} />
-                      {t('memory.reveal')}
-                    </Button>
-                  )}
-                  <Button variant="secondary" size="sm" onClick={() => void openEditor(file.scope)}>
-                    <Edit3 size={14} />
-                    {t('memory.edit')}
-                  </Button>
-                </div>
-              </div>
-              <button type="button" className="memory-file-card__body" onClick={() => void openEditor(file.scope)}>
-                <span className="memory-file-card__path">{file.path || t('memory.no_path')}</span>
-                {file.entries.length > 0 ? (
-                  <p className="memory-file-card__preview">{file.entries[0]}</p>
-                ) : (
-                  <p className="memory-file-card__empty">{t('memory.empty')}</p>
-                )}
-              </button>
-            </div>
+        <div className="memory-tree">
+          <TreeSection
+            label={t('memory.tree.system')}
+            relPrefix=""
+            nodes={library?.system ?? []}
+            collapsed={isCollapsed('system')}
+            onToggle={() => toggle('system')}
+            onOpen={openEditor}
+            onDelete={deleteFile}
+          />
+
+          {(library?.projects ?? []).map((project) => (
+            <ProjectBranch
+              key={project.rel}
+              project={project}
+              collapsed={isCollapsed(project.rel)}
+              onToggle={() => toggle(project.rel)}
+              onOpen={openEditor}
+              onDelete={deleteFile}
+            />
           ))}
-          {!files.length && <div className="memory-proposals__empty">{t('memory.no_files')}</div>}
+
+          {(library?.projects ?? []).length === 0 && !loading && (
+            <div className="memory-tree__empty">{t('memory.tree.no_projects')}</div>
+          )}
         </div>
       )}
     </WorkspacePage>
+  );
+}
+
+// ------------------------------------------------------------------- helpers
+
+function TreeSection({
+  label,
+  relPrefix,
+  nodes,
+  collapsed,
+  onToggle,
+  onOpen,
+  onDelete,
+}: {
+  label: string;
+  relPrefix: string;
+  nodes: MemoryNode[];
+  collapsed: boolean;
+  onToggle: () => void;
+  onOpen: (rel: string) => void;
+  onDelete: (rel: string) => void;
+}) {
+  return (
+    <div className="memory-tree__section">
+      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle}>
+        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        <Folder size={14} className="memory-tree__icon" />
+        <span className="memory-tree__label">{label}</span>
+      </button>
+      {!collapsed && (
+        <div className="memory-tree__children">
+          {nodes.length === 0 && <span className="memory-tree__placeholder">{t('memory.tree.empty')}</span>}
+          {nodes.map((node) => (
+            <MemoryRow key={node.rel} node={node} onOpen={onOpen} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectBranch({
+  project,
+  collapsed,
+  onToggle,
+  onOpen,
+  onDelete,
+}: {
+  project: MemoryProjectView;
+  collapsed: boolean;
+  onToggle: () => void;
+  onOpen: (rel: string) => void;
+  onDelete: (rel: string) => void;
+}) {
+  return (
+    <div className="memory-tree__section">
+      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle}>
+        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        <Folder size={14} className="memory-tree__icon" />
+        <span className="memory-tree__label">{t('memory.tree.project')}</span>
+        <span className="memory-tree__rel">{project.name}</span>
+      </button>
+      {!collapsed && (
+        <div className="memory-tree__children">
+          <TreeSection
+            label={t('memory.tree.base')}
+            relPrefix={project.rel}
+            nodes={project.base}
+            collapsed={false}
+            onToggle={() => undefined}
+            onOpen={onOpen}
+            onDelete={onDelete}
+          />
+          <TreeSection
+            label={t('memory.tree.project_context')}
+            relPrefix={`${project.rel}/BASE/PROJECT`}
+            nodes={project.project}
+            collapsed={false}
+            onToggle={() => undefined}
+            onOpen={onOpen}
+            onDelete={onDelete}
+          />
+          {project.agents.map((agent) => (
+            <AgentBranch
+              key={agent.rel}
+              agent={agent}
+              collapsed={false}
+              onOpen={onOpen}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentBranch({
+  agent,
+  collapsed,
+  onOpen,
+  onDelete,
+}: {
+  agent: MemoryAgentView;
+  collapsed: boolean;
+  onOpen: (rel: string) => void;
+  onDelete: (rel: string) => void;
+}) {
+  const core: Array<{ rel: string; node: MemoryNode | null; labelKey: string }> = [
+    { rel: agent.soul?.rel ?? '', node: agent.soul, labelKey: 'memory.tree.soul' },
+    { rel: agent.agent?.rel ?? '', node: agent.agent, labelKey: 'memory.tree.agent' },
+    { rel: agent.memory?.rel ?? '', node: agent.memory, labelKey: 'memory.tree.memory' },
+  ];
+  return (
+    <div className="memory-tree__section">
+      <div className="memory-tree__node memory-tree__node--dir memory-tree__node--static">
+        <FolderOpen size={14} className="memory-tree__icon" />
+        <span className="memory-tree__label">{t('memory.tree.agent')}</span>
+        <span className="memory-tree__rel">{agent.name}</span>
+      </div>
+      <div className="memory-tree__children">
+        {core.map(
+          (entry) =>
+            entry.node && (
+              <MemoryRow key={entry.rel} node={entry.node} onOpen={onOpen} onDelete={onDelete} />
+            ),
+        )}
+        {agent.sessions.length > 0 && (
+          <TreeSection
+            label={t('memory.tree.sessions')}
+            relPrefix={agent.rel}
+            nodes={agent.sessions}
+            collapsed={false}
+            onToggle={() => undefined}
+            onOpen={onOpen}
+            onDelete={onDelete}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MemoryRow({
+  node,
+  onOpen,
+  onDelete,
+}: {
+  node: MemoryNode;
+  onOpen: (rel: string) => void;
+  onDelete: (rel: string) => void;
+}) {
+  return (
+    <div className="memory-tree__row">
+      <button
+        type="button"
+        className="memory-tree__node memory-tree__node--file"
+        onClick={() => onOpen(node.rel)}
+      >
+        <FileText size={13} className="memory-tree__icon" />
+        <span className="memory-tree__label">{node.name}</span>
+        {node.mtime > 0 && <span className="memory-tree__meta">{formatMtime(node.mtime)}</span>}
+      </button>
+      <button
+        type="button"
+        className="memory-tree__delete"
+        aria-label={t('common.delete')}
+        title={t('common.delete')}
+        onClick={() => onDelete(node.rel)}
+      >
+        <Trash2 size={13} />
+      </button>
+    </div>
   );
 }
 

@@ -1,10 +1,10 @@
 """MemoryManager: global entry point for the memory subsystem.
 
-Owns the configuration, the default scanner/store, and the per-workspace
+Owns the configuration, the memory library root, and the per-project/agent
 middleware factory. Mirrors ``SkillManager``'s role in ``main.py``: it is
 constructed once at startup and handed to the agent registry, which passes it
-into each runtime; the runtime then builds a workspace-scoped middleware via
-:meth:`build_middleware`.
+into each runtime; the runtime then builds a project-scoped middleware via
+:meth:`for_project`.
 
 Phase 2 (auto-extract) is orchestrated here as well: a per-session turn counter
 feeds the nudge trigger, and extraction itself lives in ``auto_extract``.
@@ -18,11 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .layout import MEMORY_ROOT_NAME
 from .memory_discovery import MemoryScanner
 from .memory_prompt import format_memory_prompt
 from .memory_store import MemoryStore
+from .registry import MemoryRegistry
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_AGENT = "default_agent"
 
 
 @dataclass(frozen=True)
@@ -40,17 +44,18 @@ class MemoryManager:
     def __init__(
         self,
         data_dir: Path | None = None,
-        workspace_root: Path | None = None,
+        memory_dir: Path | None = None,
         *,
         config: MemoryConfig | None = None,
     ):
         self.data_dir = Path(data_dir) if data_dir else Path.cwd()
         self.config = config or MemoryConfig()
-        self._workspace_root = Path(workspace_root).resolve() if workspace_root else None
+        self._root = Path(memory_dir).resolve() if memory_dir else (self.data_dir / MEMORY_ROOT_NAME).resolve()
+        self._root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        # Default scanner/store (used by the API surface and render_prompt).
-        self.scanner = MemoryScanner(workspace_root=self._workspace_root)
-        self.store = MemoryStore(self.scanner)
+        self.registry = MemoryRegistry(self.data_dir)
+        self.scanner = MemoryScanner(self._root)
+        self.store = MemoryStore(self._root)
         # Phase 2: per-session turn counters (in-memory; reset on restart).
         self._turn_counters: dict[str, int] = {}
         # Injected extractor dependencies (set via configure_extractor).
@@ -72,42 +77,58 @@ class MemoryManager:
     def auto_extract(self) -> bool:
         return self.config.auto_extract
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
     # -- read path ----------------------------------------------------------
 
     def render_prompt(self) -> str:
-        """Render the injected memory block for the default workspace."""
+        """Render the injected memory block for the default (system-only) scope."""
         if not self.config.enabled:
             return ""
-        return self._render(self._workspace_root)
+        library = self.scanner.scan()
+        return format_memory_prompt(library.injected(), self.config.char_limit)
 
-    def _render(self, workspace_root: Path | None) -> str:
-        scanner = MemoryScanner(workspace_root=workspace_root)
-        scan = scanner.scan()
-        sections: list[tuple[str, str, list[str]]] = []
-        for memory in scan.files():
-            label = memory.scope
-            # Do NOT expose the on-disk path to the model: handing it the exact
-            # file path invites direct read/write edits that bypass the store's
-            # protections (duplicate rejection, scope whitelist). Use an
-            # anonymous label that still carries freshness.
-            source = f"{'project' if label == 'project' else 'user'} memory (updated {_format_mtime(memory.mtime)})"
-            sections.append((label, source, memory.entries))
-        return format_memory_prompt(sections, self.config.char_limit)
+    def render_for(self, project_dir: str | None = None, agent: str | None = None) -> str:
+        """Render the injected memory block for one project/agent scope."""
+        if not self.config.enabled:
+            return ""
+        library = self.scanner.scan()
+        nodes = library.injected(project_dir=project_dir, agent=agent or DEFAULT_AGENT)
+        return format_memory_prompt(nodes, self.config.char_limit)
 
     # -- middleware factory -------------------------------------------------
 
-    def for_workspace(self, workspace_root: Path | None) -> "MemoryManager":
-        """Return a lightweight view of this manager for one workspace.
+    def for_project(self, project_dir: str | None = None, agent: str | None = None) -> "MemoryManager":
+        """Return a lightweight view of this manager bound to one project/agent.
 
-        Shares config + data_dir + extractor deps, but scans the given root.
+        Shares config + root + store + extractor deps, but renders/injects only
+        the given project/agent's memory.
         """
-        if workspace_root is not None and Path(workspace_root).resolve() == self._workspace_root:
-            return self
-        view = MemoryManager(self.data_dir, workspace_root, config=self.config)
+        view = MemoryManager.__new__(MemoryManager)
+        view.data_dir = self.data_dir
+        view.config = self.config
+        view._root = self._root
+        view._lock = self._lock
+        view.registry = self.registry
+        view.scanner = self.scanner
+        view.store = self.store
+        view._turn_counters = self._turn_counters
         view._proposal_store = self._proposal_store
         view._llm_factory = self._llm_factory
         view._transcript_provider = self._transcript_provider
+        view._project_dir = project_dir
+        view._agent = agent or DEFAULT_AGENT
         return view
+
+    @property
+    def bound_project(self) -> str | None:
+        return getattr(self, "_project_dir", None)
+
+    @property
+    def bound_agent(self) -> str:
+        return getattr(self, "_agent", DEFAULT_AGENT)
 
     def configure_extractor(
         self,
@@ -123,21 +144,14 @@ class MemoryManager:
 
     # -- Phase 2 nudge ------------------------------------------------------
 
-    # Hard cap on tracked sessions so abandoned counters (sessions that never
-    # reach the nudge interval) cannot grow memory without bound.
+    # Hard cap on tracked sessions so abandoned counters cannot grow unbounded.
     _MAX_TRACKED_SESSIONS = 500
 
     def after_turn(self, session_id: str, workspace_root: Path | None = None) -> None:
         """Called once per settled turn by the agent runtimes.
 
         Records the turn and, when the nudge threshold is crossed, dispatches an
-        async extraction task. The record+check+reset cycle happens under a
-        single lock so two concurrent turns for the same session can never both
-        schedule an extraction. Never blocks and never raises.
-
-        Note: the extraction task reads the transcript asynchronously, so it may
-        run before the current turn's messages are persisted; that is an accepted
-        best-effort race (the next nudge will re-cover the turn).
+        async extraction task. Never blocks and never raises.
         """
         if not self.config.enabled or not self.config.auto_extract:
             return
@@ -145,7 +159,6 @@ class MemoryManager:
         with self._lock:
             count = self._turn_counters.get(session_id, 0) + 1
             if len(self._turn_counters) >= self._MAX_TRACKED_SESSIONS and session_id not in self._turn_counters:
-                # Evict the oldest tracked session to keep the dict bounded.
                 self._turn_counters.pop(next(iter(self._turn_counters)), None)
             self._turn_counters[session_id] = count
             if count < threshold:
@@ -158,11 +171,10 @@ class MemoryManager:
         except RuntimeError:
             logger.debug("auto-extract skipped for %s: no running loop", session_id)
             return
-        root = Path(workspace_root).resolve() if workspace_root else self._workspace_root
-        loop.create_task(self._extract_async(session_id, root))
+        loop.create_task(self._extract_async(session_id))
         logger.info("auto-extract scheduled for session %s", session_id)
 
-    async def _extract_async(self, session_id: str, workspace_root: Path | None) -> None:
+    async def _extract_async(self, session_id: str) -> None:
         """Extract candidate memories and propose them (best-effort)."""
         if (
             self._proposal_store is None
@@ -187,17 +199,9 @@ class MemoryManager:
                 session_id=session_id,
                 provider_name=model_label or "memory-extract",
                 model_name=model_label,
-                workspace_path=str(workspace_root) if workspace_root else "",
+                project_dir=self.bound_project or "",
+                agent=self.bound_agent,
             )
             logger.info("auto-extract done for %s: %s", session_id, result)
         except Exception as exc:  # noqa: BLE001 - defensive
             logger.warning("auto-extract failed for %s: %s", session_id, exc)
-
-
-def _format_mtime(mtime: float) -> str:
-    """Format an mtime as a readable local timestamp (or 'never')."""
-    if not mtime:
-        return "never"
-    import datetime
-
-    return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")

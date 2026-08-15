@@ -1,80 +1,232 @@
-"""Multi-root memory discovery.
+"""Memory library discovery: scan the directory tree in injection order.
 
-Mirrors ``coworker.skills.skill_discovery``: project-level memory (the
-workspace) precedes user-level memory, and each root is only scanned once.
-Unlike skills, memory is *not* first-match-only — user-level and project-level
-are both injected so global preferences survive across projects. At most one file per root.
+Discovers system files, project trees (BASE + BASE/PROJECT) and agent trees
+(core files + SESSIONS). Nodes are returned in injection precedence order:
+
+    system → BASE/* (user) → BASE/PROJECT/* (system) → SOUL → AGENT → MEMORY
+    → SESSIONS/*
+
+Each ``MemoryNode`` carries a ``rel`` path (relative to the memory root) used
+by the store and the API, so callers never need absolute paths.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from .memory_file import MEMORY_FILE_NAME, MemoryFile, load_file
+from .layout import AGENT_CORE_FILES, BASE_DIR, PROJECT_SUBDIR, SESSIONS_DIR, SYSTEM_FILES
+from .memory_file import MemoryFile, load_file
 
 logger = logging.getLogger(__name__)
 
-COWORKER_DIR = ".coworker"
+_KINDS = ("system", "base_file", "project_file", "agent_file", "session_file")
 
 
 @dataclass(frozen=True)
-class MemoryScan:
-    """Files found across all roots, project-first."""
+class MemoryNode:
+    kind: str            # one of _KINDS
+    name: str            # file name (stem for display convenience) or label
+    rel: str             # path relative to the memory root ("/"-separated)
+    path: Path           # absolute path
+    content: str = ""
+    mtime: float = 0.0
+    blocks: tuple[str, ...] = ()
 
-    project: MemoryFile | None = None
-    user: MemoryFile | None = None
+    @classmethod
+    def from_file(cls, kind: str, rel: str, file: MemoryFile) -> "MemoryNode":
+        return cls(
+            kind=kind,
+            name=file.path.name,
+            rel=rel,
+            path=file.path,
+            content=file.content,
+            mtime=file.mtime,
+            blocks=file.blocks,
+        )
 
-    def files(self) -> list[MemoryFile]:
-        return [f for f in (self.project, self.user) if f is not None]
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "name": self.name,
+            "rel": self.rel,
+            "mtime": self.mtime,
+            "content": self.content,
+            "blocks": list(self.blocks),
+            "char_count": len(self.content),
+        }
+
+
+@dataclass(frozen=True)
+class AgentView:
+    name: str
+    rel: str
+    soul: MemoryNode | None = None
+    agent: MemoryNode | None = None
+    memory: MemoryNode | None = None
+    sessions: list[MemoryNode] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "rel": self.rel,
+            "soul": self.soul.to_dict() if self.soul else None,
+            "agent": self.agent.to_dict() if self.agent else None,
+            "memory": self.memory.to_dict() if self.memory else None,
+            "sessions": [s.to_dict() for s in self.sessions],
+        }
+
+
+@dataclass(frozen=True)
+class ProjectView:
+    name: str            # directory name = memory_dir
+    rel: str
+    base: list[MemoryNode] = field(default_factory=list)
+    project: list[MemoryNode] = field(default_factory=list)
+    agents: list[AgentView] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "rel": self.rel,
+            "base": [b.to_dict() for b in self.base],
+            "project": [p.to_dict() for p in self.project],
+            "agents": [a.to_dict() for a in self.agents],
+        }
+
+
+@dataclass(frozen=True)
+class MemoryLibrary:
+    root: Path
+    system: list[MemoryNode] = field(default_factory=list)
+    projects: list[ProjectView] = field(default_factory=list)
+
+    def injected(self, *, project_dir: str | None = None, agent: str | None = None) -> list[MemoryNode]:
+        """Return nodes for injection: system + one project (+ agent) scoped."""
+        nodes: list[MemoryNode] = list(self.system)
+        if project_dir:
+            view = next((p for p in self.projects if p.name == project_dir), None)
+            if view:
+                nodes.extend(view.base)
+                nodes.extend(view.project)
+                if agent:
+                    aview = next((a for a in view.agents if a.name == agent), None)
+                    if aview:
+                        for core in (aview.soul, aview.agent, aview.memory):
+                            if core:
+                                nodes.append(core)
+                        nodes.extend(aview.sessions)
+        return nodes
 
 
 class MemoryScanner:
-    """Resolve project + user memory file paths and read them."""
+    """Scan the memory library directory tree."""
 
-    def __init__(self, workspace_root: Path | None = None, user_home: Path | None = None):
-        self.workspace_root = Path(workspace_root).resolve() if workspace_root else None
-        self.user_home = Path(user_home).resolve() if user_home else Path.home()
+    def __init__(self, root: Path):
+        self.root = Path(root).resolve()
 
-    def project_path(self) -> Path | None:
-        """The project-level memory file path (or ``None`` without a workspace)."""
-        if self.workspace_root is None:
-            return None
-        return self.workspace_root / COWORKER_DIR / MEMORY_FILE_NAME
+    def scan(self, *, include_missing: bool = False) -> MemoryLibrary:
+        """Discover system files, project dirs and agent dirs.
 
-    def user_path(self) -> Path:
-        """The user-level memory file path."""
-        return self.user_home / COWORKER_DIR / MEMORY_FILE_NAME
-
-    def _path_missing(self, path: Path | None) -> bool:
-        return path is None or not path.is_file()
-
-    def scan(self, *, include_missing: bool = False) -> MemoryScan:
-        """Load both memory files.
-
-        By default files that do not exist are skipped entirely (``None``);
-        with ``include_missing=True`` a synthetic empty ``MemoryFile`` is
-        returned for every root, so the UI can show "no memory yet" for each
-        scope. Unreadable files degrade to an empty project/user view.
+        ``include_missing`` synthesizes empty nodes for expected skeleton files
+        so the frontend can show a well-formed tree even before first use.
         """
-        project_path = self.project_path()
-        user_path = self.user_path()
+        system: list[MemoryNode] = []
+        for name in SYSTEM_FILES:
+            node = self._read_node("system", name)
+            if node is None and include_missing:
+                node = self._empty_node("system", name)
+            if node is not None:
+                system.append(node)
 
-        project: MemoryFile | None = None
-        if project_path is not None and (include_missing or not self._path_missing(project_path)):
-            try:
-                project = load_file(project_path, "project")
-            except Exception as exc:  # noqa: BLE001 - one broken file must not break discovery
-                logger.warning("Failed to read project memory %s: %s", project_path, exc)
-                project = MemoryFile(scope="project", path=project_path, mtime=0.0, entries=[])
+        projects: list[ProjectView] = []
+        if self.root.is_dir():
+            for entry in sorted(self.root.iterdir()):
+                if not entry.is_dir() or entry.name.startswith("."):
+                    continue
+                view = self._scan_project(entry, include_missing)
+                if view is not None:
+                    projects.append(view)
 
-        user: MemoryFile | None = None
-        if include_missing or not self._path_missing(user_path):
-            try:
-                user = load_file(user_path, "user")
-            except Exception as exc:  # noqa: BLE001 - defensive
-                logger.warning("Failed to read user memory %s: %s", user_path, exc)
-                user = MemoryFile(scope="user", path=user_path, mtime=0.0, entries=[])
+        return MemoryLibrary(root=self.root, system=system, projects=projects)
 
-        return MemoryScan(project=project, user=user)
+    # -- helpers ------------------------------------------------------------
+
+    def _scan_project(self, project_dir: Path, include_missing: bool) -> ProjectView | None:
+        base_dir = project_dir / BASE_DIR
+        base: list[MemoryNode] = []
+        project: list[MemoryNode] = []
+        if base_dir.is_dir():
+            for entry in sorted(base_dir.iterdir()):
+                if not entry.is_file() or entry.name.endswith(".lock"):
+                    continue
+                rel = _rel(self.root, entry)
+                base.append(self._read_node("base_file", rel) or self._empty_node("base_file", rel))
+            proj_sub = base_dir / PROJECT_SUBDIR
+            if proj_sub.is_dir():
+                for entry in sorted(proj_sub.iterdir()):
+                    if not entry.is_file() or entry.name.endswith(".lock"):
+                        continue
+                    rel = _rel(self.root, entry)
+                    project.append(self._read_node("project_file", rel) or self._empty_node("project_file", rel))
+        elif include_missing:
+            base_dir.mkdir(parents=True, exist_ok=True)
+            (base_dir / PROJECT_SUBDIR).mkdir(parents=True, exist_ok=True)
+
+        agents: list[AgentView] = []
+        for entry in sorted(project_dir.iterdir()):
+            if entry.name == BASE_DIR or not entry.is_dir() or entry.name.startswith("."):
+                continue
+            agents.append(self._scan_agent(project_dir, entry, include_missing))
+
+        return ProjectView(
+            name=project_dir.name,
+            rel=_rel(self.root, project_dir),
+            base=base,
+            project=project,
+            agents=agents,
+        )
+
+    def _scan_agent(self, project_dir: Path, agent_dir: Path, include_missing: bool) -> AgentView:
+        core: dict[str, MemoryNode | None] = {k: None for k in AGENT_CORE_FILES}
+        sessions: list[MemoryNode] = []
+        for name in AGENT_CORE_FILES:
+            rel = _rel(self.root, agent_dir / name)
+            node = self._read_node("agent_file", rel)
+            if node is None and include_missing:
+                node = self._empty_node("agent_file", rel)
+            core[name] = node
+        sessions_dir = agent_dir / SESSIONS_DIR
+        if sessions_dir.is_dir():
+            for entry in sorted(sessions_dir.iterdir()):
+                if not entry.is_file() or entry.name.endswith(".lock"):
+                    continue
+                rel = _rel(self.root, entry)
+                node = self._read_node("session_file", rel) or self._empty_node("session_file", rel)
+                sessions.append(node)
+        return AgentView(
+            name=agent_dir.name,
+            rel=_rel(self.root, agent_dir),
+            soul=core["SOUL.md"],
+            agent=core["AGENT.md"],
+            memory=core["MEMORY.md"],
+            sessions=sessions,
+        )
+
+    def _read_node(self, kind: str, rel: str) -> MemoryNode | None:
+        path = self.root / rel
+        if not path.is_file():
+            return None
+        return MemoryNode.from_file(kind, rel, load_file(path))
+
+    def _empty_node(self, kind: str, rel: str) -> MemoryNode:
+        path = self.root / rel
+        return MemoryNode(kind=kind, name=path.name, rel=rel, path=path, content="", mtime=0.0)
+
+
+def _rel(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.name

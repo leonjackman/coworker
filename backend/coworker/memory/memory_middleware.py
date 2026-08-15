@@ -35,7 +35,10 @@ class MemoryMiddleware(AgentMiddleware):
 
     def _overrides(self, request: Any) -> dict[str, Any]:
         try:
-            section = self.manager.render_prompt()
+            if self.manager.bound_project:
+                section = self.manager.render_for(self.manager.bound_project, self.manager.bound_agent)
+            else:
+                section = self.manager.render_prompt()
         except Exception as exc:  # noqa: BLE001 - a scan failure must not break chat
             logger.warning("Memory load failed: %s", exc)
             return {}
