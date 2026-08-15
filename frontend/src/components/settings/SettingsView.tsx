@@ -49,7 +49,7 @@ export function SettingsView({
   const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit' | 'memory_proposals'>('main');
 
   async function selectLanguage(language: string) {
-    const allowed = ['zh', 'en', 'zh-TW', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
+    const allowed = ['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
     if (!allowed.includes(language)) return;
     if (language === getLanguage()) return;
     await setLanguage(language as Language);

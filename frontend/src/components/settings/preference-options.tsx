@@ -25,6 +25,7 @@ export function languageOptions(): SettingsToggleOption<Language>[] {
   return [
     { value: 'zh', label: t('language.zh'), title: t('language.zh') },
     { value: 'zh-TW', label: t('language.zh-TW'), title: t('language.zh-TW') },
+    { value: 'zh-HK', label: t('language.zh-HK'), title: t('language.zh-HK') },
     { value: 'en', label: t('language.en'), title: t('language.en') },
     { value: 'ja', label: t('language.ja'), title: t('language.ja') },
     { value: 'ko', label: t('language.ko'), title: t('language.ko') },

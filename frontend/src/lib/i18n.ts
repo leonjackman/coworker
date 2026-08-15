@@ -1,7 +1,7 @@
 const STORAGE_KEY = 'coworker-language';
 import { createContext, useState, useCallback, useEffect } from 'react';
 
-export type Language = 'zh' | 'en' | 'zh-TW' | 'ja' | 'ko' | 'fr' | 'de' | 'es' | 'pt-BR' | 'ru';
+export type Language = 'zh' | 'en' | 'zh-TW' | 'zh-HK' | 'ja' | 'ko' | 'fr' | 'de' | 'es' | 'pt-BR' | 'ru';
 
 let currentLanguage: Language = 'en';
 let dictionary: Record<string, string> = {};
@@ -38,7 +38,7 @@ export async function setLanguage(language: Language): Promise<void> {
 export async function initLanguage(): Promise<Language> {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'zh' || stored === 'en' || stored === 'zh-TW' || stored === 'ja' || stored === 'ko' || stored === 'fr' || stored === 'de' || stored === 'es' || stored === 'pt-BR' || stored === 'ru') {
+    if (stored === 'zh' || stored === 'en' || stored === 'zh-TW' || stored === 'zh-HK' || stored === 'ja' || stored === 'ko' || stored === 'fr' || stored === 'de' || stored === 'es' || stored === 'pt-BR' || stored === 'ru') {
       currentLanguage = stored;
     }
   } catch {
