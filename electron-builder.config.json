@@ -44,7 +44,7 @@
         "arch": ["arm64"]
       }
     ],
-    "icon": "assets/brand/cw-icon-blue-white-background.png",
+    "icon": "assets/brand/png/cw-icon-blue-white-background.png",
     "category": "public.app-category.developer-tools",
     "hardenedRuntime": true,
     "entitlements": "build/entitlements.mac.plist",
@@ -58,7 +58,7 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "assets/brand/cw-icon-blue-white-background.png"
+    "icon": "assets/brand/png/cw-icon-blue-white-background.png"
   },
   "linux": {
     "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
@@ -72,6 +72,6 @@
         "arch": ["x64", "arm64"]
       }
     ],
-    "icon": "assets/brand/cw-icon-blue-white-background.png"
+    "icon": "assets/brand/png/cw-icon-blue-white-background.png"
   }
 }
