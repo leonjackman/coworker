@@ -274,7 +274,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -R release-artifacts
-          mapfile -t FILES < <(find release-artifacts -type f)
+          mapfile -t FILES < <(find release-artifacts -type f ! -name 'builder-debug.yml')
           PRERELEASE_FLAG=""
           if [[ "${{ github.ref_name }}" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
             PRERELEASE_FLAG="--prerelease"
