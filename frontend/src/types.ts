@@ -913,3 +913,32 @@ export interface MemorySettings {
 }
 
 export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'char_limit' | 'auto_extract' | 'nudge_interval' | 'extract_model'>>;
+
+// ── Auto-update ─────────────────────────────────────────────────────────
+export type UpdateStateStatus =
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error';
+
+export interface UpdateDownloadProgress {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
+export interface UpdateStateSnapshot {
+  isDev: boolean;
+  enabled: boolean;
+  skippedVersion: string | null;
+  currentVersion: string;
+  state: UpdateStateStatus;
+  availableVersion: string | null;
+  releaseNotes: string | null;
+  progress: UpdateDownloadProgress | null;
+  errorMessage: string | null;
+}

@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import { t } from '../../lib/i18n';
 import { Button } from '../ui/button';
+import { Switch } from '../ui/switch';
 import { ToggleGroup } from '../ui/toggle-group';
 
 export interface SettingsToggleOption<T extends string> {
@@ -68,6 +69,22 @@ export type SettingsItem =
       value: string;
       options: { value: string; label: ReactNode }[];
       onChange: (value: string) => void;
+    }
+  | {
+      id: string;
+      type: 'switch';
+      label: ReactNode;
+      description?: ReactNode;
+      checked: boolean;
+      disabled?: boolean;
+      onChange: (checked: boolean) => void;
+    }
+  | {
+      id: string;
+      type: 'info';
+      label: ReactNode;
+      description?: ReactNode;
+      meta?: ReactNode;
     };
 
 export interface SettingsGroup {
@@ -75,6 +92,7 @@ export interface SettingsGroup {
   title: ReactNode;
   description?: ReactNode;
   items: SettingsItem[];
+  footer?: ReactNode;
 }
 
 interface SettingsListProps {
@@ -90,6 +108,16 @@ function SettingControl({ item }: { item: SettingsItem }) {
         <ChevronRight size={14} />
       </Button>
     );
+  }
+
+  if (item.type === 'switch') {
+    return (
+      <Switch id={`setting-${item.id}`} checked={item.checked} disabled={item.disabled} onChange={(e) => item.onChange(e.target.checked)} />
+    );
+  }
+
+  if (item.type === 'info') {
+    return null;
   }
 
   if (item.type === 'goal_rounds') {
@@ -283,6 +311,7 @@ export function SettingsList({ groups, className }: SettingsListProps) {
                 </div>
               </div>
             ))}
+            {group.footer}
           </div>
         </section>
       ))}

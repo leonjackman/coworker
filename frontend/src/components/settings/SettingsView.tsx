@@ -3,12 +3,14 @@ import { useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
 import type { Autonomy, MemorySettings, MemorySettingsPatch } from '../../types';
+import type { UpdateCenter } from '../../lib/useUpdateCenter';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
 import { MemoryProposalsPanel } from './MemoryProposalsPanel';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
+import { UpdatePanel } from './UpdatePanel';
 import { autonomyOptions, languageOptions, themeOptions } from './preference-options';
 
 interface SettingsViewProps {
@@ -23,6 +25,7 @@ interface SettingsViewProps {
   memorySettings: MemorySettings | null;
   onMemorySettingsChange: (patch: MemorySettingsPatch) => void;
   modelOptions: { id: string; label: string; provider: string }[];
+  updateCenter: UpdateCenter;
   onLanguageChange?: () => void;
   onClose: () => void;
 }
@@ -39,6 +42,7 @@ export function SettingsView({
   memorySettings,
   onMemorySettingsChange,
   modelOptions,
+  updateCenter,
   onLanguageChange,
   onClose,
 }: SettingsViewProps) {
@@ -288,19 +292,36 @@ export function SettingsView({
             items: [
               {
                 id: 'version',
-                type: 'action',
+                type: 'info',
                 label: t('settings.version'),
-                description: 'Electron / PyInstaller',
-                actionLabel: t('settings.check_for_updates'),
-                onAction: async () => {
-                  if (!window.electronAPI) return;
-                  const result = await window.electronAPI.checkForUpdates();
-                  if (result.status === 'dev-mode') {
-                    console.log('Auto-update disabled in dev mode');
-                  }
-                },
+                description: t('settings.version_desc'),
+                meta: (
+                  <span className="settings-chip">
+                    {updateCenter.state.currentVersion
+                      ? `v${updateCenter.state.currentVersion}`
+                      : t('update.version_unknown')}
+                  </span>
+                ),
+              },
+              {
+                id: 'auto_update',
+                type: 'switch',
+                label: t('update.auto_update'),
+                description: t('update.auto_update_desc'),
+                checked: updateCenter.state.enabled,
+                onChange: (checked) => void updateCenter.setAutoUpdate(checked),
+              },
+              {
+                id: 'check_updates',
+                type: 'action',
+                label: t('update.check_now'),
+                description: t('update.check_now_desc'),
+                actionLabel: t('update.check_now_action'),
+                disabled: updateCenter.state.state === 'checking',
+                onAction: () => void updateCenter.check(),
               },
             ],
+            footer: <UpdatePanel center={updateCenter} />,
           },
         ]}
       />

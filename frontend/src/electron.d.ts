@@ -56,6 +56,7 @@ import type {
   MemoryFileSaveResponse,
   MemorySettings,
   MemorySettingsPatch,
+  UpdateStateSnapshot,
 } from './types';
 
 export type StreamEventCallback = (event: StreamEvent) => void;
@@ -154,9 +155,14 @@ declare global {
       clearCheckpoints: () => Promise<{ status: string }>;
       getRetentionSettings: () => Promise<{ trace_lines: number; audit_lines: number }>;
       saveRetentionSettings: (patch: { trace_lines?: number; audit_lines?: number }) => Promise<{ trace_lines: number; audit_lines: number }>;
-      checkForUpdates: () => Promise<{ status: string }>;
-      onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string | null }) => void) => () => void;
-      onUpdateDownloaded: (callback: (info: { version: string }) => void) => () => void;
+      checkForUpdates: () => Promise<{ status: string; error?: string }>;
+      getUpdateState: () => Promise<UpdateStateSnapshot>;
+      setAutoUpdate: (enabled: boolean) => Promise<{ status: string; enabled: boolean }>;
+      downloadUpdate: () => Promise<{ status: string; error?: string }>;
+      installUpdate: () => Promise<{ status: string }>;
+      skipVersion: () => Promise<{ status: string; skippedVersion: string | null }>;
+      clearSkipVersion: () => Promise<{ status: string }>;
+      onUpdateState: (callback: (state: UpdateStateSnapshot) => void) => () => void;
     };
   }
 }

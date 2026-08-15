@@ -148,14 +148,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRetentionSettings: () => ipcRenderer.invoke('settings-retention-get'),
   saveRetentionSettings: (patch) => ipcRenderer.invoke('settings-retention-set', patch),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
-  onUpdateAvailable: (callback) => {
-    const listener = (_event, info) => callback(info);
-    ipcRenderer.on('app:update-available', listener);
-    return () => ipcRenderer.removeListener('app:update-available', listener);
-  },
-  onUpdateDownloaded: (callback) => {
-    const listener = (_event, info) => callback(info);
-    ipcRenderer.on('app:update-downloaded', listener);
-    return () => ipcRenderer.removeListener('app:update-downloaded', listener);
+  getUpdateState: () => ipcRenderer.invoke('get-update-state'),
+  setAutoUpdate: (enabled) => ipcRenderer.invoke('set-auto-update', enabled),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  skipVersion: () => ipcRenderer.invoke('skip-version'),
+  clearSkipVersion: () => ipcRenderer.invoke('clear-skip'),
+  onUpdateState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('app:update-state', listener);
+    return () => ipcRenderer.removeListener('app:update-state', listener);
   },
 });

@@ -41,47 +41,191 @@
 const { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage, nativeTheme, shell } = require('electron');
 const path = require('path');
 const http = require('http');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
-
-autoUpdater.autoDownload = false;
-autoUpdater.allowDowngrade = false;
 
 // `app.isPackaged` is the only reliable packaged/dev signal in Electron —
 // NODE_ENV and IS_PACKAGED are not set automatically.
 const IS_DEV = !app.isPackaged || process.env.COWORKER_DEV === '1';
 
-// Only enable auto-updater in packaged builds (not in dev)
-if (!IS_DEV) {
+// ── Auto-update settings persistence ───────────────────────────────────
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+function updateSettingsFilePath() {
+  return path.join(app.getPath('userData'), 'update-settings.json');
+}
+
+function defaultUpdateSettings() {
+  return { autoUpdateEnabled: true, skippedVersion: null };
+}
+
+function readUpdateSettings() {
+  try {
+    const raw = fs.readFileSync(updateSettingsFilePath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      autoUpdateEnabled: parsed.autoUpdateEnabled !== false,
+      skippedVersion: typeof parsed.skippedVersion === 'string' ? parsed.skippedVersion : null,
+    };
+  } catch {
+    return defaultUpdateSettings();
+  }
+}
+
+function writeUpdateSettings(patch) {
+  const next = { ...readUpdateSettings(), ...patch };
+  try {
+    fs.mkdirSync(path.dirname(updateSettingsFilePath()), { recursive: true });
+    fs.writeFileSync(updateSettingsFilePath(), JSON.stringify(next, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Failed to persist update settings:', err);
+  }
+  return next;
+}
+
+let updateSettings = readUpdateSettings();
+
+// ── Auto-updater state (single source of truth for the renderer) ───────
+let autoUpdateTimer = null;
+let updateState = {
+  state: 'idle', // idle | checking | up-to-date | available | downloading | downloaded | error
+  availableVersion: null,
+  releaseNotes: null,
+  progress: null, // { percent, bytesPerSecond, transferred, total }
+  errorMessage: null,
+};
+
+function getUpdateStateSnapshot() {
+  return {
+    isDev: IS_DEV,
+    enabled: updateSettings.autoUpdateEnabled,
+    skippedVersion: updateSettings.skippedVersion,
+    currentVersion: app.getVersion(),
+    state: updateState.state,
+    availableVersion: updateState.availableVersion,
+    releaseNotes: updateState.releaseNotes,
+    progress: updateState.progress,
+    errorMessage: updateState.errorMessage,
+  };
+}
+
+function broadcastUpdateState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app:update-state', getUpdateStateSnapshot());
+  }
+}
+
+function setUpdateState(patch) {
+  updateState = { ...updateState, ...patch };
+  broadcastUpdateState();
+}
+
+function setupAutoUpdater() {
+  if (IS_DEV) return;
+
+  autoUpdater.autoDownload = false;
+  autoUpdater.allowDowngrade = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  // Channel routing: prerelease builds (e.g. 1.1.0-beta.1, 1.1.0-rc.1) stay
+  // on their own channel so they keep receiving matching prerelease updates
+  // and never drop to stable by accident. Stable builds use the default
+  // latest channel.
+  const currentVersion = app.getVersion();
+  const prereleaseMatch = /-([a-zA-Z]+)(\.[0-9]+)?$/.exec(currentVersion);
+  if (prereleaseMatch) {
+    autoUpdater.channel = prereleaseMatch[1];
+    autoUpdater.allowPrerelease = true;
+  }
+
+  autoUpdater.on('checking-for-update', () => {
+    setUpdateState({ state: 'checking', errorMessage: null });
+  });
+
   autoUpdater.on('update-available', (info) => {
     console.log('Update available:', info.version);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('app:update-available', { version: info.version, releaseNotes: info.releaseNotes });
+    const version = String(info.version || '');
+    const releaseNotes = info.releaseNotes != null ? String(info.releaseNotes) : null;
+    if (updateSettings.skippedVersion && updateSettings.skippedVersion === version) {
+      // User asked to skip this version — surface it (with "undo" available)
+      // but never auto-download it.
+      setUpdateState({ state: 'available', availableVersion: version, releaseNotes });
+      return;
     }
+    setUpdateState({ state: 'available', availableVersion: version, releaseNotes });
+    if (updateSettings.autoUpdateEnabled) {
+      autoUpdater.downloadUpdate().catch((err) => {
+        console.error('Auto-download failed:', err);
+        setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
+      });
+    }
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    console.log('No update available');
+    setUpdateState({ state: 'up-to-date', availableVersion: null, releaseNotes: null, progress: null, errorMessage: null });
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    setUpdateState({
+      state: 'downloading',
+      progress: {
+        percent: progressObj.percent,
+        bytesPerSecond: progressObj.bytesPerSecond,
+        transferred: progressObj.transferred,
+        total: progressObj.total,
+      },
+    });
   });
 
   autoUpdater.on('update-downloaded', (info) => {
     console.log('Update downloaded:', info.version);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('app:update-downloaded', { version: info.version });
-    }
-    // Silent install — quit and install
-    setImmediate(() => autoUpdater.quitAndInstall());
+    setUpdateState({
+      state: 'downloaded',
+      availableVersion: String(info.version || ''),
+      releaseNotes: info.releaseNotes != null ? String(info.releaseNotes) : null,
+      progress: null,
+      errorMessage: null,
+    });
   });
 
   autoUpdater.on('error', (err) => {
     console.error('Auto-update error:', err);
+    // A download error should not clear an already-downloaded update.
+    if (updateState.state !== 'downloaded') {
+      setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
+    }
   });
+}
 
-  // Check for updates every 30 minutes
-  setInterval(() => {
-    autoUpdater.checkForUpdatesAndNotify().catch(console.error);
-  }, 30 * 60 * 1000);
+function stopAutoUpdateTimer() {
+  if (autoUpdateTimer) {
+    clearInterval(autoUpdateTimer);
+    autoUpdateTimer = null;
+  }
+}
 
-  // Check immediately on startup
-  autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-    console.error('Failed to check for updates:', err);
-  });
+async function checkForUpdates({ automatic = false } = {}) {
+  if (IS_DEV) return { status: 'dev-mode' };
+  if (automatic && !updateSettings.autoUpdateEnabled) return { status: 'disabled' };
+  if (autoUpdater.isUpdaterActive()) return { status: 'checking' };
+  try {
+    await autoUpdater.checkForUpdates();
+    return { status: 'ok' };
+  } catch (err) {
+    setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
+    return { status: 'error', error: String(err?.message || err) };
+  }
+}
+
+function startAutoUpdateTimer() {
+  stopAutoUpdateTimer();
+  if (IS_DEV || !updateSettings.autoUpdateEnabled) return;
+  checkForUpdates({ automatic: true }).catch(() => {});
+  autoUpdateTimer = setInterval(() => {
+    checkForUpdates({ automatic: true }).catch(() => {});
+  }, UPDATE_CHECK_INTERVAL_MS);
 }
 
 // Disable GPU to avoid IMKCFRunLoopWakeUpReliable crash on macOS
@@ -473,6 +617,9 @@ app.whenReady().then(async () => {
     if (backendProcess === null && !IS_DEV) return;
   }
 
+  setupAutoUpdater();
+  startAutoUpdateTimer();
+
   createTray();
   createWindow();
   nativeTheme.on('updated', refreshBrandIcons);
@@ -628,11 +775,56 @@ ipcMain.handle('settings-retention-set', async (event, patch) => {
 });
 
 // ── Auto-update IPC handlers ───────────────────────────────────────────
-ipcMain.handle('check-for-updates', async () => {
-  if (!IS_DEV && autoUpdater.isUpdaterActive()) {
-    return { status: 'ok' };
+ipcMain.handle('get-update-state', () => getUpdateStateSnapshot());
+
+ipcMain.handle('set-auto-update', async (event, enabled) => {
+  updateSettings = writeUpdateSettings({ autoUpdateEnabled: !!enabled });
+  if (!IS_DEV) {
+    if (updateSettings.autoUpdateEnabled) {
+      startAutoUpdateTimer();
+    } else {
+      stopAutoUpdateTimer();
+    }
   }
-  return { status: IS_DEV ? 'dev-mode' : 'unavailable' };
+  broadcastUpdateState();
+  return { status: 'ok', enabled: updateSettings.autoUpdateEnabled };
+});
+
+ipcMain.handle('check-for-updates', () => checkForUpdates({ automatic: false }));
+
+ipcMain.handle('download-update', async () => {
+  if (IS_DEV) return { status: 'dev-mode' };
+  if (updateState.state !== 'available') return { status: 'no-update' };
+  try {
+    await autoUpdater.downloadUpdate();
+    return { status: 'ok' };
+  } catch (err) {
+    setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
+    return { status: 'error', error: String(err?.message || err) };
+  }
+});
+
+ipcMain.handle('install-update', async () => {
+  if (IS_DEV) return { status: 'dev-mode' };
+  if (updateState.state !== 'downloaded') return { status: 'no-update' };
+  isQuitting = true;
+  stopBundledBackend();
+  autoUpdater.quitAndInstall();
+  return { status: 'ok' };
+});
+
+ipcMain.handle('skip-version', async () => {
+  if (updateState.availableVersion) {
+    updateSettings = writeUpdateSettings({ skippedVersion: updateState.availableVersion });
+  }
+  setUpdateState({ state: 'idle', progress: null, errorMessage: null });
+  return { status: 'ok', skippedVersion: updateSettings.skippedVersion };
+});
+
+ipcMain.handle('clear-skip', async () => {
+  updateSettings = writeUpdateSettings({ skippedVersion: null });
+  broadcastUpdateState();
+  return { status: 'ok' };
 });
 
 ipcMain.handle('update-runtime-config', async (event, payload) => {

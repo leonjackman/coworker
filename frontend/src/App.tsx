@@ -19,7 +19,9 @@ import { WorkspaceBottomPanel, type BottomPanelView } from './components/Workspa
 import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { ChangesPanel } from './components/ChangesPanel';
 import { RollbackDialog } from './components/RollbackDialog';
+import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
+import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
 import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
@@ -180,6 +182,7 @@ function App() {
   const [draftMode, setDraftMode] = useState(false);
   // useLanguage() 订阅语言变化以触发重渲染（返回值不直接使用）。
   useLanguage();
+  const updateCenter = useUpdateCenter();
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -2699,6 +2702,7 @@ function App() {
                   memorySettings={memorySettings}
                   onMemorySettingsChange={changeMemorySettings}
                   modelOptions={modelOptions}
+                  updateCenter={updateCenter}
                   onClose={() => setActiveView('chat')}
                 />
               )}
@@ -2760,6 +2764,7 @@ function App() {
           onConfirm={(withCode) => performRollback(withCode)}
         />
       )}
+      <UpdateToastCard center={updateCenter} onOpenSettings={() => setActiveView('settings')} />
     </main>
   );
 }

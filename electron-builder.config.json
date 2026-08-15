@@ -38,6 +38,10 @@
       {
         "target": "dmg",
         "arch": ["arm64"]
+      },
+      {
+        "target": "zip",
+        "arch": ["arm64"]
       }
     ],
     "icon": "assets/brand/cw-icon-blue-white-background.png",

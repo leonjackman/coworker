@@ -43,14 +43,22 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --mac --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
+          CHANNEL_FLAG=""
+          # Prerelease tags (e.g. v1.1.0-beta.1, v1.1.0-rc.1) build into their
+          # own channel files (beta-mac.yml, rc-mac.yml); stable tags keep the
+          # default latest channel.
+          if [[ "$APP_VERSION" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
+            CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
+          fi
+          npx electron-builder --mac --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
           name: mac-arm64
           path: |
             release/*.dmg
-            release/latest-mac.yml
+            release/*.zip
+            release/*.yml
           retention-days: 7
 
   build-win:
@@ -83,7 +91,14 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --win --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
+          CHANNEL_FLAG=""
+          # Prerelease tags (e.g. v1.1.0-beta.1, v1.1.0-rc.1) build into their
+          # own channel files (beta-mac.yml, rc-mac.yml); stable tags keep the
+          # default latest channel.
+          if [[ "$APP_VERSION" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
+            CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
+          fi
+          npx electron-builder --win --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
         shell: bash
 
       - uses: actions/upload-artifact@v4
@@ -91,7 +106,7 @@ jobs:
           name: win-x64
           path: |
             release/*.exe
-            release/latest.yml
+            release/*.yml
           retention-days: 7
 
   build-linux-x64:
@@ -130,7 +145,14 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
+          CHANNEL_FLAG=""
+          # Prerelease tags (e.g. v1.1.0-beta.1, v1.1.0-rc.1) build into their
+          # own channel files (beta-mac.yml, rc-mac.yml); stable tags keep the
+          # default latest channel.
+          if [[ "$APP_VERSION" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
+            CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
+          fi
+          npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -138,7 +160,7 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
-            release/latest-linux.yml
+            release/*.yml
           retention-days: 7
 
   build-linux-arm64:
@@ -177,7 +199,14 @@ jobs:
           python -m pip install pyinstaller -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
-          npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never -c.extraMetadata.version="${APP_VERSION#v}"
+          CHANNEL_FLAG=""
+          # Prerelease tags (e.g. v1.1.0-beta.1, v1.1.0-rc.1) build into their
+          # own channel files (beta-mac.yml, rc-mac.yml); stable tags keep the
+          # default latest channel.
+          if [[ "$APP_VERSION" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
+            CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
+          fi
+          npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -185,7 +214,7 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
-            release/latest-linux.yml
+            release/*.yml
           retention-days: 7
 
   release:
@@ -208,4 +237,8 @@ jobs:
         run: |
           ls -R release-artifacts
           mapfile -t FILES < <(find release-artifacts -type f)
-          gh release create "${{ github.ref_name }}" "${FILES[@]}" --generate-notes --title "CoWorker ${{ github.ref_name }}"
+          PRERELEASE_FLAG=""
+          if [[ "${{ github.ref_name }}" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "${{ github.ref_name }}" "${FILES[@]}" --generate-notes --title "CoWorker ${{ github.ref_name }}" $PRERELEASE_FLAG
