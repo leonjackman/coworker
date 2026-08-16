@@ -85,7 +85,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   }, [load]);
 
   const toggle = (key: string) => {
-    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+    setCollapsed((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));
   };
 
   const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
