@@ -195,11 +195,24 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
       eyebrow={t('memory.eyebrow')}
       title={t('memory.title')}
       description={t('memory.description')}
-      action={onClose ? (
-        <Button variant="outline" size="icon" aria-label={t('common.close')} onClick={onClose}>
-          <X size={16} />
-        </Button>
-      ) : undefined}
+      action={(
+        <>
+          <Button
+            variant="outline"
+            size="icon"
+            aria-label={t('common.refresh')}
+            title={t('common.refresh')}
+            onClick={() => void load()}
+          >
+            {loading ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+          </Button>
+          {onClose && (
+            <Button variant="outline" size="icon" aria-label={t('common.close')} onClick={onClose}>
+              <X size={16} />
+            </Button>
+          )}
+        </>
+      )}
     >
       {flash && (
         <div className={`memory-flash memory-flash--${flash.kind}`} role="status">
@@ -209,12 +222,6 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
 
       <div className="memory-library__toolbar">
         <span className="memory-subheading">{t('memory.library_title')}</span>
-        <div className="memory-library__actions">
-          <Button variant="outline" size="sm" onClick={() => void load()}>
-            {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
-            {t('common.refresh')}
-          </Button>
-        </div>
       </div>
 
       {loading && !library ? (
