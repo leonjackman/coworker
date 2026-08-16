@@ -10,9 +10,10 @@ interface OrgSettingsPageProps {
   projectId: string;
   projectName?: string;
   onBack: () => void;
+  onChanged?: () => void;
 }
 
-export function OrgSettingsPage({ projectId, projectName, onBack }: OrgSettingsPageProps) {
+export function OrgSettingsPage({ projectId, projectName, onBack, onChanged }: OrgSettingsPageProps) {
   const title = useMemo(() => (projectName ? `${projectName} · ${t('settings.org_group')}` : t('settings.org_group')), [projectName]);
   return (
     <WorkspacePage
@@ -26,7 +27,7 @@ export function OrgSettingsPage({ projectId, projectName, onBack }: OrgSettingsP
         </Button>
       )}
     >
-      <OrgSettingsPanel projectId={projectId} />
+      <OrgSettingsPanel projectId={projectId} {...(onChanged ? { onChanged } : {})} />
     </WorkspacePage>
   );
 }

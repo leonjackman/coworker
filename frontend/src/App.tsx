@@ -2752,6 +2752,7 @@ function App() {
                   projectId={orgProjectId}
                   {...(orgProjectName ? { projectName: orgProjectName } : {})}
                   onBack={() => setActiveView('chat')}
+                  onChanged={() => void refreshProjects()}
                 />
               ) : (
                 <SettingsView

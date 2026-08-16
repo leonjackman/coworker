@@ -783,7 +783,7 @@
   "settings.org_status": "ステータス",
   "settings.org_active": "有効",
   "settings.org_disabled": "無効",
-  "settings.org_delete_agent_confirm": "このメンバーを削除しますか？記憶ディレクトリはゴミ箱に移動します。",
+  "settings.org_delete_agent_confirm": "このメンバーを削除しますか？すべてのセッションと記憶ディレクトリが削除されます（記憶はゴミ箱に移動）。",
   "settings.org_teams": "部門",
   "settings.org_empty_teams": "部門がありません",
   "settings.org_add_team": "部門を追加",
@@ -805,5 +805,6 @@
   "chat.agent_pick": "エージェント",
   "settings.org_rename": "名前変更",
   "settings.org_rename_placeholder": "新しい表示名",
-  "settings.org_cancel": "キャンセル"
+  "settings.org_cancel": "キャンセル",
+  "settings.org_default_agent_protected": "default_agent はプロジェクトのメインエージェントのため削除できません"
 }

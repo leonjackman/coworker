@@ -19,53 +19,53 @@
 
 方向：`AgentView` 拆出 `id`（= 目录名）与 `name`（= 显示名，可 fallback id）；`injected()` 与迁移回填改按 `id` 匹配，杜绝显示名污染路径/匹配逻辑。
 
-- [ ] **`backend/coworker/memory/memory_discovery.py`**：
-  - [ ] `AgentView`（:103）加 `id: str` 字段；`name` 字段语义改为「显示名」（无旧 name=id 兼容）
-  - [ ] `to_dict()`（:112）输出 `id` 与 `name` 两个字段
-  - [ ] `_scan_agent`（:446）：`id=agent_dir.name`；`name = agent_name_resolver(agent_dir.name) if resolver else agent_dir.name`
-  - [ ] `MemoryScanner.__init__`（:228）加 `agent_name_resolver: Callable[[str], str] | None`（复用 `project_name_resolver` 可变属性模式，支持动态绑定）
-  - [ ] **`injected()`（:208）改 `a.id == agent`**（`agent` 参数是 id；用显示名匹配会导致注入失效）
-  - [ ] 搜索标签（:309）用 `aview.name`（显示名）——保留，不改
-- [ ] **`backend/main.py`**：
-  - [ ] scanner 装配 `agent_name_resolver`（:103 `project_name_resolver` 旁）：`lambda agent_id: <从 org_store 加载该项目 org，members_for 建 id→name 映射，缺失回退 agent_id>`
-  - [ ] **迁移回填（:591-595）改用 `aview.id` 作 id、`aview.name` 作显示名**（`name` 现在是显示名，不能当 id 用）
-- [ ] **`backend/coworker/memory/selftest.py:349-350`**：迁移回填模拟改用 `aview.id`
-- [ ] **`frontend/src/types.ts`**：`MemoryAgentView` 加 `id: string`
-- [ ] **`frontend/src/components/MemoryPanel.tsx`**：
-  - [ ] `:1116` agentKey 改用 `agent.id`（改名不崩折叠态）
-  - [ ] `:1128` label 用 `agent.name`（显示名）
-  - [ ] `:369` move 目标 label 用 `agent.name`、value 用 `agent.rel`（含 id）——已正确，确认即可
+- [x] **`backend/coworker/memory/memory_discovery.py`**：
+  - [x] `AgentView`（:103）加 `id: str` 字段；`name` 字段语义改为「显示名」（无旧 name=id 兼容）
+  - [x] `to_dict()`（:112）输出 `id` 与 `name` 两个字段
+  - [x] `_scan_agent`（:446）：`id=agent_dir.name`；`name = agent_name_resolver(agent_dir.name) if resolver else agent_dir.name`
+  - [x] `MemoryScanner.__init__`（:228）加 `agent_name_resolver: Callable[[str], str] | None`（复用 `project_name_resolver` 可变属性模式，支持动态绑定）
+  - [x] **`injected()`（:208）改 `a.id == agent`**（`agent` 参数是 id；用显示名匹配会导致注入失效）
+  - [x] 搜索标签（:309）用 `aview.name`（显示名）——保留，不改
+- [x] **`backend/main.py`**：
+  - [x] scanner 装配 `agent_name_resolver`（:103 `project_name_resolver` 旁）：`lambda agent_id: <从 org_store 加载该项目 org，members_for 建 id→name 映射，缺失回退 agent_id>`
+  - [x] **迁移回填（:591-595）改用 `aview.id` 作 id、`aview.name` 作显示名**（`name` 现在是显示名，不能当 id 用）
+- [x] **`backend/coworker/memory/selftest.py:349-350`**：迁移回填模拟改用 `aview.id`
+- [x] **`frontend/src/types.ts`**：`MemoryAgentView` 加 `id: string`
+- [x] **`frontend/src/components/MemoryPanel.tsx`**：
+  - [x] `:1116` agentKey 改用 `agent.id`（改名不崩折叠态）
+  - [x] `:1128` label 用 `agent.name`（显示名）
+  - [x] `:369` move 目标 label 用 `agent.name`、value 用 `agent.rel`（含 id）——已正确，确认即可
 
 ## 阶段 B — 改名实时刷新（onChanged → refreshProjects）
 
 方向：团队面板所有成功变更都通知 App 刷新 `/projects`，roster 随之更新，各处 agent 名实时同步。
 
-- [ ] **`frontend/src/components/settings/OrgSettingsPanel.tsx`**：
-  - [ ] props 加 `onChanged?: () => void`
-  - [ ] 加 `notifyChanged()` 辅助（`onChanged?.()` 空安全调用）
-  - [ ] 在成功路径末尾调用：`createAgent` / `updateAgent` / `submitRename` / `deleteAgent` / `createTeam` / `deleteTeam` / `saveConfig`
-- [ ] **`frontend/src/components/settings/OrgSettingsPage.tsx`**：props 加 `onChanged?: () => void`，透传给 `OrgSettingsPanel`
-- [ ] **`frontend/src/App.tsx`**：渲染 `OrgSettingsPage` 时传 `onChanged={() => void refreshProjects()}`
+- [x] **`frontend/src/components/settings/OrgSettingsPanel.tsx`**：
+  - [x] props 加 `onChanged?: () => void`
+  - [x] 加 `notifyChanged()` 辅助（`onChanged?.()` 空安全调用）
+  - [x] 在成功路径末尾调用：`createAgent` / `updateAgent` / `submitRename` / `deleteAgent` / `createTeam` / `deleteTeam` / `saveConfig`
+- [x] **`frontend/src/components/settings/OrgSettingsPage.tsx`**：props 加 `onChanged?: () => void`，透传给 `OrgSettingsPanel`
+- [x] **`frontend/src/App.tsx`**：渲染 `OrgSettingsPage` 时传 `onChanged={() => void refreshProjects()}`
 
 ## 阶段 C — 删除项目级联清记忆（回收站）
 
 方向：删项目在既有清理链（project 记录、session、checkpoint、change_store）基础上，补上整个项目 memory_dir 的回收。
 
-- [ ] **`backend/main.py` `delete_project`（:2650-2658）**：
-  - [ ] 顺序重构：先取 `memory_dir`（`project_store.require(project_id).memory_dir`，空则 `memory_dir_for`）→ 删 project 记录 → 清 session/checkpoint/change → 移 memory_dir 进回收站
-  - [ ] 回收实现：`from coworker.memory.trash import send_to_trash, system_trash_dir`；目标 `memory_manager.root / memory_dir`；`dest_dir = system_trash_dir() or (memory_manager.root / ".trash")`
-  - [ ] 回收失败仅 `logger.warning`，不阻断 `{"status":"ok"}`（与 org_delete_agent 一致）
+- [x] **`backend/main.py` `delete_project`（:2650-2658）**：
+  - [x] 顺序重构：先取 `memory_dir`（`project_store.require(project_id).memory_dir`，空则 `memory_dir_for`）→ 删 project 记录 → 清 session/checkpoint/change → 移 memory_dir 进回收站
+  - [x] 回收实现：`from coworker.memory.trash import send_to_trash, system_trash_dir`；目标 `memory_manager.root / memory_dir`；`dest_dir = system_trash_dir() or (memory_manager.root / ".trash")`
+  - [x] 回收失败仅 `logger.warning`，不阻断 `{"status":"ok"}`（与 org_delete_agent 一致）
 
 ## 阶段 D — 删除 agent 级联 + 硬阻断
 
 方向：删除 agent 与删项目同构，且 `default_agent` 与组织上下级受保护。
 
-- [ ] **`backend/coworker/sessions.py`**：
-  - [ ] 新增 `delete_by_agent(project_id: str, agent_id: str) -> int`：`list_sessions(project_id)` 中 `session["agent_id"] == agent_id` 逐个 `delete()`
-- [ ] **`backend/main.py` `org_delete_agent`（:1198）重构**：
-  - [ ] 开头保护：`if request.id == DEFAULT_AGENT: raise HTTPException(400, "default_agent cannot be deleted")`
-  - [ ] `org_store.remove_agent` 保留（已有硬阻断：不存在 / 是他人上级 parent / 是 team lead）
-  - [ ] 会话级联：
+- [x] **`backend/coworker/sessions.py`**：
+  - [x] 新增 `delete_by_agent(project_id: str, agent_id: str) -> int`：`list_sessions(project_id)` 中 `session["agent_id"] == agent_id` 逐个 `delete()`
+- [x] **`backend/main.py` `org_delete_agent`（:1198）重构**：
+  - [x] 开头保护：`if request.id == DEFAULT_AGENT: raise HTTPException(400, "default_agent cannot be deleted")`
+  - [x] `org_store.remove_agent` 保留（已有硬阻断：不存在 / 是他人上级 parent / 是 team lead）
+  - [x] 会话级联：
     ```python
     for session in session_store.list_sessions(request.project_id):
         if session.get("agent_id") != request.id:
@@ -74,34 +74,34 @@
         agent_registry.change_store.delete_session(session["id"])
     session_store.delete_by_agent(request.project_id, request.id)
     ```
-  - [ ] 记忆目录进回收站逻辑保留（已有 `store.remove_file(f"{project_dir}/{request.id}")`）
-  - [ ] 顺序：`remove_agent`（硬阻断）→ 级联会话 → 回收记忆目录（各自 try/except，回收失败不阻断）
-- [ ] **`frontend/src/components/settings/OrgSettingsPanel.tsx`**：
-  - [ ] `deleteAgent`（:111）确认文案升级为「删除该成员将连同其全部会话与记忆目录一并删除（记忆移入回收站）」
-  - [ ] 成员行删除按钮：`agent.id === 'default_agent'` 时 `disabled` + title 提示
+  - [x] 记忆目录进回收站逻辑保留（已有 `store.remove_file(f"{project_dir}/{request.id}")`）
+  - [x] 顺序：`remove_agent`（硬阻断）→ 级联会话 → 回收记忆目录（各自 try/except，回收失败不阻断）
+- [x] **`frontend/src/components/settings/OrgSettingsPanel.tsx`**：
+  - [x] `deleteAgent`（:111）确认文案升级为「删除该成员将连同其全部会话与记忆目录一并删除（记忆移入回收站）」
+  - [x] 成员行删除按钮：`agent.id === 'default_agent'` 时 `disabled` + title 提示
 
 ## 阶段 E — 文案与测试
 
 方向：补齐多语言文案；后端 selftest/stress 与前端类型/构建/HTTP 冒烟全绿。
 
-- [ ] **locales（zh/zh-TW/zh-HK/en/ja/ko/fr）**：
-  - [ ] 更新 `settings.org_delete_agent_confirm`（含会话+记忆回收站说明）
-  - [ ] 新增 `settings.org_default_agent_protected`（default_agent 不可删除提示）
-- [ ] **`backend/coworker/memory/selftest.py`**：
-  - [ ] discover agent 输出 `id`+`name`（改名后 name=新名、id 不变、fallback 正确）
-  - [ ] `injected()` 按 id 匹配（改名后注入仍命中）
-  - [ ] `delete_by_agent` 只删对 agent 的会话
-- [ ] **`backend/coworker/memory/stress_test.py`**：HTTP 冒烟增补
-  - [ ] 建项目 → 建 coder + 用 coder 发会话 → `DELETE /api/org/agent{id:coder}` → org 无 coder、coder 会话全删、`.../{project}/coder` 进回收站
-  - [ ] `DELETE /api/org/agent{id:default_agent}` → 400
-  - [ ] 删项目 → 整 memory_dir 进回收站
-- [ ] **全量验证**：
-  - [ ] `cd backend && ./venv/bin/python -c "import main"` + `py_compile` 相关文件
-  - [ ] `./venv/bin/python coworker/memory/selftest.py`（全绿）
-  - [ ] `./venv/bin/python coworker/memory/stress_test.py`（全绿）
-  - [ ] `export PATH="$HOME/.nvm/versions/node/v22.23.1/bin:$PATH" && cd frontend && npx tsc --noEmit`
-  - [ ] `npm run build`
-  - [ ] `node --check ../electron/main.js` / `../electron/preload.js`（如涉 IPC，本计划不涉及）
+- [x] **locales（zh/zh-TW/zh-HK/en/ja/ko/fr）**：
+  - [x] 更新 `settings.org_delete_agent_confirm`（含会话+记忆回收站说明）
+  - [x] 新增 `settings.org_default_agent_protected`（default_agent 不可删除提示）
+- [x] **`backend/coworker/memory/selftest.py`**：
+  - [x] discover agent 输出 `id`+`name`（改名后 name=新名、id 不变、fallback 正确）
+  - [x] `injected()` 按 id 匹配（改名后注入仍命中）
+  - [x] `delete_by_agent` 只删对 agent 的会话
+- [x] **`backend/coworker/memory/stress_test.py`**：HTTP 冒烟增补
+  - [x] 建项目 → 建 coder + 用 coder 发会话 → `DELETE /api/org/agent{id:coder}` → org 无 coder、coder 会话全删、`.../{project}/coder` 进回收站
+  - [x] `DELETE /api/org/agent{id:default_agent}` → 400
+  - [x] 删项目 → 整 memory_dir 进回收站
+- [x] **全量验证**：
+  - [x] `cd backend && ./venv/bin/python -c "import main"` + `py_compile` 相关文件
+  - [x] `./venv/bin/python coworker/memory/selftest.py`（全绿）
+  - [x] `./venv/bin/python coworker/memory/stress_test.py`（全绿）
+  - [x] `export PATH="$HOME/.nvm/versions/node/v22.23.1/bin:$PATH" && cd frontend && npx tsc --noEmit`
+  - [x] `npm run build`
+  - [x] `node --check ../electron/main.js` / `../electron/preload.js`（如涉 IPC，本计划不涉及）
 
 ## 关键文件清单
 
@@ -127,4 +127,13 @@
 
 ## 完成记录
 
-（实施完成后在此勾选并记录验证结果）
+全部阶段已实施并验证通过。
+
+- 阶段 A（名/id 分离）：`AgentView` 拆出 `id`（=目录名）与 `name`（显示名，可 fallback id）；`MemoryScanner` 加 `agent_name_resolver(project_dir, agent_id)`；`injected()` 与迁移回填改按 `id` 匹配；`MemoryAgentView.id` + MemoryPanel key 用 id / label 用 name。
+- 阶段 B（改名实时刷新）：`OrgSettingsPanel` 加 `onChanged`（createAgent/updateAgent/submitRename/deleteAgent/createTeam/deleteTeam/saveConfig 成功路径触发）→ `OrgSettingsPage` 透传 → App `refreshProjects()`。
+- 阶段 C（删项目清记忆）：`delete_project` 把整项目 memory_dir 移入 OS 回收站（`send_to_trash`，失败仅 warning）。
+- 阶段 D（删 agent 级联 + 保护）：`org_delete_agent` 硬阻断 default_agent（400）+ 上级/lead 阻断保留；级联删除绑定会话（checkpoint/change_store/`delete_by_agent`）+ 记忆目录进回收站；前端 default_agent 删除按钮禁用 + 提示。
+- 阶段 E（文案/测试）：7 语言更新 `org_delete_agent_confirm`、新增 `org_default_agent_protected`；selftest 新增 discover id/name、injected 按 id、rename fallback、`delete_by_agent` 用例；stress 增 HTTP 级联冒烟。
+
+验证结果：selftest 101→111 全绿；stress 99 全绿；`import main`/py_compile OK；tsc --noEmit + vite build（node 22）+ electron node --check 通过。
+HTTP 冒烟（9533）：discover agent 显示 `id`+`name`（改名后 name=老板、id=default_agent）；删 coder → 会话级联 + 记忆目录移除；删 default_agent → 400；删项目 → 整 memory_dir 进 OS 回收站。

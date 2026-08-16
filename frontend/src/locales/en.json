@@ -783,7 +783,7 @@
   "settings.org_status": "Status",
   "settings.org_active": "Active",
   "settings.org_disabled": "Disabled",
-  "settings.org_delete_agent_confirm": "Delete this member? Their memory directory moves to the Trash.",
+  "settings.org_delete_agent_confirm": "Delete this member? All of their sessions and memory directory will be removed (memory moves to the Trash).",
   "settings.org_teams": "Departments",
   "settings.org_empty_teams": "No departments yet",
   "settings.org_add_team": "Add Department",
@@ -805,5 +805,6 @@
   "chat.agent_pick": "Agent",
   "settings.org_rename": "Rename",
   "settings.org_rename_placeholder": "New display name",
-  "settings.org_cancel": "Cancel"
+  "settings.org_cancel": "Cancel",
+  "settings.org_default_agent_protected": "default_agent is the project's main agent and cannot be deleted"
 }

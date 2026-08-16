@@ -103,6 +103,21 @@ def _memory_project_name(memory_dir: str) -> str:
 memory_manager.scanner.project_name_resolver = _memory_project_name
 org_store = OrgStore(memory_manager.root)
 memory_manager.org_store = org_store
+
+
+def _memory_agent_name(project_dir: str, agent_id: str) -> str:
+    """Resolve an agent id to its display name from the project's org manifest."""
+    try:
+        org = org_store.load(project_dir)
+        for member in org_store.members_for(org):
+            if member["id"] == agent_id:
+                return member["name"] or agent_id
+    except Exception:  # noqa: BLE001 - display-only, never break the scan
+        pass
+    return agent_id
+
+
+memory_manager.scanner.agent_name_resolver = _memory_agent_name
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir, org_store=org_store)
 agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
 
@@ -588,10 +603,10 @@ def _ensure_org(memory_dir: str) -> str:
         view = next((p for p in library.projects if p.name == memory_dir), None)
         if view:
             for aview in view.agents:
-                if not any(a.id == aview.name for a in org.agents):
+                if not any(a.id == aview.id for a in org.agents):
                     org.agents.append(
                         OrgAgent(
-                            id=aview.name,
+                            id=aview.id,
                             name=aview.name,
                             role="",
                             description="",
@@ -1197,7 +1212,14 @@ async def org_update_agent(request: OrgAgentUpdateRequest):
 
 @app.delete("/api/org/agent")
 async def org_delete_agent(request: OrgAgentDeleteRequest):
-    """Delete an agent (org entry + memory dir to trash)."""
+    """Delete an agent (org entry + bound sessions + memory dir to trash).
+
+    ``default_agent`` is protected. Agents that are another member's superior or
+    a team lead are hard-blocked (reassign those first) so deleting a member can
+    never break the org hierarchy.
+    """
+    if request.id == DEFAULT_AGENT:
+        raise HTTPException(status_code=400, detail="default_agent cannot be deleted")
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
@@ -1206,6 +1228,14 @@ async def org_delete_agent(request: OrgAgentDeleteRequest):
         org_store.remove_agent(project_dir, request.id)
     except OrgError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Cascade: forget runtimes + clean change store + delete sessions bound to this agent.
+    for session in session_store.list_sessions(request.project_id):
+        if session.get("agent_id") != request.id:
+            continue
+        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
+        agent_registry.change_store.delete_session(session["id"])
+    session_store.delete_by_agent(request.project_id, request.id)
+    # Trash the agent's memory directory (recoverable), never blocking the delete.
     from coworker.memory.memory_store import MemoryStore
 
     store = MemoryStore(memory_manager.root)
@@ -2649,12 +2679,26 @@ async def rename_project(project_id: str, request: ProjectRenameRequest):
 
 @app.delete("/projects/{project_id}")
 async def delete_project(project_id: str):
+    try:
+        memory_dir = project_store.memory_dir_for(project_id)
+    except (KeyError, ValueError):
+        memory_dir = ""
     if not project_store.delete(project_id):
         raise HTTPException(status_code=404, detail=f"project {project_id} not found")
     for session in session_store.list_sessions(project_id):
         await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
         agent_registry.change_store.delete_session(session["id"])
     session_store.delete_by_project(project_id)
+    if memory_dir:
+        project_memory = memory_manager.root / memory_dir
+        if project_memory.exists():
+            try:
+                from coworker.memory.trash import send_to_trash, system_trash_dir
+
+                dest_dir = system_trash_dir() or (memory_manager.root / ".trash")
+                send_to_trash(project_memory, dest_dir)
+            except Exception:  # noqa: BLE001 - trash failure must not fail the delete
+                logger.warning("could not trash project memory dir %s", memory_dir, exc_info=True)
     return {"status": "ok"}
 
 @app.get("/workspace/tree")

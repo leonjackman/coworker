@@ -271,7 +271,7 @@
   "settings.org_status": "状态",
   "settings.org_active": "启用",
   "settings.org_disabled": "停用",
-  "settings.org_delete_agent_confirm": "删除该成员？其记忆目录将移入回收站。",
+  "settings.org_delete_agent_confirm": "删除该成员？将连同其全部会话与记忆目录一并删除（记忆移入回收站）。",
   "settings.org_teams": "部门",
   "settings.org_empty_teams": "暂无部门",
   "settings.org_add_team": "添加部门",
@@ -805,5 +805,6 @@
   "chat.agent_pick": "选择 Agent",
   "settings.org_rename": "改名",
   "settings.org_rename_placeholder": "新的显示名称",
-  "settings.org_cancel": "取消"
+  "settings.org_cancel": "取消",
+  "settings.org_default_agent_protected": "default_agent 是项目主 Agent，不可删除"
 }

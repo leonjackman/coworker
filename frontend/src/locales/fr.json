@@ -783,7 +783,7 @@
   "settings.org_status": "Statut",
   "settings.org_active": "Actif",
   "settings.org_disabled": "Désactivé",
-  "settings.org_delete_agent_confirm": "Supprimer ce membre ? Son dossier mémoire ira à la corbeille.",
+  "settings.org_delete_agent_confirm": "Supprimer ce membre ? Toutes ses sessions et son dossier mémoire seront supprimés (mémoire déplacée à la corbeille).",
   "settings.org_teams": "Départements",
   "settings.org_empty_teams": "Aucun département",
   "settings.org_add_team": "Ajouter un département",
@@ -805,5 +805,6 @@
   "chat.agent_pick": "Agent",
   "settings.org_rename": "Renommer",
   "settings.org_rename_placeholder": "Nouveau nom d'affichage",
-  "settings.org_cancel": "Annuler"
+  "settings.org_cancel": "Annuler",
+  "settings.org_default_agent_protected": "default_agent est l'agent principal du projet et ne peut pas être supprimé"
 }

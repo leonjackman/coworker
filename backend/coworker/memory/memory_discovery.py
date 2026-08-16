@@ -101,7 +101,8 @@ class MemoryNode:
 
 @dataclass(frozen=True)
 class AgentView:
-    name: str
+    id: str              # agent id (= directory name, stable across renames)
+    name: str            # display name (from org roster, falls back to id)
     rel: str
     soul: MemoryNode | None = None
     agent: MemoryNode | None = None
@@ -111,6 +112,7 @@ class AgentView:
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "name": self.name,
             "rel": self.rel,
             "soul": self.soul.to_dict() if self.soul else None,
@@ -205,7 +207,7 @@ class MemoryLibrary:
                 nodes.extend(view.base)
                 nodes.extend(view.project)
                 if agent:
-                    aview = next((a for a in view.agents if a.name == agent), None)
+                    aview = next((a for a in view.agents if a.id == agent), None)
                     if aview:
                         for core in (aview.soul, aview.agent, aview.memory):
                             if core:
@@ -225,9 +227,10 @@ class MemoryLibrary:
 class MemoryScanner:
     """Scan the memory library directory tree."""
 
-    def __init__(self, root: Path, project_name_resolver: Callable[[str], str] | None = None):
+    def __init__(self, root: Path, project_name_resolver: Callable[[str], str] | None = None, agent_name_resolver: Callable[[str, str], str] | None = None):
         self.root = Path(root).resolve()
         self.project_name_resolver = project_name_resolver
+        self.agent_name_resolver = agent_name_resolver
 
     def scan(self, *, include_missing: bool = False) -> MemoryLibrary:
         """Discover system files, project dirs and agent dirs.
@@ -443,8 +446,16 @@ class MemoryScanner:
                 rel = _rel(self.root, entry)
                 node = self._read_node("session_file", rel) or self._empty_node("session_file", rel)
                 sessions.append(node)
+        agent_id = agent_dir.name
+        display_name = agent_id
+        if self.agent_name_resolver is not None:
+            try:
+                display_name = self.agent_name_resolver(project_dir.name, agent_id) or agent_id
+            except Exception:  # noqa: BLE001 - a bad resolver must not break the scan
+                display_name = agent_id
         return AgentView(
-            name=agent_dir.name,
+            id=agent_id,
+            name=display_name,
             rel=_rel(self.root, agent_dir),
             soul=core["SOUL.md"],
             agent=core["AGENT.md"],

@@ -25,6 +25,7 @@ from coworker.memory.memory_discovery import MemoryScanner
 from coworker.memory.registry import MemoryRegistry
 from coworker.memory.transfer import apply_import, export_memory, preview_import
 from coworker.org import OrgError, OrgStore, OrgTeam, OrgAgent, default_org
+from coworker.sessions import SessionStore
 
 CHECKS: list[str] = []
 
@@ -331,6 +332,31 @@ def main() -> int:
         check("discover exposes teams", len(view.teams) == 1 and view.teams[0].id == "backend", str(view.teams))
         check("team goals scanned", view.teams[0].goals is not None and "加速交付" in (view.teams[0].goals.content or ""))
 
+        # discover agent view: id = dir name (stable), name = display name (renamed later)
+        av = next(a for a in view.agents if a.id == "coder")
+        check("discover agent has id", av.id == "coder", av.id)
+        check("discover agent name display", av.name == "coder" or av.name == "首席编码", av.name)
+        injected_after = library.injected(project_dir="proj1", agent="coder")
+        check("injected matches by id", any(n.kind == "agent_file" for n in injected_after))
+
+        # renamed agent: discover id unchanged, display name reflects rename, injected still hits by id
+        org_store.upsert_agent("proj1", OrgAgent(id="coder", name="首席编码", role="developer", team_id="backend"))
+        library_rn = MemoryScanner(
+            root,
+            agent_name_resolver=lambda project_dir, agent_id: (
+                next((m["name"] for m in org_store.members_for(org_store.load(project_dir)) if m["id"] == agent_id), agent_id)
+            ),
+        ).scan()
+        view_rn = next(p for p in library_rn.projects if p.name == "proj1")
+        av_rn = next(a for a in view_rn.agents if a.id == "coder")
+        check("discover id stable after rename", av_rn.id == "coder", av_rn.id)
+        check("discover name reflects rename", av_rn.name == "首席编码", av_rn.name)
+        injected_rn = library_rn.injected(project_dir="proj1", agent="coder")
+        check("injected by id after rename", any(n.kind == "agent_file" for n in injected_rn))
+        # fallback: no resolver -> name falls back to id
+        av_nr = next(a for a in next(p for p in MemoryScanner(root).scan().projects if p.name == "proj1").agents if a.id == "coder")
+        check("discover name falls back to id", av_nr.name == "coder", av_nr.name)
+
         # migration: org missing but agent dirs exist -> backfilled via discover path
         os2 = OrgStore(root)
         check("org missing initially", not os2.exists("proj2"))
@@ -346,8 +372,8 @@ def main() -> int:
         view2 = next(p for p in library2.projects if p.name == "proj2")
         org5 = os2.load("proj2")
         for aview in view2.agents:
-            if not any(a.id == aview.name for a in org5.agents):
-                org5.agents.append(OrgAgent(id=aview.name, name=aview.name, role="", parent="", team_id="", status="active"))
+            if not any(a.id == aview.id for a in org5.agents):
+                org5.agents.append(OrgAgent(id=aview.id, name=aview.name, role="", parent="", team_id="", status="active"))
         os2.save("proj2", org5)
         migrated = os2.load("proj2")
         ids = {a.id for a in migrated.agents}
@@ -384,6 +410,19 @@ def main() -> int:
             check("org empty name rejected", False)
         except OrgError:
             check("org empty name rejected", True)
+
+        # delete_by_agent only removes sessions bound to the given agent
+        sstore = SessionStore(Path(tmp) / "sessions")
+        sstore.create("s1", project_id="proj1", agent_id="coder")
+        sstore.create("s2", project_id="proj1", agent_id="default_agent")
+        sstore.create("s3", project_id="proj1", agent_id="coder")
+        sstore.create("s4", project_id="other", agent_id="coder")
+        removed = sstore.delete_by_agent("proj1", "coder")
+        check("delete_by_agent removes bound sessions", removed == 2, str(removed))
+        remaining_titles = {s["title"] for s in sstore.list_sessions("proj1")}
+        check("delete_by_agent keeps other agent sessions", remaining_titles == {"s2"}, str(remaining_titles))
+        other_titles = {s["title"] for s in sstore.list_sessions("other")}
+        check("delete_by_agent scoped to project", other_titles == {"s4"}, str(other_titles))
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]

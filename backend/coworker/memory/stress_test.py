@@ -555,6 +555,24 @@ def test_http_api(url: str, project_id: str):
     r16 = _http("/api/org/agent", "DELETE", {"project_id": project_id, "id": "org_worker"})
     check("org delete agent", "__error" not in r16 or r16.get("status"), str(r16)[:120])
 
+    # default_agent is protected from deletion
+    r17 = _http("/api/org/agent", "DELETE", {"project_id": project_id, "id": "default_agent"})
+    check("org delete default_agent rejected", "__error" in r17, str(r17)[:120])
+
+    # delete a working agent cascades its bound sessions
+    _http("/api/org/agent", "POST", {"project_id": project_id, "name": "cascader", "role": "developer"})
+    _http("/sessions", "POST", {"project_id": project_id, "agent_id": "cascader"})
+    _http("/sessions", "POST", {"project_id": project_id, "agent_id": "default_agent"})
+    sess_before = _http("/sessions?project_id=" + project_id)
+    cascader_count_before = sum(1 for s in sess_before.get("sessions", []) if s.get("agent_id") == "cascader")
+    r18 = _http("/api/org/agent", "DELETE", {"project_id": project_id, "id": "cascader"})
+    check("org delete cascades ok", "__error" not in r18, str(r18.get("__error", ""))[:120])
+    sess_after = _http("/sessions?project_id=" + project_id)
+    cascader_after = [s for s in sess_after.get("sessions", []) if s.get("agent_id") == "cascader"]
+    check("org delete removes agent sessions", cascader_count_before > 0 and not cascader_after, f"before={cascader_count_before} after={len(cascader_after)}")
+    default_kept = any(s.get("agent_id") == "default_agent" for s in sess_after.get("sessions", []))
+    check("org delete keeps other sessions", default_kept)
+
 
 def test_http_pressure(url: str, project_id: str):
     print("\n[HTTP] Pressure: 200 writes to single agent")

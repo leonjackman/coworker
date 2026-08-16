@@ -268,6 +268,16 @@ class SessionStore:
                 deleted += 1
         return deleted
 
+    def delete_by_agent(self, project_id: str, agent_id: str) -> int:
+        """Delete every session of one project bound to ``agent_id``."""
+        deleted = 0
+        for session in self.list_sessions(project_id):
+            if session.get("agent_id") != agent_id:
+                continue
+            if self.delete(session["id"]):
+                deleted += 1
+        return deleted
+
     def rename(self, session_id: str, title: str) -> Session | None:
         session = self.require(session_id)
         cleaned = title.strip()

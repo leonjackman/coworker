@@ -870,6 +870,7 @@ export interface MemoryFolderView {
 }
 
 export interface MemoryAgentView {
+  id: string;
   name: string;
   rel: string;
   soul: MemoryNode | null;

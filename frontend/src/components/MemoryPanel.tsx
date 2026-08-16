@@ -1113,7 +1113,7 @@ function AgentBranch({
   onAddBase: (folderRel: string, expandKey: string) => void;
 }) {
   const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
-  const agentKey = `p:${projectRel}:a:${agent.name}`;
+  const agentKey = `p:${projectRel}:a:${agent.id}`;
   const baseKey = `${agentKey}:base`;
   const sessionsKey = `${agentKey}:sessions`;
 

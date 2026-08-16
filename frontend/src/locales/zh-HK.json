@@ -783,7 +783,7 @@
   "settings.org_status": "狀態",
   "settings.org_active": "啟用",
   "settings.org_disabled": "停用",
-  "settings.org_delete_agent_confirm": "刪除該成員？其記憶目錄將移至資源回收筒。",
+  "settings.org_delete_agent_confirm": "刪除該成員？將連同其全部會話與記憶目錄一併刪除（記憶移至資源回收筒）。",
   "settings.org_teams": "部門",
   "settings.org_empty_teams": "暫無部門",
   "settings.org_add_team": "新增部門",
@@ -805,5 +805,6 @@
   "chat.agent_pick": "選擇 Agent",
   "settings.org_rename": "改名",
   "settings.org_rename_placeholder": "新的顯示名稱",
-  "settings.org_cancel": "取消"
+  "settings.org_cancel": "取消",
+  "settings.org_default_agent_protected": "default_agent 是項目主 Agent，不可刪除"
 }

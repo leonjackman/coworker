@@ -7,6 +7,7 @@ import { Button } from '../ui/button';
 
 interface OrgSettingsPanelProps {
   projectId: string;
+  onChanged?: () => void;
 }
 
 interface AgentForm {
@@ -27,7 +28,7 @@ interface TeamForm {
 const emptyAgent: AgentForm = { name: '', role: '', description: '', parent: '', team_id: '' };
 const emptyTeam: TeamForm = { id: '', name: '', lead: '', parent_team_id: '' };
 
-export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
+export function OrgSettingsPanel({ projectId, onChanged }: OrgSettingsPanelProps) {
   const [org, setOrg] = useState<OrgSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -36,6 +37,10 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
   const [config, setConfig] = useState<OrgConfig | null>(null);
   const [renameAgentId, setRenameAgentId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+
+  const notifyChanged = useCallback(() => {
+    onChanged?.();
+  }, [onChanged]);
 
   const load = useCallback(async () => {
     if (!projectId) {
@@ -76,6 +81,7 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
       });
       setOrg(snapshot);
       setAgentForm(emptyAgent);
+      notifyChanged();
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -86,6 +92,7 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
     try {
       const snapshot = await chatService.updateOrgAgent({ project_id: projectId, id, ...patch });
       setOrg(snapshot);
+      notifyChanged();
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -103,6 +110,7 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
       setOrg(snapshot);
       setRenameAgentId(null);
       setRenameDraft('');
+      notifyChanged();
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -114,6 +122,7 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
     try {
       const snapshot = await chatService.deleteOrgAgent(projectId, id);
       setOrg(snapshot);
+      notifyChanged();
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -135,6 +144,7 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
       });
       setOrg(snapshot);
       setTeamForm(emptyTeam);
+      notifyChanged();
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -146,6 +156,7 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
     try {
       const snapshot = await chatService.deleteOrgTeam(projectId, id);
       setOrg(snapshot);
+      notifyChanged();
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -157,6 +168,7 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
       const snapshot = await chatService.updateOrgConfig({ project_id: projectId, ...patch });
       setOrg(snapshot);
       setConfig(snapshot.config);
+      notifyChanged();
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -286,7 +298,13 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
                   <option value="active">{t('settings.org_active')}</option>
                   <option value="disabled">{t('settings.org_disabled')}</option>
                 </select>
-                <Button variant="ghost" size="sm" onClick={() => deleteAgent(agent.id)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => deleteAgent(agent.id)}
+                  disabled={agent.id === 'default_agent'}
+                  title={agent.id === 'default_agent' ? t('settings.org_default_agent_protected') : t('common.delete')}
+                >
                   <Trash2 size={14} />
                 </Button>
               </div>
