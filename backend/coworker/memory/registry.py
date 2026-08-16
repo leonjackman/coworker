@@ -16,13 +16,19 @@ from .layout import (
     AGENT_CORE_FILES,
     AGENT_SKELETON,
     BASE_DIR,
-    DEFAULT_BASE_FILES,
+    BASE_SKELETON,
+    BASE_TEMPLATE_FILES,
+    LEGACY_PROJECT_SKELETON,
     MEMORY_ROOT_NAME,
     PROJECT_SKELETON,
     PROJECT_SUBDIR,
     SESSIONS_DIR,
     SYSTEM_FILES,
 )
+
+# Deprecated system-default files from earlier layouts; converge them so all
+# projects settle on the current ALL-CAPS skeleton.
+_DEPRECATED_BASE_FILES = ("project.md", "game_rule.md", "BASE.md", "clean_code_rule.md")
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +58,26 @@ class MemoryRegistry:
         return self.root / memory_dir
 
     def ensure_project(self, memory_dir: str) -> Path:
-        """Create the project dir with ``BASE/`` and ``BASE/PROJECT/``."""
+        """Create the project dir with ``BASE/`` (template only) + ``BASE/PROJECT/``.
+
+        Also converges legacy lowercase system files from earlier layouts:
+        empty skeleton files are removed, and user-edited files are either kept
+        (BASE) or renamed to the current ALL-CAPS name (PROJECT).
+        """
         with self._lock:
             project_dir = self.project_dir(memory_dir)
             project_dir.mkdir(parents=True, exist_ok=True)
             base_dir = project_dir / BASE_DIR
             base_dir.mkdir(parents=True, exist_ok=True)
-            for name in DEFAULT_BASE_FILES:
+            _prune_legacy_base_files(base_dir)
+            for name in BASE_TEMPLATE_FILES:
                 path = base_dir / name
                 if not path.exists():
-                    _write_skeleton(path, f"# {name}\n")
+                    content = BASE_SKELETON.get(name, f"# {name}\n")
+                    _write_skeleton(path, content)
             project_subdir = base_dir / PROJECT_SUBDIR
             project_subdir.mkdir(parents=True, exist_ok=True)
+            _prune_legacy_project_files(project_subdir)
             for name, content in PROJECT_SKELETON.items():
                 path = project_subdir / name
                 if not path.exists():
@@ -118,6 +132,43 @@ def normalize_agent_layout(agent_dir: Path) -> None:
                 lock_src.unlink(missing_ok=True)
     if moved:
         logger.info("normalized legacy agent layout: %s", agent_dir)
+
+
+def _prune_legacy_base_files(base_dir: Path) -> None:
+    """Remove deprecated BASE files that still hold only their skeleton header.
+
+    A deprecated file with real user content is kept — it becomes a regular
+    user-maintained file (BASE is the user area, so any case is allowed).
+    """
+    for name in _DEPRECATED_BASE_FILES:
+        path = base_dir / name
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:  # pragma: no cover - defensive
+            continue
+        if content.strip() == f"# {name}":
+            path.unlink(missing_ok=True)
+
+
+def _prune_legacy_project_files(project_subdir: Path) -> None:
+    """Drop legacy lowercase PROJECT files that still hold skeleton content.
+
+    The ALL-CAPS file is then recreated by ``ensure_project``. Files with
+    user-edited content are kept untouched (a case-only rename is impossible on
+    case-insensitive filesystems, where ``goals.md`` and ``GOALS.md`` alias).
+    """
+    for name, content in LEGACY_PROJECT_SKELETON.items():
+        path = project_subdir / name
+        if not path.is_file():
+            continue
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError:  # pragma: no cover - defensive
+            continue
+        if existing.strip() == content.strip():
+            path.unlink(missing_ok=True)
 
 
 def _write_skeleton(path: Path, content: str) -> None:

@@ -9,9 +9,9 @@ directory tree (multi-agent capable):
     ├── MEMORY.md / USER.md / AGENT.md      # system-level (user-maintained)
     ├── <memory_dir>/                        # one dir per project (timestamp id)
     │   ├── BASE/                            # user-maintained project facts
-    │   │   ├── project.md / game_rule.md / …
+    │   │   ├── EXAMPLE.md                   # only template, user adds own files
     │   │   └── PROJECT/                     # system-generated project context
-    │   │       ├── goals.md / context.md
+    │   │       ├── GOALS.md / CONTEXT.md
     │   └── <agent>/                         # one dir per agent (auto-created)
     │       ├── BASE/                        # agent identity + long-term memory
     │       │   └── SOUL.md / AGENT.md / MEMORY.md
@@ -43,11 +43,38 @@ AGENT_BASE_DIR = BASE_DIR
 # Agent core files, in injection precedence order.
 AGENT_CORE_FILES = ("SOUL.md", "AGENT.md", "MEMORY.md")
 
-# Default BASE files created for a new project (user-maintained).
-DEFAULT_BASE_FILES = ("project.md", "game_rule.md", "BASE.md", "clean_code_rule.md")
+# System-default files are named in ALL CAPS so the user can tell what the
+# system created vs. files the user/agent created (any case is allowed for
+# user/agent-created files). BASE/ holds a single template file; concrete
+# project memory files are user-maintained and created by the user.
+
+# Default BASE template created for a new project (user-maintained area).
+BASE_TEMPLATE_FILES = ("EXAMPLE.md",)
+
+# Skeleton content for the BASE template.
+BASE_SKELETON = {
+    "EXAMPLE.md": (
+        "# EXAMPLE.md\n"
+        "\n"
+        "（模板示例 — 可删除）\n"
+        "\n"
+        "本目录（BASE）用于存放由你维护的项目记忆，内容会按 Markdown 注入给该项目内的 agent。\n"
+        "\n"
+        "- 在 BASE/ 下创建你自己的记忆文件，如 RULES.md、TODO.md、NOTES.md（文件名大小写不限）\n"
+        "- 每个文件聚焦一个主题，使用 Markdown 标题与列表\n"
+        "- BASE/PROJECT/ 目录由系统生成与维护，请勿手动添加文件\n"
+    ),
+}
 
 # Skeleton content for system-generated PROJECT context files.
 PROJECT_SKELETON = {
+    "GOALS.md": "# 项目高层级目标\n\n（由系统生成与维护 — 记录项目的高层级目标）\n",
+    "CONTEXT.md": "# 项目背景与约束\n\n（由系统生成与维护 — 记录项目的高层级背景、约束与上下文）\n",
+}
+
+# Skeleton content of the deprecated lowercase PROJECT files (pre-ALL-CAPS).
+# Used only to recognize untouched legacy files for pruning.
+LEGACY_PROJECT_SKELETON = {
     "goals.md": "# 项目高层级目标\n\n（由系统生成与维护 — 记录项目的高层级目标）\n",
     "context.md": "# 项目背景与约束\n\n（由系统生成与维护 — 记录项目的高层级背景、约束与上下文）\n",
 }

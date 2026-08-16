@@ -80,14 +80,43 @@ def main() -> int:
         project_path = registry.ensure_project("20260812100000")
         check("BASE exists", (project_path / "BASE").is_dir())
         check(
+            "BASE template EXAMPLE.md",
+            (project_path / "BASE" / "EXAMPLE.md").is_file(),
+        )
+        check(
             "PROJECT subdir exists",
-            (project_path / "BASE" / "PROJECT" / "goals.md").is_file(),
+            (project_path / "BASE" / "PROJECT" / "GOALS.md").is_file(),
         )
         agent_path = registry.ensure_agent(project_path, "default_agent")
         for name in ("SOUL.md", "AGENT.md", "MEMORY.md"):
             check(f"agent file {name}", (agent_path / "BASE" / name).is_file())
         check("SESSIONS dir", (agent_path / "SESSIONS").is_dir())
         check("registry idempotent", registry.ensure_root() == registry.ensure_root())
+
+        with tempfile.TemporaryDirectory() as legacy_tmp:
+            legacy_registry = MemoryRegistry(Path(legacy_tmp))
+            legacy_registry.ensure_root()
+            legacy_project = legacy_registry.project_dir("20990101000000")
+            legacy_project.mkdir(parents=True, exist_ok=True)
+            legacy_base = legacy_project / "BASE"
+            legacy_base.mkdir(parents=True, exist_ok=True)
+            (legacy_base / "project.md").write_text("# project.md\n", encoding="utf-8")
+            (legacy_base / "game_rule.md").write_text("# game_rule.md\n", encoding="utf-8")
+            (legacy_base / "custom_note.md").write_text("real user content\n", encoding="utf-8")
+            legacy_proj = legacy_base / "PROJECT"
+            legacy_proj.mkdir(parents=True, exist_ok=True)
+            (legacy_proj / "goals.md").write_text(
+                "# 项目高层级目标\n\n（由系统生成与维护 — 记录项目的高层级目标）\n", encoding="utf-8"
+            )
+            (legacy_proj / "context.md").write_text("user edited context\n", encoding="utf-8")
+            legacy_registry.ensure_project("20990101000000")
+            check("legacy skeleton base pruned", not (legacy_base / "project.md").exists())
+            check("legacy game_rule pruned", not (legacy_base / "game_rule.md").exists())
+            check("legacy user content kept", (legacy_base / "custom_note.md").is_file())
+            check("GOALS recreated", (legacy_proj / "GOALS.md").is_file())
+            goals_content = (legacy_proj / "GOALS.md").read_text(encoding="utf-8")
+            check("GOALS skeleton content", "# 项目高层级目标" in goals_content, goals_content[:40])
+            check("legacy edited context kept", (legacy_proj / "context.md").is_file())
 
         store = MemoryStore(data_dir / "memory")
 

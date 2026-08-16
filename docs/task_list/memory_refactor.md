@@ -6,12 +6,12 @@
 
 ```
 {DATA_DIR}/memory/
-├── MEMORY.md / USER.md / AGENT.md        # 系统/用户级记忆（用户维护）
+├── MEMORY.md / USER.md / AGENT.md        # 系统/用户级记忆（用户维护，全大写=系统默认）
 ├── <memory_dir>/                          # 项目记忆目录 = 秒级时间戳
-│   ├── BASE/                              # 用户维护
-│   │   ├── project.md / game_rule.md / …
-│   │   └── PROJECT/                       # 系统生成维护
-│   │       ├── goals.md / context.md
+│   ├── BASE/                              # 用户维护（系统只放一个模板）
+│   │   ├── EXAMPLE.md                     # 模板示例，用户按需自建文件（大小写不限）
+│   │   └── PROJECT/                       # 系统生成维护（建议用户勿增）
+│   │       ├── GOALS.md / CONTEXT.md
 │   └── <agent>/                           # 创建 agent 时自动生成
 │       ├── SOUL.md / AGENT.md / MEMORY.md
 │       └── SESSIONS/*.md
@@ -29,7 +29,7 @@
   - [x] `resolve_rel_path(root, rel) -> Path`（防目录逃逸校验）
 - [x] 新增 `memory/registry.py`：
   - [x] `ensure_root(data_dir)`：建 `memory/` + 空 system 文件（MEMORY/USER/AGENT.md）
-  - [x] `ensure_project(memory_dir)`：建 `<dir>/BASE/` + `BASE/PROJECT/` 骨架（goals.md/context.md 带标题占位）
+  - [x] `ensure_project(memory_dir)`：建 `<dir>/BASE/`（EXAMPLE.md 模板）+ `BASE/PROJECT/` 骨架（GOALS.md/CONTEXT.md 带标题占位）
   - [x] `ensure_agent(project_dir, agent)`：建 `<agent>/` + SOUL/AGENT/MEMORY + `SESSIONS/`
 
 ## 阶段 2 — 文件读写层（纯 Markdown）
