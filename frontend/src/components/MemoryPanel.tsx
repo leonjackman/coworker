@@ -472,11 +472,11 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
           {canReveal && (
             <>
               <Button variant="outline" size="sm" onClick={() => void doImport()} disabled={importBusy}>
-                {importBusy ? <Loader2 className="animate-spin" size={15} /> : <Upload size={15} />}
+                {importBusy ? <Loader2 className="animate-spin" size={15} /> : <Download size={15} />}
                 {t('memory.import')}
               </Button>
               <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
-                <Download size={15} />
+                <Upload size={15} />
                 {t('memory.export')}
               </Button>
             </>
@@ -726,7 +726,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
       <DetailModal
         open={exportOpen}
         onClose={() => setExportOpen(false)}
-        icon={<Download size={18} />}
+        icon={<Upload size={18} />}
         title={t('memory.export_title')}
         subtitle={t('memory.export_desc')}
         footer={(
@@ -740,7 +740,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
               disabled={exportBusy || (exportScope === 'projects' && exportProjectDirs.length === 0)}
               onClick={() => void doExport()}
             >
-              {exportBusy ? <Loader2 className="animate-spin" size={14} /> : <Download size={14} />}
+              {exportBusy ? <Loader2 className="animate-spin" size={14} /> : <Upload size={14} />}
               {t('memory.export_confirm')}
             </Button>
           </>
@@ -785,7 +785,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
       <DetailModal
         open={importConflict !== null}
         onClose={() => setImportConflict(null)}
-        icon={<Upload size={18} />}
+        icon={<Download size={18} />}
         title={t('memory.import_conflict_title')}
         subtitle={t('memory.import_conflict_desc')}
         footer={(
@@ -805,7 +805,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
               disabled={importApplyBusy}
               onClick={() => void applyImport()}
             >
-              {importApplyBusy ? <Loader2 className="animate-spin" size={14} /> : <Upload size={14} />}
+              {importApplyBusy ? <Loader2 className="animate-spin" size={14} /> : <Download size={14} />}
               {t('memory.import_confirm')}
             </Button>
           </>
