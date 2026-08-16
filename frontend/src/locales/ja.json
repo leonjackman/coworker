@@ -686,6 +686,7 @@
   "memory.add_import": "ファイルからインポート",
   "memory.add_confirm": "追加",
   "memory.file_added": "メモリファイルを追加しました",
+  "memory.extension_not_supported": "Markdown ファイルのみ対応（.md / .markdown）",
   "settings.about_group": "について",
   "settings.about_group_desc": "アプリケーションバージョンとアップデート設定。",
   "settings.version": "バージョン",

@@ -686,6 +686,7 @@
   "memory.add_import": "Import from file",
   "memory.add_confirm": "Add",
   "memory.file_added": "Memory file added",
+  "memory.extension_not_supported": "Only Markdown files (.md / .markdown) are supported",
   "settings.about_group": "About",
   "settings.about_group_desc": "Application version and update settings.",
   "settings.version": "Version",

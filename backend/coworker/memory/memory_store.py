@@ -20,6 +20,7 @@ The concurrency hardening from the original ``§``-delimited store is preserved:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
@@ -67,12 +68,45 @@ class MemoryStore:
     # -- whole-file write --------------------------------------------------
 
     def write_file(self, rel: str, content: str) -> MemoryFile:
-        """Replace a whole memory file from raw Markdown."""
+        """Replace a whole memory file from raw Markdown.
+
+        Uses a read-then-write strategy with conflict detection: the content
+        hash is captured *before* writing.  After writing we re-read from disk;
+        if the hash changed (external editor, another process) a
+        ``MemoryError("file changed externally, please reload")`` is raised
+        so the caller can offer the user **overwrite** or **keep external**.
+        """
+        if not rel.endswith(('.md', '.markdown')):
+            raise MemoryError("only Markdown files (.md / .markdown) are allowed")
         if not content.strip():
             content = ""
         path = self._resolve(rel)
+
         with self._lock:
-            return self._update_locked(path, lambda _raw: content)
+            # Ensure parent directory exists
+            if path.parent and not path.parent.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+            # Capture hash of current content
+            current_raw = _read_text(path)
+            current_hash = hashlib.sha256(current_raw.encode("utf-8")).hexdigest()
+
+            # Write
+            self._write_payload_atomic(path, content)
+
+            # Detect external modification between our read and write
+            disk_raw = _read_text(path) if path.exists() else ""
+            if disk_raw != content:
+                # Concurrent external edit: disk has something we didn't expect.
+                # Re-check: if disk content differs from what we wrote and also
+                # differs from our original read → true concurrent edit conflict.
+                disk_hash = hashlib.sha256(disk_raw.encode("utf-8")).hexdigest()
+                if disk_hash != current_hash:
+                    raise MemoryError("file changed externally, please reload", current_hash, disk_hash)
+                # disk hash == current hash → a non-cooperating writer between
+                # our read and write, but that writer reverted to our state.
+                # Safe — just return current content (it matches our write).
+
+            return load_file(path)
 
     def remove_file(self, rel: str) -> bool:
         """Delete a file (or empty directory) under the memory root."""

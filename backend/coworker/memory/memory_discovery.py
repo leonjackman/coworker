@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 
 _KINDS = ("system", "base_file", "project_file", "agent_file", "session_file")
 
+_MEMORY_SUFFIXES = (".md", ".markdown")
+
+
+def _is_memory_file(path: Path) -> bool:
+    """Return True for regular files that match markdown extensions and aren't lock files."""
+    return (
+        path.is_file()
+        and not path.name.endswith(".lock")
+        and any(path.name.lower().endswith(suffix) for suffix in _MEMORY_SUFFIXES)
+    )
+
 
 @dataclass(frozen=True)
 class MemoryNode:
@@ -157,9 +168,7 @@ class MemoryScanner:
         if self.root.is_dir():
             for entry in sorted(self.root.iterdir()):
                 if (
-                    not entry.is_file()
-                    or entry.name.startswith(".")
-                    or entry.name.endswith(".lock")
+                    not _is_memory_file(entry)
                     or entry.name in SYSTEM_FILES
                 ):
                     continue
@@ -185,14 +194,14 @@ class MemoryScanner:
         project: list[MemoryNode] = []
         if base_dir.is_dir():
             for entry in sorted(base_dir.iterdir()):
-                if not entry.is_file() or entry.name.endswith(".lock"):
+                if not _is_memory_file(entry):
                     continue
                 rel = _rel(self.root, entry)
                 base.append(self._read_node("base_file", rel) or self._empty_node("base_file", rel))
             proj_sub = base_dir / PROJECT_SUBDIR
             if proj_sub.is_dir():
                 for entry in sorted(proj_sub.iterdir()):
-                    if not entry.is_file() or entry.name.endswith(".lock"):
+                    if not _is_memory_file(entry):
                         continue
                     rel = _rel(self.root, entry)
                     project.append(self._read_node("project_file", rel) or self._empty_node("project_file", rel))
@@ -229,14 +238,14 @@ class MemoryScanner:
             core[name] = node
         if core_dir.is_dir():
             for entry in sorted(core_dir.iterdir()):
-                if not entry.is_file() or entry.name.endswith(".lock") or entry.name in AGENT_CORE_FILES:
+                if not _is_memory_file(entry) or entry.name in AGENT_CORE_FILES:
                     continue
                 rel = _rel(self.root, entry)
                 base.append(self._read_node("agent_file", rel) or self._empty_node("agent_file", rel))
         sessions_dir = agent_dir / SESSIONS_DIR
         if sessions_dir.is_dir():
             for entry in sorted(sessions_dir.iterdir()):
-                if not entry.is_file() or entry.name.endswith(".lock"):
+                if not _is_memory_file(entry):
                     continue
                 rel = _rel(self.root, entry)
                 node = self._read_node("session_file", rel) or self._empty_node("session_file", rel)

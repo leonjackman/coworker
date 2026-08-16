@@ -686,6 +686,7 @@
   "memory.add_import": "从文件导入",
   "memory.add_confirm": "添加",
   "memory.file_added": "记忆文件已添加",
+  "memory.extension_not_supported": "仅支持 Markdown 文件（.md / .markdown）",
   "settings.about_group": "关于",
   "settings.about_group_desc": "应用版本和更新设置。",
   "settings.version": "版本",

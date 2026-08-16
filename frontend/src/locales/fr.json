@@ -698,6 +698,7 @@
   "memory.add_import": "Importer depuis un fichier",
   "memory.add_confirm": "Ajouter",
   "memory.file_added": "Fichier mémoire ajouté",
+  "memory.extension_not_supported": "Seuls les fichiers Markdown (.md / .markdown) sont acceptés",
   "update.auto_update": "Mises à jour automatiques",
   "update.auto_update_desc": "Vérifiez silencieusement les mises à jour au lancement et toutes les 30 minutes. Téléchargez la mise à jour en arrière-plan et notifiez-vous quand elle est prête à redémarrer.",
   "update.check_now": "Vérifier les mises à jour",

@@ -796,6 +796,10 @@ async def save_memory_file(request: MemoryFileRequest):
         raise HTTPException(status_code=400, detail="rel is required")
     try:
         memory = memory_manager.store.write_file(request.rel, request.content)
+    except MemoryError as exc:
+        if len(exc.args) > 0 and "file changed externally" in str(exc.args[0]):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"rel": request.rel, "content": memory.content}

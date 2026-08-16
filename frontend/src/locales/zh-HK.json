@@ -522,6 +522,7 @@
   "memory.add_import": "從檔案匯入",
   "memory.add_confirm": "新增",
   "memory.file_added": "記憶檔案已新增",
+  "memory.extension_not_supported": "僅支援 Markdown 檔案（.md / .markdown）",
   "nav.mcp": "MCP",
   "mcp.title": "MCP 伺服器",
   "mcp.heading": "MCP 伺服器",

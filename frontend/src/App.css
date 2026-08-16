@@ -8583,7 +8583,7 @@ body.bottom-panel-resizing {
 
 .memory-add__content {
   width: 100%;
-  min-height: 110px;
+  min-height: 140px;
   resize: vertical;
   padding: 6px 8px;
   border: 1px solid var(--material-border);
@@ -8593,6 +8593,12 @@ body.bottom-panel-resizing {
   font: inherit;
   font-size: 0.82rem;
   line-height: 1.5;
+}
+
+.memory-add__error {
+  margin-top: -6px;
+  font-size: 0.75rem;
+  color: var(--destructive);
 }
 
 .memory-add__actions {

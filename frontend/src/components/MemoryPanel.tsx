@@ -57,8 +57,10 @@ function blockCount(text: string): number {
 function sanitizeFileName(name: string): string {
   let clean = name.replace(/[/\\]+/g, '_').replace(/\.{2,}/g, '_').trim();
   if (!clean) return '';
-  if (!clean.includes('.')) clean += '.md';
-  return clean;
+  const lower = clean.toLowerCase();
+  if (!lower.includes('.')) return `${clean}.md`;
+  if (lower.endsWith('.markdown') || lower.endsWith('.md')) return clean;
+  return ''; // invalid extension — caller handles error
 }
 
 export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
@@ -156,6 +158,11 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    const name = file.name.toLowerCase();
+    if (!name.endsWith('.md') && !name.endsWith('.markdown')) {
+      notify('error', t('memory.extension_not_supported'));
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       setAddContent(String(reader.result ?? ''));
@@ -356,6 +363,9 @@ childrenOverride={(library?.projects ?? []).map((project) => (
             autoFocus
             aria-label={t('memory.add_name_placeholder')}
           />
+          {addName && !sanitizeFileName(addName) && (
+            <span className="memory-add__error">{t('memory.extension_not_supported')}</span>
+          )}
           <textarea
             className="memory-add__content"
             placeholder={t('memory.add_content_placeholder')}
@@ -367,7 +377,7 @@ childrenOverride={(library?.projects ?? []).map((project) => (
           <input
             ref={importInputRef}
             type="file"
-            accept=".md,.markdown,.txt,.text"
+            accept=".md,.markdown"
             className="memory-add__file-input"
             onChange={onImportFile}
           />

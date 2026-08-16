@@ -351,6 +351,7 @@
   "memory.add_import": "파일에서 가져오기",
   "memory.add_confirm": "추가",
   "memory.file_added": "메모리 파일이 추가되었습니다",
+  "memory.extension_not_supported": "Markdown 파일만 지원됩니다(.md / .markdown)",
   "message.copied": "복사됨",
   "message.copy": "복사",
   "message.edit": "편집",

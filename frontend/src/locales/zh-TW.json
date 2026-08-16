@@ -685,6 +685,7 @@
   "memory.add_import": "從檔案匯入",
   "memory.add_confirm": "新增",
   "memory.file_added": "記憶檔案已新增",
+  "memory.extension_not_supported": "僅支援 Markdown 檔案（.md / .markdown）",
   "settings.about_group": "關於",
   "settings.about_group_desc": "應用程式版本與更新設定。",
   "settings.version": "版本",
