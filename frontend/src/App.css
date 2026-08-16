@@ -917,7 +917,8 @@ body.sidebar-resizing {
 .workspace-shell--mcp,
 .workspace-shell--settings,
 .workspace-shell--skills,
-.workspace-shell--memory {
+.workspace-shell--memory,
+.workspace-shell--org {
   overflow-y: auto;
 }
 
