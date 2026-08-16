@@ -356,7 +356,7 @@
   "memory.move_target_label": "대상 폴더",
   "memory.move_confirm": "이동",
   "memory.moved": "이동함",
-  "memory.reveal": "폴더에서 열기",
+  "memory.reveal": "시스템 디렉터리로 이동",
   "memory.reveal_unsupported": "폴더에서 열기는 데스크톱 앱에서만 사용 가능합니다",
   "memory.saved": "메모리 파일 저장됨",
   "memory.scope.project": "프로젝트",

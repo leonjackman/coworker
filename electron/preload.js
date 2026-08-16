@@ -123,6 +123,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMemoryStatus: () => ipcRenderer.invoke('get-memory-status'),
   discoverMemory: (projectId) => ipcRenderer.invoke('discover-memory', projectId || ''),
   getMemoryFile: (rel) => ipcRenderer.invoke('get-memory-file', rel || ''),
+  resolveMemoryPath: (rel) => ipcRenderer.invoke('resolve-memory-path', rel || ''),
   saveMemoryFile: (payload) => ipcRenderer.invoke('save-memory-file', payload),
   deleteMemoryFile: (payload) => ipcRenderer.invoke('delete-memory-file', payload),
   searchMemory: (query, limit) => ipcRenderer.invoke('search-memory', query || '', limit || 50),

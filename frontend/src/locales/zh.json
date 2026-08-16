@@ -729,7 +729,7 @@
   "memory.remove_entry": "删除条目",
   "memory.library_title": "记忆文件",
   "memory.edit": "编辑",
-  "memory.reveal": "打开所在位置",
+  "memory.reveal": "跳转至系统目录",
   "memory.reveal_unsupported": "仅在桌面端支持打开所在位置",
   "memory.editor_title": "编辑记忆文件",
   "memory.editor_hint": "Markdown 纯文本，条目之间用空行分隔。",

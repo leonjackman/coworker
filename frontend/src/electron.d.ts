@@ -139,6 +139,7 @@ declare global {
       getMemoryStatus: () => Promise<MemoryStatusResponse>;
       discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
       getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
+      resolveMemoryPath: (rel: string) => Promise<{ rel: string; path: string }>;
       saveMemoryFile: (payload: { rel: string; content: string }) => Promise<MemoryFileSaveResponse>;
       deleteMemoryFile: (payload: { rel: string }) => Promise<MemoryDeleteResponse>;
       searchMemory: (query: string, limit?: number) => Promise<MemorySearchResponse>;

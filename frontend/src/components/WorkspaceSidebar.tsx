@@ -273,7 +273,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
               <DropdownMenuTrigger asChild className="sidebar-project__more-trigger" aria-label="Project actions">
                 <span className="more-icon-wrapper"><MoreHorizontal size={15} /></span>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" alignOffset={-8}>
+              <DropdownMenuContent align="end" alignOffset={-8} className="min-w-44">
                 <DropdownMenuItem onClick={() => onOpenProject(project.id)}>
                   <MessageSquare size={14} />
                   {t('sidebar.session_history')}
@@ -298,11 +298,11 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <button type="button" className="sidebar-project__new-trigger" onClick={(e) => { e.stopPropagation(); onNewChat(project.id); }} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>
+              <MessageSquarePlus size={15} />
+            </button>
           </div>
         </div>
-        <button type="button" className="sidebar-project__new-trigger" onClick={(e) => { e.stopPropagation(); onNewChat(project.id); }} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>
-          <MessageSquarePlus size={15} />
-        </button>
       </div>
 
       {expanded && (

@@ -687,7 +687,7 @@
   "memory.remove_entry": "移除項目",
   "memory.library_title": "記憶檔案",
   "memory.edit": "編輯",
-  "memory.reveal": "在資料夾中開啟",
+  "memory.reveal": "跳轉至系統目錄",
   "memory.reveal_unsupported": "在資料夾中開啟僅在桌面應用程式中可用",
   "memory.editor_title": "編輯記憶檔案",
   "memory.editor_hint": "Markdown 純文字，條目之間用空行分隔。",

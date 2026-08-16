@@ -1332,6 +1332,9 @@ ipcMain.handle('discover-memory', (event, projectId = '') => {
 ipcMain.handle('get-memory-file', (event, rel = '') =>
   requestBackend(`/api/memory/file?rel=${encodeURIComponent(rel)}`, 'GET'),
 );
+ipcMain.handle('resolve-memory-path', (event, rel = '') =>
+  requestBackend(`/api/memory/resolve?rel=${encodeURIComponent(rel)}`, 'GET'),
+);
 ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api/memory/file', 'POST', payload));
 ipcMain.handle('delete-memory-file', (event, payload = {}) => requestBackend('/api/memory/delete', 'POST', payload));
 ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings', 'GET'));

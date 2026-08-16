@@ -688,7 +688,7 @@
   "memory.remove_entry": "Remove entry",
   "memory.library_title": "Memory files",
   "memory.edit": "Edit",
-  "memory.reveal": "Open in folder",
+  "memory.reveal": "Jump to system directory",
   "memory.reveal_unsupported": "Open in folder is only available in the desktop app",
   "memory.editor_title": "Edit memory file",
   "memory.editor_hint": "Plain Markdown; entries are separated by blank lines.",

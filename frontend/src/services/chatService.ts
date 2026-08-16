@@ -178,6 +178,7 @@ export interface ChatService {
   getMemoryStatus: () => Promise<MemoryStatusResponse>;
   discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
   getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
+  resolveMemoryPath: (rel: string) => Promise<{ rel: string; path: string }>;
   saveMemoryFile: (rel: string, content: string) => Promise<MemoryFileSaveResponse>;
   deleteMemoryFile: (rel: string) => Promise<MemoryDeleteResponse>;
   searchMemory: (query: string, limit?: number) => Promise<MemorySearchResponse>;
@@ -422,6 +423,11 @@ class ElectronChatService implements ChatService {
   async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.getMemoryFile(rel);
+  }
+
+  async resolveMemoryPath(rel: string): Promise<{ rel: string; path: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.resolveMemoryPath(rel);
   }
 
   async saveMemoryFile(rel: string, content: string): Promise<MemoryFileSaveResponse> {
@@ -1416,6 +1422,10 @@ class HttpChatService implements ChatService {
 
   async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
     return this.request<MemoryFileContentResponse>(`/api/memory/file?rel=${encodeURIComponent(rel)}`);
+  }
+
+  async resolveMemoryPath(rel: string): Promise<{ rel: string; path: string }> {
+    return this.request<{ rel: string; path: string }>(`/api/memory/resolve?rel=${encodeURIComponent(rel)}`);
   }
 
   async saveMemoryFile(rel: string, content: string): Promise<MemoryFileSaveResponse> {

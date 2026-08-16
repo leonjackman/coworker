@@ -137,3 +137,20 @@
 
 验证结果：selftest 101→111 全绿；stress 99 全绿；`import main`/py_compile OK；tsc --noEmit + vite build（node 22）+ electron node --check 通过。
 HTTP 冒烟（9533）：discover agent 显示 `id`+`name`（改名后 name=老板、id=default_agent）；删 coder → 会话级联 + 记忆目录移除；删 default_agent → 400；删项目 → 整 memory_dir 进 OS 回收站。
+
+
+---
+
+## 追加需求（2026-08-17）：记忆树右键「跳轉至系統目錄」
+
+已实施并验证：
+
+- 后端：新增 `GET /api/memory/resolve?rel=`（`main.py`），安全解析 rel → 绝对路径（复用 `resolve_rel_path`，防 `..` 逃逸），文件/目录均可解析，缺失 404、逃逸 400。
+- electron：`electron/main.js` 新增 `resolve-memory-path` IPC；`preload.js` + `electron.d.ts` + `chatService`（Electron/HTTP 两实现）新增 `resolveMemoryPath`。
+- 前端 `MemoryPanel`：
+  - 记忆树所有行（文件 / 项目 / agent / 部门 / 文件夹 / 分区标题）加 `data-rel`。
+  - 树容器 `onContextMenu` 事件委托 → 定位菜单 `memory-context-menu`，菜单项「跳轉至系統目錄」（`memory.reveal`）。
+  - 点击/Escape 关闭；菜单项调 `resolveMemoryPath` → `revealInFolder(绝对路径)`。
+  - 修复编辑器 reveal：`openEditor` 用 `res.path`（绝对）替代 `res.rel`（相对）。
+- 文案：7 语言 `memory.reveal` 更新为「跳轉至系統目錄 / Jump to system directory」等。
+- 验证：`import main`/py_compile、selftest 111、stress 99 全绿；tsc + vite build + electron node --check 通过；HTTP 冒烟（9536）：resolve 文件/目录返回绝对路径、缺失 404、逃逸 400。

@@ -124,6 +124,9 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   const [moveTarget, setMoveTarget] = useState('');
   const [moveBusy, setMoveBusy] = useState(false);
 
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; rel: string } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+
   const canReveal = typeof window !== 'undefined' && Boolean((window as { electronAPI?: unknown }).electronAPI);
 
   const notify = (kind: 'ok' | 'error', text: string) => {
@@ -162,7 +165,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   const openEditor = async (rel: string) => {
     try {
       const res: MemoryFileContentResponse = await chatService.getMemoryFile(rel);
-      setEditorPath(res.rel);
+      setEditorPath(res.path || res.rel);
       setContent(res.content);
       setEditingRel(res.rel);
     } catch (error) {
@@ -249,6 +252,48 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
       if (res.status === 'unsupported') notify('error', t('memory.reveal_unsupported'));
     } catch (error) {
       notify('error', translateError(error));
+    }
+  };
+
+  const closeContextMenu = () => setContextMenu(null);
+
+  const openContextMenu = (e: React.MouseEvent, rel: string) => {
+    e.preventDefault();
+    if (!canReveal) return;
+    setContextMenu({ x: e.clientX, y: e.clientY, rel });
+  };
+
+  const handleTreeContextMenu = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const row = target.closest('[data-rel]') as HTMLElement | null;
+    if (!row) return;
+    openContextMenu(e, row.dataset.rel ?? '');
+  };
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onDocClick = () => closeContextMenu();
+    const onDocKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') closeContextMenu();
+    };
+    document.addEventListener('click', onDocClick);
+    document.addEventListener('keydown', onDocKey);
+    return () => {
+      document.removeEventListener('click', onDocClick);
+      document.removeEventListener('keydown', onDocKey);
+    };
+  }, [contextMenu]);
+
+  const revealFromContextMenu = async (rel: string) => {
+    const relToClose = rel;
+    closeContextMenu();
+    try {
+      const resolved = await chatService.resolveMemoryPath(rel);
+      await reveal(resolved.path);
+    } catch (error) {
+      notify('error', translateError(error));
+    } finally {
+      void relToClose;
     }
   };
 
@@ -568,7 +613,24 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
           )}
         </div>
       ) : (
-        <div className="memory-tree">
+        <div className="memory-tree" onContextMenu={handleTreeContextMenu}>
+          {contextMenu && (
+            <div
+              ref={contextMenuRef}
+              className="memory-context-menu"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="memory-context-menu__item"
+                onClick={() => void revealFromContextMenu(contextMenu.rel)}
+              >
+                <FolderOpen size={13} />
+                {t('memory.reveal')}
+              </button>
+            </div>
+          )}
           <TreeSection
             label={t('memory.tree.system')}
             relPrefix=""
@@ -895,7 +957,7 @@ function TreeSection({
   return (
     <div className="memory-tree__section">
       <div className="memory-tree__dir">
-        <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle}>
+        <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle} data-rel={relPrefix}>
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           <Folder size={14} className="memory-tree__icon" />
           <span className="memory-tree__label">{label}</span>
@@ -943,6 +1005,7 @@ function ProjectBranch({
         type="button"
         className="memory-tree__node memory-tree__node--dir"
         onClick={() => toggle(`p:${project.rel}`)}
+        data-rel={project.rel}
       >
         {isCollapsed(`p:${project.rel}`) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         <Folder size={14} className="memory-tree__icon" />
@@ -1032,7 +1095,7 @@ function FolderBranch({
   const folderKey = `p:${folder.rel}:f`;
   return (
     <div className="memory-tree__section">
-      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(folderKey)}>
+      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(folderKey)} data-rel={folder.rel}>
         {isCollapsed(folderKey) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         <Folder size={14} className="memory-tree__icon" />
         <span className="memory-tree__label">{folder.name}</span>
@@ -1071,7 +1134,7 @@ function TeamBranch({
   const teamFiles = [team.goals, team.context, team.memory].filter((node): node is MemoryNode => node !== null);
   return (
     <div className="memory-tree__section">
-      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(teamKey)}>
+      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(teamKey)} data-rel={team.rel}>
         {isCollapsed(teamKey) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         <Users size={14} className="memory-tree__icon" />
         <span className="memory-tree__label">{team.name}</span>
@@ -1122,7 +1185,7 @@ function AgentBranch({
   );
   return (
     <div className="memory-tree__section">
-      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(agentKey)}>
+      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(agentKey)} data-rel={agent.rel}>
         {isCollapsed(agentKey) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         <Folder size={14} className="memory-tree__icon" />
         <span className="memory-tree__label">{agent.name}</span>
@@ -1174,6 +1237,7 @@ function MemoryRow({
         type="button"
         className="memory-tree__node memory-tree__node--file"
         onClick={() => onOpen(node.rel)}
+        data-rel={node.rel}
       >
         <FileText size={13} className="memory-tree__icon" />
         <span className="memory-tree__label">{node.name}</span>

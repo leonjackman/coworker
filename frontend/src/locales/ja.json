@@ -688,7 +688,7 @@
   "memory.remove_entry": "エントリを削除",
   "memory.library_title": "メモリファイル",
   "memory.edit": "編集",
-  "memory.reveal": "フォルダで開く",
+  "memory.reveal": "システムディレクトリに移動",
   "memory.reveal_unsupported": "フォルダで開く機能はデスクトップアプリでのみ利用可能です",
   "memory.editor_title": "メモリファイルを編集",
   "memory.editor_hint": "プレーン Markdown。エントリは空行で区切ります。",

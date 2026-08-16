@@ -898,6 +898,25 @@ async def get_memory_file(rel: str = ""):
     }
 
 
+@app.get("/api/memory/resolve")
+async def resolve_memory_path(rel: str = ""):
+    """Resolve a memory-root-relative ``rel`` to its absolute filesystem path.
+
+    Used by the UI's right-click "jump to system directory" (reveal in the OS
+    file manager). Both files and directories are resolvable; the path is
+    validated to stay inside the memory root.
+    """
+    if not rel:
+        raise HTTPException(status_code=400, detail="rel is required")
+    try:
+        path = memory_manager.store._resolve(rel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"memory path not found: {rel!r}")
+    return {"rel": rel, "path": str(path)}
+
+
 @app.post("/api/memory/file")
 async def save_memory_file(request: MemoryFileRequest):
     """Replace one memory file's full content (raw Markdown)."""

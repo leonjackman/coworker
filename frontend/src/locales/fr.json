@@ -700,7 +700,7 @@
   "memory.remove_entry": "Supprimer l'entrée",
   "memory.library_title": "Fichiers mémoire",
   "memory.edit": "Modifier",
-  "memory.reveal": "Ouvrir dans le dossier",
+  "memory.reveal": "Aller au répertoire système",
   "memory.reveal_unsupported": "Ouvrir dans le dossier est uniquement disponible dans l'application de bureau",
   "memory.editor_title": "Modifier le fichier mémoire",
   "memory.editor_hint": "Markdown brut ; les entrées sont séparées par des lignes vides.",
