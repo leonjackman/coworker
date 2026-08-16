@@ -910,8 +910,6 @@ export interface MemoryDiscoverResponse {
 export interface MemoryStatusResponse {
   enabled: boolean;
   auto_extract: boolean;
-  nudge_interval: number;
-  char_limit: number;
   root: string;
   file_count: number;
   char_count: number;
@@ -1005,13 +1003,10 @@ export interface MemoryImportApplyResponse {
 
 export interface MemorySettings {
   enabled: boolean;
-  char_limit: number;
   auto_extract: boolean;
-  nudge_interval: number;
-  extract_model: string;
 }
 
-export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'char_limit' | 'auto_extract' | 'nudge_interval' | 'extract_model'>>;
+export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'auto_extract'>>;
 
 // ── Auto-update ─────────────────────────────────────────────────────────
 export type UpdateStateStatus =

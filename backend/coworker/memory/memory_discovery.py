@@ -194,11 +194,16 @@ class MemoryLibrary:
     projects: list[ProjectView] = field(default_factory=list)
 
     def injected(self, *, project_dir: str | None = None, agent: str | None = None, team_ids: list[str] | None = None) -> list[MemoryNode]:
-        """Return nodes for injection: system + one project (+ agent + team) scoped.
+        """Return nodes for resident injection: system + one project (+ agent + team) scoped.
 
         ``team_ids`` are the team containers (self + ancestors) whose shared
         memory (GOALS/CONTEXT/MEMORY) is injected alongside the agent's own core
         files. When omitted the legacy behavior is preserved (no team memory).
+
+        Resident scope: system files, the project's BASE + PROJECT, the whole
+        agent ``BASE/`` (SOUL/AGENT/MEMORY + theme files), and team memory. The
+        agent's ``SESSIONS/*`` transcripts are intentionally NOT injected here —
+        they are read on demand via the ``memory_read`` tool.
         """
         nodes: list[MemoryNode] = list(self.system)
         if project_dir:
@@ -213,7 +218,6 @@ class MemoryLibrary:
                             if core:
                                 nodes.append(core)
                         nodes.extend(aview.base)
-                        nodes.extend(aview.sessions)
                 for tid in team_ids or []:
                     tview = next((t for t in view.teams if t.id == tid), None)
                     if tview:

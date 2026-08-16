@@ -32,10 +32,21 @@ DEFAULT_AGENT = "default_agent"
 @dataclass(frozen=True)
 class MemoryConfig:
     enabled: bool = True
-    char_limit: int = 2000
+    # Internal read-side hard cap for the resident injection block. Not user
+    # facing: the settings page only exposes ``enabled`` / ``auto_extract``.
+    inject_char_limit: int = 4000
     auto_extract: bool = False
-    nudge_interval: int = 10
+    # Internal consolidation knobs (not exposed in the settings UI).
+    nudge_interval: int = 3
     extract_model: str = ""
+    max_prior_loss: float = 0.25  # dream rewrite must preserve >= 75% of prior entries
+    dream_idle_seconds: int = 300  # session-end idle window before dreaming
+
+    # Backwards-compatible alias for ``inject_char_limit`` (older call sites /
+    # selftests may still read ``config.char_limit``).
+    @property
+    def char_limit(self) -> int:
+        return self.inject_char_limit
 
 
 class MemoryManager:
@@ -58,8 +69,9 @@ class MemoryManager:
         self.store = MemoryStore(self._root)
         # Org registry (injected by main.py) powers roster + team memory injection.
         self.org_store: Any | None = None
-        # Phase 2: per-session turn counters (in-memory; reset on restart).
-        self._turn_counters: dict[str, int] = {}
+        # Phase 2: per-session dream state (idle timers + staged candidates).
+        self._pending_dreams: dict[str, Any] = {}
+        self._pending_candidates: dict[str, list[str]] = {}
         # Injected extractor dependencies (set via configure_extractor).
         self._llm_factory: Any | None = None
         self._transcript_provider: Any | None = None
@@ -143,7 +155,8 @@ class MemoryManager:
         view.scanner = self.scanner
         view.store = self.store
         view.org_store = self.org_store
-        view._turn_counters = self._turn_counters
+        view._pending_dreams = self._pending_dreams
+        view._pending_candidates = self._pending_candidates
         view._llm_factory = self._llm_factory
         view._transcript_provider = self._transcript_provider
         view._project_dir = project_dir
@@ -168,49 +181,66 @@ class MemoryManager:
         self._llm_factory = llm_factory
         self._transcript_provider = transcript_provider
 
-    # -- Phase 2 nudge ------------------------------------------------------
+    # -- Phase 2 dream (extract + consolidate) ------------------------------
 
-    # Hard cap on tracked sessions so abandoned counters cannot grow unbounded.
-    _MAX_TRACKED_SESSIONS = 500
+    def note_turn_active(self, session_id: str) -> None:
+        """Signal that a turn is running for ``session_id``.
+
+        Cancels any pending dream (consolidation) so it does not fire mid-turn.
+        The runtime calls this at the start of a stream.
+        """
+        if not self.config.enabled or not self.config.auto_extract:
+            return
+        with self._lock:
+            task = self._pending_dreams.pop(session_id, None)
+        if task is not None:
+            task.cancel()
 
     def after_turn(self, session_id: str, workspace_root: Path | None = None) -> None:
         """Called once per settled turn by the agent runtimes.
 
-        Records the turn and, when the nudge threshold is crossed, dispatches an
-        async extraction task. Never blocks and never raises.
+        Schedules a background dream (extract + consolidate) to run once the
+        session has been idle for ``dream_idle_seconds`` (Codex-style). It never
+        blocks and never raises; an active turn cancels the pending dream via
+        :meth:`note_turn_active`.
         """
         if not self.config.enabled or not self.config.auto_extract:
             return
-        threshold = max(1, self.config.nudge_interval)
-        with self._lock:
-            count = self._turn_counters.get(session_id, 0) + 1
-            if len(self._turn_counters) >= self._MAX_TRACKED_SESSIONS and session_id not in self._turn_counters:
-                self._turn_counters.pop(next(iter(self._turn_counters)), None)
-            self._turn_counters[session_id] = count
-            if count < threshold:
-                return
-            self._turn_counters.pop(session_id, None)
         try:
             import asyncio
 
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            logger.debug("auto-extract skipped for %s: no running loop", session_id)
+            logger.debug("dream skipped for %s: no running loop", session_id)
             return
-        loop.create_task(self._extract_async(session_id))
-        logger.info("auto-extract scheduled for session %s", session_id)
+        idle = max(1, self.config.dream_idle_seconds)
+        with self._lock:
+            previous = self._pending_dreams.pop(session_id, None)
+            task = loop.create_task(self._dream_later(session_id, idle))
+            self._pending_dreams[session_id] = task
+        if previous is not None:
+            previous.cancel()
+        logger.debug("dream scheduled for session %s in %ss", session_id, idle)
 
-    async def _extract_async(self, session_id: str) -> None:
-        """Extract candidate memories and write them directly (best-effort)."""
+    async def _dream_later(self, session_id: str, idle: int) -> None:
+        """Wait for the idle window, then run extraction + consolidation."""
+        try:
+            await asyncio.sleep(idle)
+        except asyncio.CancelledError:
+            return
+        await self._dream_async(session_id)
+
+    async def _dream_async(self, session_id: str) -> None:
+        """Run the full background memory pass: extract, then consolidate."""
         if self._llm_factory is None or self._transcript_provider is None:
-            logger.debug("auto-extract skipped for %s: extractor not configured", session_id)
+            logger.debug("dream skipped for %s: extractor not configured", session_id)
             return
         try:
-            from .auto_extract import run_auto_extract
+            from .auto_extract import run_auto_extract, run_consolidation
 
             llm = self._llm_factory()
             if llm is None:
-                logger.info("auto-extract skipped for %s: no provider configured", session_id)
+                logger.info("dream skipped for %s: no provider configured", session_id)
                 return
             model_label = getattr(llm, "model_name", "") or self.config.extract_model
             messages = self._transcript_provider(session_id)
@@ -220,13 +250,95 @@ class MemoryManager:
                 session_id=session_id,
                 provider_name=model_label or "memory-extract",
                 model_name=model_label,
-                write_facts=self.write_auto_facts,
+                write_facts=lambda candidates: self._stage_candidates(session_id, candidates),
                 project_dir=self.bound_project or "",
                 agent=self.bound_agent,
             )
-            logger.info("auto-extract done for %s: %s", session_id, result)
+            added = int(result.get("added") or 0)
+            consolidated, note = await self._consolidate_now(llm, session_id)
+            self._write_dream_diary(session_id, added=added, consolidated=consolidated, note=note)
+            logger.info("dream done for %s: added=%d %s", session_id, added, note)
         except Exception as exc:  # noqa: BLE001 - defensive
-            logger.warning("auto-extract failed for %s: %s", session_id, exc)
+            logger.warning("dream failed for %s: %s", session_id, exc)
+
+    def _stage_candidates(self, session_id: str, candidates: list[str]) -> int:
+        """Extract step: stage candidates for the consolidation pass (and fall
+        back to direct writes when no consolidation will run)."""
+        stored = self._pending_candidates.setdefault(session_id, [])
+        for text in candidates:
+            text = (text or "").strip()
+            if text and text not in stored:
+                stored.append(text)
+        # Keep a bounded in-memory staging list per session.
+        self._pending_candidates[session_id] = stored[-50:]
+        return len(stored)
+
+    async def _consolidate_now(self, llm: Any, session_id: str) -> tuple[bool, str]:
+        """Consolidate staged candidates into the agent's MEMORY.md.
+
+        Returns ``(applied, note)``. Guarded: on any rejection the candidates
+        fall back to direct appends so nothing is lost.
+        """
+        from .auto_extract import run_consolidation
+
+        staged = self._pending_candidates.pop(session_id, [])
+        if not staged:
+            return False, "no staged candidates to consolidate"
+        if self.bound_project:
+            target = f"{self.bound_project}/{self.bound_agent}/BASE/MEMORY.md"
+            try:
+                existing = self.store.read_file(target).content or ""
+            except Exception:  # noqa: BLE001
+                existing = ""
+        else:
+            target = "USER.md"
+            try:
+                existing = self.store.read_file(target).content or ""
+            except Exception:  # noqa: BLE001
+                existing = ""
+        new_blocks, note = await run_consolidation(
+            llm=llm,
+            existing=existing,
+            candidates=staged,
+            session_id=session_id,
+            max_prior_loss=self.config.max_prior_loss,
+            max_total_chars=self.config.inject_char_limit,
+        )
+        if new_blocks is None:
+            # Guardrail rejected the rewrite: append candidates directly (no loss).
+            added = self.write_auto_facts(staged)
+            return False, f"append-only fallback ({added} added); {note}"
+        try:
+            from .memory_file import render_blocks
+
+            self.store.write_file(target, render_blocks(new_blocks))
+            return True, note
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("dream consolidate write failed for %s: %s", session_id, exc)
+            added = self.write_auto_facts(staged)
+            return False, f"write failed; append-only fallback ({added} added)"
+
+    def _write_dream_diary(self, session_id: str, added: int, consolidated: bool, note: str) -> None:
+        """Append a line to the agent's DREAMS.md review diary (best-effort)."""
+        try:
+            import datetime
+
+            if self.bound_project:
+                target = f"{self.bound_project}/{self.bound_agent}/BASE/DREAMS.md"
+            else:
+                target = "DREAMS.md"
+            stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            outcome = "consolidated" if consolidated else "appended"
+            line = f"- {stamp} · {outcome} · new {added} · {note}"
+            existing = ""
+            try:
+                existing = self.store.read_file(target).content or ""
+            except Exception:  # noqa: BLE001
+                existing = ""
+            content = (existing.rstrip() + "\n" + line + "\n") if existing.strip() else f"# Dream Diary\n\n{line}\n"
+            self.store.write_file(target, content)
+        except Exception:  # noqa: BLE001 - diary must never break chat
+            logger.warning("dream diary write failed for %s", session_id, exc_info=True)
 
     def write_auto_facts(self, candidates: list[str]) -> int:
         """Persist extracted facts directly into long-term memory.

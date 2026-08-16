@@ -86,7 +86,7 @@ memory_manager = MemoryManager(
     memory_dir=settings.memory_dir,
     config=MemoryConfig(
         enabled=settings.memory_enabled,
-        char_limit=settings.memory_char_limit,
+        inject_char_limit=settings.memory_char_limit or MemoryConfig().inject_char_limit,
         auto_extract=settings.memory_auto_extract,
         nudge_interval=settings.memory_nudge_interval,
         extract_model=settings.memory_extract_model,
@@ -719,6 +719,7 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="project_id is required to start a new chat")
     created_session = None
     session_id = request.session_id
+    memory_manager.note_turn_active(session_id) if session_id else None
     work_mode = normalize_work_mode(request.work_mode)
     autonomy = resolve_request_autonomy(request)
     references = _resolve_references(request.referenced_sessions)
@@ -856,10 +857,7 @@ class MemoryImportApplyRequest(BaseModel):
 
 class MemorySettingsUpdate(BaseModel):
     enabled: bool | None = None
-    char_limit: int | None = None
     auto_extract: bool | None = None
-    nudge_interval: int | None = None
-    extract_model: str | None = None
 
 
 @app.get("/api/memory/discover")
@@ -1377,8 +1375,6 @@ async def memory_status(project_id: str = ""):
     return {
         "enabled": memory_manager.enabled,
         "auto_extract": memory_manager.auto_extract,
-        "nudge_interval": memory_manager.config.nudge_interval,
-        "char_limit": memory_manager.char_limit,
         "root": str(library.root),
         "file_count": len(nodes),
         "char_count": char_total,
@@ -1391,10 +1387,7 @@ async def get_memory_settings():
     """Runtime memory settings (the Settings page surface)."""
     return {
         "enabled": memory_manager.enabled,
-        "char_limit": memory_manager.char_limit,
         "auto_extract": memory_manager.auto_extract,
-        "nudge_interval": memory_manager.config.nudge_interval,
-        "extract_model": memory_manager.config.extract_model,
     }
 
 
@@ -1404,34 +1397,26 @@ async def save_memory_settings(request: MemorySettingsUpdate):
     current = memory_manager.config
     updated = MemoryConfig(
         enabled=request.enabled if request.enabled is not None else current.enabled,
-        char_limit=request.char_limit if request.char_limit is not None else current.char_limit,
+        inject_char_limit=current.inject_char_limit,
         auto_extract=request.auto_extract if request.auto_extract is not None else current.auto_extract,
-        nudge_interval=request.nudge_interval if request.nudge_interval is not None else current.nudge_interval,
-        extract_model=request.extract_model if request.extract_model is not None else current.extract_model,
+        nudge_interval=current.nudge_interval,
+        extract_model=current.extract_model,
+        max_prior_loss=current.max_prior_loss,
+        dream_idle_seconds=current.dream_idle_seconds,
     )
-    if updated.char_limit < 100:
-        raise HTTPException(status_code=400, detail="char_limit must be at least 100")
-    if updated.nudge_interval < 1:
-        raise HTTPException(status_code=400, detail="nudge_interval must be at least 1")
     memory_manager.config = updated
     try:
         save_user_memory_settings(
             {
                 "enabled": updated.enabled,
-                "char_limit": updated.char_limit,
                 "auto_extract": updated.auto_extract,
-                "nudge_interval": updated.nudge_interval,
-                "extract_model": updated.extract_model,
             }
         )
     except OSError as exc:  # noqa: BLE001 - settings persistence must not fail the request
         logger.warning("Failed to persist memory settings: %s", exc)
     return {
         "enabled": updated.enabled,
-        "char_limit": updated.char_limit,
         "auto_extract": updated.auto_extract,
-        "nudge_interval": updated.nudge_interval,
-        "extract_model": updated.extract_model,
     }
 
 from fastapi.responses import StreamingResponse
@@ -1474,6 +1459,7 @@ async def chat_stream(request: ChatStreamRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     session_id = request.session_id
+    memory_manager.note_turn_active(session_id) if session_id else None
     max_attachment_bytes = request.max_attachment_bytes
     history = []
     if request.session_id:
@@ -1790,7 +1776,7 @@ def read_user_memory_settings() -> dict:
     stored = data.get("memory")
     if not isinstance(stored, dict):
         return {}
-    known = {"enabled", "char_limit", "auto_extract", "nudge_interval", "extract_model"}
+    known = {"enabled", "auto_extract"}
     return {k: v for k, v in stored.items() if k in known}
 
 
@@ -1854,10 +1840,12 @@ def apply_stored_memory_settings() -> None:
     current = memory_manager.config
     memory_manager.config = MemoryConfig(
         enabled=overrides.get("enabled", current.enabled),
-        char_limit=overrides.get("char_limit", current.char_limit),
+        inject_char_limit=current.inject_char_limit,
         auto_extract=overrides.get("auto_extract", current.auto_extract),
-        nudge_interval=overrides.get("nudge_interval", current.nudge_interval),
-        extract_model=overrides.get("extract_model", current.extract_model),
+        nudge_interval=current.nudge_interval,
+        extract_model=current.extract_model,
+        max_prior_loss=current.max_prior_loss,
+        dream_idle_seconds=current.dream_idle_seconds,
     )
 
 

@@ -17,8 +17,10 @@ def format_memory_prompt(
     """Render memory files into a system-prompt block.
 
     ``nodes`` is a list of ``MemoryNode`` objects in injection precedence order
-    (see ``memory_discovery.scan``). ``char_limit`` triggers an explicit budget
-    warning; content is never truncated.
+    (see ``memory_discovery.scan``). ``char_limit`` is a HARD read-side cap: the
+    resident block is truncated at ``char_limit`` characters with a pointer to
+    ``memory_read`` for on-demand retrieval. Truncation never destroys data — the
+    files stay on disk.
     """
     if not nodes:
         return ""
@@ -30,25 +32,54 @@ def format_memory_prompt(
         "<memory>",
     ]
     total = 0
+    truncated = False
     for node in nodes:
         content = node.content or ""
-        total += len(content)
+        remaining = char_limit - total
+        if remaining <= 0:
+            truncated = True
+            break
         source = _node_source(node)
-        lines.append(f'  <file kind="{_escape(node.kind)}" name="{_escape(node.name)}" source="{source}">')
-        if not content.strip():
-            lines.append("    (empty)")
-        for line in content.splitlines():
-            lines.append(f"    {_escape(line)}")
-        lines.append("  </file>")
-    if total > char_limit:
+        rendered, clipped = _render_file(node, content, remaining)
+        lines.append(rendered)
+        total += len(rendered)
+        if clipped:
+            truncated = True
+        if remaining <= len(rendered):
+            truncated = True
+    if truncated:
         lines.append(
-            f"  <budget_warning>Memory is near its size limit "
-            f"({total} chars / {char_limit} limit). Prefer the most important "
-            "facts; you may propose consolidating or removing stale ones via "
-            "the memory tool.</budget_warning>"
+            "  <budget_warning>Memory is compacted to keep this prompt small. "
+            "Additional session records and topic files are available on demand "
+            "via the memory_read tool.</budget_warning>"
         )
     lines.append("</memory>")
     return "\n".join(lines)
+
+
+def _render_file(node: Any, content: str, remaining: int) -> tuple[str, bool]:
+    """Render one memory file, clipping its body so the total stays in budget.
+
+    Returns ``(rendered, clipped)`` where ``clipped`` is True when the file body
+    had to be cut to fit ``remaining``.
+    """
+    source = _node_source(node)
+    header = f'  <file kind="{_escape(node.kind)}" name="{_escape(node.name)}" source="{source}">'
+    if not content.strip():
+        return f"{header}\n    (empty)\n  </file>", False
+    parts = [header]
+    total = len(header)
+    clipped = False
+    for line in content.splitlines():
+        rendered_line = f"    {_escape(line)}"
+        if total + len(rendered_line) + 1 > remaining:
+            parts.append("    … (clipped — use memory_read to view)")
+            clipped = True
+            break
+        parts.append(rendered_line)
+        total += len(rendered_line) + 1
+    parts.append("  </file>")
+    return "\n".join(parts), clipped
 
 
 def _node_source(node: Any) -> str:

@@ -173,3 +173,126 @@ async def run_auto_extract(
     if added:
         logger.info("auto-extract wrote %d memories for %s", added, session_id)
     return {"added": added, "error": None}
+
+
+# ---------------------------------------------------------------------------
+# Dream / consolidation
+# ---------------------------------------------------------------------------
+
+CONSOLIDATE_PROMPT = """You are a memory consolidator for Coworker. You merge new
+durable facts into an existing memory index, deduplicating, superseding stale
+entries and compressing while preserving meaning.
+
+Existing MEMORY.md blocks (each block is one durable fact, separated by blank lines):
+
+{existing}
+
+New candidate facts to integrate:
+
+{candidates}
+
+RULES:
+- Merge overlapping facts: when a new candidate is a duplicate or a refinement of
+  an existing block, UPDATE that block in place (do not keep both).
+- Remove or rewrite stale / superseded entries.
+- Keep each block as a CONCISE, SELF-CONTAINED fact (~200 chars). Never paste raw
+  transcript text.
+- Preserve every existing block UNLESS it is merged or clearly stale. You may
+  restructure but must not drop meaning.
+- If a new candidate is already covered, do not add it again.
+- Do not invent facts that are not in the existing blocks or the candidates.
+
+Return ONLY a JSON object with one key "blocks": an array of the final memory
+blocks (strings). Every entry must be a plain string; no extra commentary.
+"""
+
+
+def _parse_consolidation(text: str) -> list[str] | None:
+    """Best-effort parse of the consolidation response.
+
+    Returns ``None`` when the output is not a usable JSON object (caller falls
+    back to append-only). Expects ``{"blocks": [ ... ]}``.
+    """
+    text = (text or "").strip()
+    candidates: list[str] | None = None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            blocks = parsed.get("blocks")
+            if isinstance(blocks, list):
+                candidates = [str(b).strip() for b in blocks if str(b).strip()]
+    except json.JSONDecodeError:
+        start, end = text.find("["), text.rfind("]")
+        if start != -1 and end > start:
+            try:
+                parsed = json.loads(text[start : end + 1])
+                if isinstance(parsed, list):
+                    candidates = [str(b).strip() for b in parsed if str(b).strip()]
+            except json.JSONDecodeError:
+                pass
+    return candidates
+
+
+async def run_consolidation(
+    *,
+    llm: Any,
+    existing: str,
+    candidates: list[str],
+    session_id: str,
+    max_prior_loss: float = 0.25,
+    max_total_chars: int = 4000,
+) -> tuple[list[str] | None, str]:
+    """Consolidate ``existing`` memory with ``candidates`` via the model.
+
+    Returns ``(new_blocks, note)``. ``new_blocks`` is ``None`` when the rewrite
+    is rejected by a guardrail (falls back to append-only). ``note`` explains the
+    outcome for the dream diary. Never raises: model errors degrade to
+    ``(None, note)``.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from .memory_file import split_blocks
+
+    prior = split_blocks(existing)
+    if not candidates:
+        return None, "no new candidates to consolidate"
+    try:
+        response = await llm.ainvoke(
+            [
+                SystemMessage(
+                    content=CONSOLIDATE_PROMPT.format(
+                        existing=existing or "(empty)",
+                        candidates="\n".join(f"- {c}" for c in candidates),
+                    )
+                ),
+                HumanMessage(content="Return the consolidated JSON {\"blocks\": [...]}."),
+            ]
+        )
+        text = str(getattr(response, "content", "") or response or "")
+    except Exception as exc:  # noqa: BLE001 - consolidation must never break chat
+        return None, f"model error: {str(exc)[:120]}"
+
+    new_blocks = _parse_consolidation(text)
+    if new_blocks is None:
+        return None, "unparseable consolidation output"
+    if not new_blocks:
+        return None, "consolidation produced no blocks"
+
+    # Guardrail 1: must not drop more than max_prior_loss of prior entries.
+    prior_keys = {b.lower() for b in prior}
+    if prior_keys:
+        kept = sum(1 for b in new_blocks if b.lower() in prior_keys)
+        prior_fraction = kept / len(prior_keys)
+        if prior_fraction < 1 - max_prior_loss:
+            return None, (
+                f"guardrail: rewrite keeps only {prior_fraction:.0%} of prior "
+                f"entries (need >= {1 - max_prior_loss:.0%})"
+            )
+
+    # Guardrail 2: new version must fit the read-side injection budget.
+    total = sum(len(b) for b in new_blocks)
+    if total > max_total_chars:
+        return None, f"guardrail: consolidated memory too large ({total} chars)"
+
+    return new_blocks, f"consolidated {len(prior)} -> {len(new_blocks)} blocks"
+

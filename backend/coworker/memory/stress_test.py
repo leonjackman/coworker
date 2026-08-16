@@ -386,12 +386,14 @@ def test_full_inject_order(tmp: Path):
     library = MemoryScanner(tmp / MEMORY_ROOT_NAME).scan()
     nodes = library.injected(project_dir=md, agent=DEFAULT_AGENT)
     found_kw2 = set()
-    for kw in ["SYS_MESS","USR_MESS","BR_MESS","BP_MESS","PG_MESS","PC_MESS","SOUL_MESS","AG_MESS","MEM_MESS","SES_MESS"]:
+    for kw in ["SYS_MESS","USR_MESS","BR_MESS","BP_MESS","PG_MESS","PC_MESS","SOUL_MESS","AG_MESS","MEM_MESS"]:
         for n in nodes:
             if kw in (n.content or ""):
                 found_kw2.add(kw)
                 break
-    check("all keywords injected", len(found_kw2) == 10, f"found {len(found_kw2)}: {found_kw2}")
+    check("all resident keywords injected", len(found_kw2) == 9, f"found {len(found_kw2)}: {found_kw2}")
+    check("sessions not resident", all("SES_MESS" not in (n.content or "") for n in nodes))
+    check("session readable on demand", "SES_MESS" in store.read_file(f"{md}/{DEFAULT_AGENT}/SESSIONS/sess1.md").content)
 
 
 def test_block_merge(tmp: Path):
@@ -490,8 +492,9 @@ def test_full_inject_order_mm(tmp: Path):
     mgr.store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "MEM_MESS")
     mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/SESSIONS/sess1.md", "SES_MESS")
     rendered = mgr.render_for(md, DEFAULT_AGENT)
-    for kw in ["SYS_MESS", "USR_MESS", "BR_MESS", "BP_MESS", "PG_MESS", "PC_MESS", "SOUL_MESS", "AG_MESS", "MEM_MESS", "SES_MESS"]:
+    for kw in ["SYS_MESS", "USR_MESS", "BR_MESS", "BP_MESS", "PG_MESS", "PC_MESS", "SOUL_MESS", "AG_MESS", "MEM_MESS"]:
         check(f"rendered has {kw}", kw in rendered, str(rendered[:200]))
+    check("rendered excludes sessions", "SES_MESS" not in rendered, str(rendered[:200]))
 
 
 # --- HTTP tests ---
@@ -512,7 +515,9 @@ def test_http_api(url: str, project_id: str):
     check("status", "file_count" in r5, str(r5.get("__error", "")))
 
     r6 = _http("/api/memory/settings")
-    check("settings", "enabled" in r6, str(r6.get("__error", "")))
+    check("settings", "enabled" in r6 and "auto_extract" in r6, str(r6.get("__error", "")))
+    check("settings has no char_limit", "char_limit" not in r6, str(r6)[:120])
+    check("settings has no extract_model", "extract_model" not in r6, str(r6)[:120])
 
     r7 = _http("/api/memory/search?q=test")
     check("search", "results" in r7, str(r7.get("__error", "")))

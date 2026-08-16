@@ -247,6 +247,33 @@ class MemoryArgs(BaseModel):
     )
 
 
+class MemoryReadArgs(BaseModel):
+    """Read a long-term memory file on demand (agent scope)."""
+    file: str = Field(
+        description="Memory-root-relative path of the file to read, e.g. '<project>/<agent>/SESSIONS/<name>.md' or '<project>/<agent>/BASE/RULES.md'. Use this to review session records or topic files that are not injected every turn.",
+    )
+
+
+def _looks_like_raw_paste(text: str) -> bool:
+    """Heuristic guard against dumping raw conversation into long-term memory.
+
+    A refined memory fact is short and compact. Anything very long that is
+    heavily quoted or spans many lines is almost certainly a raw paste the
+    agent should first distill into a takeaway.
+    """
+    stripped = (text or "").strip()
+    if len(stripped) < 400:
+        return False
+    quote_chars = sum(1 for c in stripped if c in '>“”"\'`')
+    newline_count = stripped.count("\n")
+    # A long block that is (a) 3+ lines and quoted, or (b) unusually verbose.
+    if newline_count >= 3 and quote_chars >= 2:
+        return True
+    if len(stripped) >= 1200:
+        return True
+    return False
+
+
 def _resolve_memory_target(memory_rel: str, scope: str, name: str) -> tuple[bool, str]:
     """Resolve the memory file ``rel`` for the memory tool write target.
 
@@ -669,6 +696,14 @@ def build_workspace_tools(
           with ``content``. Use it to update stale or outgrown entries.
         - ``remove``: deletes every entry containing ``target``.
 
+        Your ``MEMORY.md`` is a CURATED INDEX of durable facts, kept concise by
+        automatic consolidation. When you have a lot of detail to preserve,
+        write it to a separate topic file via ``name`` (e.g. ``name="RULES.md"``)
+        instead of dumping it into ``MEMORY.md``. Before writing, check whether
+        the fact already exists or overlaps an existing entry — prefer
+        ``replace``/merge over blind appends. Never paste long raw text: only
+        refined takeaways belong in memory.
+
         Scope rules:
         - ``scope="agent"`` (default) writes to your own agent ``BASE/`` — either
           your ``MEMORY.md`` or, via ``name``, another ``.md`` file there.
@@ -685,6 +720,12 @@ def build_workspace_tools(
         try:
             if memory_store is None or not memory_rel:
                 return _error_result(RuntimeError("memory is not available"), "memory")
+            if action in ("add", "replace") and _looks_like_raw_paste(content):
+                return (
+                    "Memory write rejected: this looks like pasted raw text "
+                    "(too long / heavily quoted). Distill the durable takeaway "
+                    "into a concise fact in your own words before saving it."
+                )
             ok, rel = _resolve_memory_target(memory_rel, scope, name)
             if not ok:
                 return f"Memory write rejected: {rel}"
@@ -699,6 +740,28 @@ def build_workspace_tools(
             return f"Memory updated. {len(blocks)} entries now."
         except Exception as exc:
             return _error_result(exc, "memory")
+
+    @tool(args_schema=MemoryReadArgs)
+    def memory_read(file: str) -> str:
+        """Read a long-term memory file on demand (agent scope).
+
+        Your ``SESSIONS/*`` records and extra topic files are NOT injected into
+        every conversation to keep the prompt compact. When you need to recall
+        what happened in an earlier session or review a topic file, read it here
+        with its memory-root-relative ``file`` path (e.g.
+        ``<project>/<agent>/SESSIONS/2026-08-17.md``). Returns the file content,
+        or an error if the path is missing or outside the memory root.
+        """
+        try:
+            if memory_store is None or not memory_rel:
+                return _error_result(RuntimeError("memory is not available"), "memory_read")
+            memory = memory_store.read_file(file.strip())
+            content = memory.content or ""
+            if not content.strip():
+                return f"(empty memory file: {file})"
+            return content
+        except Exception as exc:
+            return _error_result(exc, "memory_read")
 
     @tool(args_schema=AskUserArgs)
     def ask_user(question: str, options: list[dict[str, str]], multiple: bool = False, header: str = "") -> str:
@@ -821,7 +884,9 @@ def build_workspace_tools(
         # Reviewer/auditor sub-agents get no workspace mutation tools.
         tools = [search_files, read_file, git_status]
     if memory_store is not None and memory_rel:
-        tools.append(memory)
+        tools.append(memory_read)
+        if not readonly:
+            tools.append(memory)
     if session_store is not None:
         tools.append(read_session)
     if delegator is not None:
@@ -835,7 +900,7 @@ def build_workspace_tools(
 _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "load_skill", "git_status"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
 _EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}

@@ -2550,10 +2550,7 @@ function App() {
     setMemorySettings((cur) => {
       const base: MemorySettings = cur ?? {
         enabled: true,
-        char_limit: 2000,
         auto_extract: true,
-        nudge_interval: 10,
-        extract_model: '',
       };
       return { ...base, ...patch };
     });

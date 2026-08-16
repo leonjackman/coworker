@@ -179,17 +179,28 @@ def main() -> int:
         check("agent memory injected", "agent_file" in kinds, str(kinds))
         check("agent memory content", any("agent fact" in n.content for n in injected))
 
+        # --- on-demand sessions: SESSIONS not resident, readable via store -----
+        sess_rel = "20260812100000/default_agent/SESSIONS/2026-01-01.md"
+        store.write_file(sess_rel, "# Session\n\n回顾了记忆注入的优先级。\n")
+        lib_s = scanner.scan()
+        injected_s = lib_s.injected(project_dir="20260812100000", agent="default_agent")
+        check("sessions NOT injected resident", all(n.kind != "session_file" for n in injected_s), str([n.kind for n in injected_s]))
+        check("sessions readable on demand", "回顾" in store.read_file(sess_rel).content)
+
         # --- prompt budget + ordering ----------------------------------------
         prompt = format_memory_prompt(injected, char_limit=5)
         check("budget warning present", "<budget_warning>" in prompt)
         check("files rendered", "<file kind=" in prompt)
         check("empty prompt", format_memory_prompt([], char_limit=2000) == "")
 
-        # --- budget is SOFT: writes never blocked -----------------------------
+        # --- budget is HARD: resident block truncated, data intact on disk ----
         store.clear_file(rel)
         store.add_block(rel, "z" * 5000)
         over = format_memory_prompt(library.injected(project_dir="20260812100000", agent="default_agent"), char_limit=100)
-        check("budget warns but does not truncate", "<budget_warning>" in over)
+        check("budget warning present when truncated", "<budget_warning>" in over)
+        check("resident block truncated", len(over) < 5000, f"len={len(over)}")
+        check("on-demand pointer present", "memory_read" in over)
+        check("file intact on disk", "z" * 5000 in store.read_file(rel).content)
 
         # --- non-agent folder classification ---------------------------------
         mem_root = store.root
@@ -423,6 +434,46 @@ def main() -> int:
         check("delete_by_agent keeps other agent sessions", remaining_titles == {"s2"}, str(remaining_titles))
         other_titles = {s["title"] for s in sstore.list_sessions("other")}
         check("delete_by_agent scoped to project", other_titles == {"s4"}, str(other_titles))
+
+        # --- write-side discipline: raw-paste guard ---------------------------
+        from coworker.agents import _looks_like_raw_paste
+
+        check("paste guard rejects long quoted paste", _looks_like_raw_paste("> 引用\n\n> 更多\n\n" + "长文本" * 200))
+        check("paste guard rejects very long block", _looks_like_raw_paste("x" * 1300))
+        check("paste guard allows concise fact", not _looks_like_raw_paste("用户偏好中文回复，前端用 npm run build 构建。"))
+
+        # --- dream consolidation guardrails ------------------------------------
+        import asyncio
+
+        from coworker.memory.auto_extract import run_consolidation
+
+        class _FakeLLM:
+            def __init__(self, payload: str):
+                self._payload = payload
+
+            async def ainvoke(self, messages):
+                return type("R", (), {"content": self._payload})()
+
+        async def _run(llm, existing, candidates):
+            return await run_consolidation(
+                llm=llm, existing=existing, candidates=candidates,
+                session_id="s", max_prior_loss=0.25, max_total_chars=4000,
+            )
+
+        # Guardrail: too many prior entries dropped -> rejected (None).
+        keep_most = '{"blocks": ["用户偏好中文"]}'
+        blocks_keep, note_keep = asyncio.run(_run(_FakeLLM(keep_most), "用户偏好中文\n\n端口 9527\n\n用 pnpm", ["偏好中文"]))
+        check("consolidation rejects heavy loss", blocks_keep is None, note_keep)
+
+        # Guardrail: unparseable -> rejected.
+        blocks_bad, note_bad = asyncio.run(_run(_FakeLLM("not json at all"), "a\n\nb", ["c"]))
+        check("consolidation rejects unparseable", blocks_bad is None, note_bad)
+
+        # Success path: preserves prior entries, integrates candidate.
+        ok_payload = '{"blocks": ["用户偏好中文", "端口 9527", "用户使用 pnpm"]}'
+        blocks_ok, note_ok = asyncio.run(_run(_FakeLLM(ok_payload), "用户偏好中文\n\n端口 9527", ["用户使用 pnpm"]))
+        check("consolidation succeeds", blocks_ok is not None, note_ok)
+        check("consolidation integrates candidate", any("pnpm" in b for b in blocks_ok or []), str(blocks_ok))
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]
