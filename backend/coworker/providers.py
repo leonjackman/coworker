@@ -28,6 +28,137 @@ class ProviderEntry:
     # When True the real api_key lives in the OS secret store (Keychain) and the
     # JSON only carries an empty placeholder; load() resolves it in memory.
     key_in_secrets: bool = False
+    # Context window in tokens. 0 = unknown: resolved at runtime via
+    # resolve_context_window() (user override > MODEL_CONTEXT_TABLE > discover > 128k).
+    context_window: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Known cloud model context windows (id-prefix matched, tokens).
+# Order matters: more specific prefixes must come before broader ones.
+# ---------------------------------------------------------------------------
+MODEL_CONTEXT_TABLE: list[tuple[str, int]] = [
+    # ---- OpenAI ----------------------------------------------------------
+    ("gpt-5.6", 1_050_000),
+    ("gpt-5.5", 1_050_000),
+    ("gpt-5.4", 1_050_000),
+    ("gpt-5.3", 1_050_000),
+    ("gpt-5.2", 1_050_000),
+    ("gpt-5.1", 1_050_000),
+    ("gpt-5", 400_000),
+    ("gpt-4.1", 1_000_000),
+    ("gpt-4o-mini", 128_000),
+    ("gpt-4o", 128_000),
+    ("gpt-4", 128_000),
+    ("o4-mini", 200_000),
+    ("o3-mini", 200_000),
+    ("o3", 200_000),
+    ("o1", 200_000),
+    ("gpt-oss-120b", 131_072),
+    ("gpt-oss-20b", 131_072),
+    ("gpt-oss", 131_072),
+    # ---- Anthropic (haiku before claude so the narrower prefix wins) ------
+    ("claude-haiku", 200_000),
+    ("claude-sonnet", 1_000_000),
+    ("claude-opus", 1_000_000),
+    ("claude-fable", 1_000_000),
+    ("claude-mythos", 1_000_000),
+    ("claude", 1_000_000),
+    # ---- Google Gemini / Gemma -------------------------------------------
+    ("gemini-3", 1_000_000),
+    ("gemini-2.5", 1_000_000),
+    ("gemini-2.0", 1_000_000),
+    ("gemini", 1_000_000),
+    ("gemma4:12b", 262_144),
+    ("gemma4:26b", 262_144),
+    ("gemma4:31b", 262_144),
+    ("gemma4", 131_072),
+    ("gemma3", 131_072),
+    ("gemma2", 8_192),
+    ("gemma", 8_192),
+    # ---- DeepSeek ---------------------------------------------------------
+    ("deepseek-v4", 1_000_000),
+    ("deepseek-v3.1", 131_072),
+    ("deepseek-v3", 131_072),
+    ("deepseek-r1", 131_072),
+    ("deepseek-coder-v2", 131_072),
+    ("deepseek", 1_000_000),
+    # ---- Meta Llama -------------------------------------------------------
+    ("llama4:scout", 10_000_000),
+    ("llama4:maverick", 1_000_000),
+    ("llama4", 10_000_000),
+    ("llama3.3", 128_000),
+    ("llama3.2", 128_000),
+    ("llama3.1", 128_000),
+    ("llama3", 8_192),
+    # ---- Qwen (specific variants before broad prefixes) --------------------
+    ("qwen3.8", 262_144),
+    ("qwen3.6", 262_144),
+    ("qwen3.5", 262_144),
+    ("qwen3:4b", 262_144),
+    ("qwen3:30b", 262_144),
+    ("qwen3:235b", 262_144),
+    ("qwen3:32b", 262_144),
+    ("qwen3", 40_960),
+    ("qwen2.5-coder", 131_072),
+    ("qwen2.5", 131_072),
+    ("qwen2", 131_072),
+    ("qwq", 131_072),
+    # ---- Z.AI GLM ---------------------------------------------------------
+    ("glm-5.2", 1_000_000),
+    ("glm-5.1", 198_000),
+    ("glm-5", 198_000),
+    ("glm-4.7", 198_000),
+    ("glm-4.6", 198_000),
+    ("glm-4.5", 128_000),
+    ("glm-4", 128_000),
+    ("glm", 128_000),
+    # ---- Moonshot / Kimi --------------------------------------------------
+    ("kimi-k3", 1_000_000),
+    ("kimi-k2.7", 262_144),
+    ("kimi-k2.6", 262_144),
+    ("kimi-k2.5", 131_072),
+    ("kimi", 131_072),
+    # ---- MiniMax ----------------------------------------------------------
+    ("minimax-m3", 1_000_000),
+    ("minimax-m2.7", 131_072),
+    ("minimax-m2.5", 131_072),
+    ("minimax", 131_072),
+    # ---- Mistral ----------------------------------------------------------
+    ("mistral-medium-3.5", 262_144),
+    ("mistral-medium", 262_144),
+    ("mistral-large-3", 131_072),
+    ("mistral-large", 128_000),
+    ("mistral-small", 128_000),
+    ("codestral", 32_000),
+    ("mixtral", 32_000),
+    ("mistral", 32_000),
+    # ---- xAI Grok ---------------------------------------------------------
+    ("grok-4.5", 262_144),
+    ("grok-4", 131_072),
+    ("grok-3", 131_072),
+    ("grok", 131_072),
+    # ---- Microsoft Phi ----------------------------------------------------
+    ("phi-4", 128_000),
+    ("phi4", 128_000),
+    ("phi-3", 128_000),
+    ("phi3", 128_000),
+    # ---- IBM Granite ------------------------------------------------------
+    ("granite4.1", 131_072),
+    ("granite4", 131_072),
+    ("granite3.3", 128_000),
+    ("granite3", 128_000),
+    ("granite", 128_000),
+    # ---- ByteDance Doubao / Baidu Ernie / others (cloud) -------------------
+    ("doubao", 262_144),
+    ("ernie", 128_000),
+    ("wenxin", 128_000),
+    ("internlm", 1_000_000),
+    ("yi-", 200_000),
+    ("yi", 32_000),
+]
+
+DEFAULT_CONTEXT_WINDOW = 128_000
 
 
 @dataclass
@@ -188,7 +319,7 @@ class ProviderManager:
             provider.model = config.default_model
         return provider
 
-    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "") -> dict[str, Any]:
+    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0) -> dict[str, Any]:
         base_url = self.validate_base_url(base_url, provider_type)
         if not name.strip():
             raise ValueError("provider name is required")
@@ -207,6 +338,7 @@ class ProviderManager:
             enabled=True,
             created_at=now,
             updated_at=now,
+            context_window=max(0, int(context_window or 0)),
         )
         config.providers.append(provider)
         if not config.default_provider_id:
@@ -215,7 +347,7 @@ class ProviderManager:
         self.save(config)
         return self.public_provider(provider)
 
-    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None) -> dict[str, Any]:
+    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None) -> dict[str, Any]:
         config = self.load()
         provider = self.require_provider(config, provider_id)
         if name is not None:
@@ -233,6 +365,8 @@ class ProviderManager:
             if not provider.model and config.default_provider_id == provider.id:
                 config.default_provider_id = ""
                 config.default_model = ""
+        if context_window is not None:
+            provider.context_window = max(0, int(context_window))
         if enabled is not None:
             provider.enabled = enabled
             if not enabled and config.default_provider_id == provider.id:
@@ -314,6 +448,125 @@ class ProviderManager:
         return [str(model["id"]) for model in payload.get("data", []) if model.get("id")]
 
     @staticmethod
+    def table_context_window(model: str) -> int:
+        """Look up a model's context window from the known-model table.
+
+        Prefix-matched from most specific to most generic; returns 0 when the
+        model is unknown.
+        """
+        name = (model or "").strip().lower()
+        if not name:
+            return 0
+        for prefix, window in MODEL_CONTEXT_TABLE:
+            if name.startswith(prefix):
+                return window
+        return 0
+
+    @staticmethod
+    def resolve_context_window(provider: ProviderEntry) -> tuple[int, str]:
+        """Resolve the effective context window (tokens) for a provider.
+
+        Priority: user override > known-model table > local-server discovery >
+        default. Returns ``(window, source)`` where source is one of
+        ``"user"``, ``"table"``, ``"discovered"``, ``"default"``.
+        """
+        if provider.context_window and provider.context_window > 0:
+            return provider.context_window, "user"
+        from_table = ProviderManager.table_context_window(provider.model)
+        if from_table:
+            return from_table, "table"
+        if provider.provider_type in {"ollama", "llamacpp", "llmstudio", "lmstudio", "vllm"} or ProviderManager._is_local(provider):
+            discovered = ProviderManager.fetch_context_window(provider)
+            if discovered and discovered > 0:
+                return discovered, "discovered"
+        return DEFAULT_CONTEXT_WINDOW, "default"
+
+    @staticmethod
+    def _is_local(provider: ProviderEntry) -> bool:
+        try:
+            parsed = urllib.parse.urlparse(provider.base_url)
+            hostname = parsed.hostname or ""
+            if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".local"):
+                return True
+            address = ipaddress.ip_address(hostname)
+            return address.is_private or address.is_loopback
+        except (ValueError, TypeError):
+            return False
+
+    @staticmethod
+    def fetch_context_window(provider: ProviderEntry) -> int:
+        """Best-effort discovery of the context window from a local server.
+
+        - ollama: ``POST {base}/api/show`` → ``model_info.*.context_length`` or
+          ``parameters`` containing ``num_ctx``.
+        - llamacpp: ``GET {base}/props`` → ``default_generation_settings.n_ctx``.
+        - OpenAI-compatible local servers: ``GET /v1/models`` extended fields.
+
+        Returns 0 when the value cannot be determined (caller falls back).
+        """
+        base = (provider.base_url or "").rstrip("/")
+        if not base:
+            return 0
+        try:
+            if provider.provider_type == "ollama":
+                return ProviderManager._fetch_ollama_ctx(base, provider.model)
+            if provider.provider_type in {"llamacpp", "llmstudio", "lmstudio"}:
+                props = ProviderManager._http_get(f"{base}/props")
+                if props:
+                    n_ctx = (
+                        props.get("default_generation_settings", {})
+                        .get("n_ctx")
+                        or props.get("n_ctx")
+                    )
+                    if isinstance(n_ctx, int) and n_ctx > 0:
+                        return n_ctx
+                return 0
+            # Generic OpenAI-compatible: try /v1/models extended fields.
+            url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+            payload = ProviderManager._http_get(url, provider)
+            if isinstance(payload, dict):
+                for item in payload.get("data", []):
+                    if item.get("id") != provider.model:
+                        continue
+                    for key in ("max_model_len", "context_window", "context_length"):
+                        value = item.get(key)
+                        if isinstance(value, int) and value > 0:
+                            return value
+        except Exception:  # noqa: BLE001 - discovery is best-effort
+            return 0
+        return 0
+
+    @staticmethod
+    def _fetch_ollama_ctx(base: str, model: str) -> int:
+        try:
+            payload = json.dumps({"model": model or ""}).encode()
+            request = urllib.request.Request(f"{base}/api/show", data=payload, headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(request, timeout=8) as response:
+                data = json.loads(response.read().decode())
+            model_info = data.get("model_info") or {}
+            for key, value in model_info.items():
+                if isinstance(key, str) and key.endswith(".context_length") and isinstance(value, int) and value > 0:
+                    return value
+            params = data.get("parameters") or ""
+            import re
+
+            match = re.search(r"num_ctx\s+(\d+)", str(params))
+            if match:
+                return int(match.group(1))
+        except Exception:  # noqa: BLE001
+            return 0
+        return 0
+
+    @staticmethod
+    def _http_get(url: str, provider: ProviderEntry | None = None) -> dict | None:
+        headers = {"Content-Type": "application/json"}
+        if provider and provider.api_key:
+            headers["Authorization"] = f"Bearer {provider.api_key}"
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return json.loads(response.read().decode())
+
+    @staticmethod
     def validate_base_url(base_url: str, provider_type: str = "") -> str:
         normalized = base_url.strip().rstrip("/")
         if not normalized:
@@ -348,6 +601,7 @@ class ProviderManager:
 
     @staticmethod
     def public_provider(provider: ProviderEntry) -> dict[str, Any]:
+        window, source = ProviderManager.resolve_context_window(provider)
         return {
             "id": provider.id,
             "name": provider.name,
@@ -357,6 +611,8 @@ class ProviderManager:
             "api_key_preview": ProviderManager.secret_preview(provider.api_key),
             "model": provider.model,
             "enabled": provider.enabled,
+            "context_window": window,
+            "context_source": source,
             "created_at": provider.created_at,
             "updated_at": provider.updated_at,
         }

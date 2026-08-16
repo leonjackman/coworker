@@ -1273,6 +1273,10 @@ ipcMain.handle('update-provider', async (event, payload) => {
   return requestBackend(`/providers/${encodeURIComponent(payload.provider_id)}`, 'PUT', payload.params);
 });
 
+ipcMain.handle('discover-provider-context', async (event, providerId) => {
+  return requestBackend(`/providers/${encodeURIComponent(providerId)}/discover-context`, 'POST', {});
+});
+
 ipcMain.handle('delete-provider', async (event, providerId) => {
   return requestBackend(`/providers/${encodeURIComponent(providerId)}`, 'DELETE');
 });

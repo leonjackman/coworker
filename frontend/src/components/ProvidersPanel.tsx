@@ -43,6 +43,8 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [discoveringCtx, setDiscoveringCtx] = useState(false);
+  const [ctxSource, setCtxSource] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -82,6 +84,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   function startAdd() {
     setForm(emptyForm());
     setTestResult(null);
+    setCtxSource('');
     setViewMode('form');
   }
 
@@ -94,8 +97,10 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
       api_key: '',
       model: provider.model,
       availableModels: provider.model ? [provider.model] : [],
+      ...(provider.context_window ? { context_window: provider.context_window } : {}),
     });
     setTestResult(null);
+    setCtxSource(provider.context_source ?? '');
     setViewMode('form');
   }
 
@@ -103,6 +108,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
     setViewMode('list');
     setForm(emptyForm());
     setTestResult(null);
+    setCtxSource('');
     setDeleteConfirm(null);
   }
 
@@ -140,6 +146,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           base_url: form.base_url,
           ...(form.api_key ? { api_key: form.api_key } : {}),
           model: form.model,
+          ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
         });
       } else {
         await chatService.createProvider({
@@ -148,6 +155,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           base_url: form.base_url,
           api_key: form.api_key,
           model: form.model,
+          ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
         });
       }
       await load();
@@ -157,6 +165,21 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
       setMessage(translateError(error) || t('common.operation_failed'));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDiscoverContext() {
+    if (!form.id) return;
+    setDiscoveringCtx(true);
+    setMessage(null);
+    try {
+      const response = await chatService.discoverProviderContext(form.id);
+      setForm((current) => ({ ...current, ...(response.provider.context_window ? { context_window: response.provider.context_window } : {}) }));
+      setCtxSource(response.provider.context_source ?? 'discovered');
+    } catch (error) {
+      setMessage(translateError(error) || t('providers.context_discover_failed'));
+    } finally {
+      setDiscoveringCtx(false);
     }
   }
 
@@ -283,6 +306,34 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
               </div>
               {form.availableModels.length === 0 && !fetchingModels && form.base_url.trim() && <small>{t('providers.fetch_models_hint')}</small>}
             </div>
+
+            <label className="field">
+              <span>{t('providers.context_window')}</span>
+              <div className="provider-model-row">
+                <input
+                  type="number"
+                  min={0}
+                  step={1000}
+                  value={form.context_window ?? ''}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === '') {
+                      const { context_window: _cw, ...rest } = form;
+                      setForm(rest);
+                    } else {
+                      setForm({ ...form, context_window: Number(value) });
+                    }
+                  }}
+                  placeholder={t('providers.context_window_placeholder')}
+                  disabled={saving}
+                />
+                <Button variant="icon" onClick={handleDiscoverContext} disabled={discoveringCtx || !form.id} title={t('providers.context_discover')}>
+                  <RefreshCw size={14} className={discoveringCtx ? 'animate-spin' : ''} />
+                </Button>
+              </div>
+              {ctxSource && <small>{t(`providers.context_source_${ctxSource}`)}</small>}
+              {form.provider_type === 'ollama' && <small>{t('providers.ollama_ctx_hint')}</small>}
+            </label>
 
             <div className="provider-test-row">
               <Button variant="secondary" onClick={handleTestConnection} disabled={testing || !form.base_url || !form.model}>

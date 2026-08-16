@@ -1842,7 +1842,60 @@ class NormalizeMessagesMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any])
 # messages are dropped first (the first system message is always kept). The
 # checkpoint still holds full history; this only bounds what the model sees and
 # what gets replayed into the checkpoint.
-CONTEXT_WINDOW_CHARS = 120_000
+# Default budget when a provider's context window cannot be resolved. Derived
+# from the default context window (128k tokens) with the safety factor applied.
+DEFAULT_CONTEXT_WINDOW_CHARS = 128_000
+CONTEXT_SAFETY_FACTOR = 0.75
+CHARS_PER_TOKEN = 3.5
+KEEP_RECENT_FACTOR = 0.6
+
+
+def context_budget_chars(context_window_tokens: int) -> int:
+    """Convert a model's token context window into the resident-message budget.
+
+    ``budget = window × safety × chars_per_token``; a floor keeps tiny local
+    models usable (avoids a budget so small every turn trims immediately).
+    """
+    if not context_window_tokens or context_window_tokens <= 0:
+        context_window_tokens = 128_000
+    return max(20_000, int(context_window_tokens * CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN))
+
+
+# Provider "context overflow" error signatures that trigger an automatic
+# compaction + single retry (OpenClaw-style recovery).
+CONTEXT_OVERFLOW_PATTERNS = (
+    "context length",
+    "maximum context",
+    "context_length_exceeded",
+    "context_window_exceeded",
+    "too many tokens",
+    "request too large",
+    "this model's maximum context",
+    "exceeds the maximum context",
+    "the number of tokens in the prompt",
+)
+
+
+def is_context_overflow_error(exc: BaseException | None) -> bool:
+    if exc is None:
+        return False
+    text = str(exc).lower()
+    return any(pattern in text for pattern in CONTEXT_OVERFLOW_PATTERNS)
+
+
+def _runtime_context_budget(provider: Any, model_override: str | None = None) -> int:
+    """Resolve the runtime context budget (chars) from a provider entry.
+
+    Uses the provider's context window resolution (user override > table >
+    local discovery > default) and converts it to a character budget.
+    """
+    try:
+        from .providers import ProviderManager
+
+        window, _ = ProviderManager.resolve_context_window(provider)
+        return context_budget_chars(window)
+    except Exception:  # noqa: BLE001 - a failed resolve must never break a turn
+        return DEFAULT_CONTEXT_WINDOW_CHARS
 
 
 def _msg_chars(msg: Any) -> int:
@@ -1881,19 +1934,28 @@ def _truncate_message(msg: Any, budget: int) -> Any:
 
 
 class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
-    """Trim the model-bound message list to ``CONTEXT_WINDOW_CHARS``.
+    """Trim the model-bound message list to the runtime context budget.
 
     Long sessions otherwise replay the entire history on every model call (and
     grow the checkpoint), eventually exceeding the provider's context window and
     failing the turn with a 400. Dropping the OLDEST messages (keeping the first
     system message + the most recent exchanges) is a safe rolling window.
 
-    The trim must be expressed with ``RemoveMessage``: the ``messages`` state
-    channel uses the ``add_messages`` reducer, so merely returning a shorter list
-    merges by message id and does NOT delete the trimmed messages. Tool messages
-    are also kept paired with their triggering AIMessage so the provider never
-    sees an orphaned ToolMessage.
+    The budget is derived at runtime from the provider's model context window
+    (see :func:`context_budget_chars`). The trim must be expressed with
+    ``RemoveMessage``: the ``messages`` state channel uses the ``add_messages``
+    reducer, so merely returning a shorter list merges by message id and does NOT
+    delete the trimmed messages. Tool messages are also kept paired with their
+    triggering AIMessage so the provider never sees an orphaned ToolMessage.
     """
+
+    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None):
+        self.budget_chars = max(20_000, int(budget_chars or DEFAULT_CONTEXT_WINDOW_CHARS))
+        # Optional model used for summary compaction. When set, over-budget turns
+        # summarize the OLDEST segment instead of dropping it entirely; when unset
+        # (or on summarization failure) the plain rolling trim is used.
+        self.llm = llm
+        self._summarized_segments: set[str] = set()
 
     def _trim(self, state: CoworkerAgentState) -> list[Any] | None:
         from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
@@ -1902,7 +1964,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         if not messages:
             return None
         total = sum(_msg_chars(m) for m in messages)
-        if total <= CONTEXT_WINDOW_CHARS:
+        if total <= self.budget_chars:
             return None
         # Keep the first message (system prompt) and then the most recent tail
         # (oldest-first drop). Oversized user/system content is truncated instead
@@ -1910,7 +1972,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         # tool/AI messages are dropped (cannot be truncated without breaking
         # tool-call pairing).
         head: list[Any] = []
-        budget = CONTEXT_WINDOW_CHARS
+        budget = self.budget_chars
         for msg in messages[:1]:
             chars = _msg_chars(msg)
             if chars > budget:
@@ -1921,10 +1983,10 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         kept_tail: list[Any] = []
         for msg in reversed(messages[1:]):
             chars = _msg_chars(msg)
-            if chars >= CONTEXT_WINDOW_CHARS:
+            if chars >= self.budget_chars:
                 # Oversized message: truncate user/system, drop tool/AI.
                 if getattr(msg, "type", "") in ("human", "system", "user"):
-                    kept_tail.append(_truncate_message(msg, CONTEXT_WINDOW_CHARS))
+                    kept_tail.append(_truncate_message(msg, self.budget_chars))
                     budget = 0
                     break
                 continue
@@ -1949,7 +2011,125 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         return self._trim(state)
 
     async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        # Summary compaction: when the LLM is available and we are over budget,
+        # summarize the OLDEST segment (keeping the recent tail intact) instead of
+        # dropping it. Falls back to the plain rolling trim on any failure.
+        if self.llm is not None:
+            try:
+                compacted = await self._compact(state)
+                if compacted is not None:
+                    return compacted
+            except Exception:  # noqa: BLE001 - compaction must never break a turn
+                logger.warning("context compaction failed; falling back to trim", exc_info=True)
         return self._trim(state)
+
+    async def _compact(self, state: CoworkerAgentState) -> dict[str, Any] | None:
+        """Replace the oldest over-budget segment with a model-generated summary.
+
+        Keeps the first system message and the ``keep_recent`` tail untouched;
+        the middle (oldest) messages are summarized into a single system message
+        carrying the key facts (paths, commands, ports, decisions). Never raises:
+        any failure returns ``None`` so the caller falls back to rolling trim.
+        """
+        from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
+
+        from langchain_core.messages import SystemMessage
+
+        messages = state.get("messages", [])
+        if len(messages) < 4:
+            return None
+        total = sum(_msg_chars(m) for m in messages)
+        if total <= self.budget_chars:
+            return None
+
+        keep_recent = max(8_000, int(self.budget_chars * KEEP_RECENT_FACTOR))
+        recent: list[Any] = []
+        recent_budget = keep_recent
+        for msg in reversed(messages[1:]):
+            chars = _msg_chars(msg)
+            if recent_budget - chars < 0 and recent:
+                break
+            recent.append(msg)
+            recent_budget -= chars
+        recent.reverse()
+        if len(recent) >= len(messages) - 1:
+            return None
+
+        # The oldest segment to summarize = everything between the first message
+        # (system) and the recent tail.
+        old_count = len(messages) - 1 - len(recent)
+        if old_count < 2:
+            return None
+
+        old_messages = messages[1 : 1 + old_count]
+        fingerprint = "|".join(getattr(m, "id", "") or "" for m in old_messages)
+        if fingerprint in self._summarized_segments:
+            # Already summarized this exact segment on a prior turn: do not loop.
+            return None
+        self._summarized_segments.add(fingerprint)
+        if len(self._summarized_segments) > 64:
+            self._summarized_segments.clear()
+
+        summary = await self._summarize_segment(old_messages)
+        if not summary:
+            return None
+
+        kept = [messages[0], SystemMessage(content=f"[Earlier conversation summary] {summary}", id="__compaction__"), *recent]
+        # Memory-flush reminder: tell the model the oldest history was compacted
+        # and it should persist any still-relevant facts into long-term memory so
+        # they survive beyond this session (ties into the auto-memory pipeline).
+        kept.append(
+            SystemMessage(
+                content=(
+                    "Note: the oldest part of this conversation was summarized "
+                    "above to keep the context compact. If any durable fact in it "
+                    "still matters for future sessions, persist it via the memory "
+                    "tool now."
+                ),
+                id="__compaction_flush__",
+            )
+        )
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}
+
+    async def _summarize_segment(self, messages: list[Any]) -> str:
+        """Ask the model to condense the oldest messages into a concise summary."""
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        transcript = []
+        for msg in messages:
+            role = getattr(msg, "type", "")
+            text = _msg_chars(msg)
+            if text <= 0:
+                continue
+            role_label = {"human": "user", "ai": "assistant", "tool": "tool", "system": "system"}.get(role, role)
+            transcript.append(f"{role_label}: {text}")
+        transcript_text = "\n".join(transcript)
+        if not transcript_text.strip():
+            return ""
+        # Cap the transcript fed to the summarizer so a pathological segment
+        # cannot blow up the compaction call itself.
+        if len(transcript_text) > 40_000:
+            transcript_text = transcript_text[-40_000:]
+        system = SystemMessage(
+            content=(
+                "You are summarizing the OLDEST part of a working session so the "
+                "agent can continue with a compact context. Preserve every durable "
+                "fact that still matters: file paths, command lines, ports, IDs, "
+                "user preferences, decisions and their rationale. Drop transient "
+                "noise. Return ONLY a dense factual summary, ~150-250 words, no "
+                "preamble."
+            )
+        )
+        try:
+            response = await self.llm.ainvoke([system, HumanMessage(content=transcript_text)])
+            text = str(getattr(response, "content", "") or response or "")
+            text = text.strip()
+            if len(text) > 2500:
+                text = text[:2500]
+            return text
+        except Exception:  # noqa: BLE001 - summarization is best-effort
+            logger.warning("context summarization failed", exc_info=True)
+            return ""
 
 
 # ---------------------------------------------------------------------------
@@ -2265,6 +2445,7 @@ def build_coworker_agent_graph(
     skill_manager: Any | None = None,
     memory_manager: Any | None = None,
     workspace: Any | None = None,  # NEW: for external write HITL bridge
+    context_budget: int = DEFAULT_CONTEXT_WINDOW_CHARS,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -2304,9 +2485,10 @@ def build_coworker_agent_graph(
     )
 
     phase_gate = PhaseToolGateMiddleware()
+    context_middleware = ContextWindowMiddleware(context_budget, llm=llm)
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
-        ContextWindowMiddleware(),
+        context_middleware,
         ToolCallCleanerMiddleware(),
         phase_gate,
         GoalModeMiddleware(language),
@@ -2322,9 +2504,7 @@ def build_coworker_agent_graph(
     middleware.extend(command_approval_middleware(approval_store, mcp_middleware.tool_policy, workspace=workspace))
 
     middleware.append(mcp_middleware)
-    phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names
-
-    # Skills: inject the catalog (name+description+location) into the system
+    phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names    # Skills: inject the catalog (name+description+location) into the system
     # prompt; the full SKILL.md body loads on demand via read_file.
     if skill_manager is not None:
         from .skills.skill_middleware import SkillMiddleware
@@ -2359,7 +2539,14 @@ def build_coworker_agent_graph(
     }
     if checkpointer is not None:
         kwargs["checkpointer"] = checkpointer
-    return create_agent(**kwargs)
+    graph = create_agent(**kwargs)
+    # Expose the context middleware on the compiled graph so a runtime can
+    # tighten the budget when the provider rejects an oversized request.
+    try:
+        setattr(graph, "_cw_context_middleware", context_middleware)
+    except Exception:  # noqa: BLE001 - best-effort hook
+        pass
+    return graph
 
 
 # ---------------------------------------------------------------------------
@@ -2411,6 +2598,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.skill_manager = skill_manager
         self.memory_manager = memory_manager
         self.project_store = project_store
+        self.context_budget_chars = _runtime_context_budget(provider, model_override)
         self.agent = agent or DEFAULT_AGENT_NAME
 
     @property
@@ -2522,6 +2710,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             skill_manager=self.skill_manager,
             memory_manager=memory_view,
             workspace=self.workspace,
+            context_budget=self.context_budget_chars,
         )
         try:
             result = graph.invoke(
@@ -2580,7 +2769,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.project_store = project_store
         self.agent = agent or DEFAULT_AGENT_NAME
         self._delegation_buffer: list[dict[str, Any]] = []
-
+        self.context_budget_chars = _runtime_context_budget(provider, model_override)
     @property
     def _memory(self) -> tuple[Any | None, Any | None, str]:
         """Return ``(project_scoped_manager, memory_store, agent_memory_rel)``."""
@@ -2659,6 +2848,21 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         except Exception:  # noqa: BLE001
             return []
 
+    async def _force_compact(self, graph: Any, inputs: dict[str, Any], config: Any) -> None:
+        """Halve the context budget on the middleware and nudge the checkpoint
+        so the overflow retry sends a strictly smaller request.
+
+        The middleware's ``budget_chars`` is mutable and read on every
+        ``abefore_model``; halving it guarantees the retried turn trims harder.
+        """
+        try:
+            middleware = getattr(graph, "_cw_context_middleware", None)
+            if middleware is not None and hasattr(middleware, "budget_chars"):
+                middleware.budget_chars = max(20_000, int(middleware.budget_chars * 0.5))
+            logger.info("forced context compaction for overflow retry (budget halved)")
+        except Exception:  # noqa: BLE001 - best-effort
+            logger.warning("overflow compaction failed", exc_info=True)
+
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
         base_url = provider.base_url.rstrip("/")
@@ -2730,6 +2934,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 skill_manager=self.skill_manager,
                 memory_manager=memory_view,
                 workspace=self.workspace,
+                context_budget=self.context_budget_chars,
             )
 
             inputs = {
@@ -2755,46 +2960,62 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             tool_state: dict[str, dict[str, Any]] = {}
             parts: list[dict[str, Any]] = []
 
-            try:
-                async for stream_mode, chunk in graph.astream(inputs, config=config, stream_mode=["messages", "custom", "updates"]):
-                    if stream_mode == "messages":
-                        msg, _meta = chunk
-                        try:
-                            for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
-                                yield event
-                        except GeneratorExit:
-                            raise
-                        except Exception:
-                            # The stream must keep going (the chunk is non-fatal),
-                            # but never swallow it silently — a missing tool card /
-                            # text segment would otherwise be undiagnosable.
-                            logger.exception("Failed to emit message-chunk event")
-                    elif stream_mode == "custom":
-                        if isinstance(chunk, dict):
-                            event_type = chunk.get("type", "")
-                            if event_type in ("plan_start", "plan_delta", "plan_end"):
-                                parts.append(chunk)
-                                yield chunk
-                    elif stream_mode == "updates":
-                        if "__interrupt__" in chunk:
-                            approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, interrupt_context, mcp_policy_resolver(self.mcp_session_manager))
-                            self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
-                            for approval in approvals:
-                                event = stream_event_from_interrupt(approval)
-                                yield event
-                            return
-                        # write_todos updates the todo list via a Command state update.
-                        for node_update in chunk.values():
-                            if isinstance(node_update, dict) and "todos" in node_update:
-                                yield {"type": "todos", "todos": node_update.get("todos") or []}
-                        # Drain any delegation SSE frames buffered by the delegate tools.
-                        for delegate_event in self._drain_delegation_events():
-                            yield delegate_event
-                        if _cancel_event and _cancel_event.is_set():
-                            raise asyncio.CancelledError("Goal cancelled mid-stream")
-            except Exception as exc:
-                self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
-                raise
+            # Overflow recovery: run the stream, and if the provider rejects the
+            # request for being too long before anything was emitted, force a
+            # tighter budget (compact once) and retry the graph a single time.
+            for _attempt in range(2):
+                try:
+                    async for stream_mode, chunk in graph.astream(inputs, config=config, stream_mode=["messages", "custom", "updates"]):
+                        if stream_mode == "messages":
+                            msg, _meta = chunk
+                            try:
+                                for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
+                                    yield event
+                            except GeneratorExit:
+                                raise
+                            except Exception:
+                                # The stream must keep going (the chunk is non-fatal),
+                                # but never swallow it silently — a missing tool card /
+                                # text segment would otherwise be undiagnosable.
+                                logger.exception("Failed to emit message-chunk event")
+                        elif stream_mode == "custom":
+                            if isinstance(chunk, dict):
+                                event_type = chunk.get("type", "")
+                                if event_type in ("plan_start", "plan_delta", "plan_end"):
+                                    parts.append(chunk)
+                                    yield chunk
+                        elif stream_mode == "updates":
+                            if "__interrupt__" in chunk:
+                                approvals = record_runtime_interrupts(chunk["__interrupt__"], self.approval_store, interrupt_context, mcp_policy_resolver(self.mcp_session_manager))
+                                self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
+                                for approval in approvals:
+                                    event = stream_event_from_interrupt(approval)
+                                    yield event
+                                return
+                            # write_todos updates the todo list via a Command state update.
+                            for node_update in chunk.values():
+                                if isinstance(node_update, dict) and "todos" in node_update:
+                                    yield {"type": "todos", "todos": node_update.get("todos") or []}
+                            # Drain any delegation SSE frames buffered by the delegate tools.
+                            for delegate_event in self._drain_delegation_events():
+                                yield delegate_event
+                            if _cancel_event and _cancel_event.is_set():
+                                raise asyncio.CancelledError("Goal cancelled mid-stream")
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if (
+                        _attempt == 0
+                        and not content_parts
+                        and not parts
+                        and is_context_overflow_error(exc)
+                    ):
+                        logger.warning("context overflow; compacting and retrying once: %s", str(exc)[:200])
+                        await self._force_compact(graph, inputs, config)
+                        continue
+                    self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
+                    raise
 
         final_content = "".join(content_parts)
         final_content = _strip_plan_leak(final_content, parts)
@@ -3246,6 +3467,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 skill_manager=self.skill_manager,
                 memory_manager=memory_view,
                 workspace=self.workspace,
+                context_budget=self.context_budget_chars,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of

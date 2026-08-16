@@ -451,6 +451,7 @@ class ProviderCreate(BaseModel):
     base_url: str
     api_key: str = ""
     model: str = ""
+    context_window: int = 0
 
 class ProviderUpdate(BaseModel):
     name: Optional[str] = None
@@ -458,6 +459,7 @@ class ProviderUpdate(BaseModel):
     api_key: Optional[str] = None
     model: Optional[str] = None
     enabled: Optional[bool] = None
+    context_window: Optional[int] = None
 
 class DefaultProviderPayload(BaseModel):
     provider_id: str
@@ -3170,6 +3172,7 @@ async def create_provider(request: ProviderCreate):
             base_url=request.base_url,
             api_key=request.api_key,
             model=request.model,
+            context_window=request.context_window,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3196,10 +3199,32 @@ async def update_provider(provider_id: str, request: ProviderUpdate):
             api_key=request.api_key,
             model=request.model,
             enabled=request.enabled,
+            context_window=request.context_window,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "provider": provider}
+
+@app.post("/providers/{provider_id}/discover-context")
+async def discover_provider_context(provider_id: str):
+    """Probe the provider's local server for its actual context window (tokens).
+
+    For cloud providers the known-model table already covers most cases, so a
+    failed probe simply returns 0 and the caller falls back to table/default.
+    """
+    try:
+        config = provider_manager.load()
+        provider = provider_manager.require_provider(config, provider_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    window = provider_manager.fetch_context_window(provider)
+    if not window or window <= 0:
+        raise HTTPException(status_code=404, detail="could not discover context window from this provider")
+    try:
+        provider_manager.update_provider(provider_id, context_window=window)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "provider": provider_manager.public_provider(provider_manager.require_provider(provider_manager.load(), provider_id))}
 
 @app.delete("/providers/{provider_id}")
 async def delete_provider(provider_id: str):

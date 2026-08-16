@@ -525,6 +525,17 @@ def test_http_api(url: str, project_id: str):
     r7b = _http("/api/memory/proposals")
     check("proposals endpoint removed", "__error" in r7b, str(r7b)[:120])
 
+    # provider public payload carries context resolution fields
+    rp = _http("/providers")
+    check("providers list ok", "providers" in rp, str(rp.get("__error", "")))
+    if "providers" in rp and rp["providers"]:
+        first = rp["providers"][0]
+        check("provider has context_window", "context_window" in first, str(first)[:200])
+        check("provider has context_source", "context_source" in first, str(first)[:200])
+        check("provider context_window is int", isinstance(first.get("context_window"), int) and first.get("context_window", 0) > 0, str(first.get("context_window")))
+        rdc = _http(f"/providers/{first['id']}/discover-context", "POST", {})
+        check("discover-context endpoint responds", "provider" in rdc or "__error" in rdc, str(rdc)[:200])
+
     r8 = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("API test fact"), "project_id": project_id, "agent": "default_agent"})
     check("write block", "blocks" in r8 or "error" in str(r8), str(r8.get("__error", r8)))
 

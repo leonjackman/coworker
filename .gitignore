@@ -61,3 +61,5 @@ pyinstaller_cache/
 
 # User runtime settings (persisted by the app; per-machine, must not ship)
 .coworker_settings.json
+
+docs/task_list/

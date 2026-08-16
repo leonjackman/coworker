@@ -74,6 +74,7 @@ declare global {
       listProviders: () => Promise<ProvidersListResponse>;
       createProvider: (payload: ProviderPayload) => Promise<{ status: string }>;
       updateProvider: (providerId: string, params: ProviderUpdatePayload) => Promise<{ status: string }>;
+      discoverProviderContext: (providerId: string) => Promise<{ status: string; provider: ProviderEntry }>;
       deleteProvider: (providerId: string) => Promise<{ status: string }>;
       setDefaultProvider: (payload: { provider_id: string; model: string }) => Promise<{ status: string }>;
       testProvider: (payload: { base_url: string; api_key: string; model: string }) => Promise<{ status: string; result: ProviderTestResult }>;

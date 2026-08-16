@@ -23,6 +23,7 @@ import type {
   ProjectResponse,
   ProjectsListResponse,
   ProviderPayload,
+  ProviderEntry,
   ProvidersListResponse,
   ProviderTestResult,
   ProviderUpdatePayload,
@@ -109,6 +110,7 @@ export interface ChatService {
   setDefaultProvider: (providerId: string, model: string) => Promise<void>;
   testProvider: (request: { base_url: string; api_key: string; model: string }) => Promise<ProviderTestResult>;
   fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string }) => Promise<{ models: string[]; error?: string }>;
+  discoverProviderContext: (providerId: string) => Promise<{ status: string; provider: ProviderEntry }>;
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;
   listActiveSessions: () => Promise<string[]>;
@@ -787,7 +789,12 @@ class ElectronChatService implements ChatService {
   async fetchProviderModels(request: { base_url: string; api_key: string; provider_type: string }): Promise<{ models: string[]; error?: string }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.fetchProviderModels(request);
-    return response.error ? { models: response.models, error: response.error } : { models: response.models };
+    return response;
+  }
+
+  async discoverProviderContext(providerId: string): Promise<{ status: string; provider: ProviderEntry }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.discoverProviderContext(providerId);
   }
 
   async generateTitle(sessionId: string, firstUserMessage: string, assistantResponse?: string): Promise<string> {
@@ -1242,6 +1249,14 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
+    });
+  }
+
+  async discoverProviderContext(providerId: string): Promise<{ status: string; provider: ProviderEntry }> {
+    return this.request<{ status: string; provider: ProviderEntry }>(`/providers/${encodeURIComponent(providerId)}/discover-context`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
     });
   }
 

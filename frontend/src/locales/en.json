@@ -797,5 +797,14 @@
   "settings.org_rename": "Rename",
   "settings.org_rename_placeholder": "New display name",
   "settings.org_cancel": "Cancel",
-  "settings.org_default_agent_protected": "default_agent is the project's main agent and cannot be deleted"
+  "settings.org_default_agent_protected": "default_agent is the project's main agent and cannot be deleted",
+  "providers.context_window": "Context window (tokens)",
+  "providers.context_window_placeholder": "e.g. 128000; leave empty to auto-resolve",
+  "providers.context_discover": "Auto-discover context window",
+  "providers.context_discover_failed": "Could not discover the context window from this provider",
+  "providers.context_source_user": "Source: manually set by you",
+  "providers.context_source_table": "Source: built-in model table",
+  "providers.context_source_discovered": "Source: discovered from the server",
+  "providers.context_source_default": "Source: default (128k)",
+  "providers.ollama_ctx_hint": "Ollama picks context by VRAM (4k–256k) by default and its OpenAI-compatible endpoint does not accept per-request num_ctx. To enlarge it, set PARAMETER num_ctx in a Modelfile, OLLAMA_CONTEXT_LENGTH, or the app slider."
 }

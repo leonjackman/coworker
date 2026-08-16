@@ -332,6 +332,8 @@ export interface ProviderEntry {
   api_key_preview: string;
   model: string;
   enabled: boolean;
+  context_window?: number;
+  context_source?: string;
   created_at: string;
   updated_at: string;
 }
@@ -349,6 +351,7 @@ export interface ProviderPayload {
   base_url: string;
   api_key: string;
   model: string;
+  context_window?: number;
 }
 
 export interface ProviderUpdatePayload {
@@ -357,6 +360,7 @@ export interface ProviderUpdatePayload {
   api_key?: string;
   model?: string;
   enabled?: boolean;
+  context_window?: number;
 }
 
 export interface ProviderTestResult {

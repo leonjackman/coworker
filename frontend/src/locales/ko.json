@@ -797,5 +797,14 @@
   "settings.org_rename": "이름 변경",
   "settings.org_rename_placeholder": "새 표시 이름",
   "settings.org_cancel": "취소",
-  "settings.org_default_agent_protected": "default_agent는 프로젝트의 메인 에이전트로 삭제할 수 없습니다"
+  "settings.org_default_agent_protected": "default_agent는 프로젝트의 메인 에이전트로 삭제할 수 없습니다",
+  "providers.context_window": "컨텍스트 창(토큰)",
+  "providers.context_window_placeholder": "예: 128000; 비워두면 자동 해석",
+  "providers.context_discover": "컨텍스트 창 자동 감지",
+  "providers.context_discover_failed": "이 공급자에서 컨텍스트 창을 감지할 수 없습니다",
+  "providers.context_source_user": "출처: 사용자 수동 설정",
+  "providers.context_source_table": "출처: 내장 모델 표",
+  "providers.context_source_discovered": "출처: 서버에서 자동 감지",
+  "providers.context_source_default": "출처: 기본값(128k)",
+  "providers.ollama_ctx_hint": "Ollama는 기본적으로 VRAM에 따라 컨텍스트(4k~256k)를 정하며 OpenAI 호환 엔드포인트는 요청별 num_ctx를 지원하지 않습니다. 확대하려면 Modelfile의 PARAMETER num_ctx, OLLAMA_CONTEXT_LENGTH 또는 앱 슬라이더를 설정하세요."
 }

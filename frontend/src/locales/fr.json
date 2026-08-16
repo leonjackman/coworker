@@ -797,5 +797,14 @@
   "settings.org_rename": "Renommer",
   "settings.org_rename_placeholder": "Nouveau nom d'affichage",
   "settings.org_cancel": "Annuler",
-  "settings.org_default_agent_protected": "default_agent est l'agent principal du projet et ne peut pas être supprimé"
+  "settings.org_default_agent_protected": "default_agent est l'agent principal du projet et ne peut pas être supprimé",
+  "providers.context_window": "Fenêtre de contexte (tokens)",
+  "providers.context_window_placeholder": "ex. 128000 ; laisser vide pour résolution auto",
+  "providers.context_discover": "Découvrir automatiquement la fenêtre de contexte",
+  "providers.context_discover_failed": "Impossible de découvrir la fenêtre de contexte de ce fournisseur",
+  "providers.context_source_user": "Source : défini manuellement",
+  "providers.context_source_table": "Source : table de modèles intégrée",
+  "providers.context_source_discovered": "Source : découvert depuis le serveur",
+  "providers.context_source_default": "Source : par défaut (128k)",
+  "providers.ollama_ctx_hint": "Ollama choisit le contexte selon la VRAM (4k–256k) par défaut et son endpoint compatible OpenAI n'accepte pas num_ctx par requête. Pour l'agrandir, définissez PARAMETER num_ctx dans un Modelfile, OLLAMA_CONTEXT_LENGTH ou le curseur de l'application."
 }

@@ -14,6 +14,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import sys
+import json
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -474,6 +475,80 @@ def main() -> int:
         blocks_ok, note_ok = asyncio.run(_run(_FakeLLM(ok_payload), "用户偏好中文\n\n端口 9527", ["用户使用 pnpm"]))
         check("consolidation succeeds", blocks_ok is not None, note_ok)
         check("consolidation integrates candidate", any("pnpm" in b for b in blocks_ok or []), str(blocks_ok))
+
+        # --- context budget: table resolution + conversion ----------------------
+        from coworker.agents import context_budget_chars, is_context_overflow_error
+        from coworker.providers import DEFAULT_CONTEXT_WINDOW, MODEL_CONTEXT_TABLE, ProviderEntry, ProviderManager
+
+        gpt = ProviderEntry(id="p1", name="gpt", provider_type="custom", base_url="http://localhost:9000", model="gpt-4o")
+        win, src = ProviderManager.resolve_context_window(gpt)
+        check("table resolves gpt-4o", win == 128_000, f"{win}/{src}")
+        haiku = ProviderEntry(id="p2", name="h", provider_type="custom", base_url="http://localhost:9000", model="claude-haiku-4-5")
+        win_h, src_h = ProviderManager.resolve_context_window(haiku)
+        check("table prefers haiku prefix", win_h == 200_000, f"{win_h}/{src_h}")
+        scout = ProviderEntry(id="p3", name="s", provider_type="custom", base_url="http://localhost:9000", model="llama4:scout")
+        win_s, src_s = ProviderManager.resolve_context_window(scout)
+        check("table prefers scout prefix", win_s == 10_000_000, f"{win_s}/{src_s}")
+        qwen4 = ProviderEntry(id="p4", name="q", provider_type="custom", base_url="http://localhost:9000", model="qwen3:4b")
+        win_q, src_q = ProviderManager.resolve_context_window(qwen4)
+        check("table prefers qwen3:4b variant", win_q == 262_144, f"{win_q}/{src_q}")
+        unknown = ProviderEntry(id="p5", name="u", provider_type="custom", base_url="http://localhost:9000", model="weird-model-x")
+        win_u, src_u = ProviderManager.resolve_context_window(unknown)
+        check("unknown model falls back to default", win_u == DEFAULT_CONTEXT_WINDOW and src_u == "default", f"{win_u}/{src_u}")
+        overridden = ProviderEntry(id="p6", name="o", provider_type="custom", base_url="http://localhost:9000", model="gpt-4o", context_window=9999)
+        win_o, src_o = ProviderManager.resolve_context_window(overridden)
+        check("user override wins", win_o == 9999 and src_o == "user", f"{win_o}/{src_o}")
+
+        check("budget 128k -> 336000", context_budget_chars(128_000) == 336_000, str(context_budget_chars(128_000)))
+        check("budget floors at 20k", context_budget_chars(1) == 20_000, str(context_budget_chars(1)))
+        check("budget default when 0", context_budget_chars(0) == 336_000, str(context_budget_chars(0)))
+
+        # expanded context table (50+ mainstream models)
+        def _win(model: str) -> int:
+            return ProviderManager.table_context_window(model)
+
+        check("qwen3.8 resolves 256k", _win("qwen3.8:27b") == 262_144, str(_win("qwen3.8:27b")))
+        check("qwen3.6 resolves 256k", _win("qwen3.6:35b") == 262_144, str(_win("qwen3.6:35b")))
+        check("glm-5.2 resolves 1M", _win("glm-5.2") == 1_000_000, str(_win("glm-5.2")))
+        check("glm-5.1 resolves 198k", _win("glm-5.1") == 198_000, str(_win("glm-5.1")))
+        check("glm-4.7 resolves 198k", _win("glm-4.7-flash") == 198_000, str(_win("glm-4.7-flash")))
+        check("kimi-k3 resolves 1M", _win("kimi-k3") == 1_000_000, str(_win("kimi-k3")))
+        check("kimi-k2.7 resolves 256k", _win("kimi-k2.7-code") == 262_144, str(_win("kimi-k2.7-code")))
+        check("minimax-m3 resolves 1M", _win("minimax-m3") == 1_000_000, str(_win("minimax-m3")))
+        check("gemma4 resolves 128k", _win("gemma4") == 131_072, str(_win("gemma4")))
+        check("gemma4:12b resolves 256k", _win("gemma4:12b") == 262_144, str(_win("gemma4:12b")))
+        check("mistral-medium-3.5 resolves 256k", _win("mistral-medium-3.5") == 262_144, str(_win("mistral-medium-3.5")))
+        check("deepseek-v4 resolves 1M", _win("deepseek-v4-flash") == 1_000_000, str(_win("deepseek-v4-flash")))
+        check("phi4 resolves 128k", _win("phi4") == 128_000, str(_win("phi4")))
+        check("grok-4.5 resolves 256k", _win("grok-4.5") == 262_144, str(_win("grok-4.5")))
+        check("doubao resolves 256k", _win("doubao-1.5-pro") == 262_144, str(_win("doubao-1.5-pro")))
+        check("ernie resolves 128k", _win("ernie-4.5") == 128_000, str(_win("ernie-4.5")))
+        check("internlm resolves 1M", _win("internlm3") == 1_000_000, str(_win("internlm3")))
+        check("yi- resolves 200k", _win("yi-large") == 200_000, str(_win("yi-large")))
+        check("granite4.1 resolves 128k", _win("granite4.1") == 131_072, str(_win("granite4.1")))
+        check("table covers 50+ models", len(MODEL_CONTEXT_TABLE) >= 90, str(len(MODEL_CONTEXT_TABLE)))
+
+        check("overflow detection", is_context_overflow_error(ValueError("This model's maximum context length is 4096 tokens.")))
+        check("overflow detection ignores normal", not is_context_overflow_error(ValueError("rate limit")))
+
+        # fetch_context_window: ollama /api/show model_info parsing (mocked).
+        from unittest.mock import patch
+
+        ollama = ProviderEntry(id="p7", name="ollama", provider_type="ollama", base_url="http://localhost:11434", model="qwen3:8b")
+        fake_show = json.dumps({"model_info": {"qwen3.context_length": 40960}}).encode()
+        with patch("urllib.request.urlopen") as mock_open:
+            class _Resp:
+                status = 200
+
+                def __enter__(self): return self
+
+                def __exit__(self, *a): return False
+
+                def read(self): return fake_show
+
+            mock_open.return_value = _Resp()
+            discovered = ProviderManager.fetch_context_window(ollama)
+        check("ollama fetch parses model_info", discovered == 40960, str(discovered))
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]

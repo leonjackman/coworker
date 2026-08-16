@@ -797,5 +797,14 @@
   "settings.org_rename": "名前変更",
   "settings.org_rename_placeholder": "新しい表示名",
   "settings.org_cancel": "キャンセル",
-  "settings.org_default_agent_protected": "default_agent はプロジェクトのメインエージェントのため削除できません"
+  "settings.org_default_agent_protected": "default_agent はプロジェクトのメインエージェントのため削除できません",
+  "providers.context_window": "コンテキストウィンドウ（トークン）",
+  "providers.context_window_placeholder": "例 128000；空欄なら自動解決",
+  "providers.context_discover": "コンテキストウィンドウを自動検出",
+  "providers.context_discover_failed": "このプロバイダーからコンテキストウィンドウを検出できませんでした",
+  "providers.context_source_user": "ソース：手動設定",
+  "providers.context_source_table": "ソース：内蔵モデル表",
+  "providers.context_source_discovered": "ソース：サーバーから自動検出",
+  "providers.context_source_default": "ソース：デフォルト（128k）",
+  "providers.ollama_ctx_hint": "Ollama はデフォルトで VRAM に応じてコンテキスト（4k〜256k）を決め、OpenAI 互換エンドポイントはリクエストごとの num_ctx を受け付けません。拡大するには Modelfile の PARAMETER num_ctx、OLLAMA_CONTEXT_LENGTH、またはアプリのスライダーを設定してください。"
 }
