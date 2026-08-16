@@ -45,6 +45,14 @@ from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_
 from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
 from coworker.memory.layout import AGENT_CORE_FILES, BASE_DIR, SYSTEM_FILES
 from coworker.memory.transfer import apply_import, export_memory, preview_import
+from coworker.org import (
+    AGENT_STATUS_ACTIVE,
+    ORG_MODE_MULTI,
+    OrgAgent,
+    OrgError,
+    OrgStore,
+    OrgTeam,
+)
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
@@ -93,6 +101,8 @@ def _memory_project_name(memory_dir: str) -> str:
 
 
 memory_manager.scanner.project_name_resolver = _memory_project_name
+org_store = OrgStore(memory_manager.root)
+memory_manager.org_store = org_store
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
 agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
 
@@ -563,6 +573,50 @@ def _ensure_agent_skeleton(project_dir: str, agent: str = DEFAULT_AGENT) -> str:
         return f"{project_dir}/{agent}"
 
 
+def _ensure_org(memory_dir: str) -> str:
+    """Materialize (or migrate) the org manifest for a project memory dir.
+
+    Returns the ``memory_dir`` on success; raises ``HTTPException(400)`` when
+    the project's memory is unavailable.
+    """
+    if not memory_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    if not org_store.exists(memory_dir):
+        org = org_store.load(memory_dir)
+        # Migration: back-fill existing agent directories discovered on disk.
+        library = memory_manager.scanner.scan()
+        view = next((p for p in library.projects if p.name == memory_dir), None)
+        if view:
+            for aview in view.agents:
+                if not any(a.id == aview.name for a in org.agents):
+                    org.agents.append(
+                        OrgAgent(
+                            id=aview.name,
+                            name=aview.name,
+                            role="",
+                            description="",
+                            parent="",
+                            team_id="",
+                            status=AGENT_STATUS_ACTIVE,
+                        )
+                    )
+        if not any(a.id == DEFAULT_AGENT for a in org.agents):
+            org.agents.append(
+                OrgAgent(
+                    id=DEFAULT_AGENT,
+                    name=DEFAULT_AGENT,
+                    role="team lead",
+                    description="",
+                    parent="",
+                    team_id="",
+                    status=AGENT_STATUS_ACTIVE,
+                )
+            )
+        org.mode = ORG_MODE_MULTI
+        org_store.save(memory_dir, org)
+    return memory_dir
+
+
 def _is_agent_core_rel(rel: str) -> bool:
     """True when ``rel`` points at an agent identity/core file (``…/BASE/SOUL|AGENT|MEMORY.md``)."""
     parts = rel.split("/")
@@ -659,10 +713,21 @@ async def chat(request: ChatRequest):
             session_id=session_id,
             project_id=request.project_id,
         )
+        agent = request.agent or DEFAULT_AGENT
         if not session_id:
-            created_session = session_store.new_session("", project_id=request.project_id or "")
+            created_session = session_store.new_session("", project_id=request.project_id or "", agent_id=agent)
             session_id = created_session.id
-        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
+        else:
+            try:
+                existing = session_store.require(session_id)
+                if request.agent:
+                    existing.agent_id = request.agent
+                    session_store.save(existing)
+                elif existing.agent_id:
+                    agent = existing.agent_id
+            except KeyError:
+                pass
+        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent)
         agent_registry.checkpoint_manager.mark_active(session_id)
         try:
             # The sync path runs the whole LangGraph turn (LLM calls + possibly a
@@ -788,6 +853,10 @@ async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
     project_dir = _project_memory_dir(project_id)
     if project_dir:
         _ensure_agent_skeleton(project_dir, agent)
+        try:
+            _ensure_org(project_dir)
+        except Exception:  # noqa: BLE001 - org scaffold must not break discovery
+            pass
     library = memory_manager.scanner.scan(include_missing=True)
     return {
         "root": str(library.root),
@@ -964,12 +1033,283 @@ async def memory_register_project(request: MemoryWriteRequest):
 
 @app.post("/api/memory/register-agent")
 async def memory_register_agent(request: MemoryWriteRequest):
-    """Materialize an agent skeleton under a project."""
+    """Materialize an agent skeleton under a project and register it in the org."""
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    agent_dir = _ensure_agent_skeleton(project_dir, request.agent or DEFAULT_AGENT)
+    agent = request.agent or DEFAULT_AGENT
+    _ensure_org(project_dir)
+    org = org_store.load(project_dir)
+    if not any(a.id == agent for a in org.agents):
+        org.agents.append(
+            OrgAgent(id=agent, name=agent, role="", description="", parent="", team_id="", status=AGENT_STATUS_ACTIVE)
+        )
+        org_store.save(project_dir, org)
+    agent_dir = _ensure_agent_skeleton(project_dir, agent)
     return {"status": "ok", "agent_dir": agent_dir}
+
+
+# --------------------------------------------------------------------------- #
+# Org API (project = organization container: agents + teams)
+# --------------------------------------------------------------------------- #
+
+class OrgAgentCreateRequest(BaseModel):
+    project_id: str = ""
+    name: str = ""
+    role: str = ""
+    description: str = ""
+    parent: str = ""
+    team_id: str = ""
+
+
+class OrgAgentUpdateRequest(BaseModel):
+    project_id: str = ""
+    id: str = ""
+    role: str | None = None
+    description: str | None = None
+    parent: str | None = None
+    team_id: str | None = None
+    status: str | None = None
+
+
+class OrgAgentDeleteRequest(BaseModel):
+    project_id: str = ""
+    id: str = ""
+
+
+class OrgTeamCreateRequest(BaseModel):
+    project_id: str = ""
+    id: str = ""
+    name: str = ""
+    lead: str = ""
+    parent_team_id: str = ""
+
+
+class OrgTeamUpdateRequest(BaseModel):
+    project_id: str = ""
+    id: str = ""
+    name: str | None = None
+    lead: str | None = None
+    parent_team_id: str | None = None
+    status: str | None = None
+
+
+class OrgTeamDeleteRequest(BaseModel):
+    project_id: str = ""
+    id: str = ""
+
+
+class OrgConfigUpdateRequest(BaseModel):
+    project_id: str = ""
+    mode: str | None = None
+    max_depth: int | None = None
+    max_concurrent: int | None = None
+    allow_agent_creation: bool | None = None
+
+
+def _org_public(org) -> dict:
+    return {
+        "agents": [a.__dict__ for a in org.agents],
+        "teams": [t.__dict__ for t in org.teams],
+        "config": {
+            "mode": org.mode,
+            "max_depth": org.max_depth,
+            "max_concurrent": org.max_concurrent,
+            "allow_agent_creation": org.allow_agent_creation,
+        },
+        "roster": org_store.roster(org),
+    }
+
+
+@app.get("/api/org")
+async def org_get(project_id: str = ""):
+    """Return the org manifest for one project (agents + teams + config + roster)."""
+    project_dir = _project_memory_dir(project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    org = org_store.load(project_dir)
+    return _org_public(org)
+
+
+@app.post("/api/org/agent")
+async def org_create_agent(request: OrgAgentCreateRequest):
+    """Create an agent: register in the org manifest + materialize the skeleton."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    org = org_store.load(project_dir)
+    if any(a.id == request.name for a in org.agents):
+        raise HTTPException(status_code=400, detail=f"agent {request.name!r} already exists")
+    try:
+        org_store.upsert_agent(
+            project_dir,
+            OrgAgent(
+                id=request.name,
+                name=request.name,
+                role=request.role,
+                description=request.description,
+                parent=request.parent,
+                team_id=request.team_id,
+                status=AGENT_STATUS_ACTIVE,
+            ),
+        )
+        _ensure_agent_skeleton(project_dir, request.name)
+    except OrgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _org_public(org_store.load(project_dir))
+
+
+@app.patch("/api/org/agent")
+async def org_update_agent(request: OrgAgentUpdateRequest):
+    """Edit an agent (role/description/superior/team/status)."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    org = org_store.load(project_dir)
+    agent = next((a for a in org.agents if a.id == request.id), None)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"agent {request.id!r} not found")
+    if request.role is not None:
+        agent.role = request.role
+    if request.description is not None:
+        agent.description = request.description
+    if request.parent is not None:
+        agent.parent = request.parent
+    if request.team_id is not None:
+        agent.team_id = request.team_id
+    if request.status is not None:
+        agent.status = request.status
+    try:
+        org_store.save(project_dir, org)
+    except OrgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _org_public(org_store.load(project_dir))
+
+
+@app.delete("/api/org/agent")
+async def org_delete_agent(request: OrgAgentDeleteRequest):
+    """Delete an agent (org entry + memory dir to trash)."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    try:
+        org_store.remove_agent(project_dir, request.id)
+    except OrgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from coworker.memory.memory_store import MemoryStore
+
+    store = MemoryStore(memory_manager.root)
+    try:
+        store.remove_file(f"{project_dir}/{request.id}")
+    except Exception:  # noqa: BLE001 - trash failure must not fail the org update
+        logger.warning("could not trash agent dir %s/%s", project_dir, request.id, exc_info=True)
+    return _org_public(org_store.load(project_dir))
+
+
+@app.post("/api/org/team")
+async def org_create_team(request: OrgTeamCreateRequest):
+    """Create a team (department)."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    org = org_store.load(project_dir)
+    if any(t.id == request.id for t in org.teams):
+        raise HTTPException(status_code=400, detail=f"team {request.id!r} already exists")
+    try:
+        org_store.upsert_team(
+            project_dir,
+            OrgTeam(
+                id=request.id,
+                name=request.name,
+                lead=request.lead,
+                parent_team_id=request.parent_team_id,
+                status=AGENT_STATUS_ACTIVE,
+            ),
+        )
+        memory_manager.registry.ensure_project(project_dir)
+        team_dir = memory_manager.root / project_dir / "teams" / request.id
+        team_dir.mkdir(parents=True, exist_ok=True)
+        for name in ("GOALS.md", "CONTEXT.md", "MEMORY.md"):
+            path = team_dir / name
+            if not path.exists():
+                path.write_text(f"# {name}\n\n（{request.name} 部门记忆）\n", encoding="utf-8")
+    except OrgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _org_public(org_store.load(project_dir))
+
+
+@app.patch("/api/org/team")
+async def org_update_team(request: OrgTeamUpdateRequest):
+    """Edit a team (name/lead/parent/status)."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    org = org_store.load(project_dir)
+    team = next((t for t in org.teams if t.id == request.id), None)
+    if team is None:
+        raise HTTPException(status_code=404, detail=f"team {request.id!r} not found")
+    if request.name is not None:
+        team.name = request.name
+    if request.lead is not None:
+        team.lead = request.lead
+    if request.parent_team_id is not None:
+        team.parent_team_id = request.parent_team_id
+    if request.status is not None:
+        team.status = request.status
+    try:
+        org_store.save(project_dir, org)
+    except OrgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _org_public(org_store.load(project_dir))
+
+
+@app.delete("/api/org/team")
+async def org_delete_team(request: OrgTeamDeleteRequest):
+    """Delete a team (only empty teams may be removed)."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    try:
+        org_store.remove_team(project_dir, request.id)
+    except OrgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    team_path = memory_manager.root / project_dir / "teams" / request.id
+    if team_path.is_dir():
+        from coworker.memory.memory_store import MemoryStore
+
+        store = MemoryStore(memory_manager.root)
+        try:
+            store.remove_file(f"{project_dir}/teams/{request.id}")
+        except Exception:  # noqa: BLE001
+            logger.warning("could not trash team dir %s", team_path, exc_info=True)
+    return _org_public(org_store.load(project_dir))
+
+
+@app.patch("/api/org/config")
+async def org_update_config(request: OrgConfigUpdateRequest):
+    """Update org config (mode/max_depth/max_concurrent/allow_agent_creation)."""
+    project_dir = _project_memory_dir(request.project_id)
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    try:
+        org_store.update_config(
+            project_dir,
+            mode=request.mode,
+            max_depth=request.max_depth,
+            max_concurrent=request.max_concurrent,
+            allow_agent_creation=request.allow_agent_creation,
+        )
+    except OrgError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _org_public(org_store.load(project_dir))
 
 
 @app.get("/api/memory/status")
@@ -1063,7 +1403,18 @@ async def chat_stream(request: ChatStreamRequest):
             session_id=request.session_id or None,
             project_id=request.project_id,
         )
-        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids)
+        agent = request.agent or DEFAULT_AGENT
+        if request.session_id:
+            try:
+                existing = session_store.require(request.session_id)
+                if request.agent:
+                    existing.agent_id = request.agent
+                    session_store.save(existing)
+                elif existing.agent_id:
+                    agent = existing.agent_id
+            except KeyError:
+                pass
+        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1081,7 +1432,7 @@ async def chat_stream(request: ChatStreamRequest):
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     else:
-        session = session_store.create("", project_id=request.project_id or "")
+        session = session_store.create("", project_id=request.project_id or "", agent_id=agent)
         session_id = session.id
 
     # A session may only have ONE in-flight stream writing its checkpoint; a
@@ -1202,6 +1553,7 @@ async def chat_stream(request: ChatStreamRequest):
             runtime = agent_registry.get_stream_runtime(
                 request.mode, request.provider_id, request.model,
                 resolved_workspace, referenced_sessions=referenced_ids,
+                agent=agent,
             )
             try:
                 stream_id = session_store.require(session_id).goal_stream_id or ""
@@ -1216,6 +1568,7 @@ async def chat_stream(request: ChatStreamRequest):
             runtime = agent_registry.get_stream_runtime(
                 request.mode, request.provider_id, request.model,
                 resolved_workspace, referenced_sessions=referenced_ids,
+                agent=agent,
             )
             stream_iter = runtime.stream(
                 messages, session_id, request.language, work_mode, autonomy,
@@ -1649,7 +2002,7 @@ async def goal_resume(request: GoalResumeRequest):
     referenced_ids: set[str] = set()
     try:
         resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
-        runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids)
+        runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids, agent=session.agent_id or DEFAULT_AGENT)
     except (KeyError, ValueError, RuntimeError) as exc:
         _goal_active_streams.pop(stream_id, None)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2106,7 +2459,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         async for kind, payload in _sse_events(
             _tracked_stream(
                 agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path,
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT,
                 ),
                 session_id,
             ),
@@ -2228,7 +2581,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         async for kind, payload in _sse_events(
             _tracked_stream(
                 agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path,
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT,
                 ),
                 session_id,
             ),
@@ -2265,6 +2618,8 @@ async def create_project(request: ProjectCreateRequest):
         project = project_store.create(request.name, workspace_path, memory_dir=memory_dir)
         try:
             memory_manager.registry.ensure_project(project.memory_dir)
+            _ensure_org(project.memory_dir)
+            memory_manager.registry.ensure_agent(memory_manager.root / project.memory_dir, DEFAULT_AGENT)
         except Exception:  # noqa: BLE001 - memory scaffold must not block project creation
             pass
     except KeyError as exc:

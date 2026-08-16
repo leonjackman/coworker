@@ -9020,3 +9020,191 @@ body.bottom-panel-resizing {
 .todo-block__head .goal-card__todos-count {
   margin-left: auto;
 }
+
+/* ── Org team settings panel ─────────────────────────────────────────── */
+.settings-org {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+.settings-org-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-org-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-danger, #e5484d);
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-danger, #e5484d) 40%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger, #e5484d) 8%, transparent);
+}
+.settings-org-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 10px;
+  background: var(--color-panel, transparent);
+}
+.settings-org-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+.settings-org-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+.settings-org-empty {
+  font-size: 13px;
+  opacity: 0.6;
+}
+.settings-org-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-org-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+.settings-org-member-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.settings-org-member-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  opacity: 0.7;
+  flex-wrap: wrap;
+}
+.settings-org-member-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.settings-org-config-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-org-label {
+  min-width: 140px;
+  font-size: 13px;
+}
+.settings-org-checkbox {
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-org-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--color-border, #333);
+  border-radius: 8px;
+}
+.settings-org-form-row {
+  display: flex;
+  gap: 8px;
+}
+.settings-org-form input,
+.settings-org-form select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 6px;
+  background: var(--color-input, transparent);
+  color: inherit;
+}
+.settings-org-config-row select,
+.settings-org-config-row input,
+.settings-org-member select {
+  padding: 5px 8px;
+  font-size: 13px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 6px;
+  background: var(--color-input, transparent);
+  color: inherit;
+}
+
+/* ── Delegate block (multi-agent delegation card) ─────────────────────── */
+.delegate-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--color-panel, transparent);
+}
+.delegate-block--running {
+  border-color: color-mix(in srgb, var(--color-accent, #3b82f6) 50%, transparent);
+}
+.delegate-block--error {
+  border-color: color-mix(in srgb, var(--color-danger, #e5484d) 50%, transparent);
+}
+.delegate-block-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 1px;
+  opacity: 0.7;
+}
+.delegate-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.delegate-block-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.delegate-block-status {
+  font-weight: 400;
+  opacity: 0.7;
+  font-size: 12px;
+}
+.delegate-block-task {
+  opacity: 0.75;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delegate-block-failed {
+  color: var(--color-danger, #e5484d);
+  font-size: 12px;
+}

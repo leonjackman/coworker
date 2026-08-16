@@ -33,6 +33,7 @@ class SessionMessage:
     attachments: list[dict[str, Any]] = field(default_factory=list)
     parts: list[dict[str, Any]] = field(default_factory=list)
     references: list[dict[str, Any]] = field(default_factory=list)
+    agent_id: str = ""
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Session:
     created_at: str
     updated_at: str
     project_id: str = ""
+    agent_id: str = ""
     work_mode: str = "build"
     autonomy: str = "guarded"
     goal_text: str = ""
@@ -70,6 +72,7 @@ class Session:
             created_at=str(payload.get("created_at", _now())),
             updated_at=str(payload.get("updated_at", _now())),
             project_id=str(payload.get("project_id", "")),
+            agent_id=str(payload.get("agent_id", "")),
             work_mode=str(payload.get("work_mode", "build")),
             autonomy=str(autonomy),
             goal_text=str(payload.get("goal_text", "")),
@@ -96,6 +99,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "project_id": self.project_id,
+            "agent_id": self.agent_id,
             "work_mode": self.work_mode,
             "autonomy": self.autonomy,
             "goal_text": self.goal_text,
@@ -118,6 +122,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "project_id": self.project_id,
+            "agent_id": self.agent_id,
             "work_mode": self.work_mode,
             "autonomy": self.autonomy,
             "goal_text": self.goal_text,
@@ -170,7 +175,7 @@ class SessionStore:
             sessions.append(session.public())
         return sessions
 
-    def new_session(self, title: str = "", project_id: str = "", work_mode: str = "build", autonomy: str = "guarded") -> Session:
+    def new_session(self, title: str = "", project_id: str = "", work_mode: str = "build", autonomy: str = "guarded", agent_id: str = "") -> Session:
         now = _now()
         return Session(
             id=str(uuid.uuid4()),
@@ -178,12 +183,13 @@ class SessionStore:
             created_at=now,
             updated_at=now,
             project_id=project_id,
+            agent_id=agent_id,
             work_mode=work_mode,
             autonomy=autonomy,
         )
 
-    def create(self, title: str = "", project_id: str = "", work_mode: str = "build", autonomy: str = "guarded") -> Session:
-        session = self.new_session(title, project_id, work_mode, autonomy)
+    def create(self, title: str = "", project_id: str = "", work_mode: str = "build", autonomy: str = "guarded", agent_id: str = "") -> Session:
+        session = self.new_session(title, project_id, work_mode, autonomy, agent_id)
         self.save(session)
         return session
 
@@ -286,11 +292,13 @@ class SessionStore:
         parts: list[dict[str, Any]] | None = None,
         references: list[dict[str, Any]] | None = None,
         message_id: str | None = None,
+        agent_id: str = "",
     ) -> Session:
         session = self.require(session_id)
         # 优先使用调用方传入的 id（通常是前端乐观渲染时生成的 id），
         # 保证前端展示的 message id 与后端持久化 id 一致，避免按 id 检索（回退/重生成）时 404。
         resolved_id = message_id or str(uuid.uuid4())
+        resolved_agent = agent_id or session.agent_id
         session.messages.append(
             SessionMessage(
                 id=resolved_id,
@@ -305,6 +313,7 @@ class SessionStore:
                 attachments=attachments or [],
                 parts=parts or [],
                 references=references or [],
+                agent_id=resolved_agent,
             )
         )
         if role == "user" and session.title == "新会话":

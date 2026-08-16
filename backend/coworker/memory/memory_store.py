@@ -109,18 +109,34 @@ class MemoryStore:
             return load_file(path)
 
     def remove_file(self, rel: str, *, trash_dir: Path | None = None) -> bool:
-        """Delete a file (or empty directory) under the memory root.
+        """Delete a file or directory under the memory root.
 
-        Files go to the OS trash with a hidden ``.trash/`` fallback; an
-        explicit ``trash_dir`` (used by tests) takes precedence. Empty
-        directories are removed directly. Returns True on success, False when
-        the target is missing or cannot be moved.
+        Files (and non-empty directories) go to the OS trash with a hidden
+        ``.trash/`` fallback; an explicit ``trash_dir`` (used by tests) takes
+        precedence. Empty directories are removed directly. Returns True on
+        success, False when the target is missing or cannot be moved.
         """
         path = self._resolve(rel)
         with self._lock:
             if path.is_dir():
                 try:
                     path.rmdir()
+                    return True
+                except OSError:
+                    pass
+                try:
+                    from .trash import send_to_trash, system_trash_dir
+
+                    if trash_dir is not None:
+                        dest_dir = trash_dir
+                    else:
+                        dest_dir = system_trash_dir() or (self.root / ".trash")
+                    send_to_trash(path, dest_dir)
+                    for lock in path.rglob("*.lock"):
+                        try:
+                            lock.unlink(missing_ok=True)
+                        except OSError:  # pragma: no cover - defensive
+                            pass
                     return True
                 except OSError:
                     return False

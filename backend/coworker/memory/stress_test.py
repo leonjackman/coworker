@@ -529,6 +529,32 @@ def test_http_api(url: str, project_id: str):
     r10 = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("stress_agent wrote this"), "project_id": project_id, "agent": "stress_agent"})
     check("write to new agent", "blocks" in r10, str(r10.get("__error", r10)))
 
+    # --- org API ---
+    r11 = _http(f"/api/org?project_id={project_id}")
+    check("org get", "agents" in r11 and "config" in r11, str(r11.get("__error", "")))
+    if "agents" in r11:
+        default_present = any(a.get("id") == "default_agent" for a in r11["agents"])
+        check("org has default_agent", default_present, str(r11.get("agents"))[:200])
+
+    r12 = _http("/api/org/agent", "POST", {"project_id": project_id, "name": "org_worker", "role": "developer", "parent": "default_agent"})
+    check("org create agent", "agents" in r12 and any(a.get("id") == "org_worker" for a in r12["agents"]), str(r12.get("__error", "")))
+
+    r12b = _http("/api/org/agent", "POST", {"project_id": project_id, "name": "org_worker", "role": "dup"})
+    check("org duplicate agent rejected", "__error" in r12b, str(r12b)[:120])
+
+    r13 = _http("/api/org/team", "POST", {"project_id": project_id, "id": "org_team", "name": "团队", "lead": "org_worker"})
+    check("org create team", "teams" in r13 and any(t.get("id") == "org_team" for t in r13["teams"]), str(r13.get("__error", "")))
+
+    r14 = _http("/api/org/config", "PATCH", {"project_id": project_id, "mode": "single"})
+    check("org config single", r14.get("config", {}).get("mode") == "single", str(r14.get("__error", "")))
+    r14b = _http("/api/org/config", "PATCH", {"project_id": project_id, "mode": "multi"})
+    check("org config multi", r14b.get("config", {}).get("mode") == "multi", str(r14b.get("__error", "")))
+
+    r15 = _http("/api/org/team", "DELETE", {"project_id": project_id, "id": "org_team"})
+    check("org delete team", "__error" not in r15 or r15.get("status"), str(r15)[:120])
+    r16 = _http("/api/org/agent", "DELETE", {"project_id": project_id, "id": "org_worker"})
+    check("org delete agent", "__error" not in r16 or r16.get("status"), str(r16)[:120])
+
 
 def test_http_pressure(url: str, project_id: str):
     print("\n[HTTP] Pressure: 200 writes to single agent")

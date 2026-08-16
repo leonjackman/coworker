@@ -10,6 +10,7 @@ import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
 import { UpdatePanel } from './UpdatePanel';
+import { OrgSettingsPanel } from './OrgSettingsPanel';
 import { autonomyOptions, languageOptions, themeOptions } from './preference-options';
 
 interface SettingsViewProps {
@@ -25,6 +26,7 @@ interface SettingsViewProps {
   onMemorySettingsChange: (patch: MemorySettingsPatch) => void;
   modelOptions: { id: string; label: string; provider: string }[];
   updateCenter: UpdateCenter;
+  activeProjectId?: string | undefined;
   onLanguageChange?: () => void;
   onClose: () => void;
 }
@@ -42,10 +44,11 @@ export function SettingsView({
   onMemorySettingsChange,
   modelOptions,
   updateCenter,
+  activeProjectId,
   onLanguageChange,
   onClose,
 }: SettingsViewProps) {
-  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit'>('main');
+  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit' | 'org'>('main');
 
   async function selectLanguage(language: string) {
     const allowed = ['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
@@ -75,6 +78,24 @@ export function SettingsView({
         )}
       >
         <ToolAuditPanel embedded />
+      </WorkspacePage>
+    );
+  }
+
+  if (settingsPage === 'org') {
+    return (
+      <WorkspacePage
+        eyebrow={t('settings.title')}
+        title={t('settings.org_group')}
+        description={t('settings.org_group_desc')}
+        action={(
+          <Button variant="ghost" onClick={() => setSettingsPage('main')}>
+            <ArrowLeft size={15} />
+            {t('settings.back')}
+          </Button>
+        )}
+      >
+        <OrgSettingsPanel projectId={activeProjectId || ''} />
       </WorkspacePage>
     );
   }
@@ -226,6 +247,21 @@ export function SettingsView({
                   })),
                 ],
                 onChange: (value) => onMemorySettingsChange({ extract_model: value }),
+              },
+            ],
+          },
+          {
+            id: 'org',
+            title: t('settings.org_group'),
+            description: t('settings.org_group_desc'),
+            items: [
+              {
+                id: 'org',
+                type: 'action',
+                label: t('settings.org_entry'),
+                description: t('settings.org_entry_desc'),
+                actionLabel: t('settings.org_open'),
+                onAction: () => setSettingsPage('org'),
               },
             ],
           },

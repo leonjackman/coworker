@@ -56,6 +56,8 @@ class MemoryManager:
         self.registry = MemoryRegistry(self.data_dir)
         self.scanner = MemoryScanner(self._root)
         self.store = MemoryStore(self._root)
+        # Org registry (injected by main.py) powers roster + team memory injection.
+        self.org_store: Any | None = None
         # Phase 2: per-session turn counters (in-memory; reset on restart).
         self._turn_counters: dict[str, int] = {}
         # Injected extractor dependencies (set via configure_extractor).
@@ -90,12 +92,39 @@ class MemoryManager:
         return format_memory_prompt(library.injected(), self.config.char_limit)
 
     def render_for(self, project_dir: str | None = None, agent: str | None = None) -> str:
-        """Render the injected memory block for one project/agent scope."""
+        """Render the injected memory block for one project/agent scope.
+
+        Includes team-level memory (GOALS/CONTEXT/MEMORY of the agent's team and
+        its ancestor teams) and a lightweight team roster when the org registry
+        is available and the agent belongs to a team.
+        """
         if not self.config.enabled:
             return ""
         library = self.scanner.scan()
-        nodes = library.injected(project_dir=project_dir, agent=agent or DEFAULT_AGENT)
-        return format_memory_prompt(nodes, self.config.char_limit)
+        team_ids: list[str] = []
+        roster_lines: list[str] = []
+        if project_dir and agent and self.org_store is not None:
+            try:
+                org = self.org_store.load(project_dir)
+                target = next((a for a in org.agents if a.id == agent), None)
+                if target and target.team_id:
+                    team_ids = self.org_store.team_ancestors(org, target.team_id)
+                for member in self.org_store.roster(org):
+                    role = f" · {member['role']}" if member["role"] else ""
+                    team = f" · {member['team']}" if member["team"] else ""
+                    roster_lines.append(f"- {member['name']} ({member['id']}){role}{team}")
+            except Exception:  # noqa: BLE001 - roster/team injection must never break chat
+                team_ids = []
+                roster_lines = []
+        nodes = library.injected(project_dir=project_dir, agent=agent or DEFAULT_AGENT, team_ids=team_ids)
+        rendered = format_memory_prompt(nodes, self.config.char_limit)
+        if roster_lines:
+            block = "\n".join(roster_lines)
+            if rendered:
+                rendered = f"{rendered}\n\n## 团队成员\n{block}"
+            else:
+                rendered = f"## 团队成员\n{block}"
+        return rendered
 
     # -- middleware factory -------------------------------------------------
 
@@ -113,6 +142,7 @@ class MemoryManager:
         view.registry = self.registry
         view.scanner = self.scanner
         view.store = self.store
+        view.org_store = self.org_store
         view._turn_counters = self._turn_counters
         view._llm_factory = self._llm_factory
         view._transcript_provider = self._transcript_provider

@@ -242,12 +242,24 @@ export interface PartPlan {
   content: string;
 }
 
+export interface PartDelegate {
+  type: 'delegate';
+  from: string;
+  to: string | string[];
+  task?: string | undefined;
+  status: 'running' | 'done' | 'error';
+  parallel?: boolean | undefined;
+  chars?: number | undefined;
+  failed?: string[] | undefined;
+  error?: string | undefined;
+}
+
 export interface PartText {
   type: 'text';
   content: string;
 }
 
-export type MessagePart = PartTool | PartReasoning | PartPlan | PartText;
+export type MessagePart = PartTool | PartReasoning | PartPlan | PartDelegate | PartText;
 
 export interface ChatMessage {
   id: string;
@@ -294,6 +306,7 @@ export interface ChatRequest {
   provider_id?: string;
   model?: string;
   project_id?: string;
+  agent?: string;
   attachments?: ComposerAttachment[];
   referenced_sessions?: string[];
   // 前端乐观渲染时生成的消息 id，回传后端以统一前后端 id（修复回退/重生成时 404）
@@ -406,6 +419,7 @@ export interface SessionMessageRecord {
   attachments?: ComposerAttachment[];
   parts?: MessagePart[];
   references?: SessionReference[];
+  agent_id?: string;
 }
 
 export interface SessionDetail {
@@ -414,6 +428,7 @@ export interface SessionDetail {
   created_at: string;
   updated_at: string;
   project_id: string;
+  agent_id?: string;
   work_mode: string;
   autonomy: string;
   messages: SessionMessageRecord[];
@@ -653,7 +668,10 @@ export interface PendingRequest {
     | { type: 'todos'; todos: GoalTodo[]; session_id?: string }
     | { type: 'goal_stream_id'; stream_id: string; session_id: string }
     | { type: 'goal_system'; content: string; session_id?: string }
-    | { type: 'goal_attached'; stream_id: string; session_id: string };
+    | { type: 'goal_attached'; stream_id: string; session_id: string }
+    | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string }
+    | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string }
+    | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string };
 
 export interface GoalTodo {
   content: string;
@@ -857,6 +875,16 @@ export interface MemoryAgentView {
   sessions: MemoryNode[];
 }
 
+export interface MemoryTeamView {
+  id: string;
+  name: string;
+  rel: string;
+  goals: MemoryNode | null;
+  context: MemoryNode | null;
+  memory: MemoryNode | null;
+  files: MemoryNode[];
+}
+
 export interface MemoryProjectView {
   name: string;
   rel: string;
@@ -865,6 +893,7 @@ export interface MemoryProjectView {
   project: MemoryNode[];
   agents: MemoryAgentView[];
   folders: MemoryFolderView[];
+  teams: MemoryTeamView[];
 }
 
 export interface MemoryDiscoverResponse {
@@ -1006,4 +1035,91 @@ export interface UpdateStateSnapshot {
   releaseNotes: string | null;
   progress: UpdateDownloadProgress | null;
   errorMessage: string | null;
+}
+
+// ── Org (multi-agent team) ───────────────────────────────────────────────
+export type OrgAgentStatus = 'active' | 'disabled';
+
+export interface OrgAgent {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  parent: string;
+  team_id: string;
+  status: OrgAgentStatus;
+  created_at: string;
+}
+
+export interface OrgTeam {
+  id: string;
+  name: string;
+  lead: string;
+  parent_team_id: string;
+  status: OrgAgentStatus;
+}
+
+export interface OrgConfig {
+  mode: 'single' | 'multi';
+  max_depth: number;
+  max_concurrent: number;
+  allow_agent_creation: boolean;
+}
+
+export interface OrgRosterEntry {
+  id: string;
+  name: string;
+  role: string;
+  team: string;
+}
+
+export interface OrgSnapshot {
+  agents: OrgAgent[];
+  teams: OrgTeam[];
+  config: OrgConfig;
+  roster: OrgRosterEntry[];
+}
+
+export interface OrgAgentPayload {
+  project_id: string;
+  name: string;
+  role?: string;
+  description?: string;
+  parent?: string;
+  team_id?: string;
+}
+
+export interface OrgAgentUpdatePayload {
+  project_id: string;
+  id: string;
+  role?: string;
+  description?: string;
+  parent?: string;
+  team_id?: string;
+  status?: OrgAgentStatus;
+}
+
+export interface OrgTeamPayload {
+  project_id: string;
+  id: string;
+  name: string;
+  lead?: string;
+  parent_team_id?: string;
+}
+
+export interface OrgTeamUpdatePayload {
+  project_id: string;
+  id: string;
+  name?: string;
+  lead?: string;
+  parent_team_id?: string;
+  status?: OrgAgentStatus;
+}
+
+export interface OrgConfigPayload {
+  project_id: string;
+  mode?: 'single' | 'multi';
+  max_depth?: number;
+  max_concurrent?: number;
+  allow_agent_creation?: boolean;
 }

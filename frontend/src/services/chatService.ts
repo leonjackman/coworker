@@ -59,6 +59,12 @@ import type {
   MemoryImportApplyResponse,
   MemorySettings,
   MemorySettingsPatch,
+  OrgAgentPayload,
+  OrgAgentUpdatePayload,
+  OrgConfigPayload,
+  OrgSnapshot,
+  OrgTeamPayload,
+  OrgTeamUpdatePayload,
 } from '../types';
 import { getLanguage } from '../lib/i18n';
 
@@ -183,6 +189,14 @@ export interface ChatService {
   getMemorySettings: () => Promise<MemorySettings>;
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
   revealInFolder: (path: string) => Promise<{ status: string }>;
+  getOrg: (projectId: string) => Promise<OrgSnapshot>;
+  createOrgAgent: (request: OrgAgentPayload) => Promise<OrgSnapshot>;
+  updateOrgAgent: (request: OrgAgentUpdatePayload) => Promise<OrgSnapshot>;
+  deleteOrgAgent: (projectId: string, id: string) => Promise<OrgSnapshot>;
+  createOrgTeam: (request: OrgTeamPayload) => Promise<OrgSnapshot>;
+  updateOrgTeam: (request: OrgTeamUpdatePayload) => Promise<OrgSnapshot>;
+  deleteOrgTeam: (projectId: string, id: string) => Promise<OrgSnapshot>;
+  updateOrgConfig: (request: OrgConfigPayload) => Promise<OrgSnapshot>;
 }
 
 class ElectronChatService implements ChatService {
@@ -464,6 +478,76 @@ class ElectronChatService implements ChatService {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.revealInFolder(path);
   }
+
+  private async _orgRequest<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await fetch(`${BACKEND_URL}${path}`, init);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || `Backend returned ${response.status}`);
+    }
+    return payload as T;
+  }
+
+  async getOrg(projectId: string): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>(`/api/org?project_id=${encodeURIComponent(projectId)}`);
+  }
+
+  async createOrgAgent(request: OrgAgentPayload): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>('/api/org/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async updateOrgAgent(request: OrgAgentUpdatePayload): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>('/api/org/agent', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async deleteOrgAgent(projectId: string, id: string): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>('/api/org/agent', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, id }),
+    });
+  }
+
+  async createOrgTeam(request: OrgTeamPayload): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>('/api/org/team', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async updateOrgTeam(request: OrgTeamUpdatePayload): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>('/api/org/team', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async deleteOrgTeam(projectId: string, id: string): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>('/api/org/team', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, id }),
+    });
+  }
+
+  async updateOrgConfig(request: OrgConfigPayload): Promise<OrgSnapshot> {
+    return this._orgRequest<OrgSnapshot>('/api/org/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
 
   async listToolAudit(limit = 100): Promise<ToolAuditResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
@@ -1406,6 +1490,66 @@ class HttpChatService implements ChatService {
   async revealInFolder(path: string): Promise<{ status: string }> {
     // No local file manager in the web build — caller hides the action.
     return { status: 'unsupported' };
+  }
+
+  async getOrg(projectId: string): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>(`/api/org?project_id=${encodeURIComponent(projectId)}`);
+  }
+
+  async createOrgAgent(request: OrgAgentPayload): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>('/api/org/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async updateOrgAgent(request: OrgAgentUpdatePayload): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>('/api/org/agent', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async deleteOrgAgent(projectId: string, id: string): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>('/api/org/agent', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, id }),
+    });
+  }
+
+  async createOrgTeam(request: OrgTeamPayload): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>('/api/org/team', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async updateOrgTeam(request: OrgTeamUpdatePayload): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>('/api/org/team', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  }
+
+  async deleteOrgTeam(projectId: string, id: string): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>('/api/org/team', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId, id }),
+    });
+  }
+
+  async updateOrgConfig(request: OrgConfigPayload): Promise<OrgSnapshot> {
+    return this.request<OrgSnapshot>('/api/org/config', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

@@ -24,6 +24,7 @@ from coworker.memory.memory_store import MemoryError, MemoryStore
 from coworker.memory.memory_discovery import MemoryScanner
 from coworker.memory.registry import MemoryRegistry
 from coworker.memory.transfer import apply_import, export_memory, preview_import
+from coworker.org import OrgError, OrgStore, OrgTeam, OrgAgent, default_org
 
 CHECKS: list[str] = []
 
@@ -248,6 +249,109 @@ def main() -> int:
         decisions2 = {f["rel"]: "overwrite" for f in preview2["files"]}
         applied2 = apply_import(mem_root, work_dir, preview2["token"], decisions2)
         check("apply overwrite", applied2["overwritten"] >= 1, str(applied2))
+
+    # --- org registry + team memory injection ------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "memory"
+        root.mkdir(parents=True)
+        org_store = OrgStore(root)
+
+        # default org + default_agent
+        org = default_org()
+        org.agents.append(OrgAgent(id="default_agent", name="default_agent", role="team lead"))
+        org_store.save("proj1", org)
+        check("org save/load round trip", org_store.load("proj1").agents[0].name == "default_agent")
+
+        # validation: duplicate agent rejected
+        try:
+            org2 = org_store.load("proj1")
+            org2.agents.append(OrgAgent(id="default_agent", name="x"))
+            org_store.save("proj1", org2)
+            check("org duplicate agent rejected", False)
+        except OrgError:
+            check("org duplicate agent rejected", True)
+
+        # add members + team; lead auto-assigned
+        org_store.upsert_agent("proj1", OrgAgent(id="coder", name="coder", role="developer"))
+        org_store.upsert_team("proj1", OrgTeam(id="backend", name="后端", lead="coder"))
+        org3 = org_store.load("proj1")
+        coder = next(a for a in org3.agents if a.id == "coder")
+        check("team lead auto-assigned", coder.team_id == "backend", coder.team_id)
+        check("team ancestors", org_store.team_ancestors(org3, "backend") == ["backend"])
+        check("agents depth root", org_store.agents_depth(org3, "coder") == 1)
+        check("roster lists active", any(m["id"] == "coder" and m["team"] == "后端" for m in org_store.roster(org3)))
+
+        # depth limit: chain deeper than max_depth rejected
+        org_store.upsert_agent("proj1", OrgAgent(id="a1", name="a1", parent="coder"))
+        try:
+            org_store.upsert_agent("proj1", OrgAgent(id="a2", name="a2", parent="a1"))
+            org_store.upsert_agent("proj1", OrgAgent(id="a3", name="a3", parent="a2"))
+            check("org depth limit rejected", False)
+        except OrgError:
+            check("org depth limit rejected", True)
+
+        # deletion constraints: cannot delete team lead / referenced parent
+        try:
+            org_store.remove_agent("proj1", "coder")
+            check("org delete lead rejected", False)
+        except OrgError:
+            check("org delete lead rejected", True)
+        try:
+            org_store.remove_team("proj1", "backend")
+            check("org delete non-empty team rejected", False)
+        except OrgError:
+            check("org delete non-empty team rejected", True)
+
+        # cycle detection via parent chain
+        try:
+            org4 = org_store.load("proj1")
+            org4.agents.append(OrgAgent(id="b1", name="b1", parent="b2"))
+            org4.agents.append(OrgAgent(id="b2", name="b2", parent="b1"))
+            org_store.save("proj1", org4)
+            check("org cycle rejected", False)
+        except OrgError:
+            check("org cycle rejected", True)
+
+        # team memory + injected() includes team + ancestor team files
+        registry = MemoryRegistry(tmp)
+        project_path = registry.ensure_project("proj1")
+        registry.ensure_agent(project_path, "coder")
+        team_dir = project_path / "teams" / "backend"
+        team_dir.mkdir(parents=True, exist_ok=True)
+        (team_dir / "GOALS.md").write_text("# GOALS\n\n加速交付\n", encoding="utf-8")
+        library = MemoryScanner(root).scan()
+        nodes = library.injected(project_dir="proj1", agent="coder", team_ids=["backend"])
+        rels = [n.rel for n in nodes]
+        check("team goals injected", "proj1/teams/backend/GOALS.md" in rels, str(rels))
+        nodes_no_team = library.injected(project_dir="proj1", agent="coder")
+        check("no team injection without team_ids", all("teams/" not in n.rel for n in nodes_no_team))
+
+        # discover exposes teams in project view
+        view = next(p for p in library.projects if p.name == "proj1")
+        check("discover exposes teams", len(view.teams) == 1 and view.teams[0].id == "backend", str(view.teams))
+        check("team goals scanned", view.teams[0].goals is not None and "加速交付" in (view.teams[0].goals.content or ""))
+
+        # migration: org missing but agent dirs exist -> backfilled via discover path
+        os2 = OrgStore(root)
+        check("org missing initially", not os2.exists("proj2"))
+        # simulate: create agent dir without org, then ensure migration helper
+        p2 = registry.ensure_project("proj2")
+        registry.ensure_agent(p2, "default_agent")
+        registry.ensure_agent(p2, "worker")
+        from coworker.memory.memory_manager import MemoryManager
+
+        mgr = MemoryManager(tmp, memory_dir=root, config=type("C", (), {"enabled": True, "char_limit": 100000, "auto_extract": False, "nudge_interval": 0, "extract_model": ""})())
+        mgr.org_store = os2
+        library2 = MemoryScanner(root).scan()
+        view2 = next(p for p in library2.projects if p.name == "proj2")
+        org5 = os2.load("proj2")
+        for aview in view2.agents:
+            if not any(a.id == aview.name for a in org5.agents):
+                org5.agents.append(OrgAgent(id=aview.name, name=aview.name, role="", parent="", team_id="", status="active"))
+        os2.save("proj2", org5)
+        migrated = os2.load("proj2")
+        ids = {a.id for a in migrated.agents}
+        check("migration backfills agent dirs", {"default_agent", "worker"} <= ids, str(ids))
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]

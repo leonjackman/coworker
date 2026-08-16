@@ -1,7 +1,7 @@
-import { Bot, CheckIcon, Hammer, ListChecks, Paperclip, Shield, ShieldCheck } from 'lucide-react';
+import { Bot, CheckIcon, Hammer, ListChecks, Paperclip, Shield, ShieldCheck, Users } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
-import type { ChatMessage, MessagePart, PartFileChange } from '../types';
+import type { ChatMessage, MessagePart, PartDelegate, PartFileChange } from '../types';
 import { ScrollArea } from './ui/scroll-area';
 import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
@@ -45,7 +45,33 @@ function groupParts(parts: MessagePart[]) {
   const planParts = parts.filter((p) => p.type === 'plan');
   const reasoningParts = parts.filter((p) => p.type === 'reasoning');
   const toolParts = parts.filter((p) => p.type === 'tool');
-  return { planParts, reasoningParts, toolParts };
+  const delegateParts = parts.filter((p) => p.type === 'delegate');
+  return { planParts, reasoningParts, toolParts, delegateParts };
+}
+
+function DelegateBlock({ delegate }: { delegate: PartDelegate }) {
+  const { from, to, task, status, parallel, chars, failed } = delegate;
+  const targets = Array.isArray(to) ? to : [to];
+  const label = parallel
+    ? `${from || ''} → ${targets.join(', ')}`
+    : `${from || ''} → ${targets[0] || ''}`;
+  return (
+    <div className={`delegate-block delegate-block--${status}`}>
+      <span className="delegate-block-icon"><Users size={14} /></span>
+      <div className="delegate-block-body">
+        <div className="delegate-block-title">
+          {label}
+          {status === 'running' && <span className="delegate-block-status">{t('chat.delegate_running')}</span>}
+          {status === 'done' && chars !== undefined && <span className="delegate-block-status">· {chars} chars</span>}
+          {status === 'error' && delegate.error && <span className="delegate-block-status">{delegate.error}</span>}
+        </div>
+        {task && <div className="delegate-block-task">{task}</div>}
+        {failed && failed.length > 0 && (
+          <div className="delegate-block-failed">{t('chat.delegate_failed')}: {failed.join(', ')}</div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 interface ToolGroupNode {
@@ -157,6 +183,8 @@ function OrderedParts({ parts, running, isError, isStopped }: { parts: MessagePa
       nodes.push(<ThinkingBlock key={`reasoning-${index}`} reasoningParts={[part]} working={running} />);
     } else if (part.type === 'plan') {
       nodes.push(<PlanBlock key={`plan-${index}`} planParts={[part]} working={running} />);
+    } else if (part.type === 'delegate') {
+      nodes.push(<DelegateBlock key={`delegate-${index}`} delegate={part} />);
     }
   });
   flushTools(`tools-end`);

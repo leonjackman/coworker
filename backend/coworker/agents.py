@@ -170,6 +170,37 @@ class RunCommandArgs(BaseModel):
 DEFAULT_AGENT_NAME = "default_agent"
 
 
+class DelegateTaskArgs(BaseModel):
+    agent: str = Field(description="The team member id to delegate to (see the roster in your context).")
+    task: str = Field(description="What you want that member to do, as a self-contained instruction.")
+    context: str = Field(default="", description="Optional relevant context (file paths, prior findings, constraints) to hand over.")
+
+
+class DelegateTaskItem(BaseModel):
+    agent: str = Field(description="The team member id to delegate to.")
+    task: str = Field(description="What you want that member to do.")
+    context: str = Field(default="", description="Optional relevant context.")
+
+
+class DelegateParallelArgs(BaseModel):
+    tasks: list[DelegateTaskItem] = Field(description="List of independent delegation tasks to run concurrently.")
+    max_concurrent: int = Field(default=3, ge=1, le=8, description="Concurrency cap.")
+
+
+class CreateTeamMemberArgs(BaseModel):
+    name: str = Field(description="New member id (lowercase, no spaces). This becomes their memory directory name.")
+    role: str = Field(description="Their role on the team, e.g. 'frontend developer'.")
+    description: str = Field(default="", description="One-line description of their responsibilities.")
+    superior: str = Field(default="", description="The member they report to. Leave empty to report to the user.")
+
+
+class CreateTeamArgs(BaseModel):
+    id: str = Field(description="New team id (lowercase, no spaces).")
+    name: str = Field(description="Display name for the team / department.")
+    lead: str = Field(default="", description="The team lead's agent id (must already be a member).")
+    parent_team_id: str = Field(default="", description="Optional parent team id for nested departments.")
+
+
 def _resolve_project_memory_dir(project_store: Any | None, workspace_root: str) -> str:
     """Resolve the memory_dir for a workspace root, or ``""`` if unknown.
 
@@ -445,6 +476,9 @@ def build_workspace_tools(
     skill_market_manager: Any | None = None,
     memory_store: Any | None = None,
     memory_rel: str = "",
+    delegator: Any | None = None,
+    caller_agent: str = "",
+    readonly: bool = False,
 ) -> list[Any]:
     from pathlib import Path as _Path
 
@@ -731,11 +765,70 @@ def build_workspace_tools(
             ensure_ascii=False,
         )
 
+    @tool(args_schema=DelegateTaskArgs)
+    def delegate_task(agent: str, task: str, context: str = "") -> str:
+        """Delegate a bounded task to another team member and get back their result.
+
+        Use when a task fits a teammate's role better (code review, research,
+        testing, a subsystem you don't own). The member runs independently with
+        their own memory and returns their final answer to you; you integrate
+        it and report to the user. Do NOT delegate work you should just do
+        yourself, and never delegate to yourself.
+        """
+        if delegator is None:
+            return "Team delegation is not available in this project (single-agent mode)."
+        return delegator.delegate(agent, task, context)
+
+    @tool(args_schema=DelegateParallelArgs)
+    def delegate_parallel(tasks: list[DelegateTaskItem], max_concurrent: int = 3) -> str:
+        """Delegate several independent tasks to different team members concurrently.
+
+        Each task runs in parallel and results come back as a JSON list of
+        ``{agent, ok, result|error}``. Use for fan-out work (e.g. review several
+        files at once). Do NOT use for dependent tasks.
+        """
+        if delegator is None:
+            return "Team delegation is not available in this project (single-agent mode)."
+        payload = [item.model_dump() if isinstance(item, DelegateTaskItem) else item for item in tasks]
+        return delegator.delegate_parallel(payload, max_concurrent)
+
+    @tool(args_schema=CreateTeamMemberArgs)
+    def create_team_member(name: str, role: str, description: str = "", superior: str = "") -> str:
+        """Create a new team member under the current project (team formation).
+
+        Use when the user asks you to build a team / add a colleague, or when
+        you need a specialist whose role you can't cover. The new member gets
+        their own identity + memory and appears in the project's team roster.
+        """
+        if delegator is None:
+            return "Team management is not available in this project (single-agent mode)."
+        return delegator.create_agent(name, role, description, superior)
+
+    @tool(args_schema=CreateTeamArgs)
+    def create_team(id: str, name: str, lead: str = "", parent_team_id: str = "") -> str:
+        """Create a new team/department to organize existing team members.
+
+        A team groups members under a shared name and shared team memory. Give
+        it a stable id (lowercase, no spaces) and a display name; optionally a
+        lead member and a parent team for nested departments.
+        """
+        if delegator is None:
+            return "Team management is not available in this project (single-agent mode)."
+        return delegator.create_team(id, name, lead, parent_team_id)
+
     tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
+    if readonly:
+        # Reviewer/auditor sub-agents get no workspace mutation tools.
+        tools = [search_files, read_file, git_status]
     if memory_store is not None and memory_rel:
         tools.append(memory)
     if session_store is not None:
         tools.append(read_session)
+    if delegator is not None:
+        tools.append(delegate_task)
+        tools.append(delegate_parallel)
+        tools.append(create_team_member)
+        tools.append(create_team)
     return tools
 
 
@@ -745,7 +838,7 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "load_skill", "git_status"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
-_EXEC_TOOLS = {"run_command", "install_skill"}
+_EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}
 
 
 def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
@@ -2235,7 +2328,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -2253,6 +2346,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.skill_manager = skill_manager
         self.memory_manager = memory_manager
         self.project_store = project_store
+        self.agent = agent or DEFAULT_AGENT_NAME
 
     @property
     def _memory(self) -> tuple[Any | None, Any | None, str]:
@@ -2260,10 +2354,10 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         if self.memory_manager is None or not getattr(self.memory_manager, "enabled", False):
             return None, None, ""
         project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
-        view = self.memory_manager.for_project(project_dir, DEFAULT_AGENT_NAME)
+        view = self.memory_manager.for_project(project_dir, self.agent)
         agent_rel = ""
         if project_dir:
-            agent_rel = f"{project_dir}/{DEFAULT_AGENT_NAME}/BASE/MEMORY.md"
+            agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
 
     def _nudge_memory(self, session_id: str) -> None:
@@ -2273,6 +2367,53 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 self.memory_manager.after_turn(session_id, workspace_root=self.workspace.root)
         except Exception:  # noqa: BLE001 - a memory hiccup must never break a turn
             logger.warning("memory nudge failed", exc_info=True)
+
+    def _build_delegator(self, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy):
+        """Return a team Delegator when the project org is multi-agent, else None."""
+        try:
+            from .delegation import Delegator
+
+            org_store = getattr(self.memory_manager, "org_store", None)
+            if org_store is None or not getattr(self.memory_manager, "enabled", False):
+                return None
+            project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
+            if not project_dir or not org_store.exists(project_dir):
+                return None
+            org = org_store.load(project_dir)
+            if getattr(org, "mode", "multi") != "multi":
+                return None
+            if not org_store.is_active(org, self.agent):
+                return None
+            return Delegator(
+                org_store=org_store,
+                memory_manager=self.memory_manager,
+                project_store=self.project_store,
+                workspace=self.workspace,
+                caller_agent=self.agent,
+                project_dir=project_dir,
+                language=language,
+                work_mode=work_mode,
+                autonomy=autonomy,
+                session_id=session_id,
+                provider_name=self.provider_name,
+                model_name=self.model_name,
+                llm=self.llm,
+                trace_store=self.trace_store,
+                approval_store=self.approval_store,
+                change_store=self.change_store,
+                session_store=self.session_store,
+                data_dir=self.data_dir,
+                mcp_session_manager=self.mcp_session_manager,
+                skill_manager=self.skill_manager,
+                emit=self._delegation_event,
+            )
+        except Exception:  # noqa: BLE001 - delegation must never break a turn
+            logger.warning("delegation disabled", exc_info=True)
+            return None
+
+    def _delegation_event(self, event: dict[str, Any]) -> None:
+        """Sink for delegation SSE frames (no-op in the sync path)."""
+        return
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -2294,6 +2435,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         turn_index = self._next_turn_index(session_id)
         self._nudge_memory(session_id)
         memory_view, memory_store, memory_rel = self._memory
+        delegator = self._build_delegator(session_id, language, work_mode, autonomy)
         graph = build_coworker_agent_graph(
             self.llm,
             build_workspace_tools(
@@ -2302,6 +2444,8 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 skill_manager=self.skill_manager,
                 memory_store=memory_store,
                 memory_rel=memory_rel,
+                delegator=delegator,
+                caller_agent=self.agent,
             ),
             work_mode=work_mode,
             language=language,
@@ -2351,7 +2495,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -2369,6 +2513,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.skill_manager = skill_manager
         self.memory_manager = memory_manager
         self.project_store = project_store
+        self.agent = agent or DEFAULT_AGENT_NAME
+        self._delegation_buffer: list[dict[str, Any]] = []
 
     @property
     def _memory(self) -> tuple[Any | None, Any | None, str]:
@@ -2376,10 +2522,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         if self.memory_manager is None or not getattr(self.memory_manager, "enabled", False):
             return None, None, ""
         project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
-        view = self.memory_manager.for_project(project_dir, DEFAULT_AGENT_NAME)
+        view = self.memory_manager.for_project(project_dir, self.agent)
         agent_rel = ""
         if project_dir:
-            agent_rel = f"{project_dir}/{DEFAULT_AGENT_NAME}/BASE/MEMORY.md"
+            agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
 
     def _nudge_memory(self, session_id: str) -> None:
@@ -2389,6 +2535,64 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 self.memory_manager.after_turn(session_id, workspace_root=self.workspace.root)
         except Exception:  # noqa: BLE001 - a memory hiccup must never break a turn
             logger.warning("memory nudge failed", exc_info=True)
+
+    def _build_delegator(self, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy):
+        """Return a team Delegator when the project org is multi-agent, else None."""
+        try:
+            from .delegation import Delegator
+
+            org_store = getattr(self.memory_manager, "org_store", None)
+            if org_store is None or not getattr(self.memory_manager, "enabled", False):
+                return None
+            project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
+            if not project_dir or not org_store.exists(project_dir):
+                return None
+            org = org_store.load(project_dir)
+            if getattr(org, "mode", "multi") != "multi":
+                return None
+            if not org_store.is_active(org, self.agent):
+                return None
+            return Delegator(
+                org_store=org_store,
+                memory_manager=self.memory_manager,
+                project_store=self.project_store,
+                workspace=self.workspace,
+                caller_agent=self.agent,
+                project_dir=project_dir,
+                language=language,
+                work_mode=work_mode,
+                autonomy=autonomy,
+                session_id=session_id,
+                provider_name=self.provider_name,
+                model_name=self.model_name,
+                llm=self.llm,
+                trace_store=self.trace_store,
+                approval_store=self.approval_store,
+                change_store=self.change_store,
+                session_store=self.session_store,
+                data_dir=self.data_dir,
+                mcp_session_manager=self.mcp_session_manager,
+                skill_manager=self.skill_manager,
+                emit=self._delegation_event,
+            )
+        except Exception:  # noqa: BLE001 - delegation must never break a turn
+            logger.warning("delegation disabled", exc_info=True)
+            return None
+
+    def _delegation_event(self, event: dict[str, Any]) -> None:
+        """Buffer a delegation SSE frame for the streaming loop to drain."""
+        try:
+            self._delegation_buffer.append(event)
+        except Exception:  # noqa: BLE001 - never break on buffer append
+            pass
+
+    def _drain_delegation_events(self) -> list[dict[str, Any]]:
+        try:
+            events = list(self._delegation_buffer)
+            self._delegation_buffer.clear()
+            return events
+        except Exception:  # noqa: BLE001
+            return []
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -2440,7 +2644,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             prepared_messages = prepare_agent_messages(messages)
         turn_index = self._next_turn_index(session_id)
         self._nudge_memory(session_id)
-        memory_view, memory_store = self._memory
+        memory_view, memory_store, memory_rel = self._memory
+        delegator = self._build_delegator(session_id, language, work_mode, autonomy)
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
@@ -2449,6 +2654,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     session_store=self.session_store, referenced_sessions=self.referenced_sessions,
                     skill_manager=self.skill_manager,
                     memory_store=memory_store,
+                    memory_rel=memory_rel,
+                    delegator=delegator,
+                    caller_agent=self.agent,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -2514,6 +2722,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         for node_update in chunk.values():
                             if isinstance(node_update, dict) and "todos" in node_update:
                                 yield {"type": "todos", "todos": node_update.get("todos") or []}
+                        # Drain any delegation SSE frames buffered by the delegate tools.
+                        for delegate_event in self._drain_delegation_events():
+                            yield delegate_event
                         if _cancel_event and _cancel_event.is_set():
                             raise asyncio.CancelledError("Goal cancelled mid-stream")
             except Exception as exc:
@@ -3166,27 +3377,27 @@ class AgentRuntimeRegistry:
     def _workspace_or_default(self, workspace: Workspace | None = None) -> Workspace:
         return workspace or self.default_workspace
 
-    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None) -> AgentRuntime:
+    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None) -> AgentRuntime:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
 
-    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None) -> AgentRuntime:
+    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None) -> AgentRuntime:
         if mode == "single":
-            return self._create_single_agent(provider_id, model, workspace, referenced_sessions)
+            return self._create_single_agent(provider_id, model, workspace, referenced_sessions, agent)
         raise RuntimeError(f"Unsupported agent mode: {mode}")
 
     def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.trace_store.list(limit)
 
-    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None) -> AgentStreamRuntime:
+    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None) -> AgentStreamRuntime:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if not provider and self.settings.agent_provider == "openai":
@@ -3196,7 +3407,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
@@ -3228,12 +3439,12 @@ class AgentRuntimeRegistry:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
-        return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions)
+        return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions, agent=str(context.get("agent") or "") or None)
 
     async def rerun_stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
         provider_id: str | None = None, model: str | None = None, referenced_sessions: set[str] | None = None,
-        workspace_path: str | None = None,
+        workspace_path: str | None = None, agent: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Reset the session checkpoint and re-run the agent from full history."""
         # The checkpoint delete touches SQLite; run it off the event loop so a
@@ -3247,6 +3458,7 @@ class AgentRuntimeRegistry:
             # would run against the DEFAULT workspace and write files in the
             # wrong place (compare resume_interrupt, which passes it).
             "workspace_path": workspace_path,
+            "agent": agent or "",
         }
         runtime = self._stream_runtime_from_context(context)
         async for event in runtime.stream_rerun(messages, session_id, language, work_mode, autonomy):

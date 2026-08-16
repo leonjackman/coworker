@@ -16,6 +16,7 @@ import {
   Search,
   Trash2,
   Upload,
+  Users,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
@@ -30,6 +31,7 @@ import type {
   MemoryNode,
   MemoryProjectView,
   MemorySearchResult,
+  MemoryTeamView,
 } from '../types';
 import { Button } from './ui/button';
 import { DetailModal } from './ui/detail-modal';
@@ -368,6 +370,9 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
         }
         for (const folder of project.folders) {
           options.push({ value: folder.rel, label: `${label} / ${folder.name}` });
+        }
+        for (const team of project.teams ?? []) {
+          options.push({ value: team.rel, label: `${label} / ${team.name} (部门)` });
         }
       }
     }
@@ -967,6 +972,17 @@ function ProjectBranch({
             onDelete={onDelete}
             onRename={onRename}
           />
+          {project.teams?.map((team) => (
+            <TeamBranch
+              key={team.rel}
+              team={team}
+              collapsed={collapsed}
+              toggle={toggle}
+              onOpen={onOpen}
+              onDelete={onDelete}
+              onRename={onRename}
+            />
+          ))}
           {project.folders.map((folder) => (
             <FolderBranch
               key={folder.rel}
@@ -1027,6 +1043,48 @@ function FolderBranch({
             <span className="memory-tree__placeholder">{t('memory.tree.empty')}</span>
           )}
           {folder.files.map((node) => (
+            <MemoryRow key={node.rel} node={node} onOpen={onOpen} onDelete={onDelete} onRename={onRename} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeamBranch({
+  team,
+  collapsed,
+  toggle,
+  onOpen,
+  onDelete,
+  onRename,
+}: {
+  team: MemoryTeamView;
+  collapsed: Record<string, boolean>;
+  toggle: (key: string) => void;
+  onOpen: (rel: string) => void;
+  onDelete: (rel: string) => void;
+  onRename: (rel: string) => void;
+}) {
+  const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
+  const teamKey = `p:${team.rel}:t`;
+  const teamFiles = [team.goals, team.context, team.memory].filter((node): node is MemoryNode => node !== null);
+  return (
+    <div className="memory-tree__section">
+      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(teamKey)}>
+        {isCollapsed(teamKey) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        <Users size={14} className="memory-tree__icon" />
+        <span className="memory-tree__label">{team.name}</span>
+      </button>
+      {!isCollapsed(teamKey) && (
+        <div className="memory-tree__children">
+          {teamFiles.length === 0 && (
+            <span className="memory-tree__placeholder">{t('memory.tree.empty')}</span>
+          )}
+          {teamFiles.map((node) => (
+            <MemoryRow key={node.rel} node={node} onOpen={onOpen} onDelete={onDelete} onRename={onRename} />
+          ))}
+          {team.files.map((node) => (
             <MemoryRow key={node.rel} node={node} onOpen={onOpen} onDelete={onDelete} onRename={onRename} />
           ))}
         </div>

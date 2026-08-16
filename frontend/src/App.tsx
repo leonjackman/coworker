@@ -24,7 +24,7 @@ import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib
 import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -849,6 +849,45 @@ function App() {
         const planPart = localParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
         if (planPart && event.content) {
           planPart.content = event.content;
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'delegate_start') {
+        const delegatePart: PartDelegate = {
+          type: 'delegate',
+          from: event.from || '',
+          to: event.to || '',
+          task: event.task,
+          status: 'running',
+          parallel: event.parallel,
+        };
+        localParts.push(delegatePart);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'delegate_progress') {
+        const delegatePart = localParts.find((p): p is Extract<MessagePart, { type: 'delegate' }> => p.type === 'delegate');
+        if (delegatePart) {
+          delegatePart.status = event.status === 'error' ? 'error' : delegatePart.status;
+          if (event.error) delegatePart.error = event.error;
+        }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'delegate_end') {
+        const delegatePart = localParts.find((p): p is Extract<MessagePart, { type: 'delegate' }> => p.type === 'delegate');
+        if (delegatePart) {
+          delegatePart.status = event.error ? 'error' : 'done';
+          delegatePart.chars = typeof event.chars === 'number' ? event.chars : delegatePart.chars;
+          delegatePart.failed = event.failed;
+          delegatePart.error = event.error;
         }
         setMessages((current) =>
           current.map((item) =>
@@ -2702,6 +2741,7 @@ function App() {
                   onMemorySettingsChange={changeMemorySettings}
                   modelOptions={modelOptions}
                   updateCenter={updateCenter}
+                  activeProjectId={currentProjectId}
                   onClose={() => setActiveView('chat')}
                 />
               )}

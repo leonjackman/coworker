@@ -135,6 +135,32 @@ class FolderView:
         }
 
 
+TEAMS_DIR = "teams"
+TEAM_FILES = ("GOALS.md", "CONTEXT.md", "MEMORY.md")
+
+
+@dataclass(frozen=True)
+class TeamView:
+    id: str
+    name: str
+    rel: str             # path relative to the memory root
+    goals: MemoryNode | None = None
+    context: MemoryNode | None = None
+    memory: MemoryNode | None = None
+    files: list[MemoryNode] = field(default_factory=list)  # other .md files in the team dir
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "rel": self.rel,
+            "goals": self.goals.to_dict() if self.goals else None,
+            "context": self.context.to_dict() if self.context else None,
+            "memory": self.memory.to_dict() if self.memory else None,
+            "files": [f.to_dict() for f in self.files],
+        }
+
+
 @dataclass(frozen=True)
 class ProjectView:
     name: str            # directory name = memory_dir
@@ -144,6 +170,7 @@ class ProjectView:
     project: list[MemoryNode] = field(default_factory=list)
     agents: list[AgentView] = field(default_factory=list)
     folders: list[FolderView] = field(default_factory=list)  # non-agent user folders
+    teams: list[TeamView] = field(default_factory=list)      # department (team) containers
 
     def to_dict(self) -> dict:
         return {
@@ -154,6 +181,7 @@ class ProjectView:
             "project": [p.to_dict() for p in self.project],
             "agents": [a.to_dict() for a in self.agents],
             "folders": [f.to_dict() for f in self.folders],
+            "teams": [t.to_dict() for t in self.teams],
         }
 
 
@@ -163,8 +191,13 @@ class MemoryLibrary:
     system: list[MemoryNode] = field(default_factory=list)
     projects: list[ProjectView] = field(default_factory=list)
 
-    def injected(self, *, project_dir: str | None = None, agent: str | None = None) -> list[MemoryNode]:
-        """Return nodes for injection: system + one project (+ agent) scoped."""
+    def injected(self, *, project_dir: str | None = None, agent: str | None = None, team_ids: list[str] | None = None) -> list[MemoryNode]:
+        """Return nodes for injection: system + one project (+ agent + team) scoped.
+
+        ``team_ids`` are the team containers (self + ancestors) whose shared
+        memory (GOALS/CONTEXT/MEMORY) is injected alongside the agent's own core
+        files. When omitted the legacy behavior is preserved (no team memory).
+        """
         nodes: list[MemoryNode] = list(self.system)
         if project_dir:
             view = next((p for p in self.projects if p.name == project_dir), None)
@@ -179,6 +212,13 @@ class MemoryLibrary:
                                 nodes.append(core)
                         nodes.extend(aview.base)
                         nodes.extend(aview.sessions)
+                for tid in team_ids or []:
+                    tview = next((t for t in view.teams if t.id == tid), None)
+                    if tview:
+                        for node in (tview.goals, tview.context, tview.memory):
+                            if node:
+                                nodes.append(node)
+                        nodes.extend(tview.files)
         return nodes
 
 
@@ -270,6 +310,9 @@ class MemoryScanner:
             for folder in view.folders:
                 for node in folder.files:
                     _consider(node, f"{label} / {folder.name}")
+            for tview in view.teams:
+                for node in [tview.goals, tview.context, tview.memory] + tview.files:
+                    _consider(node, f"{label} / team {tview.name}")
 
         hits.sort(key=lambda h: (-h["match_count"], h["rel"]))
         return hits[:limit]
@@ -299,8 +342,12 @@ class MemoryScanner:
 
         agents: list[AgentView] = []
         folders: list[FolderView] = []
+        teams: list[TeamView] = []
         for entry in sorted(project_dir.iterdir()):
             if entry.name == BASE_DIR or not entry.is_dir() or entry.name.startswith("."):
+                continue
+            if entry.name == TEAMS_DIR:
+                teams = self._scan_teams(entry)
                 continue
             if _looks_like_agent(entry):
                 agents.append(self._scan_agent(project_dir, entry, include_missing))
@@ -321,7 +368,44 @@ class MemoryScanner:
             project=project,
             agents=agents,
             folders=folders,
+            teams=teams,
         )
+
+    def _scan_teams(self, teams_dir: Path) -> list[TeamView]:
+        """Scan ``teams/<team_id>/`` containers into TeamView objects."""
+        views: list[TeamView] = []
+        if not teams_dir.is_dir():
+            return views
+        for entry in sorted(teams_dir.iterdir()):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            goals = context = memory = None
+            files: list[MemoryNode] = []
+            for f in sorted(entry.rglob("*")):
+                if not _is_memory_file(f):
+                    continue
+                rel = _rel(self.root, f)
+                node = self._read_node("folder_file", rel) or self._empty_node("folder_file", rel)
+                if f.name == "GOALS.md":
+                    goals = node
+                elif f.name == "CONTEXT.md":
+                    context = node
+                elif f.name == "MEMORY.md":
+                    memory = node
+                else:
+                    files.append(node)
+            views.append(
+                TeamView(
+                    id=entry.name,
+                    name=entry.name,
+                    rel=_rel(self.root, entry),
+                    goals=goals,
+                    context=context,
+                    memory=memory,
+                    files=files,
+                )
+            )
+        return views
 
     def _scan_folder(self, folder_dir: Path) -> list[MemoryNode]:
         """Recursively collect Markdown files under a non-agent user folder."""
