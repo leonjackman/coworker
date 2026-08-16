@@ -718,6 +718,7 @@
   "language.ru": "русский",
   "language.zh-HK": "粤语",
   "memory.tree.system": "系统记忆",
+  "memory.tree.projects_list": "项目列表",
   "memory.tree.project": "项目",
   "memory.tree.base": "BASE（用户维护）",
   "memory.tree.project_context": "PROJECT（系统维护）",
@@ -727,9 +728,5 @@
   "memory.tree.memory": "MEMORY.md",
   "memory.tree.sessions": "SESSIONS（会话记录）",
   "memory.tree.empty": "（空）",
-  "memory.tree.no_projects": "暂无项目记忆。创建项目并开始对话后会自动生成。",
-  "memory.migrate": "迁移旧记忆",
-  "memory.migrate_ok": "旧记忆已迁移到记忆库",
-  "memory.migrate_already": "旧记忆此前已迁移",
-  "memory.migrate_failed": "迁移失败，请查看日志"
+  "memory.tree.no_projects": "暂无项目记忆。创建项目并开始对话后会自动生成。"
 }

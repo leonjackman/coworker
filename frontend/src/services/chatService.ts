@@ -51,7 +51,6 @@ import type {
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
-  MemoryMigrateResponse,
   MemoryFileContentResponse,
   MemoryFileSaveResponse,
   MemorySettings,
@@ -171,7 +170,6 @@ export interface ChatService {
   getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
   saveMemoryFile: (rel: string, content: string) => Promise<MemoryFileSaveResponse>;
   deleteMemoryFile: (rel: string) => Promise<MemoryDeleteResponse>;
-  migrateMemory: () => Promise<MemoryMigrateResponse>;
   listMemoryProposals: () => Promise<MemoryProposalsResponse>;
   resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
   getMemorySettings: () => Promise<MemorySettings>;
@@ -412,11 +410,6 @@ class ElectronChatService implements ChatService {
   async deleteMemoryFile(rel: string): Promise<MemoryDeleteResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.deleteMemoryFile({ rel });
-  }
-
-  async migrateMemory(): Promise<MemoryMigrateResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.migrateMemory();
   }
 
   async listMemoryProposals(): Promise<MemoryProposalsResponse> {
@@ -1326,14 +1319,6 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rel }),
-    });
-  }
-
-  async migrateMemory(): Promise<MemoryMigrateResponse> {
-    return this.request<MemoryMigrateResponse>('/api/memory/migrate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
     });
   }
 

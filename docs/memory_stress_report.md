@@ -19,7 +19,7 @@
 | 15 | [O] 多项目压力 | 50 个项目 × 20 块 = 1000 块并发写入 | 通过 | 1000 blocks |
 | 16 | [P] MemoryManager scope | 项目级 scope 隔离验证 | 通过 | — |
 | 17 | [Q] MemoryManager 渲染 | 项目级完整渲染 | 通过 | — |
-| 18 | [HTTP] RESTful API | discover / file / read / write / delete / status / settings / proposals / migrate / register-agent | 通过 | — |
+| 18 | [HTTP] RESTful API | discover / file / read / write / delete / status / settings / proposals / register-agent | 通过 | — |
 | 19 | [HTTP] 200次写入 | HTTP API 连续写入 200 个块 | 通过 | 200 blocks |
 
 ## 进程内自测试

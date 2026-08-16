@@ -718,6 +718,7 @@
   "language.ru": "русский",
   "language.zh-HK": "粤语",
   "memory.tree.system": "시스템 메모리",
+  "memory.tree.projects_list": "프로젝트 목록",
   "memory.tree.project": "프로젝트",
   "memory.tree.base": "BASE (사용자 관리)",
   "memory.tree.project_context": "PROJECT (시스템 관리)",
@@ -727,9 +728,5 @@
   "memory.tree.memory": "MEMORY.md",
   "memory.tree.sessions": "SESSIONS (세션 로그)",
   "memory.tree.empty": "(비어 있음)",
-  "memory.tree.no_projects": "아직 프로젝트 메모리가 없습니다. 프로젝트 채팅을 시작하면 자동으로 생성됩니다.",
-  "memory.migrate": "이전 메모리 마이그레이션",
-  "memory.migrate_ok": "이전 메모리가 메모리 라이브러리로 마이그레이션되었습니다",
-  "memory.migrate_already": "이전 메모리는 이미 마이그레이션되었습니다",
-  "memory.migrate_failed": "마이그레이션 실패 — 로그를 확인하세요"
+  "memory.tree.no_projects": "아직 프로젝트 메모리가 없습니다. 프로젝트 채팅을 시작하면 자동으로 생성됩니다."
 }

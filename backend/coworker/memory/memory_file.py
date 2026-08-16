@@ -1,7 +1,7 @@
 """Memory file model: a plain Markdown file plus parsed block view.
 
 The memory library is directory-based; every file is a standalone Markdown
-document the user can open and edit in any editor. ``agent/MEMORY.md`` and
+document the user can open and edit in any editor. ``agent/BASE/MEMORY.md`` and
 ``SESSIONS/*.md`` carry *blocks* (paragraphs separated by blank lines) so the
 memory tool can add/replace/remove individual entries while the file stays
 human-readable Markdown.

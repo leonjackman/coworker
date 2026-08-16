@@ -8458,10 +8458,6 @@ body.bottom-panel-resizing {
   background: color-mix(in oklch, var(--material-border) 40%, transparent);
 }
 
-.memory-tree__node--static {
-  cursor: default;
-}
-
 .memory-tree__icon {
   flex-shrink: 0;
   color: var(--muted-foreground);

@@ -49,7 +49,6 @@ import type {
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
-  MemoryMigrateResponse,
   MemoryFileContentResponse,
   MemoryFileSaveResponse,
   MemorySettings,
@@ -138,7 +137,6 @@ declare global {
       getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
       saveMemoryFile: (payload: { rel: string; content: string }) => Promise<MemoryFileSaveResponse>;
       deleteMemoryFile: (payload: { rel: string }) => Promise<MemoryDeleteResponse>;
-      migrateMemory: () => Promise<MemoryMigrateResponse>;
       listMemoryProposals: () => Promise<MemoryProposalsResponse>;
       resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
       getMemorySettings: () => Promise<MemorySettings>;

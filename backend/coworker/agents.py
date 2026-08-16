@@ -2217,7 +2217,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         view = self.memory_manager.for_project(project_dir, DEFAULT_AGENT_NAME)
         agent_rel = ""
         if project_dir:
-            agent_rel = f"{project_dir}/{DEFAULT_AGENT_NAME}/MEMORY.md"
+            agent_rel = f"{project_dir}/{DEFAULT_AGENT_NAME}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
 
     def _nudge_memory(self, session_id: str) -> None:
@@ -2333,7 +2333,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         view = self.memory_manager.for_project(project_dir, DEFAULT_AGENT_NAME)
         agent_rel = ""
         if project_dir:
-            agent_rel = f"{project_dir}/{DEFAULT_AGENT_NAME}/MEMORY.md"
+            agent_rel = f"{project_dir}/{DEFAULT_AGENT_NAME}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
 
     def _nudge_memory(self, session_id: str) -> None:

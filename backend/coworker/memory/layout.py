@@ -13,7 +13,8 @@ directory tree (multi-agent capable):
     │   │   └── PROJECT/                     # system-generated project context
     │   │       ├── goals.md / context.md
     │   └── <agent>/                         # one dir per agent (auto-created)
-    │       ├── SOUL.md / AGENT.md / MEMORY.md
+    │       ├── BASE/                        # agent identity + long-term memory
+    │       │   └── SOUL.md / AGENT.md / MEMORY.md
     │       └── SESSIONS/*.md
 
 All files are plain Markdown (human-readable/editable). ``rel`` paths used by
@@ -35,6 +36,9 @@ SYSTEM_FILES = ("MEMORY.md", "USER.md", "AGENT.md")
 BASE_DIR = "BASE"
 PROJECT_SUBDIR = "PROJECT"
 SESSIONS_DIR = "SESSIONS"
+
+# Agent-level subdirectory holding the core files.
+AGENT_BASE_DIR = BASE_DIR
 
 # Agent core files, in injection precedence order.
 AGENT_CORE_FILES = ("SOUL.md", "AGENT.md", "MEMORY.md")

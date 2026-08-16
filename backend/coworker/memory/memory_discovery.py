@@ -15,9 +15,18 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
-from .layout import AGENT_CORE_FILES, BASE_DIR, PROJECT_SUBDIR, SESSIONS_DIR, SYSTEM_FILES
+from .layout import (
+    AGENT_BASE_DIR,
+    AGENT_CORE_FILES,
+    BASE_DIR,
+    PROJECT_SUBDIR,
+    SESSIONS_DIR,
+    SYSTEM_FILES,
+)
 from .memory_file import MemoryFile, load_file
+from .registry import normalize_agent_layout
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +91,7 @@ class AgentView:
 class ProjectView:
     name: str            # directory name = memory_dir
     rel: str
+    project_name: str = ""   # real project display name (resolved, "" = fall back to name)
     base: list[MemoryNode] = field(default_factory=list)
     project: list[MemoryNode] = field(default_factory=list)
     agents: list[AgentView] = field(default_factory=list)
@@ -90,6 +100,7 @@ class ProjectView:
         return {
             "name": self.name,
             "rel": self.rel,
+            "project_name": self.project_name or self.name,
             "base": [b.to_dict() for b in self.base],
             "project": [p.to_dict() for p in self.project],
             "agents": [a.to_dict() for a in self.agents],
@@ -123,8 +134,9 @@ class MemoryLibrary:
 class MemoryScanner:
     """Scan the memory library directory tree."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, project_name_resolver: Callable[[str], str] | None = None):
         self.root = Path(root).resolve()
+        self.project_name_resolver = project_name_resolver
 
     def scan(self, *, include_missing: bool = False) -> MemoryLibrary:
         """Discover system files, project dirs and agent dirs.
@@ -183,16 +195,19 @@ class MemoryScanner:
         return ProjectView(
             name=project_dir.name,
             rel=_rel(self.root, project_dir),
+            project_name=self.project_name_resolver(project_dir.name) if self.project_name_resolver else "",
             base=base,
             project=project,
             agents=agents,
         )
 
     def _scan_agent(self, project_dir: Path, agent_dir: Path, include_missing: bool) -> AgentView:
+        normalize_agent_layout(agent_dir)
         core: dict[str, MemoryNode | None] = {k: None for k in AGENT_CORE_FILES}
         sessions: list[MemoryNode] = []
+        core_dir = agent_dir / AGENT_BASE_DIR
         for name in AGENT_CORE_FILES:
-            rel = _rel(self.root, agent_dir / name)
+            rel = _rel(self.root, core_dir / name)
             node = self._read_node("agent_file", rel)
             if node is None and include_missing:
                 node = self._empty_node("agent_file", rel)

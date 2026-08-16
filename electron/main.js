@@ -1333,7 +1333,6 @@ ipcMain.handle('get-memory-file', (event, rel = '') =>
 );
 ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api/memory/file', 'POST', payload));
 ipcMain.handle('delete-memory-file', (event, payload = {}) => requestBackend('/api/memory/delete', 'POST', payload));
-ipcMain.handle('migrate-memory', () => requestBackend('/api/memory/migrate', 'POST', {}));
 ipcMain.handle('list-memory-proposals', () => requestBackend('/api/memory/proposals', 'GET'));
 ipcMain.handle('resolve-memory-proposal', (event, payload = {}) => requestBackend('/api/memory/proposals/resolve', 'POST', payload));
 ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings', 'GET'));

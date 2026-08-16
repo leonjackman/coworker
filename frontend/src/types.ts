@@ -853,6 +853,7 @@ export interface MemoryAgentView {
 export interface MemoryProjectView {
   name: string;
   rel: string;
+  project_name: string;
   base: MemoryNode[];
   project: MemoryNode[];
   agents: MemoryAgentView[];
@@ -928,15 +929,6 @@ export interface MemoryFileSaveResponse {
 export interface MemoryDeleteResponse {
   status: string;
   rel: string;
-}
-
-export interface MemoryMigrateResponse {
-  status: string;
-  migrated: boolean;
-  reason?: string;
-  migrated_files?: number;
-  errors?: string[];
-  backup?: string;
 }
 
 export interface MemorySettings {

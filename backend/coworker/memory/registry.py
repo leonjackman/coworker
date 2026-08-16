@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 
 from .layout import (
+    AGENT_BASE_DIR,
     AGENT_CORE_FILES,
     AGENT_SKELETON,
     BASE_DIR,
@@ -75,18 +76,48 @@ class MemoryRegistry:
         return project_dir / agent
 
     def ensure_agent(self, project_dir: Path, agent: str) -> Path:
-        """Create the agent dir with core files + SESSIONS/."""
+        """Create the agent dir with ``BASE/`` core files + ``SESSIONS/``."""
         with self._lock:
             agent_dir = self.agent_dir(project_dir, agent)
             agent_dir.mkdir(parents=True, exist_ok=True)
+            normalize_agent_layout(agent_dir)
+            base_dir = agent_dir / AGENT_BASE_DIR
+            base_dir.mkdir(parents=True, exist_ok=True)
             for name in AGENT_CORE_FILES:
-                path = agent_dir / name
+                path = base_dir / name
                 if not path.exists():
                     content = AGENT_SKELETON.get(name, f"# {name}\n")
                     _write_skeleton(path, content)
             sessions_dir = agent_dir / SESSIONS_DIR
             sessions_dir.mkdir(parents=True, exist_ok=True)
         return agent_dir
+
+
+def normalize_agent_layout(agent_dir: Path) -> None:
+    """Idempotently move legacy agent core files into ``agent/BASE/``.
+
+    Older layouts kept ``SOUL.md / AGENT.md / MEMORY.md`` at the agent root;
+    they now live under ``agent/BASE/``. Any ``.lock`` sibling (a stale lock
+    from a write on the old path) is moved along with its file so the store's
+    lock-cleaning invariant stays intact.
+    """
+    base_dir = agent_dir / AGENT_BASE_DIR
+    moved = False
+    for name in AGENT_CORE_FILES:
+        src = agent_dir / name
+        if not src.is_file():
+            continue
+        base_dir.mkdir(parents=True, exist_ok=True)
+        src.replace(base_dir / name)
+        moved = True
+        lock_src = agent_dir / f"{name}.lock"
+        if lock_src.is_file():
+            try:
+                lock_src.replace(base_dir / f"{name}.lock")
+            except OSError:  # pragma: no cover - defensive
+                lock_src.unlink(missing_ok=True)
+    if moved:
+        logger.info("normalized legacy agent layout: %s", agent_dir)
 
 
 def _write_skeleton(path: Path, content: str) -> None:

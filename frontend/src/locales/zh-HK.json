@@ -718,6 +718,7 @@
   "skills.loading": "載入緊…",
   "language.zh-HK": "粤语",
   "memory.tree.system": "系統記憶",
+  "memory.tree.projects_list": "項目列表",
   "memory.tree.project": "項目",
   "memory.tree.base": "BASE（使用者維護）",
   "memory.tree.project_context": "PROJECT（系統維護）",
@@ -727,9 +728,5 @@
   "memory.tree.memory": "MEMORY.md",
   "memory.tree.sessions": "SESSIONS（會話記錄）",
   "memory.tree.empty": "（空）",
-  "memory.tree.no_projects": "暫無項目記憶。建立項目並開始對話後會自動產生。",
-  "memory.migrate": "遷移舊記憶",
-  "memory.migrate_ok": "舊記憶已遷移至記憶庫",
-  "memory.migrate_already": "舊記憶此前已遷移",
-  "memory.migrate_failed": "遷移失敗，請查看日誌"
+  "memory.tree.no_projects": "暫無項目記憶。建立項目並開始對話後會自動產生。"
 }

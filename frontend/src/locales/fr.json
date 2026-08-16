@@ -718,6 +718,7 @@
   "update.version_unknown": "Inconnu",
   "todo.task_list": "Liste des tâches",
   "memory.tree.system": "Mémoire système",
+  "memory.tree.projects_list": "Projets",
   "memory.tree.project": "Projet",
   "memory.tree.base": "BASE (géré par l'utilisateur)",
   "memory.tree.project_context": "PROJECT (géré par le système)",
@@ -727,9 +728,5 @@
   "memory.tree.memory": "MEMORY.md",
   "memory.tree.sessions": "SESSIONS (journaux de session)",
   "memory.tree.empty": "(vide)",
-  "memory.tree.no_projects": "Aucune mémoire de projet pour l'instant. Elle est créée automatiquement lors d'un premier chat de projet.",
-  "memory.migrate": "Migrer l'ancienne mémoire",
-  "memory.migrate_ok": "Ancienne mémoire migrée vers la bibliothèque de mémoire",
-  "memory.migrate_already": "L'ancienne mémoire était déjà migrée",
-  "memory.migrate_failed": "Échec de la migration — consultez les journaux"
+  "memory.tree.no_projects": "Aucune mémoire de projet pour l'instant. Elle est créée automatiquement lors d'un premier chat de projet."
 }

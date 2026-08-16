@@ -6,7 +6,7 @@ shapes exist:
 
 - **Whole-file** writes (``write_file``) replace an entire Markdown file.
 - **Block** writes (``add_block`` / ``replace_block`` / ``remove_block``) edit
-  the individual paragraphs of ``agent/MEMORY.md`` / ``SESSIONS/*.md`` while
+  the individual paragraphs of ``agent/BASE/MEMORY.md`` / ``SESSIONS/*.md`` while
   keeping the file human-readable Markdown.
 
 The concurrency hardening from the original ``§``-delimited store is preserved:

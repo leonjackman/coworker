@@ -12,7 +12,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type {
@@ -88,7 +88,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const isCollapsed = (key: string): boolean => collapsed[key] ?? false;
+  const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
 
   const openEditor = async (rel: string) => {
     try {
@@ -123,22 +123,6 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
       await chatService.deleteMemoryFile(rel);
       notify('ok', t('memory.removed'));
       if (editingRel === rel) setEditingRel(null);
-      await load();
-    } catch (error) {
-      notify('error', translateError(error));
-    }
-  };
-
-  const migrate = async () => {
-    try {
-      const res = await chatService.migrateMemory();
-      if (res.migrated) {
-        notify('ok', t('memory.migrate_ok'));
-      } else if (res.reason === 'already_migrated') {
-        notify('ok', t('memory.migrate_already'));
-      } else {
-        notify('error', t('memory.migrate_failed'));
-      }
       await load();
     } catch (error) {
       notify('error', translateError(error));
@@ -226,10 +210,6 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
       <div className="memory-library__toolbar">
         <span className="memory-subheading">{t('memory.library_title')}</span>
         <div className="memory-library__actions">
-          <Button variant="outline" size="sm" onClick={() => void migrate()}>
-            <RefreshCw size={14} />
-            {t('memory.migrate')}
-          </Button>
           <Button variant="outline" size="sm" onClick={() => void load()}>
             {loading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
             {t('common.refresh')}
@@ -254,20 +234,28 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
             onDelete={deleteFile}
           />
 
-          {(library?.projects ?? []).map((project) => (
-            <ProjectBranch
-              key={project.rel}
-              project={project}
-              collapsed={isCollapsed(project.rel)}
-              onToggle={() => toggle(project.rel)}
-              onOpen={openEditor}
-              onDelete={deleteFile}
-            />
-          ))}
-
-          {(library?.projects ?? []).length === 0 && !loading && (
-            <div className="memory-tree__empty">{t('memory.tree.no_projects')}</div>
-          )}
+          <TreeSection
+            label={t('memory.tree.projects_list')}
+            relPrefix=""
+            nodes={[]}
+            collapsed={isCollapsed('projects')}
+            onToggle={() => toggle('projects')}
+            onOpen={openEditor}
+            onDelete={deleteFile}
+            childrenOverride={(library?.projects ?? []).map((project) => (
+              <ProjectBranch
+                key={project.rel}
+                project={project}
+                collapsed={collapsed}
+                toggle={toggle}
+                onOpen={openEditor}
+                onDelete={deleteFile}
+              />
+            ))}
+            emptyText={
+              (library?.projects ?? []).length === 0 ? t('memory.tree.no_projects') : undefined
+            }
+          />
         </div>
       )}
     </WorkspacePage>
@@ -284,6 +272,8 @@ function TreeSection({
   onToggle,
   onOpen,
   onDelete,
+  childrenOverride,
+  emptyText,
 }: {
   label: string;
   relPrefix: string;
@@ -292,7 +282,22 @@ function TreeSection({
   onToggle: () => void;
   onOpen: (rel: string) => void;
   onDelete: (rel: string) => void;
+  childrenOverride?: ReactNode | undefined;
+  emptyText?: string | undefined;
 }) {
+  const hasOverride = Array.isArray(childrenOverride)
+    ? childrenOverride.length > 0
+    : Boolean(childrenOverride);
+  const children = hasOverride ? childrenOverride : (
+    <>
+      {nodes.length === 0 && (
+        <span className="memory-tree__placeholder">{emptyText ?? t('memory.tree.empty')}</span>
+      )}
+      {nodes.map((node) => (
+        <MemoryRow key={node.rel} node={node} onOpen={onOpen} onDelete={onDelete} />
+      ))}
+    </>
+  );
   return (
     <div className="memory-tree__section">
       <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle}>
@@ -300,14 +305,7 @@ function TreeSection({
         <Folder size={14} className="memory-tree__icon" />
         <span className="memory-tree__label">{label}</span>
       </button>
-      {!collapsed && (
-        <div className="memory-tree__children">
-          {nodes.length === 0 && <span className="memory-tree__placeholder">{t('memory.tree.empty')}</span>}
-          {nodes.map((node) => (
-            <MemoryRow key={node.rel} node={node} onOpen={onOpen} onDelete={onDelete} />
-          ))}
-        </div>
-      )}
+      {!collapsed && <div className="memory-tree__children">{children}</div>}
     </div>
   );
 }
@@ -315,32 +313,39 @@ function TreeSection({
 function ProjectBranch({
   project,
   collapsed,
-  onToggle,
+  toggle,
   onOpen,
   onDelete,
 }: {
   project: MemoryProjectView;
-  collapsed: boolean;
-  onToggle: () => void;
+  collapsed: Record<string, boolean>;
+  toggle: (key: string) => void;
   onOpen: (rel: string) => void;
   onDelete: (rel: string) => void;
 }) {
+  const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
+  const baseKey = `p:${project.rel}:base`;
+  const projectKey = `p:${project.rel}:project`;
   return (
     <div className="memory-tree__section">
-      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle}>
-        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+      <button
+        type="button"
+        className="memory-tree__node memory-tree__node--dir"
+        onClick={() => toggle(`p:${project.rel}`)}
+      >
+        {isCollapsed(`p:${project.rel}`) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         <Folder size={14} className="memory-tree__icon" />
-        <span className="memory-tree__label">{t('memory.tree.project')}</span>
+        <span className="memory-tree__label">{project.project_name || project.name}</span>
         <span className="memory-tree__rel">{project.name}</span>
       </button>
-      {!collapsed && (
+      {!isCollapsed(`p:${project.rel}`) && (
         <div className="memory-tree__children">
           <TreeSection
             label={t('memory.tree.base')}
             relPrefix={project.rel}
             nodes={project.base}
-            collapsed={false}
-            onToggle={() => undefined}
+            collapsed={isCollapsed(baseKey)}
+            onToggle={() => toggle(baseKey)}
             onOpen={onOpen}
             onDelete={onDelete}
           />
@@ -348,8 +353,8 @@ function ProjectBranch({
             label={t('memory.tree.project_context')}
             relPrefix={`${project.rel}/BASE/PROJECT`}
             nodes={project.project}
-            collapsed={false}
-            onToggle={() => undefined}
+            collapsed={isCollapsed(projectKey)}
+            onToggle={() => toggle(projectKey)}
             onOpen={onOpen}
             onDelete={onDelete}
           />
@@ -357,7 +362,9 @@ function ProjectBranch({
             <AgentBranch
               key={agent.rel}
               agent={agent}
-              collapsed={false}
+              projectRel={project.rel}
+              collapsed={collapsed}
+              toggle={toggle}
               onOpen={onOpen}
               onDelete={onDelete}
             />
@@ -370,46 +377,56 @@ function ProjectBranch({
 
 function AgentBranch({
   agent,
+  projectRel,
   collapsed,
+  toggle,
   onOpen,
   onDelete,
 }: {
   agent: MemoryAgentView;
-  collapsed: boolean;
+  projectRel: string;
+  collapsed: Record<string, boolean>;
+  toggle: (key: string) => void;
   onOpen: (rel: string) => void;
   onDelete: (rel: string) => void;
 }) {
-  const core: Array<{ rel: string; node: MemoryNode | null; labelKey: string }> = [
-    { rel: agent.soul?.rel ?? '', node: agent.soul, labelKey: 'memory.tree.soul' },
-    { rel: agent.agent?.rel ?? '', node: agent.agent, labelKey: 'memory.tree.agent' },
-    { rel: agent.memory?.rel ?? '', node: agent.memory, labelKey: 'memory.tree.memory' },
-  ];
+  const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
+  const agentKey = `p:${projectRel}:a:${agent.name}`;
+  const baseKey = `${agentKey}:base`;
+  const sessionsKey = `${agentKey}:sessions`;
+
+  const core: Array<MemoryNode> = [agent.soul, agent.agent, agent.memory].filter(
+    (node): node is MemoryNode => Boolean(node),
+  );
   return (
     <div className="memory-tree__section">
-      <div className="memory-tree__node memory-tree__node--dir memory-tree__node--static">
-        <FolderOpen size={14} className="memory-tree__icon" />
-        <span className="memory-tree__label">{t('memory.tree.agent')}</span>
-        <span className="memory-tree__rel">{agent.name}</span>
-      </div>
-      <div className="memory-tree__children">
-        {core.map(
-          (entry) =>
-            entry.node && (
-              <MemoryRow key={entry.rel} node={entry.node} onOpen={onOpen} onDelete={onDelete} />
-            ),
-        )}
-        {agent.sessions.length > 0 && (
+      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={() => toggle(agentKey)}>
+        {isCollapsed(agentKey) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        <Folder size={14} className="memory-tree__icon" />
+        <span className="memory-tree__label">{agent.name}</span>
+      </button>
+      {!isCollapsed(agentKey) && (
+        <div className="memory-tree__children">
+          <TreeSection
+            label={t('memory.tree.base')}
+            relPrefix={agent.rel}
+            nodes={core}
+            collapsed={isCollapsed(baseKey)}
+            onToggle={() => toggle(baseKey)}
+            onOpen={onOpen}
+            onDelete={onDelete}
+          />
           <TreeSection
             label={t('memory.tree.sessions')}
             relPrefix={agent.rel}
             nodes={agent.sessions}
-            collapsed={false}
-            onToggle={() => undefined}
+            collapsed={isCollapsed(sessionsKey)}
+            onToggle={() => toggle(sessionsKey)}
             onOpen={onOpen}
             onDelete={onDelete}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -718,6 +718,7 @@
   "language.ru": "русский",
   "language.zh-HK": "粤语",
   "memory.tree.system": "System memory",
+  "memory.tree.projects_list": "Projects",
   "memory.tree.project": "Project",
   "memory.tree.base": "BASE (user-managed)",
   "memory.tree.project_context": "PROJECT (system-managed)",
@@ -727,9 +728,5 @@
   "memory.tree.memory": "MEMORY.md",
   "memory.tree.sessions": "SESSIONS (session logs)",
   "memory.tree.empty": "(empty)",
-  "memory.tree.no_projects": "No project memory yet. It is created automatically when you start a project chat.",
-  "memory.migrate": "Migrate legacy memory",
-  "memory.migrate_ok": "Legacy memory migrated to the memory library",
-  "memory.migrate_already": "Legacy memory was already migrated",
-  "memory.migrate_failed": "Migration failed — check the logs"
+  "memory.tree.no_projects": "No project memory yet. It is created automatically when you start a project chat."
 }

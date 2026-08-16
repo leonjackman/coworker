@@ -125,7 +125,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMemoryFile: (rel) => ipcRenderer.invoke('get-memory-file', rel || ''),
   saveMemoryFile: (payload) => ipcRenderer.invoke('save-memory-file', payload),
   deleteMemoryFile: (payload) => ipcRenderer.invoke('delete-memory-file', payload),
-  migrateMemory: () => ipcRenderer.invoke('migrate-memory'),
   listMemoryProposals: () => ipcRenderer.invoke('list-memory-proposals'),
   resolveMemoryProposal: (payload) => ipcRenderer.invoke('resolve-memory-proposal', payload),
   getMemorySettings: () => ipcRenderer.invoke('get-memory-settings'),

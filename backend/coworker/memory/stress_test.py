@@ -88,6 +88,15 @@ def random_text(n: int = 0) -> str:
     return "".join(random.choices(string.ascii_letters + " ", k=n))
 
 
+_RUN_TAG = f"{time.time():.0f}"
+
+
+def _unique(text: str) -> str:
+    """Suffix content with a per-run tag so HTTP tests never collide with
+    content persisted by a previous run against the same live library."""
+    return f"{text} [{_RUN_TAG}]"
+
+
 def _http(path: str, method: str = "GET", body: dict | None = None) -> dict:
     data = json.dumps(body or {}).encode() if body else None
     try:
@@ -149,9 +158,9 @@ def test_skeletons(tmp: Path):
     base_files = [f.name for f in (proj / BASE_DIR).iterdir() if f.is_file()]
     check("default BASE files", "BASE.md" in base_files, str(base_files))
     agent = registry.ensure_agent(proj, DEFAULT_AGENT)
-    check(f"agent SOUL.md", (agent / "SOUL.md").is_file())
-    check(f"agent AGENT.md", (agent / "AGENT.md").is_file())
-    check(f"agent MEMORY.md", (agent / "MEMORY.md").is_file())
+    check(f"agent SOUL.md", (agent / "BASE" / "SOUL.md").is_file())
+    check(f"agent AGENT.md", (agent / "BASE" / "AGENT.md").is_file())
+    check(f"agent MEMORY.md", (agent / "BASE" / "MEMORY.md").is_file())
     check("sessions dir", (agent / SESSIONS_DIR).is_dir())
 
 
@@ -166,8 +175,8 @@ def test_injection_order(tmp: Path):
     store.write_file("USER.md", "USR_MESS")
     store.write_file(f"{md}/BASE/project.md", "PRJ_MESS")
     store.write_file(f"{md}/BASE/PROJECT/context.md", "PXZ_MESS")
-    store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "AGT_MESS")
-    store.write_file(f"{md}/{DEFAULT_AGENT}/SOUL.md", "SOUL_MESS")
+    store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "AGT_MESS")
+    store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/SOUL.md", "SOUL_MESS")
     store.write_file(f"{md}/{DEFAULT_AGENT}/SESSIONS/s1.md", "SES_MESS")
     library = MemoryScanner(tmp / MEMORY_ROOT_NAME).scan()
     nodes = library.injected(project_dir=md, agent=DEFAULT_AGENT)
@@ -206,9 +215,9 @@ def test_project_isolation(tmp: Path):
     registry.ensure_root()
     store = MemoryStore(tmp / MEMORY_ROOT_NAME)
     store.write_file(f"{md1}/BASE/project.md", "fact in project alpha UNIQUE")
-    store.write_file(f"{md1}/{DEFAULT_AGENT}/MEMORY.md", "memo alpha UNIQUE")
+    store.write_file(f"{md1}/{DEFAULT_AGENT}/BASE/MEMORY.md", "memo alpha UNIQUE")
     store.write_file(f"{md2}/BASE/project.md", "fact in project beta UNIQUE")
-    store.write_file(f"{md2}/{DEFAULT_AGENT}/MEMORY.md", "memo beta UNIQUE")
+    store.write_file(f"{md2}/{DEFAULT_AGENT}/BASE/MEMORY.md", "memo beta UNIQUE")
     library = MemoryScanner(tmp / MEMORY_ROOT_NAME).scan()
     nodes_p1 = library.injected(project_dir=md1, agent=DEFAULT_AGENT)
     for n in nodes_p1:
@@ -227,8 +236,8 @@ def test_agent_isolation(tmp: Path):
     registry.ensure_agent(registry.project_dir(md), "coder")
     registry.ensure_agent(registry.project_dir(md), "reviewer")
     store = MemoryStore(tmp / MEMORY_ROOT_NAME)
-    store.add_block(f"{md}/coder/MEMORY.md", "coder fact UNIQUE")
-    store.add_block(f"{md}/reviewer/MEMORY.md", "reviewer fact UNIQUE")
+    store.add_block(f"{md}/coder/BASE/MEMORY.md", "coder fact UNIQUE")
+    store.add_block(f"{md}/reviewer/BASE/MEMORY.md", "reviewer fact UNIQUE")
     library = MemoryScanner(tmp / MEMORY_ROOT_NAME).scan()
     for n in library.injected(project_dir=md, agent="coder"):
         check("coder no reviewer", "reviewer fact" not in (n.content or ""))
@@ -242,21 +251,21 @@ def test_unicode_edge(tmp: Path):
     registry = MemoryRegistry(tmp)
     registry.ensure_project(md)
     store = MemoryStore(tmp / MEMORY_ROOT_NAME)
-    store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "中文记忆条目")
-    check("unicode add", "中文记忆条目" in store.read_raw(f"{md}/{DEFAULT_AGENT}/MEMORY.md"))
-    store.replace_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "中文", "中文修改后")
-    check("unicode replace", "中文修改后" in store.read_raw(f"{md}/{DEFAULT_AGENT}/MEMORY.md"))
-    store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "x" * 10000)
-    check("long block OK", store.read_raw(f"{md}/{DEFAULT_AGENT}/MEMORY.md").count("x") >= 9990)
-    store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "特殊字符 <script>x</script>")
-    check("special chars OK", "<script>" in store.read_raw(f"{md}/{DEFAULT_AGENT}/MEMORY.md"))
+    store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "中文记忆条目")
+    check("unicode add", "中文记忆条目" in store.read_raw(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"))
+    store.replace_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "中文", "中文修改后")
+    check("unicode replace", "中文修改后" in store.read_raw(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"))
+    store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "x" * 10000)
+    check("long block OK", store.read_raw(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md").count("x") >= 9990)
+    store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "特殊字符 <script>x</script>")
+    check("special chars OK", "<script>" in store.read_raw(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"))
     try:
-        store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "")
+        store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "")
         check("empty rejected", False, "no exc")
     except MemoryError:
         check("empty rejected", True)
     try:
-        store.replace_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "xyz_nonexistent_999999", "y")
+        store.replace_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "xyz_nonexistent_999999", "y")
         check("missing target rejected", False, "no exc")
     except MemoryError:
         check("missing target rejected", True)
@@ -268,7 +277,7 @@ def test_pressure_blocks(tmp: Path):
     registry = MemoryRegistry(tmp)
     registry.ensure_project(md)
     store = MemoryStore(tmp / MEMORY_ROOT_NAME)
-    rel = f"{md}/{DEFAULT_AGENT}/MEMORY.md"
+    rel = f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"
     t0 = time.time()
     for i in range(PRESSURE_BLOCK_COUNT):
         store.add_block(rel, f"fact #{i}: {random_text(20)}")
@@ -285,7 +294,7 @@ def test_over_budget(tmp: Path):
     registry = MemoryRegistry(tmp)
     registry.ensure_project(md)
     store = MemoryStore(tmp / MEMORY_ROOT_NAME)
-    rel = f"{md}/{DEFAULT_AGENT}/MEMORY.md"
+    rel = f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"
     for i in range(50):
         store.add_block(rel, "x" * 200 + f"_{i}")
     library = MemoryScanner(tmp / MEMORY_ROOT_NAME).scan()
@@ -302,7 +311,7 @@ def test_replace_remove(tmp: Path):
     registry = MemoryRegistry(tmp)
     registry.ensure_project(md)
     store = MemoryStore(tmp / MEMORY_ROOT_NAME)
-    rel = f"{md}/{DEFAULT_AGENT}/MEMORY.md"
+    rel = f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"
     store.add_block(rel, "first fact with alpha")
     store.add_block(rel, "second fact with beta")
     store.add_block(rel, "third fact with gamma")
@@ -369,9 +378,9 @@ def test_full_inject_order(tmp: Path):
     store.write_file(f"{md}/BASE/project.md", "BP_MESS")
     store.write_file(f"{md}/BASE/PROJECT/goals.md", "PG_MESS")
     store.write_file(f"{md}/BASE/PROJECT/context.md", "PC_MESS")
-    store.write_file(f"{md}/{DEFAULT_AGENT}/SOUL.md", "SOUL_MESS")
-    store.write_file(f"{md}/{DEFAULT_AGENT}/AGENT.md", "AG_MESS")
-    store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "MEM_MESS")
+    store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/SOUL.md", "SOUL_MESS")
+    store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/AGENT.md", "AG_MESS")
+    store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "MEM_MESS")
     store.write_file(f"{md}/{DEFAULT_AGENT}/SESSIONS/sess1.md", "SES_MESS")
     library = MemoryScanner(tmp / MEMORY_ROOT_NAME).scan()
     nodes = library.injected(project_dir=md, agent=DEFAULT_AGENT)
@@ -390,7 +399,7 @@ def test_block_merge(tmp: Path):
     registry = MemoryRegistry(tmp)
     registry.ensure_project(md)
     store = MemoryStore(tmp / MEMORY_ROOT_NAME)
-    rel = f"{md}/{DEFAULT_AGENT}/MEMORY.md"
+    rel = f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"
     store.add_block(rel, "alpha")
     store.add_block(rel, "beta")
     store.add_block(rel, "gamma")
@@ -417,7 +426,7 @@ def test_many_projects(tmp: Path):
         registry.ensure_project(md)
         created.append(md)
         for j in range(blk):
-            store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", f"fact {i}_{j}")
+            store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", f"fact {i}_{j}")
     library = MemoryScanner(tmp / MEMORY_ROOT_NAME).scan()
     # Filter: only projects we created
     ours = [p for p in library.projects if p.name.startswith(prefix)]
@@ -443,8 +452,8 @@ def test_memory_manager_scoping(tmp: Path):
     mgr.registry.ensure_root()
     mgr.registry.ensure_project(md1)
     mgr.registry.ensure_project(md2)
-    mgr.store.write_file(f"{md1}/{DEFAULT_AGENT}/MEMORY.md", "project alpha memory")
-    mgr.store.write_file(f"{md2}/{DEFAULT_AGENT}/MEMORY.md", "project beta memory")
+    mgr.store.write_file(f"{md1}/{DEFAULT_AGENT}/BASE/MEMORY.md", "project alpha memory")
+    mgr.store.write_file(f"{md2}/{DEFAULT_AGENT}/BASE/MEMORY.md", "project beta memory")
     mgr.store.write_file("MEMORY.md", "global system memory")
     mgr.store.write_file("USER.md", "user preferences")
     scoped = mgr.for_project(md1, DEFAULT_AGENT)
@@ -475,9 +484,9 @@ def test_full_inject_order_mm(tmp: Path):
     mgr.store.write_file(f"{md}/BASE/project.md", "BP_MESS")
     mgr.store.write_file(f"{md}/BASE/PROJECT/goals.md", "PG_MESS")
     mgr.store.write_file(f"{md}/BASE/PROJECT/context.md", "PC_MESS")
-    mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/SOUL.md", "SOUL_MESS")
-    mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/AGENT.md", "AG_MESS")
-    mgr.store.add_block(f"{md}/{DEFAULT_AGENT}/MEMORY.md", "MEM_MESS")
+    mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/SOUL.md", "SOUL_MESS")
+    mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/AGENT.md", "AG_MESS")
+    mgr.store.add_block(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "MEM_MESS")
     mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/SESSIONS/sess1.md", "SES_MESS")
     rendered = mgr.render_for(md, DEFAULT_AGENT)
     for kw in ["SYS_MESS", "USR_MESS", "BR_MESS", "BP_MESS", "PG_MESS", "PC_MESS", "SOUL_MESS", "AG_MESS", "MEM_MESS", "SES_MESS"]:
@@ -507,17 +516,14 @@ def test_http_api(url: str, project_id: str):
     r7 = _http("/api/memory/proposals")
     check("proposals", "proposals" in r7, str(r7.get("__error", "")))
 
-    r8 = _http("/api/memory/write", "POST", {"action": "add", "content": "API test fact", "project_id": project_id, "agent": "default_agent"})
+    r8 = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("API test fact"), "project_id": project_id, "agent": "default_agent"})
     check("write block", "blocks" in r8 or "error" in str(r8), str(r8.get("__error", r8)))
 
-    r9 = _http("/api/memory/migrate", "POST", {})
-    check("migrate idempotent", r9.get("migrated") is False, str(r9.get("reason")))
+    r9 = _http("/api/memory/register-agent", "POST", {"project_id": project_id, "agent": "stress_agent"})
+    check("register agent", r9.get("status") == "ok", str(r9.get("__error", "")))
 
-    r10 = _http("/api/memory/register-agent", "POST", {"project_id": project_id, "agent": "stress_agent"})
-    check("register agent", r10.get("status") == "ok", str(r10.get("__error", "")))
-
-    r11 = _http("/api/memory/write", "POST", {"action": "add", "content": "stress_agent wrote this", "project_id": project_id, "agent": "stress_agent"})
-    check("write to new agent", "blocks" in r11, str(r11.get("__error", r11)))
+    r10 = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("stress_agent wrote this"), "project_id": project_id, "agent": "stress_agent"})
+    check("write to new agent", "blocks" in r10, str(r10.get("__error", r10)))
 
 
 def test_http_pressure(url: str, project_id: str):
@@ -525,7 +531,7 @@ def test_http_pressure(url: str, project_id: str):
     _http("/api/memory/register-agent", "POST", {"project_id": project_id, "agent": "stress_agent_pressure"})
     count = 0
     for i in range(200):
-        r = _http("/api/memory/write", "POST", {"action": "add", "content": f"pressure fact {i}", "project_id": project_id, "agent": "stress_agent_pressure"})
+        r = _http("/api/memory/write", "POST", {"action": "add", "content": _unique(f"pressure fact {i}"), "project_id": project_id, "agent": "stress_agent_pressure"})
         if isinstance(r, dict) and "blocks" in r and "error" not in str(r):
             count += 1
     check("HTTP write count == 200", count == 200, f"got {count}")

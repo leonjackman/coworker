@@ -718,6 +718,7 @@
   "language.ja": "日本語",
   "language.zh-HK": "粤语",
   "memory.tree.system": "システムメモリ",
+  "memory.tree.projects_list": "プロジェクト一覧",
   "memory.tree.project": "プロジェクト",
   "memory.tree.base": "BASE（ユーザー管理）",
   "memory.tree.project_context": "PROJECT（システム管理）",
@@ -727,9 +728,5 @@
   "memory.tree.memory": "MEMORY.md",
   "memory.tree.sessions": "SESSIONS（セッションログ）",
   "memory.tree.empty": "（空）",
-  "memory.tree.no_projects": "プロジェクトメモリはまだありません。プロジェクトチャットを開始すると自動的に作成されます。",
-  "memory.migrate": "旧メモリを移行",
-  "memory.migrate_ok": "旧メモリをメモリライブラリへ移行しました",
-  "memory.migrate_already": "旧メモリは既に移行済みです",
-  "memory.migrate_failed": "移行に失敗しました — ログを確認してください"
+  "memory.tree.no_projects": "プロジェクトメモリはまだありません。プロジェクトチャットを開始すると自動的に作成されます。"
 }

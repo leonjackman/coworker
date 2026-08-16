@@ -5,8 +5,8 @@ Runs with the venv python directly (no pytest needed)::
     cd backend && ./venv/bin/python coworker/memory/selftest.py
 
 Covers layout path safety, registry skeletons, Markdown-block CRUD, discovery
-injection order, prompt budget warning, and the v1 → v2 migration. Exits
-non-zero on the first failure.
+injection order, and prompt budget warning. Exits non-zero on the first
+failure.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from coworker.memory.memory_prompt import format_memory_prompt
 from coworker.memory.memory_store import MemoryError, MemoryStore
 from coworker.memory.memory_discovery import MemoryScanner
 from coworker.memory.registry import MemoryRegistry
-from coworker.projects import ProjectStore
 
 CHECKS: list[str] = []
 
@@ -86,14 +85,14 @@ def main() -> int:
         )
         agent_path = registry.ensure_agent(project_path, "default_agent")
         for name in ("SOUL.md", "AGENT.md", "MEMORY.md"):
-            check(f"agent file {name}", (agent_path / name).is_file())
+            check(f"agent file {name}", (agent_path / "BASE" / name).is_file())
         check("SESSIONS dir", (agent_path / "SESSIONS").is_dir())
         check("registry idempotent", registry.ensure_root() == registry.ensure_root())
 
         store = MemoryStore(data_dir / "memory")
 
         # --- store block CRUD ------------------------------------------------
-        rel = "20260812100000/default_agent/MEMORY.md"
+        rel = "20260812100000/default_agent/BASE/MEMORY.md"
         check("write_file creates parent", store.write_file(rel, "# M\n").path.is_file())
         store.write_file(rel, "# M\n")
         added = store.add_block(rel, "port 9527 is the backend")
@@ -155,51 +154,6 @@ def main() -> int:
         store.add_block(rel, "z" * 5000)
         over = format_memory_prompt(library.injected(project_dir="20260812100000", agent="default_agent"), char_limit=100)
         check("budget warns but does not truncate", "<budget_warning>" in over)
-
-        # --- migration --------------------------------------------------------
-        home = Path(tmp) / "home"
-        (home / ".coworker").mkdir(parents=True)
-        (home / ".coworker" / "MEMORY.md").write_text(
-            "# Coworker 记忆\n\n语言偏好：中文\n§\n\n项目类型：全栈\n§\n",
-            encoding="utf-8",
-        )
-        ws = Path(tmp) / "ws"
-        (ws / ".coworker").mkdir(parents=True)
-        (ws / ".coworker" / "MEMORY.md").write_text(
-            "项目约束：必须测试\n§\n\n部署：本地\n",
-            encoding="utf-8",
-        )
-        ps = ProjectStore(data_dir / "projects.json")
-        project_rec = ps.create("demo", str(ws))
-        from coworker.memory.migrate_v1 import run_migration
-
-        result = run_migration(
-            data_dir=data_dir,
-            registry=registry,
-            project_store=ps,
-            memory_root=data_dir / "memory",
-            store=store,
-            old_user_path=home / ".coworker" / "MEMORY.md",
-        )
-        check("migration migrated", result.get("migrated") is True, str(result))
-        check("migration no errors", result.get("errors") == [], str(result))
-        check("migration backup marker", (data_dir / "memory" / ".migrate_backup" / "migrated.marker").is_file())
-        user_text = store.read_raw("USER.md")
-        check("user memory imported", "语言偏好：中文" in user_text and "项目类型：全栈" in user_text, user_text)
-        md = ps.memory_dir_for(project_rec.id)
-        proj_text = store.read_raw(f"{md}/default_agent/MEMORY.md")
-        check("project memory imported", "项目约束：必须测试" in proj_text and "部署：本地" in proj_text, proj_text)
-        check("old user file moved", not (home / ".coworker" / "MEMORY.md").exists())
-        check("old project file moved", not (ws / ".coworker" / "MEMORY.md").exists())
-        again = run_migration(
-            data_dir=data_dir,
-            registry=registry,
-            project_store=ps,
-            memory_root=data_dir / "memory",
-            store=store,
-            old_user_path=home / ".coworker" / "MEMORY.md",
-        )
-        check("migration idempotent", again.get("migrated") is False, str(again))
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]

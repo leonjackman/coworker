@@ -83,6 +83,15 @@ memory_manager = MemoryManager(
         extract_model=settings.memory_extract_model,
     ),
 )
+def _memory_project_name(memory_dir: str) -> str:
+    """Resolve a project memory_dir to its real display name."""
+    try:
+        return next((p.name for p in project_store.list_projects() if p.memory_dir == memory_dir), "")
+    except Exception:  # noqa: BLE001 - display-only, never break the scan
+        return ""
+
+
+memory_manager.scanner.project_name_resolver = _memory_project_name
 memory_proposal_store = MemoryProposalStore(settings.data_dir)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
 agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
@@ -817,7 +826,7 @@ async def memory_write(request: MemoryWriteRequest):
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    agent_rel = _ensure_agent_skeleton(project_dir, request.agent) + "/MEMORY.md"
+    agent_rel = _ensure_agent_skeleton(project_dir, request.agent) + "/BASE/MEMORY.md"
     store = memory_manager.store
     try:
         if request.action == "replace":
@@ -859,21 +868,6 @@ async def memory_register_agent(request: MemoryWriteRequest):
     return {"status": "ok", "agent_dir": agent_dir}
 
 
-@app.post("/api/memory/migrate")
-async def memory_migrate():
-    """Run the v1 → v2 memory migration (idempotent, backs up first)."""
-    from coworker.memory.migrate_v1 import run_migration
-
-    result = run_migration(
-        data_dir=settings.data_dir,
-        registry=memory_manager.registry,
-        project_store=project_store,
-        memory_root=memory_manager.root,
-        store=memory_manager.store,
-    )
-    return {"status": "ok", **result}
-
-
 @app.get("/api/memory/proposals")
 async def list_memory_proposals():
     return {"proposals": memory_proposal_store.list_pending()}
@@ -889,7 +883,7 @@ async def resolve_memory_proposal(request: MemoryProposalResolveRequest):
         agent = record.get("agent") or DEFAULT_AGENT
         try:
             if project_dir:
-                agent_rel = _ensure_agent_skeleton(project_dir, agent) + "/MEMORY.md"
+                agent_rel = _ensure_agent_skeleton(project_dir, agent) + "/BASE/MEMORY.md"
                 memory_manager.store.add_block(agent_rel, record.get("text", ""))
             else:
                 memory_manager.store.add_block("USER.md", record.get("text", ""))
