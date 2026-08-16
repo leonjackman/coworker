@@ -847,6 +847,7 @@ export interface MemoryAgentView {
   soul: MemoryNode | null;
   agent: MemoryNode | null;
   memory: MemoryNode | null;
+  base: MemoryNode[];
   sessions: MemoryNode[];
 }
 

@@ -127,6 +127,10 @@ def main() -> int:
         scanner = MemoryScanner(data_dir / "memory")
         library = scanner.scan(include_missing=True)
         check("system nodes found", len(library.system) == 3, str(len(library.system)))
+        store.write_file("team_playbook.md", "user root file\n")
+        library2 = scanner.scan(include_missing=False)
+        check("user root file discovered", any(n.name == "team_playbook.md" for n in library2.system))
+        check("root file injected", any(n.name == "team_playbook.md" for n in library2.injected()))
         check("project found", len(library.projects) == 1, str(len(library.projects)))
         project = library.projects[0]
         check("project BASE nodes", len(project.base) >= 1, str(len(project.base)))

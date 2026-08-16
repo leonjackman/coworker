@@ -74,6 +74,7 @@ class AgentView:
     soul: MemoryNode | None = None
     agent: MemoryNode | None = None
     memory: MemoryNode | None = None
+    base: list[MemoryNode] = field(default_factory=list)  # extra user files in BASE/
     sessions: list[MemoryNode] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -83,6 +84,7 @@ class AgentView:
             "soul": self.soul.to_dict() if self.soul else None,
             "agent": self.agent.to_dict() if self.agent else None,
             "memory": self.memory.to_dict() if self.memory else None,
+            "base": [b.to_dict() for b in self.base],
             "sessions": [s.to_dict() for s in self.sessions],
         }
 
@@ -127,6 +129,7 @@ class MemoryLibrary:
                         for core in (aview.soul, aview.agent, aview.memory):
                             if core:
                                 nodes.append(core)
+                        nodes.extend(aview.base)
                         nodes.extend(aview.sessions)
         return nodes
 
@@ -151,6 +154,17 @@ class MemoryScanner:
                 node = self._empty_node("system", name)
             if node is not None:
                 system.append(node)
+        if self.root.is_dir():
+            for entry in sorted(self.root.iterdir()):
+                if (
+                    not entry.is_file()
+                    or entry.name.startswith(".")
+                    or entry.name.endswith(".lock")
+                    or entry.name in SYSTEM_FILES
+                ):
+                    continue
+                rel = _rel(self.root, entry)
+                system.append(self._read_node("system", rel) or self._empty_node("system", rel))
 
         projects: list[ProjectView] = []
         if self.root.is_dir():
@@ -204,6 +218,7 @@ class MemoryScanner:
     def _scan_agent(self, project_dir: Path, agent_dir: Path, include_missing: bool) -> AgentView:
         normalize_agent_layout(agent_dir)
         core: dict[str, MemoryNode | None] = {k: None for k in AGENT_CORE_FILES}
+        base: list[MemoryNode] = []
         sessions: list[MemoryNode] = []
         core_dir = agent_dir / AGENT_BASE_DIR
         for name in AGENT_CORE_FILES:
@@ -212,6 +227,12 @@ class MemoryScanner:
             if node is None and include_missing:
                 node = self._empty_node("agent_file", rel)
             core[name] = node
+        if core_dir.is_dir():
+            for entry in sorted(core_dir.iterdir()):
+                if not entry.is_file() or entry.name.endswith(".lock") or entry.name in AGENT_CORE_FILES:
+                    continue
+                rel = _rel(self.root, entry)
+                base.append(self._read_node("agent_file", rel) or self._empty_node("agent_file", rel))
         sessions_dir = agent_dir / SESSIONS_DIR
         if sessions_dir.is_dir():
             for entry in sorted(sessions_dir.iterdir()):
@@ -226,6 +247,7 @@ class MemoryScanner:
             soul=core["SOUL.md"],
             agent=core["AGENT.md"],
             memory=core["MEMORY.md"],
+            base=base,
             sessions=sessions,
         )
 

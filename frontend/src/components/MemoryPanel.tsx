@@ -3,16 +3,18 @@ import {
   ChevronDown,
   ChevronRight,
   Edit3,
+  FilePlus,
   FileText,
   Folder,
   FolderOpen,
   Loader2,
+  Plus,
   RefreshCw,
   Save,
   Trash2,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type {
@@ -23,6 +25,7 @@ import type {
   MemoryProjectView,
 } from '../types';
 import { Button } from './ui/button';
+import { DetailModal } from './ui/detail-modal';
 import { WorkspacePage } from './ui/workspace-page';
 
 interface MemoryPanelProps {
@@ -51,6 +54,13 @@ function blockCount(text: string): number {
     .filter(Boolean).length;
 }
 
+function sanitizeFileName(name: string): string {
+  let clean = name.replace(/[/\\]+/g, '_').replace(/\.{2,}/g, '_').trim();
+  if (!clean) return '';
+  if (!clean.includes('.')) clean += '.md';
+  return clean;
+}
+
 export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   const [library, setLibrary] = useState<MemoryDiscoverResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,6 +70,12 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [flash, setFlash] = useState<Flash>(null);
+  const [addingTo, setAddingTo] = useState<string | null>(null);
+  const [addExpandKey, setAddExpandKey] = useState('');
+  const [addName, setAddName] = useState('');
+  const [addContent, setAddContent] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const canReveal = typeof window !== 'undefined' && Boolean((window as { electronAPI?: unknown }).electronAPI);
 
@@ -126,6 +142,46 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
       await load();
     } catch (error) {
       notify('error', translateError(error));
+    }
+  };
+
+  const startAdd = (folderRel: string, expandKey: string) => {
+    setAddingTo(folderRel);
+    setAddExpandKey(expandKey);
+    setAddName('');
+    setAddContent('');
+  };
+
+  const onImportFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setAddContent(String(reader.result ?? ''));
+      setAddName((prev) => (prev.trim() ? prev : file.name));
+    };
+    reader.readAsText(file);
+  };
+
+  const addFile = async () => {
+    if (addingTo === null) return;
+    const name = sanitizeFileName(addName);
+    if (!name) return;
+    const rel = addingTo ? `${addingTo}/${name}` : name;
+    setAddBusy(true);
+    try {
+      await chatService.saveMemoryFile(rel, addContent);
+      notify('ok', t('memory.file_added'));
+      setCollapsed((prev) => ({ ...prev, [addExpandKey]: false }));
+      setAddingTo(null);
+      setAddName('');
+      setAddContent('');
+      await load();
+    } catch (error) {
+      notify('error', translateError(error));
+    } finally {
+      setAddBusy(false);
     }
   };
 
@@ -220,10 +276,6 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
         </div>
       )}
 
-      <div className="memory-library__toolbar">
-        <span className="memory-subheading">{t('memory.library_title')}</span>
-      </div>
-
       {loading && !library ? (
         <div className="memory-loading">
           <Loader2 className="animate-spin" size={18} />
@@ -239,6 +291,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
             onToggle={() => toggle('system')}
             onOpen={openEditor}
             onDelete={deleteFile}
+            onAdd={() => startAdd('', 'system')}
           />
 
           <TreeSection
@@ -249,7 +302,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
             onToggle={() => toggle('projects')}
             onOpen={openEditor}
             onDelete={deleteFile}
-            childrenOverride={(library?.projects ?? []).map((project) => (
+childrenOverride={(library?.projects ?? []).map((project) => (
               <ProjectBranch
                 key={project.rel}
                 project={project}
@@ -257,6 +310,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
                 toggle={toggle}
                 onOpen={openEditor}
                 onDelete={deleteFile}
+                onAddBase={startAdd}
               />
             ))}
             emptyText={
@@ -265,6 +319,66 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
           />
         </div>
       )}
+
+      <DetailModal
+        open={addingTo !== null}
+        onClose={() => setAddingTo(null)}
+        icon={<Plus size={18} />}
+        title={t('memory.add_file_title')}
+        subtitle={addingTo ? addingTo : '/'}
+        footer={(
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setAddingTo(null)}>
+              {t('dialog.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={addBusy || !sanitizeFileName(addName)}
+              onClick={() => void addFile()}
+            >
+              {addBusy ? <Loader2 className="animate-spin" size={14} /> : <Plus size={14} />}
+              {t('memory.add_confirm')}
+            </Button>
+          </>
+        )}
+      >
+        <div className="memory-add">
+          <input
+            className="memory-add__name"
+            placeholder={t('memory.add_name_placeholder')}
+            value={addName}
+            onChange={(e) => setAddName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && sanitizeFileName(addName) && !addBusy) void addFile();
+            }}
+            spellCheck={false}
+            autoFocus
+            aria-label={t('memory.add_name_placeholder')}
+          />
+          <textarea
+            className="memory-add__content"
+            placeholder={t('memory.add_content_placeholder')}
+            value={addContent}
+            onChange={(e) => setAddContent(e.target.value)}
+            spellCheck={false}
+            aria-label={t('memory.add_content_placeholder')}
+          />
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".md,.markdown,.txt,.text"
+            className="memory-add__file-input"
+            onChange={onImportFile}
+          />
+          <div className="memory-add__actions">
+            <Button variant="outline" size="sm" onClick={() => importInputRef.current?.click()}>
+              <FilePlus size={14} />
+              {t('memory.add_import')}
+            </Button>
+          </div>
+        </div>
+      </DetailModal>
     </WorkspacePage>
   );
 }
@@ -279,6 +393,7 @@ function TreeSection({
   onToggle,
   onOpen,
   onDelete,
+  onAdd,
   childrenOverride,
   emptyText,
 }: {
@@ -289,6 +404,7 @@ function TreeSection({
   onToggle: () => void;
   onOpen: (rel: string) => void;
   onDelete: (rel: string) => void;
+  onAdd?: (() => void) | undefined;
   childrenOverride?: ReactNode | undefined;
   emptyText?: string | undefined;
 }) {
@@ -307,11 +423,24 @@ function TreeSection({
   );
   return (
     <div className="memory-tree__section">
-      <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle}>
-        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        <Folder size={14} className="memory-tree__icon" />
-        <span className="memory-tree__label">{label}</span>
-      </button>
+      <div className="memory-tree__dir">
+        <button type="button" className="memory-tree__node memory-tree__node--dir" onClick={onToggle}>
+          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+          <Folder size={14} className="memory-tree__icon" />
+          <span className="memory-tree__label">{label}</span>
+        </button>
+        {onAdd && (
+          <button
+            type="button"
+            className="memory-tree__add"
+            aria-label={t('memory.add_file')}
+            title={t('memory.add_file')}
+            onClick={onAdd}
+          >
+            <Plus size={14} />
+          </button>
+        )}
+      </div>
       {!collapsed && <div className="memory-tree__children">{children}</div>}
     </div>
   );
@@ -323,12 +452,14 @@ function ProjectBranch({
   toggle,
   onOpen,
   onDelete,
+  onAddBase,
 }: {
   project: MemoryProjectView;
   collapsed: Record<string, boolean>;
   toggle: (key: string) => void;
   onOpen: (rel: string) => void;
   onDelete: (rel: string) => void;
+  onAddBase: (folderRel: string, expandKey: string) => void;
 }) {
   const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
   const baseKey = `p:${project.rel}:base`;
@@ -355,6 +486,7 @@ function ProjectBranch({
             onToggle={() => toggle(baseKey)}
             onOpen={onOpen}
             onDelete={onDelete}
+            onAdd={() => onAddBase(`${project.rel}/BASE`, baseKey)}
           />
           <TreeSection
             label={t('memory.tree.project_context')}
@@ -374,6 +506,7 @@ function ProjectBranch({
               toggle={toggle}
               onOpen={onOpen}
               onDelete={onDelete}
+              onAddBase={onAddBase}
             />
           ))}
         </div>
@@ -389,6 +522,7 @@ function AgentBranch({
   toggle,
   onOpen,
   onDelete,
+  onAddBase,
 }: {
   agent: MemoryAgentView;
   projectRel: string;
@@ -396,6 +530,7 @@ function AgentBranch({
   toggle: (key: string) => void;
   onOpen: (rel: string) => void;
   onDelete: (rel: string) => void;
+  onAddBase: (folderRel: string, expandKey: string) => void;
 }) {
   const isCollapsed = (key: string): boolean => collapsed[key] ?? true;
   const agentKey = `p:${projectRel}:a:${agent.name}`;
@@ -417,11 +552,12 @@ function AgentBranch({
           <TreeSection
             label={t('memory.tree.base')}
             relPrefix={agent.rel}
-            nodes={core}
+            nodes={[...core, ...agent.base]}
             collapsed={isCollapsed(baseKey)}
             onToggle={() => toggle(baseKey)}
             onOpen={onOpen}
             onDelete={onDelete}
+            onAdd={() => onAddBase(`${agent.rel}/BASE`, baseKey)}
           />
           <TreeSection
             label={t('memory.tree.sessions')}

@@ -815,7 +815,8 @@ body.sidebar-resizing {
 .workspace-shell--providers,
 .workspace-shell--mcp,
 .workspace-shell--settings,
-.workspace-shell--skills {
+.workspace-shell--skills,
+.workspace-shell--memory {
   overflow-y: auto;
 }
 
@@ -8522,6 +8523,87 @@ body.bottom-panel-resizing {
 .memory-tree__delete:hover {
   background: color-mix(in oklch, var(--destructive) 15%, transparent);
   color: var(--destructive);
+}
+
+.memory-tree__dir {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.memory-tree__dir .memory-tree__node--dir {
+  width: auto;
+  flex: 1;
+}
+
+.memory-tree__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-right: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.memory-tree__dir:hover .memory-tree__add,
+.memory-tree__add:focus-visible {
+  opacity: 1;
+}
+
+.memory-tree__add:hover {
+  background: color-mix(in oklch, var(--material-border) 50%, transparent);
+  color: var(--foreground);
+}
+
+.memory-add {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-add__name {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.memory-add__content {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.memory-add__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.memory-add__file-input {
+  display: none;
 }
 
 
