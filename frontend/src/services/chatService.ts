@@ -911,7 +911,7 @@ class HttpChatService implements ChatService {
     return this.request<SessionResponse>('/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: request.title || '', project_id: request.project_id }),
+      body: JSON.stringify({ title: request.title || '', project_id: request.project_id, agent_id: request.agent_id || '' }),
     });
   }
 

@@ -13,6 +13,7 @@ import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
 import { NewChatHero } from './components/NewChatHero';
 import { SettingsView } from './components/settings/SettingsView';
+import { OrgSettingsPage } from './components/settings/OrgSettingsPage';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
@@ -180,6 +181,8 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
   const [draftMode, setDraftMode] = useState(false);
+  const [draftAgentId, setDraftAgentId] = useState<string>('default_agent');
+  const [orgProjectId, setOrgProjectId] = useState<string | undefined>();
   // useLanguage() 订阅语言变化以触发重渲染（返回值不直接使用）。
   useLanguage();
   const updateCenter = useUpdateCenter();
@@ -640,7 +643,7 @@ function App() {
     // 首次发消息：先创建 session，防止 agent 已开始但前端不知 session_id 导致对话丢失
     if (requestProjectId && !sessionIdRef.current) {
       try {
-        const sessionResp = await chatService.createSession({ project_id: requestProjectId });
+        const sessionResp = await chatService.createSession({ project_id: requestProjectId, agent_id: draftAgentId });
         const newSession = sessionResp.session;
         if (newSession) {
           sessionIdRef.current = newSession.id;
@@ -1071,6 +1074,7 @@ function App() {
           ...(requestReferences.length > 0 ? { referenced_sessions: requestReferences.map((reference) => reference.id) } : {}),
           ...(requestSessionId ? { session_id: requestSessionId } : {}),
           ...(requestProjectId ? { project_id: requestProjectId } : {}),
+          ...(draftAgentId ? { agent: draftAgentId } : {}),
           user_message_id: userMessageId,
           assistant_message_id: assistantMessageId,
           ...(override?.goalMode ? { goal_mode: true, goal_text: override.goalText || message } : {}),
@@ -1837,7 +1841,7 @@ function App() {
     void resolvePendingRequest(request, { type: 'reject' });
   };
 
-  const startProjectDraft = (projectId?: string, firstMessage = '') => {
+  const startProjectDraft = (projectId?: string, firstMessage = '', agentId?: string) => {
     // 新开对话不中止任何会话的流：并行任务各自在后台继续跑（真·多进程互不干扰）。
     // 消息数组保留所有会话的消息，hero/草稿视图按 sessionId 过滤隐藏，切回即可见。
     requestSeqRef.current += 1;
@@ -1849,6 +1853,7 @@ function App() {
     sessionIdRef.current = undefined;
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
+    setDraftAgentId(agentId ?? 'default_agent');
     // 新开对话属于新的空会话：清掉上一会话残留的 goal 卡片，避免它串到新会话显示。
     setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
     goalSessionIdRef.current = undefined;
@@ -1857,8 +1862,8 @@ function App() {
 
   // 新对话：不再弹窗。在项目内新建则继承该项目 workspace；
   // 全局新建则进入空态，由 composer 顶部的 workspace 选择器指定。
-  const startNewChat = (projectId?: string) => {
-    startProjectDraft(projectId);
+  const startNewChat = (projectId?: string, agentId?: string) => {
+    startProjectDraft(projectId, '', agentId);
     setDraftMode(true);
     setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
   };
@@ -1874,6 +1879,12 @@ function App() {
   const openProject = (projectId: string) => {
     startProjectDraft(projectId);
     setDraftMode(false);
+  };
+
+  const openOrgSettings = (projectId: string) => {
+    setOrgProjectId(projectId);
+    setDraftMode(false);
+    setActiveView('org');
   };
 
   const pickWorkspaceDirectory = async () => {
@@ -1951,6 +1962,8 @@ function App() {
     // 只切换当前视图，各会话的流由 per-session 的 controller 独立管理。
     setActiveView('chat');
     setDraftMode(false);
+    // 已存在的会话自带 agent 归属，草稿 agent 选择器不再适用
+    setDraftAgentId('');
     // 保存当前 sessionId，供 fetch 失败时回滚。
     const prevSessionId = sessionIdRef.current;
     try {
@@ -2473,6 +2486,8 @@ function App() {
     name: project.name,
     path: project.workspace_path,
   }));
+  const agentOptions = activeProject?.roster ?? [];
+  const orgProjectName = orgProjectId ? projects.find((p) => p.id === orgProjectId)?.name : undefined;
   const currentSessionPending = sessionId
     ? pendingRequests.filter((item) => item.session_id === sessionId)
     : [];
@@ -2603,7 +2618,8 @@ function App() {
           onCreateProject={createProject}
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
-          {...(goal.goalText && !goal.done ? { goalIndicatorSessionId: sessionId } : {})}
+          onOpenOrgSettings={openOrgSettings}
+          {...(goal.goalText && !goal.done && sessionId ? { goalIndicatorSessionId: sessionId } : {})}
           runningSessionIds={runningSessionIds}
         />
         <section className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
@@ -2633,6 +2649,7 @@ function App() {
                       onNewChat={startNewChat}
                       onOpenSession={openSession}
                       onDeleteSession={deleteSession}
+                      onOpenOrgSettings={openOrgSettings}
                     />
                   ) : (
                     <>
@@ -2706,6 +2723,9 @@ function App() {
                         {...(currentProjectId ? { activeWorkspaceId: currentProjectId } : {})}
                         onSelectWorkspace={selectDraftWorkspace}
                         onCreateWorkspace={createProject}
+                        agentOptions={agentOptions}
+                        {...(draftAgentId ? { activeAgentId: draftAgentId } : {})}
+                        onSelectAgent={setDraftAgentId}
                         skills={skillEntries}
                         onOpenCommands={refreshSkills}
                       />
@@ -2727,6 +2747,12 @@ function App() {
                 />
               ) : activeView === 'memory' ? (
                 <MemoryPanel projectId={currentProjectId} />
+              ) : activeView === 'org' && orgProjectId ? (
+                <OrgSettingsPage
+                  projectId={orgProjectId}
+                  {...(orgProjectName ? { projectName: orgProjectName } : {})}
+                  onBack={() => setActiveView('chat')}
+                />
               ) : (
                 <SettingsView
                   themeSettings={themeSettings}
@@ -2741,7 +2767,6 @@ function App() {
                   onMemorySettingsChange={changeMemorySettings}
                   modelOptions={modelOptions}
                   updateCenter={updateCenter}
-                  activeProjectId={currentProjectId}
                   onClose={() => setActiveView('chat')}
                 />
               )}

@@ -798,5 +798,12 @@
   "settings.org_no_project": "먼저 프로젝트를 선택하세요",
   "settings.org_empty": "팀 데이터가 없습니다",
   "chat.delegate_running": "위임 중…",
-  "chat.delegate_failed": "위임 실패"
+  "chat.delegate_failed": "위임 실패",
+  "sidebar.agent_sessions_count": "세션 {count}개",
+  "sidebar.agent_empty": "이 에이전트의 세션이 없습니다",
+  "sidebar.org_team_manage": "에이전트 팀",
+  "chat.agent_pick": "에이전트",
+  "settings.org_rename": "이름 변경",
+  "settings.org_rename_placeholder": "새 표시 이름",
+  "settings.org_cancel": "취소"
 }

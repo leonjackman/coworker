@@ -798,5 +798,12 @@
   "settings.org_no_project": "Select a project first",
   "settings.org_empty": "No team data",
   "chat.delegate_running": "Delegating…",
-  "chat.delegate_failed": "Delegation failed"
+  "chat.delegate_failed": "Delegation failed",
+  "sidebar.agent_sessions_count": "{count} sessions",
+  "sidebar.agent_empty": "No sessions for this agent",
+  "sidebar.org_team_manage": "Agent Team",
+  "chat.agent_pick": "Agent",
+  "settings.org_rename": "Rename",
+  "settings.org_rename_placeholder": "New display name",
+  "settings.org_cancel": "Cancel"
 }

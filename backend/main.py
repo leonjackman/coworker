@@ -103,7 +103,7 @@ def _memory_project_name(memory_dir: str) -> str:
 memory_manager.scanner.project_name_resolver = _memory_project_name
 org_store = OrgStore(memory_manager.root)
 memory_manager.org_store = org_store
-workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
+workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir, org_store=org_store)
 agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
 
 # Persistent MCP sessions: start the background loop, pre-warm connections so
@@ -1065,6 +1065,7 @@ class OrgAgentCreateRequest(BaseModel):
 class OrgAgentUpdateRequest(BaseModel):
     project_id: str = ""
     id: str = ""
+    name: str | None = None
     role: str | None = None
     description: str | None = None
     parent: str | None = None
@@ -1172,6 +1173,11 @@ async def org_update_agent(request: OrgAgentUpdateRequest):
     agent = next((a for a in org.agents if a.id == request.id), None)
     if agent is None:
         raise HTTPException(status_code=404, detail=f"agent {request.id!r} not found")
+    if request.name is not None:
+        name = request.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="agent name must not be empty")
+        agent.name = name
     if request.role is not None:
         agent.role = request.role
     if request.description is not None:
@@ -2110,6 +2116,7 @@ async def goal_resume(request: GoalResumeRequest):
 class SessionCreateRequest(BaseModel):
     title: str = ""
     project_id: str = ""
+    agent_id: str = ""
 
 class SessionRenameRequest(BaseModel):
     title: str
@@ -2146,7 +2153,7 @@ async def create_session(request: SessionCreateRequest):
         project_store.require(request.project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    session = session_store.create(request.title, project_id=request.project_id)
+    session = session_store.create(request.title, project_id=request.project_id, agent_id=request.agent_id)
     return {"status": "ok", "session": session.public()}
 
 @app.get("/sessions/{session_id}")

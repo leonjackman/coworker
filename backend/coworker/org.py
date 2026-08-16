@@ -266,17 +266,31 @@ class OrgStore:
     # -- helpers ------------------------------------------------------------
 
     def roster(self, org: Org) -> list[dict]:
-        """Lightweight roster for context injection: every member's name/role/team."""
+        """Lightweight roster for context injection: every active member's name/role/team."""
+        return [
+            entry
+            for entry in self.members_for(org)
+            if entry["status"] == AGENT_STATUS_ACTIVE
+        ]
+
+    def members_for(self, org: Org) -> list[dict]:
+        """Every member's identity card (id/name/role/team/status), disabled included.
+
+        The sidebar / full session page rely on this to render agent group
+        headings (name · role · sessions · team) and to grey out disabled
+        members, so unlike :meth:`roster` it intentionally keeps disabled
+        members. ``roster()`` reuses it and filters to active members.
+        """
         team_names = {t.id: t.name for t in org.teams}
         return [
             {
+                "id": a.id,
                 "name": a.name,
                 "role": a.role,
                 "team": team_names.get(a.team_id, ""),
-                "id": a.id,
+                "status": a.status,
             }
             for a in org.agents
-            if a.status == AGENT_STATUS_ACTIVE
         ]
 
     def team_ancestors(self, org: Org, team_id: str) -> list[str]:
@@ -328,7 +342,7 @@ class OrgStore:
         if len(agent_ids) != len(org.agents):
             raise OrgError("duplicate agent ids")
         for a in org.agents:
-            if not a.id or not a.name:
+            if not a.id or not a.name.strip():
                 raise OrgError("agent id and name are required")
             if a.status not in AGENT_STATUSES:
                 raise OrgError(f"agent {a.id!r} has invalid status {a.status!r}")

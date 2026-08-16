@@ -798,5 +798,12 @@
   "settings.org_no_project": "請先選擇一個項目",
   "settings.org_empty": "暫無團隊資料",
   "chat.delegate_running": "委派中…",
-  "chat.delegate_failed": "委派失敗"
+  "chat.delegate_failed": "委派失敗",
+  "sidebar.agent_sessions_count": "{count} 個會話",
+  "sidebar.agent_empty": "該 agent 暫無會話",
+  "sidebar.org_team_manage": "Agent 團隊管理",
+  "chat.agent_pick": "選擇 Agent",
+  "settings.org_rename": "改名",
+  "settings.org_rename_placeholder": "新的顯示名稱",
+  "settings.org_cancel": "取消"
 }

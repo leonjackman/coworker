@@ -1,4 +1,4 @@
-import { AlertCircle, Plus, RefreshCw, Trash2, UserPlus, Users } from 'lucide-react';
+import { AlertCircle, Check, Pencil, Plus, RefreshCw, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
@@ -34,6 +34,8 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
   const [agentForm, setAgentForm] = useState<AgentForm>(emptyAgent);
   const [teamForm, setTeamForm] = useState<TeamForm>(emptyTeam);
   const [config, setConfig] = useState<OrgConfig | null>(null);
+  const [renameAgentId, setRenameAgentId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
 
   const load = useCallback(async () => {
     if (!projectId) {
@@ -84,6 +86,23 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
     try {
       const snapshot = await chatService.updateOrgAgent({ project_id: projectId, id, ...patch });
       setOrg(snapshot);
+    } catch (exc) {
+      setError(String(exc instanceof Error ? exc.message : exc));
+    }
+  }
+
+  async function submitRename(id: string) {
+    const name = renameDraft.trim();
+    if (!name) {
+      setError(t('settings.org_name_required'));
+      return;
+    }
+    setError('');
+    try {
+      const snapshot = await chatService.updateOrgAgent({ project_id: projectId, id, name });
+      setOrg(snapshot);
+      setRenameAgentId(null);
+      setRenameDraft('');
     } catch (exc) {
       setError(String(exc instanceof Error ? exc.message : exc));
     }
@@ -215,7 +234,24 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
           {agents.map((agent) => (
             <li key={agent.id} className="settings-org-member">
               <div className="settings-org-member-main">
-                <strong>{agent.name}</strong>
+                {renameAgentId === agent.id ? (
+                  <input
+                    className="settings-org-rename-input"
+                    autoFocus
+                    value={renameDraft}
+                    placeholder={t('settings.org_rename_placeholder')}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void submitRename(agent.id);
+                      if (event.key === 'Escape') {
+                        setRenameAgentId(null);
+                        setRenameDraft('');
+                      }
+                    }}
+                  />
+                ) : (
+                  <strong>{agent.name}</strong>
+                )}
                 {agent.role && <span className="settings-chip">{agent.role}</span>}
                 {agent.status === 'disabled' && <span className="settings-chip">{t('settings.org_disabled')}</span>}
               </div>
@@ -228,6 +264,20 @@ export function OrgSettingsPanel({ projectId }: OrgSettingsPanelProps) {
                 )}
               </div>
               <div className="settings-org-member-actions">
+                {renameAgentId === agent.id ? (
+                  <>
+                    <Button variant="ghost" size="sm" onClick={() => void submitRename(agent.id)} title={t('settings.org_rename')}>
+                      <Check size={14} />
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => { setRenameAgentId(null); setRenameDraft(''); }} title={t('settings.org_cancel')}>
+                      <X size={14} />
+                    </Button>
+                  </>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => { setRenameAgentId(agent.id); setRenameDraft(agent.name); }} title={t('settings.org_rename')}>
+                    <Pencil size={14} />
+                  </Button>
+                )}
                 <select
                   value={agent.status}
                   onChange={(event) => updateAgent(agent.id, { status: event.target.value as OrgAgent['status'] })}

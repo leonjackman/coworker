@@ -353,6 +353,38 @@ def main() -> int:
         ids = {a.id for a in migrated.agents}
         check("migration backfills agent dirs", {"default_agent", "worker"} <= ids, str(ids))
 
+        # members_for includes disabled; roster filters to active
+        org6 = org_store.load("proj1")
+        org_store.upsert_agent("proj1", OrgAgent(id="qa", name="qa", role="reviewer", status="disabled"))
+        org6 = org_store.load("proj1")
+        all_ids = {m["id"] for m in org_store.members_for(org6)}
+        active_ids = {m["id"] for m in org_store.roster(org6)}
+        check("members_for includes disabled", "qa" in all_ids and "coder" in all_ids, str(all_ids))
+        check("roster filters disabled", "qa" not in active_ids and "coder" in active_ids, str(active_ids))
+        qa_card = next(m for m in org_store.members_for(org6) if m["id"] == "qa")
+        check("member card has status", qa_card["status"] == "disabled", str(qa_card))
+
+        # rename: only display name changes, id stays (memory dir / session key intact)
+        org_store.upsert_agent("proj1", OrgAgent(id="coder", name="首席编码", role="developer", team_id="backend"))
+        org7 = org_store.load("proj1")
+        renamed = next(a for a in org7.agents if a.id == "coder")
+        check("rename updates display name", renamed.name == "首席编码", renamed.name)
+        check("rename keeps id", renamed.id == "coder", renamed.id)
+        check("rename keeps team", renamed.team_id == "backend", renamed.team_id)
+        roster_names = {m["id"]: m["name"] for m in org_store.roster(org7)}
+        check("roster shows new name", roster_names.get("coder") == "首席编码", str(roster_names))
+
+        # empty-name rename rejected
+        try:
+            org8 = org_store.load("proj1")
+            for a in org8.agents:
+                if a.id == "coder":
+                    a.name = "   "
+            org_store.save("proj1", org8)
+            check("org empty name rejected", False)
+        except OrgError:
+            check("org empty name rejected", True)
+
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]
     if failures:

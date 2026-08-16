@@ -798,5 +798,12 @@
   "settings.org_no_project": "Sélectionnez d'abord un projet",
   "settings.org_empty": "Aucune donnée d'équipe",
   "chat.delegate_running": "Délégation en cours…",
-  "chat.delegate_failed": "Échec de la délégation"
+  "chat.delegate_failed": "Échec de la délégation",
+  "sidebar.agent_sessions_count": "{count} sessions",
+  "sidebar.agent_empty": "Aucune session pour cet agent",
+  "sidebar.org_team_manage": "Équipe d'agents",
+  "chat.agent_pick": "Agent",
+  "settings.org_rename": "Renommer",
+  "settings.org_rename_placeholder": "Nouveau nom d'affichage",
+  "settings.org_cancel": "Annuler"
 }

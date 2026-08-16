@@ -8,12 +8,13 @@ from .workspace import TOOL_AUDIT_FILENAME, Workspace, fingerprint_path_for
 
 
 class WorkspaceController:
-    def __init__(self, project_store: ProjectStore, session_store: SessionStore, default_workspace: Path, data_dir: Path):
+    def __init__(self, project_store: ProjectStore, session_store: SessionStore, default_workspace: Path, data_dir: Path, org_store=None):
         self.project_store = project_store
         self.session_store = session_store
         self.default_workspace = default_workspace
         self.audit_path = data_dir / TOOL_AUDIT_FILENAME
         self.data_dir = data_dir
+        self.org_store = org_store
 
     def validate_workspace_path(self, workspace_path: str) -> str:
         cleaned = workspace_path.strip()
@@ -66,6 +67,10 @@ class WorkspaceController:
         project = self.project_store.require(project_id)
         if not project.memory_dir:
             project.memory_dir = self.project_store.memory_dir_for(project_id)
+        roster: list[dict[str, Any]] = []
+        if self.org_store is not None and project.memory_dir:
+            org = self.org_store.load(project.memory_dir)
+            roster = self.org_store.members_for(org)
         return {
             "id": project.id,
             "name": project.name,
@@ -75,4 +80,5 @@ class WorkspaceController:
             "updated_at": project.updated_at,
             "session_count": session_count,
             "memory_dir": project.memory_dir,
+            "roster": roster,
         }

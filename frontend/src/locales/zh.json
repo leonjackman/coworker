@@ -798,5 +798,12 @@
   "memory.tree.empty": "（空）",
   "memory.tree.no_projects": "暂无项目记忆。创建项目并开始对话后会自动生成。",
   "chat.delegate_running": "委托中…",
-  "chat.delegate_failed": "委托失败"
+  "chat.delegate_failed": "委托失败",
+  "sidebar.agent_sessions_count": "{count} 个会话",
+  "sidebar.agent_empty": "该 agent 暂无会话",
+  "sidebar.org_team_manage": "Agent 团队管理",
+  "chat.agent_pick": "选择 Agent",
+  "settings.org_rename": "改名",
+  "settings.org_rename_placeholder": "新的显示名称",
+  "settings.org_cancel": "取消"
 }

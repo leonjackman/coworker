@@ -999,6 +999,7 @@ ipcMain.handle('create-session', async (event, payload) => {
   return requestBackend('/sessions', 'POST', {
     title: payload?.title || '',
     project_id: payload?.project_id || '',
+    agent_id: payload?.agent_id || '',
   });
 });
 

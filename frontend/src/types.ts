@@ -3,7 +3,7 @@ import type { Language } from './lib/i18n';
 export type AgentMode = 'single';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
-export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory';
+export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org';
 
 export interface McpToolEntry {
   name: string;
@@ -371,6 +371,7 @@ export interface SessionSummary {
   created_at: string;
   updated_at: string;
   project_id: string;
+  agent_id?: string;
   work_mode?: string;
   autonomy?: string;
   message_count: number;
@@ -394,6 +395,8 @@ export interface ProjectEntry {
   created_at: string;
   updated_at: string;
   session_count: number;
+  memory_dir?: string;
+  roster?: OrgRosterEntry[];
 }
 
 export interface CreateProjectRequest {
@@ -404,6 +407,7 @@ export interface CreateProjectRequest {
 export interface CreateSessionRequest {
   title?: string;
   project_id: string;
+  agent_id?: string;
 }
 
 export interface SessionMessageRecord {
@@ -1071,6 +1075,7 @@ export interface OrgRosterEntry {
   name: string;
   role: string;
   team: string;
+  status?: OrgAgentStatus;
 }
 
 export interface OrgSnapshot {
@@ -1092,6 +1097,7 @@ export interface OrgAgentPayload {
 export interface OrgAgentUpdatePayload {
   project_id: string;
   id: string;
+  name?: string;
   role?: string;
   description?: string;
   parent?: string;

@@ -11,11 +11,12 @@ import {
   Send,
   ShieldCheck,
   Square,
+  Users,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { t } from "../lib/i18n";
-import type { Autonomy, ComposerAttachment, SessionReference, WorkMode } from "../types";
+import type { Autonomy, ComposerAttachment, OrgRosterEntry, SessionReference, WorkMode } from "../types";
 import { Button } from "./ui/button";
 import { CardSlot } from "./ui/card-slot";
 import {
@@ -78,6 +79,10 @@ interface ChatInputProps {
   activeWorkspaceId?: string;
   onSelectWorkspace?: (projectId: string) => void;
   onCreateWorkspace?: () => void;
+  /** 新对话草稿态：在 workspace 选择器旁显示 agent 选择器（默认 default_agent） */
+  agentOptions?: OrgRosterEntry[];
+  activeAgentId?: string;
+  onSelectAgent?: (agentId: string) => void;
   /** Installed skills, used to populate the "/" command card. Each skill may
    *  declare sub-commands that show up as direct "/<command>" entries. */
   skills?: Array<{
@@ -200,6 +205,9 @@ export function ChatInput({
   activeWorkspaceId,
   onSelectWorkspace,
   onCreateWorkspace,
+  agentOptions = [],
+  activeAgentId,
+  onSelectAgent,
   skills = [],
   onOpenCommands,
 }: ChatInputProps) {
@@ -265,6 +273,7 @@ export function ChatInput({
     (option) => option.id === activeWorkspaceId,
   );
   const workspaceMissing = showWorkspacePicker && !activeWorkspace;
+  const activeAgent = agentOptions.find((entry) => entry.id === activeAgentId);
   const canSend =
     Boolean(value.trim() || attachments.length > 0) && !workspaceMissing;
 
@@ -597,6 +606,49 @@ export function ChatInput({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            {agentOptions.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  className={`composer__ws-chip ${activeAgent && activeAgent.status === 'disabled' ? "composer__ws-chip--empty" : ""}`}
+                  aria-label={t("chat.agent_pick")}
+                  title={t("chat.agent_pick")}
+                >
+                  <span className="composer__ws-icon">
+                    <Users size={11} />
+                  </span>
+                  <span className="composer__ws-value">
+                    {activeAgent
+                      ? [activeAgent.name, activeAgent.role].filter(Boolean).join(" · ")
+                      : t("chat.agent_pick")}
+                  </span>
+                  <ChevronDown size={13} className="composer__ws-chevron" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="composer__ws-menu">
+                  <DropdownMenuLabel>{t("chat.agent_pick")}</DropdownMenuLabel>
+                  {agentOptions.map((entry) => (
+                    <DropdownMenuItem
+                      key={entry.id}
+                      className={`composer__ws-item ${entry.status === 'disabled' ? "composer__agent-item--disabled" : ""}`}
+                      disabled={entry.status === 'disabled'}
+                      onClick={() => onSelectAgent?.(entry.id)}
+                    >
+                      <Users size={14} />
+                      <span className="composer__ws-item-text">
+                        <span className="composer__ws-item-name">
+                          {[entry.name, entry.role].filter(Boolean).join(" · ")}
+                        </span>
+                        {entry.team && (
+                          <span className="composer__ws-item-path">{entry.team}</span>
+                        )}
+                      </span>
+                      {entry.id === activeAgentId && (
+                        <Check size={14} className="composer__ws-item-check" />
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             {activeWorkspace && (
               <span className="composer__ws-path" title={activeWorkspace.path}>
                 {activeWorkspace.path}

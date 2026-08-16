@@ -798,5 +798,12 @@
   "settings.org_no_project": "先にプロジェクトを選択してください",
   "settings.org_empty": "チームデータがありません",
   "chat.delegate_running": "委任中…",
-  "chat.delegate_failed": "委任失敗"
+  "chat.delegate_failed": "委任失敗",
+  "sidebar.agent_sessions_count": "{count} セッション",
+  "sidebar.agent_empty": "このエージェントのセッションはありません",
+  "sidebar.org_team_manage": "エージェントチーム",
+  "chat.agent_pick": "エージェント",
+  "settings.org_rename": "名前変更",
+  "settings.org_rename_placeholder": "新しい表示名",
+  "settings.org_cancel": "キャンセル"
 }

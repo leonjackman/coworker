@@ -1,6 +1,6 @@
-import { ArrowRight, BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2 } from 'lucide-react';
+import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
-import type { AppView, ProjectEntry, SessionSummary } from '../types';
+import type { AppView, OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
 import { formatTimeAgo } from '../lib/utils';
 import { Button } from './ui/button';
@@ -24,13 +24,15 @@ interface WorkspaceSidebarProps {
   onResizeEnd: () => void;
   onResizeWidth: (width: number) => void;
   onViewChange: (view: AppView) => void;
-  onNewChat: (projectId?: string) => void;
+  onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenProject: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onCreateProject: () => void;
   onRenameProject: (project: ProjectEntry) => void;
   onDeleteProject: (projectId: string) => void;
+  onOpenOrgSettings?: (projectId: string) => void;
+  goalIndicatorSessionId?: string;
 }
 
 interface SessionRowProps {
@@ -41,6 +43,8 @@ interface SessionRowProps {
   onDelete: (sessionId: string) => void;
   goalIndicatorSessionId?: string;
 }
+
+const DEFAULT_AGENT_ID = 'default_agent';
 
 function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorSessionId }: SessionRowProps) {
   const [copied, setCopied] = useState(false);
@@ -93,31 +97,161 @@ interface ProjectRowProps {
   activeProjectId?: string;
   runningSessionIds?: Set<string>;
   defaultExpanded?: boolean;
-  onNewChat: (projectId?: string) => void;
+  onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenProject: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onRenameProject: (project: ProjectEntry) => void;
   onDeleteProject: (projectId: string) => void;
+  onOpenOrgSettings?: (projectId: string) => void;
 }
 
-function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject }: ProjectRowProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+interface AgentGroupData {
+  agentId: string;
+  name: string;
+  role: string;
+  team: string;
+  disabled: boolean;
+  sessions: SessionSummary[];
+}
+
+const AGENT_PAGE_SIZE = 10;
+
+function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNewChat, onOpenSession, onDeleteSession }: {
+  group: AgentGroupData;
+  projectId: string;
+  activeSessionId?: string;
+  runningSessionIds?: Set<string>;
+  onNewChat: (projectId?: string, agentId?: string) => void;
+  onOpenSession: (sessionId: string) => void;
+  onDeleteSession: (sessionId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
   const [listExpanded, setListExpanded] = useState(false);
-  const sortedSessions = useMemo(
+  const sorted = useMemo(
     () =>
-      [...sessions].sort((a, b) => {
+      [...group.sessions].sort((a, b) => {
         const ta = new Date(a.updated_at || a.created_at).getTime();
         const tb = new Date(b.updated_at || b.created_at).getTime();
         return tb - ta;
       }),
-    [sessions],
+    [group.sessions],
   );
-  const LIMIT = 10;
-  const MAX = 20;
-  const hasMore = sortedSessions.length > LIMIT;
-  const shownCount = listExpanded ? Math.min(MAX, sortedSessions.length) : LIMIT;
-  const displaySessions = sortedSessions.slice(0, shownCount);
+  const hasMore = sorted.length > AGENT_PAGE_SIZE;
+  const shownCount = listExpanded ? sorted.length : AGENT_PAGE_SIZE;
+  const displaySessions = sorted.slice(0, shownCount);
+  const countLabel = t('sidebar.agent_sessions_count', { count: sorted.length });
+  const heading = [group.name, group.role && group.role].filter(Boolean).join(' · ');
+
+  return (
+    <div className={`sidebar-agent ${group.disabled ? 'sidebar-agent--disabled' : ''}`}>
+      <div
+        className="sidebar-agent__title"
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded((v) => !v); } }}
+        role="button"
+        tabIndex={0}
+      >
+        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <Users size={13} className="sidebar-agent__icon" />
+        <span className="sidebar-agent__name">{heading}</span>
+        <span className="sidebar-agent__meta">{countLabel}</span>
+        {group.team && <span className="sidebar-agent__team">{group.team}</span>}
+        <button
+          type="button"
+          className="sidebar-agent__new-trigger"
+          onClick={(e) => { e.stopPropagation(); onNewChat(projectId, group.agentId); }}
+          title={t('sidebar.new_chat')}
+          aria-label={t('sidebar.new_chat')}
+        >
+          <MessageSquarePlus size={13} />
+        </button>
+      </div>
+      {expanded && (
+        <div className="sidebar-agent__sessions">
+          {sorted.length === 0 ? (
+            <p className="sidebar-agent__empty">{t('sidebar.agent_empty')}</p>
+          ) : (
+            <>
+              {displaySessions.map((session) => (
+                <SessionRow
+                  key={session.id}
+                  session={session}
+                  active={session.id === activeSessionId}
+                  running={Boolean(runningSessionIds?.has(session.id))}
+                  onOpen={onOpenSession}
+                  onDelete={onDeleteSession}
+                />
+              ))}
+              {hasMore && (
+                <>
+                  <div className="sidebar-project__footer-meta">
+                    {listExpanded
+                      ? t('sidebar.sessions_shown', { shown: shownCount, total: sorted.length })
+                      : t('sidebar.sessions_recent', { shown: shownCount, total: sorted.length })}
+                  </div>
+                  <div className="sidebar-project__footer">
+                    {listExpanded ? (
+                      <button type="button" className="pg-btn" onClick={() => setListExpanded(false)}>
+                        <ChevronUp size={14} />
+                        <span>{t('sidebar.collapse_list')}</span>
+                      </button>
+                    ) : (
+                      <button type="button" className="pg-btn pg-btn--accent" onClick={() => setListExpanded(true)}>
+                        <ChevronDown size={14} />
+                        <span>{t('sidebar.expand_more')}</span>
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const roster = useMemo(() => project.roster ?? [], [project.roster]);
+
+  const groups = useMemo<AgentGroupData[]>(() => {
+    const rosterById = new Map<string, OrgRosterEntry>(roster.map((entry) => [entry.id, entry]));
+    const byAgent = new Map<string, SessionSummary[]>();
+    for (const session of sessions) {
+      const agentId = session.agent_id || DEFAULT_AGENT_ID;
+      const bucket = byAgent.get(agentId);
+      if (bucket) bucket.push(session);
+      else byAgent.set(agentId, [session]);
+    }
+    const knownAgentIds = roster.map((entry) => entry.id);
+    const unknownIds = [...byAgent.keys()].filter((id) => !rosterById.has(id));
+    // default_agent first; then known roster order; then unknown agent ids from sessions
+    const ordered: string[] = [];
+    if (rosterById.has(DEFAULT_AGENT_ID)) ordered.push(DEFAULT_AGENT_ID);
+    for (const id of knownAgentIds) if (id !== DEFAULT_AGENT_ID) ordered.push(id);
+    ordered.push(...unknownIds);
+
+    const built: AgentGroupData[] = ordered
+      .filter((id) => rosterById.has(id) || byAgent.has(id))
+      .map((id) => {
+        const entry = rosterById.get(id);
+        const agentSessions = byAgent.get(id) ?? [];
+        return {
+          agentId: id,
+          name: entry?.name || id,
+          role: entry?.role ?? '',
+          team: entry?.team ?? '',
+          disabled: entry?.status === 'disabled',
+          sessions: agentSessions,
+        };
+      });
+    // groups sorted: default_agent first, then by newest session inside each group
+    return built;
+  }, [roster, sessions]);
+
   const hasSessions = sessions.length > 0;
   const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || (activeProjectId === project.id && hasSessions);
 
@@ -144,6 +278,15 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
                   <MessageSquare size={14} />
                   {t('sidebar.session_history')}
                 </DropdownMenuItem>
+                {onOpenOrgSettings && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => onOpenOrgSettings(project.id)}>
+                      <Users size={14} />
+                      {t('sidebar.org_team_manage')}
+                    </DropdownMenuItem>
+                  </>
+                )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => onRenameProject(project)}>
                   <Pencil size={14} />
@@ -164,47 +307,24 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
 
       {expanded && (
         <div className="sidebar-project__sessions">
-          {sortedSessions.length === 0 ? (
+          {sessions.length === 0 && roster.length === 0 ? (
             <p className="sidebar-project__empty">{t('sidebar.project_empty')}</p>
           ) : (
             <>
-              {displaySessions.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  active={session.id === activeSessionId}
-                  running={Boolean(runningSessionIds?.has(session.id))}
-                  onOpen={onOpenSession}
-                  onDelete={onDeleteSession}
+              {groups.map((group) => (
+                <AgentGroup
+                  key={group.agentId}
+                  group={group}
+                  projectId={project.id}
+                  {...(activeSessionId ? { activeSessionId } : {})}
+                  {...(runningSessionIds ? { runningSessionIds } : {})}
+                  onNewChat={onNewChat}
+                  onOpenSession={onOpenSession}
+                  onDeleteSession={onDeleteSession}
                 />
               ))}
-              {hasMore && (
-                <>
-                  <div className="sidebar-project__footer-meta">
-                    {listExpanded
-                      ? t('sidebar.sessions_shown', { shown: shownCount, total: sortedSessions.length })
-                      : t('sidebar.sessions_recent', { shown: shownCount, total: sortedSessions.length })}
-                  </div>
-                  <div className="sidebar-project__footer">
-                    {listExpanded ? (
-                      <>
-                        <button type="button" className="pg-btn" onClick={() => setListExpanded(false)}>
-                          <ChevronUp size={14} />
-                          <span>{t('sidebar.collapse_list')}</span>
-                        </button>
-                        <button type="button" className="pg-btn pg-btn--accent" onClick={() => onOpenProject(project.id)}>
-                          <span>{t('sidebar.view_all')}</span>
-                          <ArrowRight size={14} />
-                        </button>
-                      </>
-                    ) : (
-                      <button type="button" className="pg-btn pg-btn--accent" onClick={() => setListExpanded(true)}>
-                        <ChevronDown size={14} />
-                        <span>{t('sidebar.expand_more')}</span>
-                      </button>
-                    )}
-                  </div>
-                </>
+              {sessions.length > 0 && groups.length === 0 && (
+                <p className="sidebar-project__empty">{t('sidebar.project_empty')}</p>
               )}
             </>
           )}
@@ -233,6 +353,7 @@ export function WorkspaceSidebar({
   onCreateProject,
   onRenameProject,
   onDeleteProject,
+  onOpenOrgSettings,
 }: WorkspaceSidebarProps) {
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -371,6 +492,7 @@ export function WorkspaceSidebar({
                 onDeleteSession={onDeleteSession}
                 onRenameProject={onRenameProject}
                 onDeleteProject={onDeleteProject}
+                {...(onOpenOrgSettings ? { onOpenOrgSettings } : {})}
               />
             ))}
           </section>
