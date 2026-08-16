@@ -1,10 +1,14 @@
 """Memory library discovery: scan the directory tree in injection order.
 
-Discovers system files, project trees (BASE + BASE/PROJECT) and agent trees
-(core files + SESSIONS). Nodes are returned in injection precedence order:
+Discovers system files, project trees (BASE + BASE/PROJECT), agent trees
+(core files + SESSIONS) and non-agent user folders. Nodes are returned in
+injection precedence order:
 
     system → BASE/* (user) → BASE/PROJECT/* (system) → SOUL → AGENT → MEMORY
     → SESSIONS/*
+
+Non-agent folders under a project root are listed on ``ProjectView.folders``
+(kind ``folder_file``) for browsing/editing but are never injected.
 
 Each ``MemoryNode`` carries a ``rel`` path (relative to the memory root) used
 by the store and the API, so callers never need absolute paths.
@@ -30,7 +34,7 @@ from .registry import normalize_agent_layout
 
 logger = logging.getLogger(__name__)
 
-_KINDS = ("system", "base_file", "project_file", "agent_file", "session_file")
+_KINDS = ("system", "base_file", "project_file", "agent_file", "session_file", "folder_file")
 
 _MEMORY_SUFFIXES = (".md", ".markdown")
 
@@ -42,6 +46,23 @@ def _is_memory_file(path: Path) -> bool:
         and not path.name.endswith(".lock")
         and any(path.name.lower().endswith(suffix) for suffix in _MEMORY_SUFFIXES)
     )
+
+
+def _looks_like_agent(agent_dir: Path) -> bool:
+    """True if ``agent_dir`` carries an agent marker (core identity files).
+
+    Recognizes both the current layout (``agent/BASE/SOUL|AGENT|MEMORY.md``)
+    and the legacy pre-normalize layout (core files at the agent root). A plain
+    user folder is not an agent and is surfaced as a regular folder instead.
+    """
+    base_dir = agent_dir / AGENT_BASE_DIR
+    for name in AGENT_CORE_FILES:
+        if (base_dir / name).is_file():
+            return True
+    for name in AGENT_CORE_FILES:
+        if (agent_dir / name).is_file():
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -101,6 +122,20 @@ class AgentView:
 
 
 @dataclass(frozen=True)
+class FolderView:
+    name: str            # directory name
+    rel: str             # path relative to the memory root
+    files: list[MemoryNode] = field(default_factory=list)  # .md files under it (recursive)
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "rel": self.rel,
+            "files": [f.to_dict() for f in self.files],
+        }
+
+
+@dataclass(frozen=True)
 class ProjectView:
     name: str            # directory name = memory_dir
     rel: str
@@ -108,6 +143,7 @@ class ProjectView:
     base: list[MemoryNode] = field(default_factory=list)
     project: list[MemoryNode] = field(default_factory=list)
     agents: list[AgentView] = field(default_factory=list)
+    folders: list[FolderView] = field(default_factory=list)  # non-agent user folders
 
     def to_dict(self) -> dict:
         return {
@@ -117,6 +153,7 @@ class ProjectView:
             "base": [b.to_dict() for b in self.base],
             "project": [p.to_dict() for p in self.project],
             "agents": [a.to_dict() for a in self.agents],
+            "folders": [f.to_dict() for f in self.folders],
         }
 
 
@@ -186,6 +223,57 @@ class MemoryScanner:
 
         return MemoryLibrary(root=self.root, system=system, projects=projects)
 
+    def search(self, query: str, limit: int = 50) -> list[dict]:
+        """Case-insensitive substring search across every discoverable file.
+
+        Returns up to ``limit`` results, each ``{rel, name, kind, location,
+        snippet, match_count}``, sorted by descending match count. Files with
+        no content (e.g. synthesized placeholders) are skipped.
+        """
+        needle = (query or "").strip().lower()
+        if not needle:
+            return []
+        library = self.scan()
+        hits: list[dict] = []
+        seen: set[str] = set()
+
+        def _consider(node: MemoryNode, location: str) -> None:
+            if node is None or node.rel in seen:
+                return
+            if not node.content:
+                return
+            count = node.content.lower().count(needle)
+            if count == 0:
+                return
+            seen.add(node.rel)
+            snippet = _snippet(node.content, needle)
+            hits.append(
+                {
+                    "rel": node.rel,
+                    "name": node.name,
+                    "kind": node.kind,
+                    "location": location,
+                    "snippet": snippet,
+                    "match_count": count,
+                }
+            )
+
+        for node in library.system:
+            _consider(node, "system")
+        for view in library.projects:
+            label = view.project_name or view.name
+            for node in view.base + view.project:
+                _consider(node, label)
+            for aview in view.agents:
+                for node in [aview.soul, aview.agent, aview.memory] + aview.base + aview.sessions:
+                    _consider(node, f"{label} / {aview.name}")
+            for folder in view.folders:
+                for node in folder.files:
+                    _consider(node, f"{label} / {folder.name}")
+
+        hits.sort(key=lambda h: (-h["match_count"], h["rel"]))
+        return hits[:limit]
+
     # -- helpers ------------------------------------------------------------
 
     def _scan_project(self, project_dir: Path, include_missing: bool) -> ProjectView | None:
@@ -210,10 +298,20 @@ class MemoryScanner:
             (base_dir / PROJECT_SUBDIR).mkdir(parents=True, exist_ok=True)
 
         agents: list[AgentView] = []
+        folders: list[FolderView] = []
         for entry in sorted(project_dir.iterdir()):
             if entry.name == BASE_DIR or not entry.is_dir() or entry.name.startswith("."):
                 continue
-            agents.append(self._scan_agent(project_dir, entry, include_missing))
+            if _looks_like_agent(entry):
+                agents.append(self._scan_agent(project_dir, entry, include_missing))
+            else:
+                folders.append(
+                    FolderView(
+                        name=entry.name,
+                        rel=_rel(self.root, entry),
+                        files=self._scan_folder(entry),
+                    )
+                )
 
         return ProjectView(
             name=project_dir.name,
@@ -222,7 +320,18 @@ class MemoryScanner:
             base=base,
             project=project,
             agents=agents,
+            folders=folders,
         )
+
+    def _scan_folder(self, folder_dir: Path) -> list[MemoryNode]:
+        """Recursively collect Markdown files under a non-agent user folder."""
+        nodes: list[MemoryNode] = []
+        for path in sorted(folder_dir.rglob("*")):
+            if not _is_memory_file(path):
+                continue
+            rel = _rel(self.root, path)
+            nodes.append(self._read_node("folder_file", rel) or self._empty_node("folder_file", rel))
+        return nodes
 
     def _scan_agent(self, project_dir: Path, agent_dir: Path, include_missing: bool) -> AgentView:
         normalize_agent_layout(agent_dir)
@@ -276,3 +385,15 @@ def _rel(root: Path, path: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.name
+
+
+def _snippet(content: str, needle: str, radius: int = 40) -> str:
+    """Return a short window of text around the first case-insensitive match."""
+    idx = content.lower().find(needle)
+    if idx < 0:
+        return content[: radius * 2].strip()
+    start = max(0, idx - radius)
+    end = min(len(content), idx + len(needle) + radius)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(content) else ""
+    return f"{prefix}{content[start:end].strip()}{suffix}"

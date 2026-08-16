@@ -59,7 +59,6 @@ class MemoryManager:
         # Phase 2: per-session turn counters (in-memory; reset on restart).
         self._turn_counters: dict[str, int] = {}
         # Injected extractor dependencies (set via configure_extractor).
-        self._proposal_store: Any | None = None
         self._llm_factory: Any | None = None
         self._transcript_provider: Any | None = None
 
@@ -115,7 +114,6 @@ class MemoryManager:
         view.scanner = self.scanner
         view.store = self.store
         view._turn_counters = self._turn_counters
-        view._proposal_store = self._proposal_store
         view._llm_factory = self._llm_factory
         view._transcript_provider = self._transcript_provider
         view._project_dir = project_dir
@@ -133,12 +131,10 @@ class MemoryManager:
     def configure_extractor(
         self,
         *,
-        proposal_store: Any,
         llm_factory: Any,
         transcript_provider: Any,
     ) -> None:
         """Inject Phase 2 dependencies (called once from ``main.py``)."""
-        self._proposal_store = proposal_store
         self._llm_factory = llm_factory
         self._transcript_provider = transcript_provider
 
@@ -175,12 +171,8 @@ class MemoryManager:
         logger.info("auto-extract scheduled for session %s", session_id)
 
     async def _extract_async(self, session_id: str) -> None:
-        """Extract candidate memories and propose them (best-effort)."""
-        if (
-            self._proposal_store is None
-            or self._llm_factory is None
-            or self._transcript_provider is None
-        ):
+        """Extract candidate memories and write them directly (best-effort)."""
+        if self._llm_factory is None or self._transcript_provider is None:
             logger.debug("auto-extract skipped for %s: extractor not configured", session_id)
             return
         try:
@@ -195,13 +187,38 @@ class MemoryManager:
             result = await run_auto_extract(
                 llm=llm,
                 messages=messages,
-                proposal_store=self._proposal_store,
                 session_id=session_id,
                 provider_name=model_label or "memory-extract",
                 model_name=model_label,
+                write_facts=self.write_auto_facts,
                 project_dir=self.bound_project or "",
                 agent=self.bound_agent,
             )
             logger.info("auto-extract done for %s: %s", session_id, result)
         except Exception as exc:  # noqa: BLE001 - defensive
             logger.warning("auto-extract failed for %s: %s", session_id, exc)
+
+    def write_auto_facts(self, candidates: list[str]) -> int:
+        """Persist extracted facts directly into long-term memory.
+
+        Project-scoped extraction targets the current agent's ``MEMORY.md``;
+        global extraction (no bound project) targets the system ``USER.md``.
+        Exact-duplicate entries are skipped. Never raises — each write is
+        guarded so a single bad candidate cannot abort the batch.
+        """
+        store = self.store
+        if self.bound_project:
+            target = f"{self.bound_project}/{self.bound_agent}/BASE/MEMORY.md"
+        else:
+            target = "USER.md"
+        added = 0
+        for text in candidates:
+            text = (text or "").strip()
+            if not text:
+                continue
+            try:
+                store.add_block(target, text)
+                added += 1
+            except Exception:  # noqa: BLE001 - skip duplicates/edge failures
+                continue
+        return added

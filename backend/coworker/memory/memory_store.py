@@ -108,8 +108,14 @@ class MemoryStore:
 
             return load_file(path)
 
-    def remove_file(self, rel: str) -> bool:
-        """Delete a file (or empty directory) under the memory root."""
+    def remove_file(self, rel: str, *, trash_dir: Path | None = None) -> bool:
+        """Delete a file (or empty directory) under the memory root.
+
+        Files go to the OS trash with a hidden ``.trash/`` fallback; an
+        explicit ``trash_dir`` (used by tests) takes precedence. Empty
+        directories are removed directly. Returns True on success, False when
+        the target is missing or cannot be moved.
+        """
         path = self._resolve(rel)
         with self._lock:
             if path.is_dir():
@@ -121,11 +127,39 @@ class MemoryStore:
             if not path.exists():
                 return False
             try:
-                path.unlink()
+                from .trash import send_to_trash, system_trash_dir
+
+                if trash_dir is not None:
+                    dest_dir = trash_dir
+                else:
+                    dest_dir = system_trash_dir() or (self.root / ".trash")
+                send_to_trash(path, dest_dir)
                 _cleanup_lock(path)
                 return True
             except OSError:
                 return False
+
+    def move_file(self, rel: str, new_rel: str) -> str:
+        """Move/rename a memory file, returning the new rel path."""
+        if not new_rel.endswith((".md", ".markdown")):
+            raise MemoryError("only Markdown files (.md / .markdown) are allowed")
+        src = self._resolve(rel)
+        dst = self._resolve(new_rel)
+        if not src.is_file():
+            raise MemoryError("source file not found")
+        if dst.exists():
+            raise MemoryError("destination already exists")
+        with self._lock:
+            if dst.parent and not dst.parent.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+            src.replace(dst)
+            lock_src = src.with_name(src.name + ".lock")
+            if lock_src.is_file():
+                try:
+                    lock_src.replace(dst.with_name(dst.name + ".lock"))
+                except OSError:  # pragma: no cover - defensive
+                    lock_src.unlink(missing_ok=True)
+        return new_rel
 
     # -- block API (agent MEMORY.md / SESSIONS) ----------------------------
 

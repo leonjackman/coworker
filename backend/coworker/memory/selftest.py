@@ -23,6 +23,7 @@ from coworker.memory.memory_prompt import format_memory_prompt
 from coworker.memory.memory_store import MemoryError, MemoryStore
 from coworker.memory.memory_discovery import MemoryScanner
 from coworker.memory.registry import MemoryRegistry
+from coworker.memory.transfer import apply_import, export_memory, preview_import
 
 CHECKS: list[str] = []
 
@@ -187,6 +188,66 @@ def main() -> int:
         store.add_block(rel, "z" * 5000)
         over = format_memory_prompt(library.injected(project_dir="20260812100000", agent="default_agent"), char_limit=100)
         check("budget warns but does not truncate", "<budget_warning>" in over)
+
+        # --- non-agent folder classification ---------------------------------
+        mem_root = store.root
+        folder = mem_root / "20260812100000" / "notes"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "ideas.md").write_text("folded idea about blue widgets\n", encoding="utf-8")
+        lib3 = scanner.scan(include_missing=False)
+        p3 = lib3.projects[0]
+        check("user folder not an agent", len(p3.agents) == 1, str([a.name for a in p3.agents]))
+        check("user folder surfaced", any(f.name == "notes" for f in p3.folders), str([f.name for f in p3.folders]))
+        notes = next(f for f in p3.folders if f.name == "notes")
+        check("folder files collected", any(n.name == "ideas.md" for n in notes.files))
+        injected_kinds = [n.kind for n in lib3.injected(project_dir="20260812100000", agent="default_agent")]
+        check("folder files not injected", "folder_file" not in injected_kinds, str(injected_kinds))
+
+        # --- full-text search -------------------------------------------------
+        store.write_file(rel, "agent fact about blue widgets\n")
+        results = scanner.search("blue")
+        rels = [r["rel"] for r in results]
+        check("search finds agent memory", rel in rels, rels)
+        check("search finds folder file", any("notes/ideas.md" in r for r in rels), rels)
+        check("search snippet present", all(r["snippet"] for r in results))
+        check("search no match", scanner.search("no-such-term-xyz") == [])
+
+        # --- move -------------------------------------------------------------
+        moved_rel = store.move_file("20260812100000/notes/ideas.md", "20260812100000/BASE/folded_ideas.md")
+        check("move returns new rel", moved_rel == "20260812100000/BASE/folded_ideas.md")
+        check("move source gone", not (folder / "ideas.md").exists())
+        check("move dest exists", (mem_root / moved_rel).is_file())
+        try:
+            store.move_file(moved_rel, moved_rel)
+            check("move same target rejected", False)
+        except MemoryError:
+            check("move same target rejected", True)
+
+        # --- trash (injected dir) --------------------------------------------
+        trash_dir = Path(tmp) / "trash"
+        store.write_file("USER.md", "trash me\n")
+        check("trash file", store.remove_file("USER.md", trash_dir=trash_dir) is True)
+        check("trash landed", (trash_dir / "USER.md").is_file())
+        check("trash source gone", not (mem_root / "USER.md").exists())
+        store.write_file("USER.md", "again\n")
+        store.remove_file("USER.md", trash_dir=trash_dir)
+        check("trash collision suffixed", (trash_dir / "USER 2.md").is_file())
+
+        # --- export / import round-trip ---------------------------------------
+        work_dir = Path(tmp) / "work"
+        export = export_memory(mem_root, work_dir, scope="all", project_dirs=[])
+        check("export zip created", Path(export["path"]).is_file())
+        preview = preview_import(mem_root, work_dir, export["path"])
+        check("preview token", bool(preview["token"]))
+        check("preview lists files", len(preview["files"]) > 0, str(len(preview["files"])))
+        check("preview conflict flags", all("exists" in f for f in preview["files"]))
+        decisions = {f["rel"]: "skip" for f in preview["files"] if f["exists"]}
+        applied = apply_import(mem_root, work_dir, preview["token"], decisions)
+        check("apply no-op on skip", applied["imported"] == 0 and applied["skipped"] >= 0, str(applied))
+        preview2 = preview_import(mem_root, work_dir, export["path"])
+        decisions2 = {f["rel"]: "overwrite" for f in preview2["files"]}
+        applied2 = apply_import(mem_root, work_dir, preview2["token"], decisions2)
+        check("apply overwrite", applied2["overwritten"] >= 1, str(applied2))
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]

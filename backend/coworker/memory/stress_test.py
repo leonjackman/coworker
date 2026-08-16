@@ -514,8 +514,11 @@ def test_http_api(url: str, project_id: str):
     r6 = _http("/api/memory/settings")
     check("settings", "enabled" in r6, str(r6.get("__error", "")))
 
-    r7 = _http("/api/memory/proposals")
-    check("proposals", "proposals" in r7, str(r7.get("__error", "")))
+    r7 = _http("/api/memory/search?q=test")
+    check("search", "results" in r7, str(r7.get("__error", "")))
+
+    r7b = _http("/api/memory/proposals")
+    check("proposals endpoint removed", "__error" in r7b, str(r7b)[:120])
 
     r8 = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("API test fact"), "project_id": project_id, "agent": "default_agent"})
     check("write block", "blocks" in r8 or "error" in str(r8), str(r8.get("__error", r8)))

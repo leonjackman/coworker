@@ -1333,8 +1333,6 @@ ipcMain.handle('get-memory-file', (event, rel = '') =>
 );
 ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api/memory/file', 'POST', payload));
 ipcMain.handle('delete-memory-file', (event, payload = {}) => requestBackend('/api/memory/delete', 'POST', payload));
-ipcMain.handle('list-memory-proposals', () => requestBackend('/api/memory/proposals', 'GET'));
-ipcMain.handle('resolve-memory-proposal', (event, payload = {}) => requestBackend('/api/memory/proposals/resolve', 'POST', payload));
 ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings', 'GET'));
 ipcMain.handle('save-memory-settings', (event, payload = {}) => requestBackend('/api/memory/settings', 'POST', payload));
 ipcMain.handle('reveal-in-folder', async (event, filePath) => {
@@ -1342,6 +1340,47 @@ ipcMain.handle('reveal-in-folder', async (event, filePath) => {
     shell.showItemInFolder(filePath);
   }
   return { status: 'ok' };
+});
+
+ipcMain.handle('search-memory', (event, query = '', limit = 50) => {
+  const params = new URLSearchParams({ q: query ?? '' });
+  if (limit) params.set('limit', String(limit));
+  return requestBackend(`/api/memory/search?${params.toString()}`, 'GET');
+});
+ipcMain.handle('move-memory-file', (event, payload = {}) => requestBackend('/api/memory/move', 'POST', payload));
+ipcMain.handle('preview-memory-import', (event, payload = {}) => requestBackend('/api/memory/import/preview', 'POST', payload));
+ipcMain.handle('apply-memory-import', (event, payload = {}) => requestBackend('/api/memory/import/apply', 'POST', payload));
+
+ipcMain.handle('export-memory', async (event, payload = {}) => {
+  const exportResult = await requestBackend('/api/memory/export', 'POST', payload);
+  const srcPath = exportResult && exportResult.path;
+  if (!srcPath) throw new Error('Backend returned no export path');
+  const defaultName = exportResult.filename || 'coworker-memory.zip';
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Export memory',
+    defaultPath: defaultName,
+    filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+  });
+  if (canceled || !filePath) return { status: 'canceled' };
+  await fs.promises.copyFile(srcPath, filePath);
+  // Best-effort cleanup of the backend temp archive.
+  try {
+    await fs.promises.unlink(srcPath);
+  } catch (e) {
+    // ignore
+  }
+  shell.showItemInFolder(filePath);
+  return { status: 'ok', path: filePath, file_count: exportResult.file_count || 0 };
+});
+
+ipcMain.handle('import-memory', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Import memory',
+    properties: ['openFile'],
+    filters: [{ name: 'ZIP archive', extensions: ['zip'] }],
+  });
+  if (canceled || !filePaths || filePaths.length === 0) return { status: 'canceled' };
+  return { status: 'ok', path: filePaths[0] };
 });
 
 // Skill Market IPC handlers

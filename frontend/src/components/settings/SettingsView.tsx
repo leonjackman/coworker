@@ -6,7 +6,6 @@ import type { Autonomy, MemorySettings, MemorySettingsPatch } from '../../types'
 import type { UpdateCenter } from '../../lib/useUpdateCenter';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
-import { MemoryProposalsPanel } from './MemoryProposalsPanel';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
@@ -46,7 +45,7 @@ export function SettingsView({
   onLanguageChange,
   onClose,
 }: SettingsViewProps) {
-  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit' | 'memory_proposals'>('main');
+  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit'>('main');
 
   async function selectLanguage(language: string) {
     const allowed = ['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
@@ -76,24 +75,6 @@ export function SettingsView({
         )}
       >
         <ToolAuditPanel embedded />
-      </WorkspacePage>
-    );
-  }
-
-  if (settingsPage === 'memory_proposals') {
-    return (
-      <WorkspacePage
-        eyebrow={t('settings.title')}
-        title={t('settings.memory_proposals_title')}
-        description={t('settings.memory_proposals_desc')}
-        action={(
-          <Button variant="ghost" onClick={() => setSettingsPage('main')}>
-            <ArrowLeft size={15} />
-            {t('settings.back')}
-          </Button>
-        )}
-      >
-        <MemoryProposalsPanel embedded />
       </WorkspacePage>
     );
   }
@@ -245,14 +226,6 @@ export function SettingsView({
                   })),
                 ],
                 onChange: (value) => onMemorySettingsChange({ extract_model: value }),
-              },
-              {
-                id: 'memory_proposals',
-                type: 'action',
-                label: t('settings.memory_proposals_entry'),
-                description: t('settings.memory_proposals_entry_desc'),
-                actionLabel: t('settings.memory_proposals_open'),
-                onAction: () => setSettingsPage('memory_proposals'),
               },
             ],
           },

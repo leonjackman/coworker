@@ -12,9 +12,10 @@
 │   │   ├── EXAMPLE.md                     # 模板示例，用户按需自建文件（大小写不限）
 │   │   └── PROJECT/                       # 系统生成维护（建议用户勿增）
 │   │       ├── GOALS.md / CONTEXT.md
-│   └── <agent>/                           # 创建 agent 时自动生成
-│       ├── SOUL.md / AGENT.md / MEMORY.md
-│       └── SESSIONS/*.md
+│   ├── <agent>/                           # 创建 agent 时自动生成
+│   │   ├── SOUL.md / AGENT.md / MEMORY.md
+│   │   └── SESSIONS/*.md
+│   └── <folder>/…                         # 非 agent 用户文件夹（只浏览/编辑，不注入）
 ```
 
 ---
@@ -113,3 +114,47 @@
   - [x] register-project 后骨架出现
   - [x] approved 提案落盘到 agent MEMORY.md
 - [x] 测试环境执行迁移 + 清理旧文件（`~/.coworker/MEMORY.md` 与项目内 `.coworker/MEMORY.md`）
+
+## 阶段 10 — 六项记忆增强
+
+### ⑥ 项目根非 agent 文件夹不再误判为 agent
+- [x] `memory_discovery.py`：`_looks_like_agent`（`<dir>/BASE/SOUL|AGENT|MEMORY.md` 或旧版根级三件套）判定；非 agent 目录 → `ProjectView.folders`（`FolderView`，kind=`folder_file`，递归收集 .md）
+- [x] `injected()` 排除 folder_file（纯用户归档，不注入）；搜索包含它们
+- [x] 前端：`types.ts` 加 `folder_file`/`MemoryFolderView`/`ProjectView.folders`；`MemoryPanel` 渲染普通「文件夹」分支
+
+### ② 全文搜索
+- [x] `MemoryScanner.search(query, limit)`：大小写不敏感子串匹配全库（system + 项目 + agent + 文件夹），返回 top50 `{rel,name,kind,location,snippet,match_count}`，按命中数降序
+- [x] `GET /api/memory/search?q=&limit=`；空/超长 q → 400
+- [x] 前端：搜索框（防抖 300ms）+ 结果列表（点击进编辑器）；`chatService.searchMemory` + preload + main IPC `search-memory`
+
+### ① 删除 → 系统回收站
+- [x] 新增 `memory/trash.py`：`send_to_trash(path, dest_dir)` 冲突自动补后缀（`name 2.md`）
+- [x] `MemoryStore.remove_file` 改为移动至系统废纸篓（macOS `~/.Trash`，可注入 `trash_dir` 便于测试），失败回退 `memory/.trash/`；删除前清理 `.lock`
+- [x] `POST /api/memory/delete` 响应加 `trashed:true`；前端确认文案改「移入系统废纸篓」
+
+### ③ 重命名 / 移动（弹窗式；拖动留待后续）
+- [x] `POST /api/memory/move {rel,new_rel}`：双向 `resolve_rel_path` 防逃逸；**禁止**移动系统文件（MEMORY/USER/AGENT.md）与 agent 核心（SOUL/AGENT/MEMORY.md）、禁止移入 agent 核心位置；允许 BASE/PROJECT/SESSIONS/agent-BASE 扩展/用户根文件
+- [x] `MemoryStore.move_file` 连带移动 `.lock`
+- [x] 前端：文件行悬停「重命名/移动」→ 弹窗（新文件名 + 目标文件夹下拉：系统根/各项目 BASE/PROJECT/各 agent BASE/各文件夹）
+- [ ] 拖拽放置（HTML5 drag）——后续迭代
+
+### ④ 导入导出 / 备份
+- [x] 新增 `memory/transfer.py`：`export_memory`（zip 至 `data_dir/memory_exports/`，结构=记忆库相对树，排除 `.lock/.trash/.migrate_backup/.DS_Store`）；`preview_import`（两阶段：解压到 staging + 报告 exists 冲突，不落库）；`apply_import`（按 `{rel:skip|overwrite}` 决策合并，逐条防穿越 + 仅 .md）
+- [x] `POST /api/memory/export {scope:all|system|projects, project_dirs}` / `POST /api/memory/import/preview {path}` / `POST /api/memory/import/apply {token,decisions}`
+- [x] electron：`export-memory` IPC（后端生成 → `dialog.showSaveDialog` → `fs.copyFile` → `shell.showItemInFolder`）；`import-memory` IPC（`dialog.showOpenDialog` zip filter）；`preview/apply-memory-import` IPC
+- [x] 前端：工具栏「导出/导入」按钮；导出弹窗（范围单选 + 项目多选）；导入冲突弹窗（逐文件 skip/overwrite + 全部保留/全部覆盖快捷）
+- [ ] 局限（已知）：只恢复记忆文件；`projects.json` 的 project↔memory_dir 映射不在本范围（整库恢复到新机器时项目目录可能成为孤儿）
+
+### ⑤ agent 写入权限 + 自动提炼直写
+- [x] **权限模型**：agent 可写 ① 自己的 `<agent>/BASE/`（核心+扩展，`scope="agent"`+`name`）；② 系统级默认大写文件 `MEMORY.md/USER.md/AGENT.md`（`scope="system"`+`name` 限定三件套）；其余（项目 BASE 用户文件/PROJECT/其他 agent/用户根文件）只读
+- [x] `agents.py`：`MemoryArgs` 加 `scope`/`name`；`_resolve_memory_target` 解析+越界拒绝；工具 docstring 更新权限规则
+- [x] `memory_manager.py`：`write_auto_facts(candidates)` 直写（项目→agent `MEMORY.md`，全局→系统 `USER.md`，按块去重）；`configure_extractor` 去掉 proposal_store
+- [x] `memory/auto_extract.py`：`run_auto_extract` 改为 `write_facts` 回调直写（免用户确认）
+- [x] **移除提案机制**：删 `MemoryProposalStore`、`/api/memory/proposals` 两端点、`proposals_pending`、前端 `MemoryProposalsPanel` 及 settings 入口、相关 types/ipc/locales/CSS（`memory_proposals.jsonl` 数据文件保留未动）
+
+## 阶段 11 — 增强测试与验收
+
+- [x] `memory/selftest.py` 扩展：非 agent 文件夹分类不注入、搜索命中/片段/无匹配、move 约束、trash 注入目录+冲突后缀、export/import 往返（skip/overwrite）（全绿 77 项）
+- [x] `memory/stress_test.py` 全绿（99 项）
+- [x] `tsc --noEmit` + `vite build` 通过
+- [x] HTTP 冒烟（临时实例 9528）：discover 含 folders、search、move（受保护拒绝）、export→import preview/apply 往返、proposals 404、settings/status 无 proposals_pending

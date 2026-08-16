@@ -1,4 +1,4 @@
-"""Phase 2: automatic memory extraction (opt-in, default off).
+"""Automatic memory extraction (opt-in, default off).
 
 Design decisions (per the architecture audit):
 
@@ -9,9 +9,10 @@ Design decisions (per the architecture audit):
   main provider model — never a fork of the full main model over the whole
   conversation budget. The LLM call runs as an ``asyncio`` background task so
   the main turn stream is never blocked.
-- Candidates do NOT hit disk directly in the default path: they become
-  proposals surfaced to the user for confirmation (the CW HITL advantage).
-  Proposals are persisted to a JSONL store so they survive restarts.
+- Extracted candidates are written DIRECTLY into long-term memory (no human
+  confirmation step): project-scoped facts go to the agent's own ``MEMORY.md``,
+  global facts to the system ``USER.md``. Writes are deduplicated against the
+  target file's existing content.
 - Failed extraction / model errors are logged and never break chat.
 """
 
@@ -19,109 +20,10 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
-import uuid
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Any
-
-from ..atomicio import atomic_write_text
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
-
-PROPOSALS_FILENAME = "memory_proposals.jsonl"
-
-
-class MemoryProposalStore:
-    """Append-only JSONL store of pending/reviewed auto-extract proposals."""
-
-    def __init__(self, data_dir: Path):
-        self.path = Path(data_dir) / PROPOSALS_FILENAME
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        self._resolved_history = 200
-
-    def _read(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
-            return []
-        out: list[dict[str, Any]] = []
-        try:
-            for line in self.path.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                    if isinstance(record, dict):
-                        out.append(record)
-                except json.JSONDecodeError:
-                    continue
-        except OSError:
-            return []
-        return out
-
-    def list_pending(self, limit: int = 50) -> list[dict[str, Any]]:
-        with self._lock:
-            records = [r for r in self._read() if r.get("status") == "pending"]
-        return records[-limit:]
-
-    def add(self, *, session_id: str, provider: str, model: str, candidates: list[str], workspace_path: str = "", project_dir: str = "", agent: str = "") -> list[dict[str, Any]]:
-        created_at = datetime.now(timezone.utc).isoformat()
-        added: list[dict[str, Any]] = []
-        with self._lock:
-            existing = self._read()
-            for text in candidates:
-                if not text or not text.strip():
-                    continue
-                if any(r.get("text") == text for r in existing):
-                    continue
-                record = {
-                    "id": uuid.uuid4().hex,
-                    "kind": "memory",
-                    "status": "pending",
-                    "text": text.strip(),
-                    "session_id": session_id,
-                    "provider": provider,
-                    "model": model,
-                    "workspace_path": workspace_path,
-                    "project_dir": project_dir,
-                    "agent": agent or "default_agent",
-                    "created_at": created_at,
-                }
-                existing.append(record)
-                added.append(record)
-            self._write(existing)
-        return added
-
-    def _write(self, records: list[dict[str, Any]]) -> None:
-        # Bounded retention: keep every pending proposal plus the most recent
-        # RESOLVED_HISTORY resolved/approved/rejected ones, so the file cannot
-        # grow unboundedly across the app's lifetime.
-        pending = [r for r in records if r.get("status") == "pending"]
-        resolved = [r for r in records if r.get("status") != "pending"]
-        if len(resolved) > self._resolved_history:
-            resolved = resolved[-self._resolved_history:]
-        try:
-            atomic_write_text(
-                self.path,
-                "\n".join(json.dumps(r, ensure_ascii=False) for r in (pending + resolved)) + "\n",
-            )
-        except OSError as exc:  # pragma: no cover - defensive
-            logger.warning("Failed to persist memory proposals: %s", exc)
-
-    def resolve(self, proposal_id: str, status: str) -> dict[str, Any] | None:
-        """Mark a proposal approved/rejected. Returns the updated record or None."""
-        if status not in ("approved", "rejected"):
-            raise ValueError(f"status must be approved/rejected, got {status!r}")
-        with self._lock:
-            records = self._read()
-            record = next((r for r in records if r.get("id") == proposal_id), None)
-            if record is None or record.get("status") != "pending":
-                return record
-            record["status"] = status
-            record["resolved_at"] = datetime.now(timezone.utc).isoformat()
-            self._write(records)
-        return record
 
 
 def build_extract_llm(provider_entry: Any | None, extract_model: str = "") -> Any | None:
@@ -227,23 +129,24 @@ async def run_auto_extract(
     *,
     llm: Any,
     messages: list[dict[str, Any]],
-    proposal_store: MemoryProposalStore,
     session_id: str,
     provider_name: str,
     model_name: str,
-    workspace_path: str = "",
+    write_facts: Callable[[list[str]], int],
     project_dir: str = "",
     agent: str = "",
 ) -> dict[str, Any]:
-    """Extract candidate memories from recent messages and propose them.
+    """Extract candidate memories from recent messages and write them directly.
 
+    ``write_facts`` receives the parsed candidate list and persists them into
+    long-term memory (deduplicated); it returns the number actually added.
     Never raises: all failures degrade to a logged no-op so the caller can fire
     this as a fire-and-forget task.
     """
     transcript = _recent_transcript(messages)
     if not transcript:
         logger.debug("auto-extract: no transcript to review for %s", session_id)
-        return {"proposed": 0, "error": None}
+        return {"added": 0, "error": None}
     try:
         from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -264,17 +167,9 @@ async def run_auto_extract(
         candidates = _parse_candidates(str(text))
     except Exception as exc:  # noqa: BLE001 - auto-extract must never break chat
         logger.warning("auto-extract failed for %s: %s", session_id, exc)
-        return {"proposed": 0, "error": str(exc)[:200]}
+        return {"added": 0, "error": str(exc)[:200]}
 
-    proposed = proposal_store.add(
-        session_id=session_id,
-        provider=provider_name,
-        model=model_name,
-        candidates=candidates,
-        workspace_path=workspace_path,
-        project_dir=project_dir,
-        agent=agent,
-    )
-    if proposed:
-        logger.info("auto-extract proposed %d memories for %s", len(proposed), session_id)
-    return {"proposed": len(proposed), "error": None}
+    added = write_facts(candidates)
+    if added:
+        logger.info("auto-extract wrote %d memories for %s", added, session_id)
+    return {"added": added, "error": None}

@@ -45,14 +45,18 @@ import type {
   ToolAuditResponse,
   WorkspaceBranchResponse,
   GoalStatusResponse,
-  MemoryProposalRecord,
-  MemoryProposalResolveRequest,
-  MemoryProposalsResponse,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
   MemoryFileContentResponse,
   MemoryFileSaveResponse,
+  MemorySearchResponse,
+  MemoryMoveResponse,
+  MemoryExportRequest,
+  MemoryExportResult,
+  MemoryImportPickResult,
+  MemoryImportPreviewResponse,
+  MemoryImportApplyResponse,
   MemorySettings,
   MemorySettingsPatch,
 } from '../types';
@@ -170,8 +174,12 @@ export interface ChatService {
   getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
   saveMemoryFile: (rel: string, content: string) => Promise<MemoryFileSaveResponse>;
   deleteMemoryFile: (rel: string) => Promise<MemoryDeleteResponse>;
-  listMemoryProposals: () => Promise<MemoryProposalsResponse>;
-  resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
+  searchMemory: (query: string, limit?: number) => Promise<MemorySearchResponse>;
+  moveMemoryFile: (rel: string, newRel: string) => Promise<MemoryMoveResponse>;
+  exportMemory: (payload: MemoryExportRequest) => Promise<MemoryExportResult>;
+  importMemory: () => Promise<MemoryImportPickResult>;
+  previewMemoryImport: (path: string) => Promise<MemoryImportPreviewResponse>;
+  applyMemoryImport: (token: string, decisions: Record<string, string>) => Promise<MemoryImportApplyResponse>;
   getMemorySettings: () => Promise<MemorySettings>;
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
   revealInFolder: (path: string) => Promise<{ status: string }>;
@@ -412,14 +420,34 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.deleteMemoryFile({ rel });
   }
 
-  async listMemoryProposals(): Promise<MemoryProposalsResponse> {
+  async searchMemory(query: string, limit = 50): Promise<MemorySearchResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.listMemoryProposals();
+    return window.electronAPI.searchMemory(query, limit);
   }
 
-  async resolveMemoryProposal(request: MemoryProposalResolveRequest): Promise<{ status: string; record?: MemoryProposalRecord }> {
+  async moveMemoryFile(rel: string, newRel: string): Promise<MemoryMoveResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.resolveMemoryProposal(request);
+    return window.electronAPI.moveMemoryFile({ rel, new_rel: newRel });
+  }
+
+  async exportMemory(payload: MemoryExportRequest): Promise<MemoryExportResult> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.exportMemory(payload);
+  }
+
+  async importMemory(): Promise<MemoryImportPickResult> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.importMemory();
+  }
+
+  async previewMemoryImport(path: string): Promise<MemoryImportPreviewResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.previewMemoryImport({ path });
+  }
+
+  async applyMemoryImport(token: string, decisions: Record<string, string>): Promise<MemoryImportApplyResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.applyMemoryImport({ token, decisions });
   }
 
   async getMemorySettings(): Promise<MemorySettings> {
@@ -1322,15 +1350,44 @@ class HttpChatService implements ChatService {
     });
   }
 
-  async listMemoryProposals(): Promise<MemoryProposalsResponse> {
-    return this.request<MemoryProposalsResponse>('/api/memory/proposals');
+  async searchMemory(query: string, limit = 50): Promise<MemorySearchResponse> {
+    return this.request<MemorySearchResponse>(`/api/memory/search?q=${encodeURIComponent(query)}&limit=${limit}`);
   }
 
-  async resolveMemoryProposal(request: MemoryProposalResolveRequest): Promise<{ status: string; record?: MemoryProposalRecord }> {
-    return this.request<{ status: string; record?: MemoryProposalRecord }>('/api/memory/proposals/resolve', {
+  async moveMemoryFile(rel: string, newRel: string): Promise<MemoryMoveResponse> {
+    return this.request<MemoryMoveResponse>('/api/memory/move', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request),
+      body: JSON.stringify({ rel, new_rel: newRel }),
+    });
+  }
+
+  async exportMemory(payload: MemoryExportRequest): Promise<MemoryExportResult> {
+    return this.request<MemoryExportResult>('/api/memory/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async importMemory(): Promise<MemoryImportPickResult> {
+    // No local file picker in the web build.
+    return { status: 'unsupported' };
+  }
+
+  async previewMemoryImport(path: string): Promise<MemoryImportPreviewResponse> {
+    return this.request<MemoryImportPreviewResponse>('/api/memory/import/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+  }
+
+  async applyMemoryImport(token: string, decisions: Record<string, string>): Promise<MemoryImportApplyResponse> {
+    return this.request<MemoryImportApplyResponse>('/api/memory/import/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, decisions }),
     });
   }
 

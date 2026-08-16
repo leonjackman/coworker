@@ -206,6 +206,43 @@ class MemoryArgs(BaseModel):
         default="",
         description="For 'replace'/'remove', a substring that identifies the entry to change. Leave empty for 'add'.",
     )
+    scope: Literal["agent", "system"] = Field(
+        default="agent",
+        description="agent writes to your own agent BASE/ memory (default). system writes to a system-level default file (MEMORY.md / USER.md / AGENT.md).",
+    )
+    name: str = Field(
+        default="",
+        description="File name within the target scope. Empty in agent scope = your MEMORY.md; otherwise a .md file in your own agent BASE/. In system scope must be MEMORY.md, USER.md or AGENT.md.",
+    )
+
+
+def _resolve_memory_target(memory_rel: str, scope: str, name: str) -> tuple[bool, str]:
+    """Resolve the memory file ``rel`` for the memory tool write target.
+
+    Returns ``(ok, rel_or_error)``. Agent scope stays inside the current
+    agent's ``BASE/`` (``MEMORY.md`` or a named sibling file); system scope is
+    limited to the three system-default files. Everything else — project
+    ``BASE`` files, ``BASE/PROJECT``, other agents, user root files — stays
+    read-only for agents.
+    """
+    import posixpath
+
+    from coworker.memory.layout import SYSTEM_FILES
+
+    scope = scope or "agent"
+    name = (name or "").strip()
+    if scope == "system":
+        if name not in SYSTEM_FILES:
+            return False, "System memory scope only allows MEMORY.md, USER.md or AGENT.md."
+        return True, name
+    base = posixpath.dirname(memory_rel)
+    if not name:
+        return True, memory_rel
+    if "/" in name or "\\" in name:
+        return False, "Agent memory name must be a single file name (no folders)."
+    if not (name.endswith(".md") or name.endswith(".markdown")):
+        return False, "Agent memory files must be Markdown (.md / .markdown)."
+    return True, f"{base}/{name}"
 
 
 class AskUserOption(BaseModel):
@@ -579,8 +616,8 @@ def build_workspace_tools(
             return _error_result(exc, "git_status")
 
     @tool(args_schema=MemoryArgs)
-    def memory(action: str, content: str = "", target: str = "") -> str:
-        """Write a long-term memory entry for the current agent.
+    def memory(action: str, content: str = "", target: str = "", scope: str = "agent", name: str = "") -> str:
+        """Write a long-term memory entry.
 
         Long-term memory persists across sessions and is injected into every
         conversation. Use it for stable facts: user preferences, project
@@ -598,22 +635,31 @@ def build_workspace_tools(
           with ``content``. Use it to update stale or outgrown entries.
         - ``remove``: deletes every entry containing ``target``.
 
-        Memory is scoped to the current agent's memory file automatically; you
-        cannot specify a path or scope. The project's ``BASE`` files and the
-        system memory files are read-only for you — only the user edits them.
-        In supervised mode a write pauses for the user's confirmation. Failed
-        writes (duplicate / target not found) return an error message and change
-        nothing.
+        Scope rules:
+        - ``scope="agent"`` (default) writes to your own agent ``BASE/`` — either
+          your ``MEMORY.md`` or, via ``name``, another ``.md`` file there.
+        - ``scope="system"`` writes to one of the system-default files only:
+          ``MEMORY.md``, ``USER.md`` or ``AGENT.md`` (pass it via ``name``).
+          Use this for durable global facts about the user.
+
+        You cannot write to project ``BASE`` user files, ``BASE/PROJECT``,
+        another agent's memory, or user-created root files — those are
+        read-only for you. In supervised mode a write pauses for the user's
+        confirmation. Failed writes (duplicate / target not found) return an
+        error message and change nothing.
         """
         try:
             if memory_store is None or not memory_rel:
                 return _error_result(RuntimeError("memory is not available"), "memory")
+            ok, rel = _resolve_memory_target(memory_rel, scope, name)
+            if not ok:
+                return f"Memory write rejected: {rel}"
             if action == "add":
-                blocks = memory_store.add_block(memory_rel, content)
+                blocks = memory_store.add_block(rel, content)
             elif action == "replace":
-                blocks = memory_store.replace_block(memory_rel, target, content)
+                blocks = memory_store.replace_block(rel, target, content)
             elif action == "remove":
-                blocks = memory_store.remove_block(memory_rel, target)
+                blocks = memory_store.remove_block(rel, target)
             else:
                 return f"Unsupported memory action: {action}"
             return f"Memory updated. {len(blocks)} entries now."

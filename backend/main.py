@@ -43,7 +43,8 @@ from coworker.sessions import SessionStore
 from coworker.skills.skill_manager import SkillManager
 from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
 from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
-from coworker.memory.auto_extract import MemoryProposalStore
+from coworker.memory.layout import AGENT_CORE_FILES, BASE_DIR, SYSTEM_FILES
+from coworker.memory.transfer import apply_import, export_memory, preview_import
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
@@ -92,7 +93,6 @@ def _memory_project_name(memory_dir: str) -> str:
 
 
 memory_manager.scanner.project_name_resolver = _memory_project_name
-memory_proposal_store = MemoryProposalStore(settings.data_dir)
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir)
 agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
 
@@ -563,6 +563,20 @@ def _ensure_agent_skeleton(project_dir: str, agent: str = DEFAULT_AGENT) -> str:
         return f"{project_dir}/{agent}"
 
 
+def _is_agent_core_rel(rel: str) -> bool:
+    """True when ``rel`` points at an agent identity/core file (``…/BASE/SOUL|AGENT|MEMORY.md``)."""
+    parts = rel.split("/")
+    return len(parts) >= 2 and parts[-1] in AGENT_CORE_FILES and parts[-2] == BASE_DIR
+
+
+def _is_protected_memory_file(rel: str) -> bool:
+    """True when ``rel`` is a system root file or an agent core file (immovable)."""
+    parts = rel.split("/")
+    if len(parts) == 1 and parts[0] in SYSTEM_FILES:
+        return True
+    return _is_agent_core_rel(rel)
+
+
 def _memory_extract_llm() -> Any | None:
     from coworker.memory.auto_extract import build_extract_llm
 
@@ -598,11 +612,10 @@ def _memory_transcript(session_id: str) -> list[dict[str, Any]]:
     ]
 
 
-# Wire the Phase 2 auto-extract dependencies (proposal store + extractor LLM +
-# transcript provider). Without this, after_turn's extraction task short-circuits
+# Wire the Phase 2 auto-extract dependencies (extractor LLM + transcript
+# provider). Without this, after_turn's extraction task short-circuits
 # and auto-extract silently never runs.
 memory_manager.configure_extractor(
-    proposal_store=memory_proposal_store,
     llm_factory=_memory_extract_llm,
     transcript_provider=_memory_transcript,
 )
@@ -726,7 +739,7 @@ async def chat(request: ChatRequest):
 
 
 # --------------------------------------------------------------------------- #
-# Long-term memory API (library tree + proposals + settings)
+# Long-term memory API (library tree + settings)
 # --------------------------------------------------------------------------- #
 
 class MemoryWriteRequest(BaseModel):
@@ -737,14 +750,28 @@ class MemoryWriteRequest(BaseModel):
     agent: str = DEFAULT_AGENT
 
 
-class MemoryProposalResolveRequest(BaseModel):
-    proposal_id: str
-    status: str = "approved"  # approved | rejected
-
-
 class MemoryFileRequest(BaseModel):
     rel: str = ""
     content: str = ""
+
+
+class MemoryMoveRequest(BaseModel):
+    rel: str = ""
+    new_rel: str = ""
+
+
+class MemoryExportRequest(BaseModel):
+    scope: str = "all"  # all | system | projects
+    project_dirs: list[str] = []
+
+
+class MemoryImportPreviewRequest(BaseModel):
+    path: str = ""
+
+
+class MemoryImportApplyRequest(BaseModel):
+    token: str = ""
+    decisions: dict[str, str] = {}
 
 
 class MemorySettingsUpdate(BaseModel):
@@ -807,7 +834,7 @@ async def save_memory_file(request: MemoryFileRequest):
 
 @app.post("/api/memory/delete")
 async def delete_memory(request: MemoryFileRequest):
-    """Delete a file (or empty directory) under the memory root."""
+    """Delete a file (moved to the OS trash) or empty directory under the root."""
     if not request.rel:
         raise HTTPException(status_code=400, detail="rel is required")
     try:
@@ -816,7 +843,80 @@ async def delete_memory(request: MemoryFileRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="file not found")
-    return {"status": "ok", "rel": request.rel}
+    return {"status": "ok", "rel": request.rel, "trashed": True}
+
+
+@app.post("/api/memory/move")
+async def move_memory(request: MemoryMoveRequest):
+    """Move/rename a memory file. System and agent-core files are immovable."""
+    if not request.rel or not request.new_rel:
+        raise HTTPException(status_code=400, detail="rel and new_rel are required")
+    if _is_protected_memory_file(request.rel):
+        raise HTTPException(status_code=400, detail="system and agent-core files cannot be moved")
+    if _is_agent_core_rel(request.new_rel):
+        raise HTTPException(status_code=400, detail="cannot move a file into an agent core location")
+    try:
+        new_rel = memory_manager.store.move_file(request.rel, request.new_rel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "rel": request.rel, "new_rel": new_rel}
+
+
+@app.get("/api/memory/search")
+async def search_memory(q: str = "", limit: int = 50):
+    """Full-text search across the memory library (case-insensitive substring)."""
+    query = (q or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="q is required")
+    if len(query) > 200:
+        raise HTTPException(status_code=400, detail="query too long")
+    limit = max(1, min(int(limit or 50), 100))
+    results = memory_manager.scanner.search(query, limit=limit)
+    return {"query": query, "results": results}
+
+
+@app.post("/api/memory/export")
+async def export_memory_api(request: MemoryExportRequest):
+    """Export a memory subset as a zip archive on the backend."""
+    if request.scope not in ("all", "system", "projects"):
+        raise HTTPException(status_code=400, detail="scope must be all|system|projects")
+    project_dirs = request.project_dirs if request.scope == "projects" else []
+    try:
+        return export_memory(
+            memory_manager.root,
+            memory_manager.data_dir,
+            scope=request.scope,
+            project_dirs=project_dirs,
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/memory/import/preview")
+async def preview_import_api(request: MemoryImportPreviewRequest):
+    """Unpack a zip into a staging dir and report entries with conflict flags."""
+    if not request.path:
+        raise HTTPException(status_code=400, detail="path is required")
+    try:
+        return preview_import(memory_manager.root, memory_manager.data_dir, request.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/memory/import/apply")
+async def apply_import_api(request: MemoryImportApplyRequest):
+    """Apply a previewed import with a per-file skip/overwrite decision map."""
+    if not request.token:
+        raise HTTPException(status_code=400, detail="token is required")
+    try:
+        return apply_import(
+            memory_manager.root,
+            memory_manager.data_dir,
+            request.token,
+            request.decisions,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/memory/write")
@@ -872,31 +972,6 @@ async def memory_register_agent(request: MemoryWriteRequest):
     return {"status": "ok", "agent_dir": agent_dir}
 
 
-@app.get("/api/memory/proposals")
-async def list_memory_proposals():
-    return {"proposals": memory_proposal_store.list_pending()}
-
-
-@app.post("/api/memory/proposals/resolve")
-async def resolve_memory_proposal(request: MemoryProposalResolveRequest):
-    record = memory_proposal_store.resolve(request.proposal_id, request.status)
-    if record is None:
-        raise HTTPException(status_code=404, detail="proposal not found")
-    if request.status == "approved":
-        project_dir = record.get("project_dir") or ""
-        agent = record.get("agent") or DEFAULT_AGENT
-        try:
-            if project_dir:
-                agent_rel = _ensure_agent_skeleton(project_dir, agent) + "/BASE/MEMORY.md"
-                memory_manager.store.add_block(agent_rel, record.get("text", ""))
-            else:
-                memory_manager.store.add_block("USER.md", record.get("text", ""))
-        except ValueError as exc:
-            # Duplicate or already-saved: treat as resolved regardless.
-            logger.info("approve proposal %s: %s", request.proposal_id, exc)
-    return {"status": "ok", "record": record}
-
-
 @app.get("/api/memory/status")
 async def memory_status(project_id: str = ""):
     """Full memory overview: file counts, sizes, budget, enabled flags."""
@@ -913,7 +988,6 @@ async def memory_status(project_id: str = ""):
         "file_count": len(nodes),
         "char_count": char_total,
         "over_budget": char_total > memory_manager.char_limit,
-        "proposals_pending": len(memory_proposal_store.list_pending()),
     }
 
 
@@ -926,7 +1000,6 @@ async def get_memory_settings():
         "auto_extract": memory_manager.auto_extract,
         "nudge_interval": memory_manager.config.nudge_interval,
         "extract_model": memory_manager.config.extract_model,
-        "proposals_pending": len(memory_proposal_store.list_pending()),
     }
 
 

@@ -2500,7 +2500,6 @@ function App() {
         auto_extract: true,
         nudge_interval: 10,
         extract_model: '',
-        proposals_pending: 0,
       };
       return { ...base, ...patch };
     });

@@ -829,7 +829,7 @@ export interface MarketInstallResponse {
 
 // -- Long-term memory (memory library tree) -------------------------------
 
-export type MemoryNodeKind = 'system' | 'base_file' | 'project_file' | 'agent_file' | 'session_file';
+export type MemoryNodeKind = 'system' | 'base_file' | 'project_file' | 'agent_file' | 'session_file' | 'folder_file';
 
 export interface MemoryNode {
   kind: MemoryNodeKind;
@@ -839,6 +839,12 @@ export interface MemoryNode {
   content: string;
   blocks: string[];
   char_count: number;
+}
+
+export interface MemoryFolderView {
+  name: string;
+  rel: string;
+  files: MemoryNode[];
 }
 
 export interface MemoryAgentView {
@@ -858,6 +864,7 @@ export interface MemoryProjectView {
   base: MemoryNode[];
   project: MemoryNode[];
   agents: MemoryAgentView[];
+  folders: MemoryFolderView[];
 }
 
 export interface MemoryDiscoverResponse {
@@ -875,7 +882,6 @@ export interface MemoryStatusResponse {
   file_count: number;
   char_count: number;
   over_budget: boolean;
-  proposals_pending: number;
 }
 
 export interface MemoryWriteRequest {
@@ -889,29 +895,6 @@ export interface MemoryWriteRequest {
 export interface MemoryWriteResponse {
   rel: string;
   blocks: string[];
-}
-
-export interface MemoryProposalRecord {
-  id: string;
-  kind: string;
-  status: string;
-  text: string;
-  session_id: string;
-  provider: string;
-  model: string;
-  workspace_path: string;
-  project_dir?: string;
-  agent?: string;
-  created_at: string;
-}
-
-export interface MemoryProposalsResponse {
-  proposals: MemoryProposalRecord[];
-}
-
-export interface MemoryProposalResolveRequest {
-  proposal_id: string;
-  status: 'approved' | 'rejected';
 }
 
 export interface MemoryFileContentResponse {
@@ -932,13 +915,66 @@ export interface MemoryDeleteResponse {
   rel: string;
 }
 
+export interface MemorySearchResult {
+  rel: string;
+  name: string;
+  kind: MemoryNodeKind;
+  location: string;
+  snippet: string;
+  match_count: number;
+}
+
+export interface MemorySearchResponse {
+  query: string;
+  results: MemorySearchResult[];
+}
+
+export interface MemoryMoveResponse {
+  status: string;
+  rel: string;
+  new_rel: string;
+}
+
+export interface MemoryExportRequest {
+  scope: 'all' | 'system' | 'projects';
+  project_dirs?: string[];
+}
+
+export interface MemoryExportResult {
+  path: string;
+  filename: string;
+  size: number;
+  file_count: number;
+  status?: string;
+}
+
+export interface MemoryImportPickResult {
+  status: 'ok' | 'canceled' | 'unsupported';
+  path?: string;
+}
+
+export interface MemoryImportPreviewFile {
+  rel: string;
+  exists: boolean;
+}
+
+export interface MemoryImportPreviewResponse {
+  token: string;
+  files: MemoryImportPreviewFile[];
+}
+
+export interface MemoryImportApplyResponse {
+  imported: number;
+  overwritten: number;
+  skipped: number;
+}
+
 export interface MemorySettings {
   enabled: boolean;
   char_limit: number;
   auto_extract: boolean;
   nudge_interval: number;
   extract_model: string;
-  proposals_pending: number;
 }
 
 export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'char_limit' | 'auto_extract' | 'nudge_interval' | 'extract_model'>>;

@@ -43,14 +43,18 @@ import type {
   MarketInstallResponse,
   WorkspaceBranchResponse,
   GoalStatusResponse,
-  MemoryProposalRecord,
-  MemoryProposalResolveRequest,
-  MemoryProposalsResponse,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
   MemoryFileContentResponse,
   MemoryFileSaveResponse,
+  MemorySearchResponse,
+  MemoryMoveResponse,
+  MemoryExportRequest,
+  MemoryExportResult,
+  MemoryImportPickResult,
+  MemoryImportPreviewResponse,
+  MemoryImportApplyResponse,
   MemorySettings,
   MemorySettingsPatch,
   UpdateStateSnapshot,
@@ -137,8 +141,12 @@ declare global {
       getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
       saveMemoryFile: (payload: { rel: string; content: string }) => Promise<MemoryFileSaveResponse>;
       deleteMemoryFile: (payload: { rel: string }) => Promise<MemoryDeleteResponse>;
-      listMemoryProposals: () => Promise<MemoryProposalsResponse>;
-      resolveMemoryProposal: (request: MemoryProposalResolveRequest) => Promise<{ status: string; record?: MemoryProposalRecord }>;
+      searchMemory: (query: string, limit?: number) => Promise<MemorySearchResponse>;
+      moveMemoryFile: (payload: { rel: string; new_rel: string }) => Promise<MemoryMoveResponse>;
+      exportMemory: (payload: MemoryExportRequest) => Promise<MemoryExportResult>;
+      importMemory: () => Promise<MemoryImportPickResult>;
+      previewMemoryImport: (payload: { path: string }) => Promise<MemoryImportPreviewResponse>;
+      applyMemoryImport: (payload: { token: string; decisions: Record<string, string> }) => Promise<MemoryImportApplyResponse>;
       getMemorySettings: () => Promise<MemorySettings>;
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
       revealInFolder: (path: string) => Promise<{ status: string }>;
