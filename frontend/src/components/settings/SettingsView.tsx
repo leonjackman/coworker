@@ -128,9 +128,9 @@ export function SettingsView({
             ],
           },
           {
-            id: 'composer',
-            title: t('settings.composer_group'),
-            description: t('settings.composer_group_desc'),
+            id: 'agent',
+            title: t('settings.agent_group'),
+            description: t('settings.agent_group_desc'),
             items: [
               {
                 id: 'autonomy',
@@ -141,12 +141,28 @@ export function SettingsView({
                 options: autonomyOptions(),
                 onChange: (value) => onAutonomyChange(value as Autonomy),
               },
+              {
+                id: 'goal_rounds',
+                type: 'goal_rounds',
+                label: t('settings.goal_rounds'),
+                description: t('settings.goal_rounds_desc'),
+                value: goalMaxRounds,
+                onChange: onGoalMaxRoundsChange,
+              },
+              {
+                id: 'audit',
+                type: 'action',
+                label: t('settings.audit_entry'),
+                description: t('settings.audit_entry_desc'),
+                actionLabel: t('settings.audit_open'),
+                onAction: () => setSettingsPage('audit'),
+              },
             ],
           },
           {
-            id: 'attachments',
-            title: t('settings.attachment_group'),
-            description: t('settings.attachment_group_desc'),
+            id: 'runtime',
+            title: t('settings.runtime_group'),
+            description: t('settings.runtime_group_desc'),
             items: [
               {
                 id: 'max_attachment_mb',
@@ -159,13 +175,6 @@ export function SettingsView({
                 unit: t('settings.max_attachment_mb_unit'),
                 onChange: onMaxAttachmentMbChange,
               },
-            ],
-          },
-          {
-            id: 'memory',
-            title: t('settings.memory_group'),
-            description: t('settings.memory_group_desc'),
-            items: [
               {
                 id: 'memory_enabled',
                 type: 'toggle',
@@ -189,36 +198,6 @@ export function SettingsView({
                   { value: 'false', label: t('memory.disabled') },
                 ],
                 onChange: (value) => onMemorySettingsChange({ auto_extract: value === 'true' }),
-              },
-            ],
-          },
-          {
-            id: 'observation',
-            title: t('settings.audit_group'),
-            description: t('settings.audit_group_desc'),
-            items: [
-              {
-                id: 'audit',
-                type: 'action',
-                label: t('settings.audit_entry'),
-                description: t('settings.audit_entry_desc'),
-                actionLabel: t('settings.audit_open'),
-                onAction: () => setSettingsPage('audit'),
-              },
-            ],
-          },
-          {
-            id: 'goal',
-            title: t('settings.goal_group'),
-            description: t('settings.goal_group_desc'),
-            items: [
-              {
-                id: 'goal_rounds',
-                type: 'goal_rounds',
-                label: t('settings.goal_rounds'),
-                description: t('settings.goal_rounds_desc'),
-                value: goalMaxRounds,
-                onChange: onGoalMaxRoundsChange,
               },
             ],
           },
