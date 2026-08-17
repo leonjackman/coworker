@@ -928,6 +928,7 @@ function TreeSection({
   onAdd,
   childrenOverride,
   emptyText,
+  tag,
 }: {
   label: string;
   relPrefix: string;
@@ -940,6 +941,7 @@ function TreeSection({
   onAdd?: (() => void) | undefined;
   childrenOverride?: ReactNode | undefined;
   emptyText?: string | undefined;
+  tag?: string;
 }) {
   const hasOverride = Array.isArray(childrenOverride)
     ? childrenOverride.length > 0
@@ -961,6 +963,7 @@ function TreeSection({
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           <Folder size={14} className="memory-tree__icon" />
           <span className="memory-tree__label">{label}</span>
+          {tag && <span className="memory-tree__placeholder" style={{ padding: '0', marginLeft: '0', marginTop: '2px' }}>{tag}</span>}
         </button>
         {onAdd && (
           <button
@@ -1016,6 +1019,7 @@ function ProjectBranch({
         <div className="memory-tree__children">
           <TreeSection
             label={t('memory.tree.base')}
+            tag={t('memory.tree.base_tag')}
             relPrefix={project.rel}
             nodes={project.base}
             collapsed={isCollapsed(baseKey)}
@@ -1027,6 +1031,7 @@ function ProjectBranch({
           />
           <TreeSection
             label={t('memory.tree.project_context')}
+            tag={t('memory.tree.project_context_tag')}
             relPrefix={`${project.rel}/BASE/PROJECT`}
             nodes={project.project}
             collapsed={isCollapsed(projectKey)}
@@ -1205,6 +1210,7 @@ function AgentBranch({
           />
           <TreeSection
             label={t('memory.tree.sessions')}
+            tag={t('memory.tree.sessions_tag')}
             relPrefix={agent.rel}
             nodes={agent.sessions}
             collapsed={isCollapsed(sessionsKey)}
