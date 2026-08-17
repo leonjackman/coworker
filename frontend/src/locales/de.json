@@ -816,5 +816,6 @@
   "providers.context_source_discovered": "Quelle: vom Server erkannt",
   "providers.context_source_default": "Quelle: Standard (128k)",
   "providers.ollama_ctx_hint": "Ollama wählt den Kontext je nach VRAM (4k–256k) standardmäßig und sein OpenAI-kompatibler Endpoint akzeptiert kein per-anfrage num_ctx. Um es zu vergrössen, setzen Sie PARAMETER num_ctx in einer Modelfile, OLLAMA_CONTEXT_LENGTH oder den App-Schieberegler.",
-  "sidebar.project_drag_handle": "Drag to reorder"
+  "sidebar.project_drag_handle": "Drag to reorder",
+  "titlebar.context": "Context"
 }

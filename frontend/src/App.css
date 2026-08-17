@@ -1087,6 +1087,53 @@ body.sidebar-resizing {
   background: var(--material-control) !important;
 }
 
+.workspace-titlebar__context-budget {
+  -webkit-app-region: no-drag;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 7px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: var(--material-control);
+  border: 1px solid var(--material-border);
+  white-space: nowrap;
+}
+
+.context-budget-icon {
+  color: var(--ctx-color, var(--muted-foreground));
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+.context-budget-bar {
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ctx-color, var(--muted-foreground)) 20%, var(--background));
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.context-budget-bar__fill {
+  height: 100%;
+  width: 0%;
+  background: var(--ctx-color, var(--muted-foreground));
+  border-radius: 2px;
+  transition: width 0.3s ease, background-color 0.3s ease;
+}
+
+.context-budget-text {
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+  text-align: right;
+  font-size: 11px;
+}
+
+
 .titlebar-pending {
   -webkit-app-region: no-drag;
   min-height: 28px;

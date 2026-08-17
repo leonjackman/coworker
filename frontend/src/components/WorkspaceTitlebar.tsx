@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   Diff,
+  Layers,
   MoreHorizontal,
   PanelBottom,
   PanelLeftClose,
@@ -10,7 +11,7 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import type { AppView } from '../types';
+import type { AppView, ContextUsage } from '../types';
 import { t } from '../lib/i18n';
 import { Button } from './ui/button';
 import {
@@ -33,12 +34,38 @@ interface WorkspaceTitlebarProps {
   changesPanelOpen: boolean;
   canEditSession: boolean;
   pendingCount: number;
+  contextUsage?: ContextUsage | null;
   onToggleSidebar: () => void;
   onToggleRightSidebar: () => void;
   onToggleBottomPanel: () => void;
   onToggleChangesPanel: () => void;
   onRenameSession: () => void;
   onDeleteSession: () => void;
+}
+
+const STATUS_COLORS = {
+  green: '#2fa06d',
+  amber: '#c79a2f',
+  red: '#c95343',
+} as const;
+
+function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
+  const pct = usage.budgetChars > 0 ? Math.round((usage.usedChars / usage.budgetChars) * 100) : 0;
+  const color = pct < 70 ? STATUS_COLORS.green : pct < 90 ? STATUS_COLORS.amber : STATUS_COLORS.red;
+  const usedK = usage.usedChars >= 1000 ? `${(usage.usedChars / 1000).toFixed(1)}k` : `${usage.usedChars}`;
+  const budgetK = usage.budgetChars >= 1000 ? `${(usage.budgetChars / 1000).toFixed(0)}k` : `${usage.budgetChars}`;
+
+  return (
+    <Tooltip content={`${t('titlebar.context')} · ${usedK} / ${budgetK}`}>
+      <div className="workspace-titlebar__context-budget">
+        <Layers size={12} className="context-budget-icon" />
+        <div className="context-budget-bar" style={{ '--ctx-color': color } as React.CSSProperties}>
+          <div className="context-budget-bar__fill" style={{ width: `${Math.min(pct, 100)}%` }} />
+        </div>
+        <span className="context-budget-text">{pct}%</span>
+      </div>
+    </Tooltip>
+  );
 }
 
 const isMacInset = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
@@ -54,6 +81,7 @@ export function WorkspaceTitlebar({
   changesPanelOpen,
   canEditSession,
   pendingCount,
+  contextUsage,
   onToggleSidebar,
   onToggleRightSidebar,
   onToggleBottomPanel,
@@ -117,6 +145,7 @@ export function WorkspaceTitlebar({
       </div>
 
       <div className="workspace-titlebar__right">
+        {contextUsage && <ContextBudgetIndicator usage={contextUsage} />}
         <div className="workspace-titlebar__status" aria-label={statusText}>
           <span className={`status-dot status-dot--${status}`} />
           <span>{statusText}</span>

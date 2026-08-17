@@ -816,5 +816,6 @@
   "providers.context_source_discovered": "Origem: descoberta do servidor",
   "providers.context_source_default": "Origem: padrão (128k)",
   "providers.ollama_ctx_hint": "O Ollama seleciona o contexto por VRAM (4k–256k) por padrão e seu endpoint compatível com OpenAI não aceita num_ctx por solicitação. Para ampliar, definida PARAMETER num_ctx em um Modelfile, OLLAMA_CONTEXT_LENGTH, ou o controle deslizante do aplicativo.",
-  "sidebar.project_drag_handle": "Drag to reorder"
+  "sidebar.project_drag_handle": "Drag to reorder",
+  "titlebar.context": "Context"
 }

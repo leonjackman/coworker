@@ -45,6 +45,7 @@
   "titlebar.rename_session": "Rename session",
   "titlebar.delete_session": "Delete session",
   "titlebar.delete_session_confirm": "Delete the current session?",
+  "titlebar.context": "Context",
   "sidebar.primary_nav": "Primary navigation",
   "sidebar.collapse": "Collapse sidebar",
   "sidebar.expand": "Expand sidebar",

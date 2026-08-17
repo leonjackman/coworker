@@ -25,7 +25,7 @@ import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib
 import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -176,6 +176,7 @@ function App() {
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [sessionId, setSessionId] = useState<string | undefined>();
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
@@ -758,6 +759,10 @@ function App() {
       // currently-viewed session; a background session's goal must not clobber
       // it (including while on the hero/draft, where no goal card should exist).
       // Message events (delta/tool/plan/done) are always processed.
+      if (event.type === 'context_usage') {
+        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        return;
+      }
       const goalMatchesView = !event.session_id || event.session_id === sessionIdRef.current;
       if (event.type === 'start') {
         streamStartAt = Date.now();
@@ -1269,6 +1274,10 @@ function App() {
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
+      if (event.type === 'context_usage') {
+        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        return;
+      }
       if (event.type === 'delta') {
         streamedContent += event.content;
         const last = localParts[localParts.length - 1];
@@ -1460,6 +1469,10 @@ function App() {
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
+      if (event.type === 'context_usage') {
+        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        return;
+      }
       if (event.type === 'delta') {
         streamedContent += event.content;
         const last = localParts[localParts.length - 1];
@@ -1729,6 +1742,10 @@ function App() {
         (event) => {
           // P1 陈旧请求守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
           if (isStreamStale(resumeSessionId, resumeRequestSeq)) return;
+          if (event.type === 'context_usage') {
+            setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+            return;
+          }
           if (event.type === 'done') {
             resumeDone = true;
             resumeContent = event.content || resumeContent;
@@ -2586,6 +2603,7 @@ function App() {
         changesPanelOpen={changesPanelOpen}
         canEditSession={Boolean(sessionId)}
         pendingCount={currentSessionPending.length}
+        contextUsage={contextUsage}
         onToggleSidebar={() => {
           if (isNarrowViewport) {
             setMobileSidebarOpen((value) => !value);

@@ -2023,6 +2023,23 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         return self._trim(state)
 
     async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        # Surface live context-budget usage to the client so the topbar can show
+        # how close the conversation is to the compaction/trim threshold. Emitted
+        # on every model call via the LangGraph "custom" stream channel; the
+        # no-op writer in non-streaming contexts keeps this safe.
+        try:
+            messages = state.get("messages", [])
+            total = sum(_msg_chars(m) for m in messages)
+            runtime.stream_writer(
+                {
+                    "type": "context_usage",
+                    "used_chars": total,
+                    "budget_chars": self.budget_chars,
+                    "compressed": total > self.budget_chars,
+                }
+            )
+        except Exception:  # noqa: BLE001 - telemetry must never break a turn
+            logger.debug("context_usage emit skipped", exc_info=True)
         # Summary compaction: when the LLM is available and we are over budget,
         # summarize the OLDEST segment (keeping the recent tail intact) instead of
         # dropping it. Falls back to the plain rolling trim on any failure.
@@ -3135,7 +3152,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         elif stream_mode == "custom":
                             if isinstance(chunk, dict):
                                 event_type = chunk.get("type", "")
-                                if event_type in ("plan_start", "plan_delta", "plan_end"):
+                                if event_type == "context_usage":
+                                    # The middleware has no session context, so
+                                    # stamp the active session id before forwarding.
+                                    yield {**chunk, "session_id": session_id}
+                                elif event_type in ("plan_start", "plan_delta", "plan_end"):
                                     parts.append(chunk)
                                     yield chunk
                         elif stream_mode == "updates":
@@ -3668,7 +3689,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     elif stream_mode == "custom":
                         if isinstance(chunk, dict):
                             event_type = chunk.get("type", "")
-                            if event_type in ("plan_start", "plan_delta", "plan_end"):
+                            if event_type == "context_usage":
+                                # The middleware has no session context, so
+                                # stamp the active session id before forwarding.
+                                yield {**chunk, "session_id": session_id}
+                            elif event_type in ("plan_start", "plan_delta", "plan_end"):
                                 parts.append(chunk)
                                 yield chunk
                     elif stream_mode == "updates":

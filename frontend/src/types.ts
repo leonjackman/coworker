@@ -683,7 +683,15 @@ export interface PendingRequest {
     | { type: 'goal_attached'; stream_id: string; session_id: string }
     | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string }
     | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string }
-    | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string };
+    | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string }
+    | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; session_id?: string };
+
+/** Live context-budget usage surfaced by the backend's context-window middleware. */
+export interface ContextUsage {
+  usedChars: number;
+  budgetChars: number;
+  compressed: boolean;
+}
 
 export interface GoalTodo {
   content: string;
