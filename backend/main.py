@@ -358,7 +358,17 @@ async def _sse_events(
             if final is not None:
                 await queue.put(("event", final))
         except BaseException as exc:  # incl. GeneratorExit / CancelledError
-            err = on_error(exc) if on_error is not None else {"type": "error", "error": str(exc)[:400]}
+            # The terminal event must ALWAYS reach the client: without it the
+            # frontend sees a clean EOF with neither `done` nor `error` and
+            # renders a permanently "interrupted" (yellow) bubble. If the
+            # caller's on_error handler itself fails, fall back to a plain
+            # error event instead of letting the exception propagate (which
+            # would leave only the "end" sentinel in the queue).
+            try:
+                err = on_error(exc) if on_error is not None else {"type": "error", "error": str(exc)[:400]}
+            except BaseException:  # noqa: BLE001 - never lose the terminal event
+                logger.exception("on_error handler failed for stream: %r", str(exc)[:200])
+                err = {"type": "error", "error": "internal stream failure"}
             await queue.put(("error", err))
         finally:
             await queue.put(("end", None))
@@ -1530,8 +1540,12 @@ async def chat_stream(request: ChatStreamRequest):
                 last = session.messages[-1] if session.messages else None
                 if last is not None:
                     agent_registry.change_store.assign_message(session_id, last.id)
-            except KeyError:
-                pass
+            except Exception:  # noqa: BLE001 - persistence is a side effect; a
+                # write failure must NEVER corrupt the SSE stream contract (the
+                # client still needs its terminal done/error event), otherwise a
+                # transient fs/json/sqlite hiccup turns a reply into an endless
+                # "interrupted" (yellow) bubble with no terminal event at all.
+                logger.exception("Failed to persist assistant message for session %s", session_id)
 
         def _handle_event(event):
             nonlocal terminal_sent, accumulated_content
@@ -1541,8 +1555,8 @@ async def chat_stream(request: ChatStreamRequest):
             if etype == "todos":
                 try:
                     session_store.update_goal(session_id, goal_todos=event.get("todos") or [])
-                except KeyError:
-                    pass
+                except Exception:  # noqa: BLE001 - a todo persist hiccup must not kill the stream
+                    logger.warning("update_goal(todos) failed for session %s", session_id, exc_info=True)
             if etype == "done":
                 if in_goal_flag:
                     for part in (event.get("parts") or []):
@@ -1557,8 +1571,8 @@ async def chat_stream(request: ChatStreamRequest):
                     )
                     try:
                         session_store.update_modes(session_id, work_mode, autonomy)
-                    except KeyError:
-                        pass
+                    except Exception:  # noqa: BLE001 - never break the terminal event
+                        logger.warning("update_modes failed on done for session %s", session_id, exc_info=True)
                     terminal_sent = True
             elif etype == "goal_done":
                 _persist_assistant(
@@ -1570,8 +1584,8 @@ async def chat_stream(request: ChatStreamRequest):
                 )
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
-                except KeyError:
-                    pass
+                except Exception:  # noqa: BLE001 - never break the terminal event
+                    logger.warning("update_modes failed on goal_done for session %s", session_id, exc_info=True)
                 terminal_sent = True
             elif etype == "goal_paused":
                 # Persist the work done up to the pause point (tool calls,
@@ -1667,8 +1681,8 @@ async def chat_stream(request: ChatStreamRequest):
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
-                except KeyError:
-                    pass
+                except Exception:  # noqa: BLE001 - never break the terminal event
+                    logger.warning("update_modes failed in _on_end for session %s", session_id, exc_info=True)
                 return {"type": "done", "session_id": session_id, "content": accumulated_content, "stream_end": True}
             return None
 
@@ -1683,7 +1697,9 @@ async def chat_stream(request: ChatStreamRequest):
                 # interrupted marker so the session does not look like the
                 # assistant never answered — otherwise a half-finished turn
                 # (e.g. a team member creation that already took effect) is
-                # invisible to the user after refresh.
+                # invisible to the user after refresh. _persist_assistant is
+                # fully guarded and can never raise, so this path cannot drop
+                # the terminal error event either.
                 _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [])
             if in_goal_flag:
                 _goal_active_streams.pop(f"chat-goal:{session_id}", None)
@@ -1693,12 +1709,12 @@ async def chat_stream(request: ChatStreamRequest):
                 _goal_cancel_events.pop(session_id, None)
                 try:
                     session_store.update_goal(session_id, goal_interrupted=True)
-                except KeyError:
-                    pass
+                except Exception:  # noqa: BLE001 - never break the terminal event
+                    logger.warning("update_goal failed in _on_error for session %s", session_id, exc_info=True)
             try:
                 session_store.update_modes(session_id, work_mode, autonomy)
-            except KeyError:
-                pass
+            except Exception:  # noqa: BLE001 - never break the terminal event
+                logger.warning("update_modes failed in _on_error for session %s", session_id, exc_info=True)
             terminal_sent = True
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
@@ -2112,8 +2128,8 @@ async def goal_resume(request: GoalResumeRequest):
                                     autonomy=autonomy,
                                     parts=_merge_goal_parts(goal_parts_accum),
                                 )
-                            except KeyError:
-                                pass
+                            except Exception:  # noqa: BLE001 - never break the terminal event
+                                logger.warning("goal_done persist failed for session %s", request.session_id, exc_info=True)
                             terminal_sent = True
                         elif etype == "goal_paused":
                             # Persist the work done up to the pause point (content
@@ -2131,8 +2147,8 @@ async def goal_resume(request: GoalResumeRequest):
                                         autonomy=autonomy,
                                         parts=_merge_goal_parts(goal_parts_accum),
                                     )
-                                except KeyError:
-                                    pass
+                                except Exception:  # noqa: BLE001 - never break the terminal event
+                                    logger.warning("goal_paused persist failed for session %s", request.session_id, exc_info=True)
                             terminal_sent = True
                         yield event
 
@@ -2141,14 +2157,14 @@ async def goal_resume(request: GoalResumeRequest):
                 if isinstance(exc, asyncio.TimeoutError):
                     try:
                         session_store.update_goal(request.session_id, goal_interrupted=True)
-                    except KeyError:
-                        pass
+                    except Exception:  # noqa: BLE001 - never break the terminal event
+                        logger.warning("update_goal failed (timeout) for session %s", request.session_id, exc_info=True)
                     return {"type": "goal_done", "session_id": request.session_id, "content": "", "reason": "timeout"}
                 if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
                     try:
                         session_store.update_goal(request.session_id, goal_interrupted=True)
-                    except KeyError:
-                        pass
+                    except Exception:  # noqa: BLE001 - never break the terminal event
+                        logger.warning("update_goal failed (cancel) for session %s", request.session_id, exc_info=True)
                 return {"type": "error", "session_id": request.session_id, "error": str(exc)[:400]}
 
             try:
@@ -2488,8 +2504,8 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                 last = session.messages[-1] if session.messages else None
                 if last is not None:
                     agent_registry.change_store.assign_message(session_id, last.id)
-            except KeyError:
-                pass
+            except Exception:  # noqa: BLE001 - persistence must never break the terminal event
+                logger.exception("Failed to persist partial rerun for session %s", session_id)
 
         def _on_event(event):
             nonlocal accumulated_content, terminal_sent
@@ -2513,8 +2529,8 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                     last = session.messages[-1] if session.messages else None
                     if last is not None:
                         agent_registry.change_store.assign_message(session_id, last.id)
-                except KeyError:
-                    pass
+                except Exception:  # noqa: BLE001 - persistence must never break the terminal event
+                    logger.exception("Failed to persist rerun assistant message for session %s", session_id)
 
         def _on_error(exc):
             # Persist whatever was produced before the failure so tool-change
@@ -2610,8 +2626,8 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                 last = session.messages[-1] if session.messages else None
                 if last is not None:
                     agent_registry.change_store.assign_message(session_id, last.id)
-            except KeyError:
-                pass
+            except Exception:  # noqa: BLE001 - persistence must never break the terminal event
+                logger.exception("Failed to persist partial rerun for session %s", session_id)
 
         def _on_event(event):
             nonlocal accumulated_content, terminal_sent
@@ -2635,8 +2651,8 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                     last = session.messages[-1] if session.messages else None
                     if last is not None:
                         agent_registry.change_store.assign_message(session_id, last.id)
-                except KeyError:
-                    pass
+                except Exception:  # noqa: BLE001 - persistence must never break the terminal event
+                    logger.exception("Failed to persist rerun assistant message for session %s", session_id)
 
         def _on_error(exc):
             # Persist whatever was produced before the failure so tool-change
