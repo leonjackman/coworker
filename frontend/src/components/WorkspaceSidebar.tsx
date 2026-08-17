@@ -1,5 +1,5 @@
-import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2, Users, Briefcase } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import type { AppView, OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
 import { formatTimeAgo } from '../lib/utils';
@@ -7,6 +7,21 @@ import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { Tooltip } from './ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import cwIconWhite from '../../../assets/brand/png/cw-icon-white.png';
 import cwIconBlack from '../../../assets/brand/png/cw-icon-black.png';
 import coworkerLogoBlack from '../../../assets/brand/png/coworker-logo-black.png';
@@ -45,6 +60,53 @@ interface SessionRowProps {
 }
 
 const DEFAULT_AGENT_ID = 'default_agent';
+
+const SIDEBAR_PROJECT_ORDER_KEY = 'coworker.sidebar.projectOrder';
+
+function loadProjectOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_PROJECT_ORDER_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id): id is string => typeof id === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function saveProjectOrder(ids: string[]): void {
+  try {
+    localStorage.setItem(SIDEBAR_PROJECT_ORDER_KEY, JSON.stringify(ids));
+  } catch {
+    /* localStorage may be unavailable in restricted renderer contexts */
+  }
+}
+
+/**
+ * Reorders `projects` according to a previously persisted id order.
+ * Ids no longer present are skipped; brand-new projects are appended
+ * at the end so the manual order stays stable across reloads.
+ */
+function orderProjects(projects: ProjectEntry[], preferred: string[]): ProjectEntry[] {
+  const byId = new Map(projects.map((p) => [p.id, p]));
+  const seen = new Set<string>();
+  const result: ProjectEntry[] = [];
+  for (const id of preferred) {
+    const project = byId.get(id);
+    if (project && !seen.has(id)) {
+      result.push(project);
+      seen.add(id);
+    }
+  }
+  for (const project of projects) {
+    if (!seen.has(project.id)) {
+      result.push(project);
+      seen.add(project.id);
+    }
+  }
+  return result;
+}
 
 function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorSessionId }: SessionRowProps) {
   const [copied, setCopied] = useState(false);
@@ -215,6 +277,17 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
 
 function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const {
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id });
+  const dragStyle: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
   const roster = useMemo(() => project.roster ?? [], [project.roster]);
   const isSingle = project.mode === 'single';
 
@@ -262,15 +335,18 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
   };
 
   return (
-    <div className="sidebar-project">
-      <div className={`sidebar-project__title-row ${active ? 'sidebar-project__title-row--active' : ''}`}>
+    <div ref={setNodeRef} style={dragStyle} className="sidebar-project" data-dragging={isDragging}>
+      <div
+        className={`sidebar-project__title-row ${active ? 'sidebar-project__title-row--active' : ''}`}
+        {...listeners}
+      >
         <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
-          {expanded ? (isSingle ? <FolderOpen size={16} /> : <Briefcase size={16} />) : (isSingle ? <Folder size={16} /> : <Briefcase size={16} />)}
+          {expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />)}
           <span>{project.name}</span>
-          <span className="sidebar-project__chevron-icon" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}>
+          <span className="sidebar-project__chevron-icon" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} onPointerDown={(e) => e.stopPropagation()}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </span>
-          <div className="sidebar-project__actions">
+          <div className="sidebar-project__actions" onPointerDown={(e) => e.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild className="sidebar-project__more-trigger" aria-label="Project actions">
                 <span className="more-icon-wrapper"><MoreHorizontal size={15} /></span>
@@ -376,6 +452,28 @@ export function WorkspaceSidebar({
 }: WorkspaceSidebarProps) {
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const [preferredOrder, setPreferredOrder] = useState<string[]>(() => loadProjectOrder());
+  const orderedProjects = useMemo(
+    () => orderProjects(projects, preferredOrder),
+    [projects, preferredOrder],
+  );
+  const orderedProjectIds = useMemo(() => orderedProjects.map((p) => p.id), [orderedProjects]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  const handleProjectDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = orderedProjectIds.indexOf(active.id as string);
+    const newIndex = orderedProjectIds.indexOf(over.id as string);
+    if (oldIndex < 0 || newIndex < 0) return;
+    const next = arrayMove(orderedProjectIds, oldIndex, newIndex);
+    setPreferredOrder(next);
+    saveProjectOrder(next);
+  };
 
   const handleResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (collapsed) return;
@@ -496,24 +594,28 @@ export function WorkspaceSidebar({
               <p className="sidebar-group__empty">{t('sidebar.projects_empty')}</p>
             )}
 
-            {projects.map((project) => (
-              <ProjectRow
-                key={project.id}
-                project={project}
-                sessions={sessions.filter((session) => session.project_id === project.id)}
-                {...(activeSessionId ? { activeSessionId } : {})}
-                {...(activeProjectId ? { activeProjectId } : {})}
-                {...(runningSessionIds ? { runningSessionIds } : {})}
-                defaultExpanded={expandedProjectIds.has(project.id)}
-                onNewChat={onNewChat}
-                onOpenProject={onOpenProject}
-                onOpenSession={onOpenSession}
-                onDeleteSession={onDeleteSession}
-                onRenameProject={onRenameProject}
-                onDeleteProject={onDeleteProject}
-                {...(onOpenOrgSettings ? { onOpenOrgSettings } : {})}
-              />
-            ))}
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleProjectDragEnd}>
+              <SortableContext items={orderedProjectIds} strategy={verticalListSortingStrategy}>
+                {orderedProjects.map((project) => (
+                  <ProjectRow
+                    key={project.id}
+                    project={project}
+                    sessions={sessions.filter((session) => session.project_id === project.id)}
+                    {...(activeSessionId ? { activeSessionId } : {})}
+                    {...(activeProjectId ? { activeProjectId } : {})}
+                    {...(runningSessionIds ? { runningSessionIds } : {})}
+                    defaultExpanded={expandedProjectIds.has(project.id)}
+                    onNewChat={onNewChat}
+                    onOpenProject={onOpenProject}
+                    onOpenSession={onOpenSession}
+                    onDeleteSession={onDeleteSession}
+                    onRenameProject={onRenameProject}
+                    onDeleteProject={onDeleteProject}
+                    {...(onOpenOrgSettings ? { onOpenOrgSettings } : {})}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
           </section>
         </div>
       )}

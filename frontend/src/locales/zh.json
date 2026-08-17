@@ -815,5 +815,6 @@
   "providers.context_source_table": "来源：内置模型对照表",
   "providers.context_source_discovered": "来源：服务端自动探测",
   "providers.context_source_default": "来源：默认值（128k）",
-  "providers.ollama_ctx_hint": "Ollama 默认按 VRAM 决定上下文（4k~256k），OpenAI 兼容端点不支持每请求 num_ctx。如需扩大，请在 Ollama 用 Modelfile 的 PARAMETER num_ctx、OLLAMA_CONTEXT_LENGTH 或 App 滑杆设置。"
+  "providers.ollama_ctx_hint": "Ollama 默认按 VRAM 决定上下文（4k~256k），OpenAI 兼容端点不支持每请求 num_ctx。如需扩大，请在 Ollama 用 Modelfile 的 PARAMETER num_ctx、OLLAMA_CONTEXT_LENGTH 或 App 滑杆设置。",
+  "sidebar.project_drag_handle": "拖拽以排序"
 }

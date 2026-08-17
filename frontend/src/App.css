@@ -581,6 +581,25 @@ body.sidebar-resizing {
   opacity: 1;
 }
 
+.sidebar-project__title-row {
+  cursor: grab;
+}
+
+.sidebar-project__title-row:active {
+  cursor: grabbing;
+}
+
+.sidebar-project[data-dragging='true'] {
+  position: relative;
+  z-index: 2;
+}
+
+.sidebar-project[data-dragging='true'] > .sidebar-project__title-row {
+  border-radius: 8px;
+  background: var(--material-control);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--foreground) 18%, transparent);
+}
+
 .sidebar-project__new-trigger {
   width: 24px;
   height: 24px;
