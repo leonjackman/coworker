@@ -746,6 +746,11 @@ async def chat(request: ChatRequest):
                     agent = existing.agent_id
             except KeyError:
                 pass
+        # Ensure org manifest so the agent runtime can use delegation & team tools.
+        project_dir = _project_memory_dir(request.project_id or "")
+        if project_dir:
+            _ensure_agent_skeleton(project_dir, agent)
+            _ensure_org(project_dir)
         runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent)
         agent_registry.checkpoint_manager.mark_active(session_id)
         try:
@@ -1457,8 +1462,15 @@ async def chat_stream(request: ChatStreamRequest):
                     agent = existing.agent_id
             except KeyError:
                 pass
+        # Ensure org manifest so the agent runtime can use delegation & team tools.
+        project_dir = _project_memory_dir(request.project_id or "")
+        if project_dir:
+            _ensure_agent_skeleton(project_dir, agent)
+            _ensure_org(project_dir)
         runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent)
     except (KeyError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     session_id = request.session_id
