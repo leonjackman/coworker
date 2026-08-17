@@ -386,6 +386,7 @@ async def _sse_events(
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    agent: Optional[str] = None
     mode: AgentMode = "single"
     language: Language = "zh"
     work_mode: Optional[str] = None
