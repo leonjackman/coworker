@@ -2054,6 +2054,31 @@ body.bottom-panel-resizing {
   line-height: 1.6;
 }
 
+.stream-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.stream-retry-btn:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.stream-retry-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .stream-thinking {
   display: inline-flex;
   align-items: center;
@@ -9612,4 +9637,34 @@ body.bottom-panel-resizing {
 .delegate-block-failed {
   color: var(--color-danger, #e5484d);
   font-size: 12px;
+}
+
+/* Stream idle warning banner */
+.stream-idle-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin: 8px 0 0 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning, #d99100) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning, #d99100) 30%, transparent);
+  color: var(--warning, #d99100);
+  font-size: 13px;
+  line-height: 1.4;
+  animation: stream-idle-fade-in 0.3s ease-out;
+}
+
+.stream-idle-warning__icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.stream-idle-warning__text {
+  opacity: 0.9;
+}
+
+@keyframes stream-idle-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }

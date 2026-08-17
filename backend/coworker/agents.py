@@ -3190,6 +3190,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         await self._force_compact(graph, inputs, config)
                         continue
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
+                    # Push an explicit error event to the SSE stream BEFORE re-raising,
+                    # so the frontend receives a proper `error` event instead of only
+                    # detecting the dropped connection as "interrupted".
+                    yield {"type": "error", "error": str(exc)[:400]}
                     raise
 
         final_content = "".join(content_parts)

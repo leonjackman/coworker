@@ -13,6 +13,7 @@
   "common.ready": "Готово",
   "common.connecting": "Подключение",
   "common.cancel": "Отмена",
+  "common.retry": "Повторить",
   "common.offline": "Не в сети",
   "common.loading": "Загрузка...",
   "common.delete": "Удалить",
@@ -318,6 +319,11 @@
   "error.skill_fetch_empty": "Не удалось получить файл навыка (скачанное содержимое пусто).",
   "error.skill_validation_failed": "Проверка не выполнена после установки: {message}",
   "error.skill_permission_invalid": "Разрешение должно быть одним из: {permissions}",
+  "error.context_overflow": "Переполнение окна контекста — разговор превысил лимит токенов модели. Система попыталась автоматическую сжатие. Пожалуйста, повторите попытку.",
+  "error.agent_timeout": "Операция агента истекла. Выполнение задачи превысило максимально допустимую продолжительность.",
+  "error.agent_cancelled": "Выполнение агента было отменено во время потоковой передачи.",
+  "error.agent_stalled": "Агент застрял и не может продолжить. Пожалуйста, оптимизируйте свой запрос или попробуйте другой подход.",
+  "error.provider_error": "Поставщик ИИ вернул ошибку. Пожалуйста, проверьте конфигурацию вашего поставщика и повторите попытку.",
   "sidebar.session_open": "Открыть сессию",
   "sidebar.session_delete": "Удалить сессию",
   "sidebar.session_copy_id": "Скопировать ID сессии",
@@ -817,5 +823,6 @@
   "providers.context_source_default": "Источник: по умолчанию (128k)",
   "providers.ollama_ctx_hint": "Ollama по умолчанию выбирает контекст по VRAM (4k–256k), и его OpenAI-совместимый endpoint не принимает num_ctx для запроса. Чтобы увеличить, установите PARAMETER num_ctx в Modelfile, OLLAMA_CONTEXT_LENGTH или ползунок приложения.",
   "sidebar.project_drag_handle": "Drag to reorder",
-  "titlebar.context": "Context"
+  "titlebar.context": "Context",
+  "chat.idle_warning": "Поток бездействия более 4 минут — отключение через {seconds}с. Останьтесь на этой странице, чтобы продолжить ожидание."
 }

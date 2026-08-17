@@ -13,6 +13,7 @@
   "common.ready": "準備完了",
   "common.connecting": "接続中",
   "common.cancel": "キャンセル",
+  "common.retry": "再試行",
   "common.offline": "オフライン",
   "common.loading": "読み込み中...",
   "common.delete": "削除",
@@ -318,6 +319,11 @@
   "error.skill_fetch_empty": "スキルファイルの取得に失敗しました（ダウンロードしたコンテンツが空）。",
   "error.skill_validation_failed": "インストール後の検証失敗：{message}",
   "error.skill_permission_invalid": "パーミッションは次のいずれかである必要があります：{permissions}",
+  "error.context_overflow": "コンテキストウィンドウがオーバーフロー — 会話がモデルのトークン制限を超えました。システムは自動圧縮を試みました。再試行してください。",
+  "error.agent_timeout": "エージェント操作がタイムアウトしました。タスクの実行時間が最大許容期間を超えました。",
+  "error.agent_cancelled": "ストリーム実行中にエージェント実行がキャンセルされました。",
+  "error.agent_stalled": "エージェントが停止しており、先に進めません。リクエストを最適化するか、別の方法を試してください。",
+  "error.provider_error": "AIプロバイダーがエラーを返しました。プロバイダー構成を確認して再試行してください。",
   "sidebar.session_open": "セッションを開く",
   "sidebar.session_delete": "セッションを削除",
   "sidebar.session_copy_id": "セッションIDをコピー",
@@ -817,5 +823,6 @@
   "providers.context_source_default": "ソース：デフォルト（128k）",
   "providers.ollama_ctx_hint": "Ollama はデフォルトで VRAM に応じてコンテキスト（4k〜256k）を決め、OpenAI 互換エンドポイントはリクエストごとの num_ctx を受け付けません。拡大するには Modelfile の PARAMETER num_ctx、OLLAMA_CONTEXT_LENGTH、またはアプリのスライダーを設定してください。",
   "sidebar.project_drag_handle": "Drag to reorder",
-  "titlebar.context": "Context"
+  "titlebar.context": "Context",
+  "chat.idle_warning": "ストリームが 4 分以上アイドル状態です — {seconds} 秒後に切断されます。待機し続けるにはこのページにとどまってください。"
 }

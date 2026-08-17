@@ -26,6 +26,7 @@
   "common.ready": "Prêt",
   "common.connecting": "Connexion",
   "common.cancel": "Annuler",
+  "common.retry": "Réessayer",
   "common.offline": "Hors ligne",
   "common.loading": "Chargement...",
   "common.delete": "Supprimer",
@@ -347,6 +348,11 @@
   "error.skill_fetch_empty": "Échec de la récupération du fichier de compétence (le contenu téléchargé est vide).",
   "error.skill_validation_failed": "La validation a échoué après l'installation : {message}",
   "error.skill_permission_invalid": "La permission doit être l'une des suivantes : {permissions}",
+  "error.context_overflow": "Dépassement de la fenêtre de contexte — la conversation a dépassé la limite de tokens du modèle. Le système a tenté une compression automatique. Veuillez réessayer.",
+  "error.agent_timeout": "L'opération de l'agent a expiré. L'exécution de la tâche a dépassé la durée maximale autorisée.",
+  "error.agent_cancelled": "L'exécution de l'agent a été annulée pendant le streaming.",
+  "error.agent_stalled": "L'agent est bloqué et ne peut pas avancer. Veuillez optimiser votre demande ou essayer une autre approche.",
+  "error.provider_error": "Le fournisseur IA a renvoyé une erreur. Veuillez vérifier la configuration de votre fournisseur et réessayer.",
   "changes.title": "Modifications",
   "changes.current": "Toutes les modifications",
   "changes.loading": "Chargement…",
@@ -817,5 +823,6 @@
   "providers.context_source_default": "Source : par défaut (128k)",
   "providers.ollama_ctx_hint": "Ollama choisit le contexte selon la VRAM (4k–256k) par défaut et son endpoint compatible OpenAI n'accepte pas num_ctx par requête. Pour l'agrandir, définissez PARAMETER num_ctx dans un Modelfile, OLLAMA_CONTEXT_LENGTH ou le curseur de l'application.",
   "sidebar.project_drag_handle": "Drag to reorder",
-  "titlebar.context": "Context"
+  "titlebar.context": "Context",
+  "chat.idle_warning": "Le flux est inactif depuis plus de 4 minutes — déconnexion dans {seconds}s. Restez sur cette page pour continuer à attendre."
 }

@@ -886,7 +886,7 @@ class HttpChatService implements ChatService {
             try {
               onEvent(JSON.parse(raw) as StreamEvent);
             } catch {
-              // skip malformed frames
+              console.warn('[ChatService] skipped malformed SSE frame:', raw?.slice(0, 200));
             }
           }
         }

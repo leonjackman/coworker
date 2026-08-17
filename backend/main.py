@@ -3,6 +3,7 @@ import atexit
 import json
 import logging
 import os
+import time
 from pathlib import Path
 import shlex
 import signal
@@ -350,10 +351,15 @@ async def _sse_events(
     """
     queue: asyncio.Queue = asyncio.Queue()
     _SENTINEL = object()
+    _last_activity_ts: float = 0.0  # monotonic timestamp of last event
+    _IDLE_WARN_THRESHOLD = 240.0  # 4 min — push idle-warning at 80% of 5 min
+    _idle_warning_emitted = False
 
     async def _producer():
+        nonlocal _last_activity_ts, _idle_warning_emitted
         try:
             async for event in stream_iter:
+                _last_activity_ts = _get_monotonic()
                 if on_event is not None:
                     on_event(event)
                 await queue.put(("event", event))
@@ -380,8 +386,16 @@ async def _sse_events(
     try:
         while True:
             try:
-                kind, payload = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+                kind, payload = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
+                # Emit SSE keep-alive comment every second of idle.
+                if _last_activity_ts > 0:
+                    elapsed = _get_monotonic() - _last_activity_ts
+                    if elapsed >= _IDLE_WARN_THRESHOLD and not _idle_warning_emitted:
+                        # Push an idle-warning event so the frontend can show
+                        # a countdown before the client's idle timeout fires.
+                        _idle_warning_emitted = True
+                        yield "event", {"type": "idle_warning", "seconds_idle": int(elapsed)}
                 yield "heartbeat", None
                 continue
             yield kind, payload
@@ -394,6 +408,11 @@ async def _sse_events(
             await asyncio.wait_for(task, timeout=5.0)
         except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
+
+
+def _get_monotonic() -> float:
+    """Monotonic clock (never goes backwards) for tracking idle time."""
+    return time.monotonic()
 
 
 class ChatRequest(BaseModel):
@@ -1807,6 +1826,10 @@ async def chat_stream(request: ChatStreamRequest):
                 yield ": ping\n\n"
             elif kind == "end":
                 break
+            elif kind == "event" and payload.get("type") == "idle_warning":
+                # Forward idle-warning to the frontend so it can show a countdown.
+                payload["session_id"] = session_id
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
             else:
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         # Goal stream ended (normal, error, or disconnect): drop the active marker

@@ -13,6 +13,7 @@
   "common.ready": "Listo",
   "common.connecting": "Conectando",
   "common.cancel": "Cancelar",
+  "common.retry": "Reintentar",
   "common.offline": "Sin conexión",
   "common.loading": "Cargando...",
   "common.delete": "Eliminar",
@@ -318,6 +319,11 @@
   "error.skill_fetch_empty": "Error al obtener el archivo de habilidad (el contenido descargado está vacío).",
   "error.skill_validation_failed": "Validación fallida después de instalar: {message}",
   "error.skill_permission_invalid": "El permiso debe ser uno de: {permissions}",
+  "error.context_overflow": "Desbordamiento de la ventana de contexto: la conversación superó el límite de tokens del modelo. El sistema intentó una compresión automática. Por favor, inténtelo de nuevo.",
+  "error.agent_timeout": "La operación del agente ha caducado. La ejecución de la tarea superó la duración máxima permitida.",
+  "error.agent_cancelled": "La ejecución del agente fue cancelada durante el streaming.",
+  "error.agent_stalled": "El agente se ha estancado y no puede avanzar. Por favor, optimice su solicitud o intente otro enfoque.",
+  "error.provider_error": "El proveedor de IA devolvió un error. Por favor, verifique la configuración de su proveedor e inténtelo de nuevo.",
   "sidebar.session_open": "Abrir sesión",
   "sidebar.session_delete": "Eliminar sesión",
   "sidebar.session_copy_id": "Copiar ID de sesión",
@@ -817,5 +823,6 @@
   "providers.context_source_default": "Fuente: predeterminada (128k)",
   "providers.ollama_ctx_hint": "Ollama selecciona el contexto por VRAM (4k–256k) por defecto y su endpoint compatible con OpenAI no acepta num_ctx por solicitud. Para ampliarlo, establece PARAMETER num_ctx en un Modelfile, OLLAMA_CONTEXT_LENGTH, o el control deslizante de la aplicación.",
   "sidebar.project_drag_handle": "Drag to reorder",
-  "titlebar.context": "Context"
+  "titlebar.context": "Context",
+  "chat.idle_warning": "El flujo ha estado inactivo durante más de 4 minutos — se disconnectará en {seconds}s. Manténgase en esta página para continuar esperando."
 }

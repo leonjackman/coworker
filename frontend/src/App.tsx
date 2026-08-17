@@ -178,6 +178,7 @@ function App() {
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [streamIdleWarning, setStreamIdleWarning] = useState<string>('');
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>();
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
@@ -1058,6 +1059,13 @@ function App() {
         ]);
       } else if (event.type === 'goal_attached') {
         goalStreamIdRef.current = event.stream_id;
+      } else if (event.type === 'idle_warning') {
+        // Backend detected N seconds of inactivity on the SSE stream.
+        // The client's idle watchdog will fire in (300 - seconds_idle) seconds.
+        const remaining = Math.max(0, 300 - event.seconds_idle);
+        setStreamIdleWarning(t('chat.idle_warning', { seconds: remaining }));
+        // Auto-dismiss after 8 seconds so the warning doesn't stick around.
+        setTimeout(() => setStreamIdleWarning(''), 8000);
       }
     };
 
@@ -1173,6 +1181,8 @@ function App() {
       // 侧栏 running 指示随之清除；不会误伤其它流的消息。
       // 若流结束却从未收到 done/goal_done（断线、后端重启），标记为 interrupted
       // 而非 done —— 半截回复不能被伪装成「已完成」。
+      // Guard against batched updates: only transition if the message is still
+      // running (not already marked done/error by event handlers above).
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && item.status === 'running'
@@ -2688,6 +2698,12 @@ function App() {
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
                         onRollbackMessage={(messageId) => void handleRollbackMessage(messageId)}
                       />
+                      {streamIdleWarning && (
+                        <div className="stream-idle-warning">
+                          <span className="stream-idle-warning__icon">⏱️</span>
+                          <span className="stream-idle-warning__text">{streamIdleWarning}</span>
+                        </div>
+                      )}
                     </>
                   )}
                   {!showFirstRunStart && !showProjectSessionList && (

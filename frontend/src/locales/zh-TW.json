@@ -13,6 +13,7 @@
   "common.ready": "就緒",
   "common.connecting": "連線中",
   "common.cancel": "取消",
+  "common.retry": "重試",
   "common.offline": "離線",
   "common.loading": "載入中…",
   "common.delete": "刪除",
@@ -318,6 +319,11 @@
   "error.skill_fetch_empty": "取得技能檔案失敗（下載內容為空）。",
   "error.skill_validation_failed": "安裝後驗證失敗：{message}",
   "error.skill_permission_invalid": "權限必須是以下之一：{permissions}",
+  "error.context_overflow": "上下文視窗溢位 — 對話超出了模型的 token 限制，系統已嘗試自動壓縮，請重試。",
+  "error.agent_timeout": "代理操作逾時，任務執行時間超過了最大允許時長。",
+  "error.agent_cancelled": "代理執行在流式過程中被取消。",
+  "error.agent_stalled": "代理已停滯，無法繼續推進。請最佳化您的請求或嘗試其他方法。",
+  "error.provider_error": "AI 提供商返回了錯誤，請檢查您的提供商配置並重試。",
   "sidebar.session_open": "開啟對話階段",
   "sidebar.session_delete": "刪除對話階段",
   "sidebar.session_copy_id": "複製對話階段 ID",
@@ -817,5 +823,6 @@
   "providers.context_source_discovered": "來源：服務端自動探測",
   "providers.context_source_default": "來源：預設值（128k）",
   "providers.ollama_ctx_hint": "Ollama 預設依 VRAM 決定上下文（4k~256k），OpenAI 相容端點不支援每請求 num_ctx。如需擴大，請在 Ollama 用 Modelfile 的 PARAMETER num_ctx、OLLAMA_CONTEXT_LENGTH 或 App 滑桿設定。",
-  "sidebar.project_drag_handle": "拖曳以排序"
+  "sidebar.project_drag_handle": "拖曳以排序",
+  "chat.idle_warning": "串流已空閒超過 4 分鐘 — {seconds} 秒後中斷。請停留在本頁繼續等待。"
 }

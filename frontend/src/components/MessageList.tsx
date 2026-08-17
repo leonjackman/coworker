@@ -390,7 +390,18 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
         )}
 
         {isError ? (
-          <div className="stream-error">{message.content}</div>
+          <div>
+            <div className="stream-error">{message.content}</div>
+            {onRegenerate && (
+              <button
+                className="stream-retry-btn"
+                onClick={onRegenerate}
+                disabled={actionsDisabled}
+              >
+                {t('common.retry')}
+              </button>
+            )}
+          </div>
         ) : isStopped ? (
           <div className="stream-stopped">{message.content}</div>
         ) : null}

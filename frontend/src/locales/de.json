@@ -13,6 +13,7 @@
   "common.ready": "Bereit",
   "common.connecting": "Verbindung wird hergestellt",
   "common.cancel": "Abbrechen",
+  "common.retry": "Wiederholen",
   "common.offline": "Offline",
   "common.loading": "Laden...",
   "common.delete": "Löschen",
@@ -319,6 +320,11 @@
   "error.skill_fetch_empty": "Fehler beim Abrufen der Skill-Datei (heruntergeladener Inhalt ist leer).",
   "error.skill_validation_failed": "Validierung nach der Installation fehlgeschlagen: {message}",
   "error.skill_permission_invalid": "Berechtigung muss eine der folgenden sein: {permissions}",
+  "error.context_overflow": "Kontextfenster-Überlauf — die Konversation hat das Token-Limit des Modells überschritten. Das System hat eine automatische Komprimierung versucht. Bitte versuchen Sie es erneut.",
+  "error.agent_timeout": "Der Agent-Vorgang ist abgelaufen. Die Ausführungsdauer hat die maximal zulässige Dauer überschritten.",
+  "error.agent_cancelled": "Die Agent-Ausführung wurde während des Streams abgebrochen.",
+  "error.agent_stalled": "Der Agent ist gestockt und kann nicht fortfahren. Bitte optimieren Sie Ihre Anfrage oder versuchen Sie einen anderen Ansatz.",
+  "error.provider_error": "Der KI-Anbieter hat einen Fehler zurückgegeben. Bitte prüfen Sie Ihre Anbieterkonfiguration und versuchen Sie es erneut.",
   "sidebar.session_open": "Sitzung öffnen",
   "sidebar.session_delete": "Sitzung löschen",
   "sidebar.session_copy_id": "Sitzungs-ID kopieren",
@@ -817,5 +823,6 @@
   "providers.context_source_default": "Quelle: Standard (128k)",
   "providers.ollama_ctx_hint": "Ollama wählt den Kontext je nach VRAM (4k–256k) standardmäßig und sein OpenAI-kompatibler Endpoint akzeptiert kein per-anfrage num_ctx. Um es zu vergrössen, setzen Sie PARAMETER num_ctx in einer Modelfile, OLLAMA_CONTEXT_LENGTH oder den App-Schieberegler.",
   "sidebar.project_drag_handle": "Drag to reorder",
-  "titlebar.context": "Context"
+  "titlebar.context": "Context",
+  "chat.idle_warning": "Der Stream ist seit über 4 Minuten inaktiv — Verbindung wird in {seconds}s getrennt. Bleiben Sie auf dieser Seite, um weiter zu warten."
 }

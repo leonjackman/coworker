@@ -852,11 +852,24 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
   };
 
   const sender = event.sender;
+  let idleTimer = null;
+  let lastActivity = Date.now();
   return new Promise((resolve, reject) => {
     const req = http.request(options, (res) => {
       res.setEncoding('utf8');
       let buffer = '';
+
+      // Idle timeout: if no data for 60s, consider the connection dead
+      idleTimer = setInterval(() => {
+        const elapsed = Date.now() - lastActivity;
+        if (elapsed > 60_000) {
+          // No data for 60s — backend might be hung. Terminate the request.
+          req.destroy(new Error('Stream idle for 60 seconds'));
+        }
+      }, 5000);
+
       res.on('data', (chunk) => {
+        lastActivity = Date.now();
         buffer += chunk.replace(/\r\n/g, '\n');
         let sepIndex;
         while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
@@ -870,12 +883,14 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
           try {
             parsed = JSON.parse(raw);
           } catch {
+            console.warn('[Electron] skipped malformed SSE frame:', raw?.slice(0, 200));
             continue;
           }
           sender.send('chat-stream-event', { requestId, event: parsed });
         }
       });
       res.on('end', () => {
+        if (idleTimer) clearInterval(idleTimer);
         if (res.statusCode >= 400) {
           // Non-SSE error body: surface it as an error event instead of
           // silently resolving "ok" and leaving the running bubble counting.
@@ -906,6 +921,7 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
     });
 
     req.on('error', (e) => {
+      if (idleTimer) clearInterval(idleTimer);
       activeStreams.delete(requestId);
       sender.send('chat-stream-event', { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
       resolve({ status: 'error' });
@@ -923,6 +939,8 @@ ipcMain.on('abort-chat-stream', (event, requestId) => {
     req.destroy();
     activeStreams.delete(requestId);
   }
+  // Also clear the idle timer for this stream
+  // (idleTimer is scoped to the request handler above, but the stream is already aborted)
 });
 
 ipcMain.handle('start-approval-stream', async (event, { requestId, resumeId }) => {

@@ -79,6 +79,13 @@ export function translateError(error: unknown): string {
   if (message.includes('Failed to connect to backend')) return t('error.connection_refused');
   if (message.includes('Electron API is unavailable')) return t('error.electron_api_unavailable');
 
+  // Agent execution errors (now pushed as explicit error events from backend).
+  if (message.includes('context overflow')) return t('error.context_overflow');
+  if (message.includes('TimeoutError') || message.includes('timed out')) return t('error.agent_timeout');
+  if (message.includes('CancelledError') || message.includes('cancelled')) return t('error.agent_cancelled');
+  if (message.includes('stalled')) return t('error.agent_stalled');
+  if (message.toLowerCase().includes('provider') && message.toLowerCase().includes('error')) return t('error.provider_error');
+
   // Skill-related errors from the backend (ValueError messages propagated via HTTP 400).
   if (message.startsWith("Refusing to delete")) {
     const match = /Refusing to delete '([^']+)'/;

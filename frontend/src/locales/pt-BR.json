@@ -13,6 +13,7 @@
   "common.ready": "Pronto",
   "common.connecting": "Conectando",
   "common.cancel": "Cancelar",
+  "common.retry": "Tentar novamente",
   "common.offline": "Offline",
   "common.loading": "Carregando...",
   "common.delete": "Excluir",
@@ -318,6 +319,11 @@
   "error.skill_fetch_empty": "Falha ao buscar arquivo da habilidade (o conteúdo baixado está vazio).",
   "error.skill_validation_failed": "Validação falhou após a instalação: {message}",
   "error.skill_permission_invalid": "A permissão deve ser uma das: {permissions}",
+  "error.context_overflow": "Estouro da janela de contexto — a conversa excedeu o limite de tokens do modelo. O sistema tentou compactação automática. Por favor, tente novamente.",
+  "error.agent_timeout": "A operação do agente expirou. A execução da tarefa excedeu a duração máxima permitida.",
+  "error.agent_cancelled": "A execução do agente foi cancelada durante o streaming.",
+  "error.agent_stalled": "O agente travou e não consegue avançar. Por favor, otimize sua solicitação ou tente outra abordagem.",
+  "error.provider_error": "O provedor de IA retornou um erro. Por favor, verifique a configuração do seu provedor e tente novamente.",
   "sidebar.session_open": "Abrir sessão",
   "sidebar.session_delete": "Excluir sessão",
   "sidebar.session_copy_id": "Copiar ID da sessão",
@@ -817,5 +823,6 @@
   "providers.context_source_default": "Origem: padrão (128k)",
   "providers.ollama_ctx_hint": "O Ollama seleciona o contexto por VRAM (4k–256k) por padrão e seu endpoint compatível com OpenAI não aceita num_ctx por solicitação. Para ampliar, definida PARAMETER num_ctx em um Modelfile, OLLAMA_CONTEXT_LENGTH, ou o controle deslizante do aplicativo.",
   "sidebar.project_drag_handle": "Drag to reorder",
-  "titlebar.context": "Context"
+  "titlebar.context": "Context",
+  "chat.idle_warning": "O stream está inativo há mais de 4 minutos — desconexão em {seconds}s. Permaneça nesta página para continuar aguardando."
 }

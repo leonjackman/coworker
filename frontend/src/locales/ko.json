@@ -140,6 +140,7 @@
   "chat.workspace_pick": "작업 공간 선택",
   "chat.workspace_switch": "작업 공간 전환",
   "common.cancel": "취소",
+  "common.retry": "다시 시도",
   "common.connecting": "연결 중",
   "common.coworker": "CoWorker",
   "common.delete": "삭제",
@@ -165,6 +166,11 @@
   "error.skill_delete_not_in_root": "이 스킬을 삭제할 수 없습니다: 위치 '{path}'가 인식된 스킬 디렉토리 밖에 있습니다. 어플리케이션 설정에서 삭제하거나 수동으로 심볼 링크를 제거하세요.",
   "error.skill_fetch_empty": "스킬 파일 가져오기 실패 (다운로드된 내용이 비어 있음).",
   "error.skill_permission_invalid": "권한은 다음 중 하나여야 합니다: {permissions}",
+  "error.context_overflow": "컨텍스트 윈도우 오버플로 — 대화가 모델의 토큰 제한을 초과했습니다. 시스템이 자동 압축을 시도했습니다. 다시 시도하세요.",
+  "error.agent_timeout": "에이전트 작업이 시간 초과되었습니다. 작업 실행 시간이 최대 허용 기간을 초과했습니다.",
+  "error.agent_cancelled": "스트림 실행 중 에이전트 실행이 취소되었습니다.",
+  "error.agent_stalled": "에이전트가 중단되어 더 이상 진행할 수 없습니다. 요청을 최적화하거나 다른 방법을 시도하세요.",
+  "error.provider_error": "AI 제공자가 오류를 반환했습니다. 제공자 구성을 확인하고 다시 시도하세요.",
   "error.skill_unknown_source": "알 수 없는 시장 출처: {source}",
   "error.skill_validation_failed": "설치 후 유효성 검사 실패: {message}",
   "first_run.create_project": "첫 번째 프로젝트 만들기",
@@ -817,5 +823,6 @@
   "providers.context_source_default": "출처: 기본값(128k)",
   "providers.ollama_ctx_hint": "Ollama는 기본적으로 VRAM에 따라 컨텍스트(4k~256k)를 정하며 OpenAI 호환 엔드포인트는 요청별 num_ctx를 지원하지 않습니다. 확대하려면 Modelfile의 PARAMETER num_ctx, OLLAMA_CONTEXT_LENGTH 또는 앱 슬라이더를 설정하세요.",
   "sidebar.project_drag_handle": "Drag to reorder",
-  "titlebar.context": "Context"
+  "titlebar.context": "Context",
+  "chat.idle_warning": "스트림이 4분 이상 대기 중 — {seconds}초 후 연결이 끊어집니다. 계속 기다리려면 이 페이지에 머무르세요."
 }
