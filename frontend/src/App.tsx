@@ -820,6 +820,7 @@ function App() {
         const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (toolPart) {
           toolPart.status = event.status === 'success' ? 'success' : 'error';
+          if (event.input !== undefined) toolPart.input = event.input;
           if (event.output) toolPart.output = event.output;
           if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
           if (event.files !== undefined) toolPart.files = event.files;
@@ -1313,6 +1314,7 @@ function App() {
         const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (toolPart) {
           toolPart.status = event.status === 'success' ? 'success' : 'error';
+          if (event.input !== undefined) toolPart.input = event.input;
           if (event.output) toolPart.output = event.output;
           if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
           if (event.files !== undefined) toolPart.files = event.files;
@@ -1503,6 +1505,7 @@ function App() {
         const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (toolPart) {
           toolPart.status = event.status === 'success' ? 'success' : 'error';
+          if (event.input !== undefined) toolPart.input = event.input;
           if (event.output) toolPart.output = event.output;
           if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
           if (event.files !== undefined) toolPart.files = event.files;
@@ -1762,6 +1765,7 @@ function App() {
             const tp = resumeParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
             if (tp) {
               tp.status = event.status === 'success' ? 'success' : 'error';
+              if (event.input !== undefined) tp.input = event.input;
               if (event.output) tp.output = event.output;
             }
             // 装完即见：agent 安装技能后立刻刷新技能列表。

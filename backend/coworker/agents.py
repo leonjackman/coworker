@@ -31,7 +31,7 @@ from typing_extensions import NotRequired
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, Runtime
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, Field
 
 from .checkpoints import CheckpointManager
@@ -567,7 +567,16 @@ def build_workspace_tools(
 
     @tool(args_schema=RunCommandArgs)
     def run_command(command: list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
-        """Run an allowlisted command in the workspace after runtime policy approval."""
+        """Run an allowlisted command in the workspace after runtime policy approval.
+
+        The result is JSON with ``return_code`` (0 = success), ``stdout``,
+        ``stderr`` and ``timed_out``. A non-zero ``return_code`` means the
+        command FAILED — never blindly re-run the exact same command; adjust
+        the path/scope first or use a different tool. Note that searches can
+        report "Permission denied" for unreadable directories even when the
+        search itself worked: narrow the search path instead of retrying the
+        whole tree with the same command.
+        """
         try:
             # Runtime policy approval (HITL) is owned by HumanInTheLoopMiddleware;
             # this tool call is not the sync bottom-panel approval flow.
@@ -862,6 +871,9 @@ def build_workspace_tools(
         Use when the user asks you to build a team / add a colleague, or when
         you need a specialist whose role you can't cover. The new member gets
         their own identity + memory and appears in the project's team roster.
+        This app does NOT configure agents via an agents.yaml file — creating a
+        colleague is done with THIS tool, so do not search the filesystem for
+        agent config files.
         """
         if delegator is None:
             return "Team management is not available in this project (single-agent mode)."
@@ -2427,6 +2439,107 @@ class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         return await handler(request.override(**self._overrides(request)))
 
 
+class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Stop models from blindly repeating the same failing tool call.
+
+    ``create_agent`` hard-codes ``recursion_limit: 9_999``, so a model that
+    re-emits one failing call (e.g. a ``find`` blocked by permissions) loops
+    effectively forever. This middleware counts CONSECUTIVE identical tool
+    calls already in the run history; when the warning threshold is crossed it
+    tells the model to change approach, and when the hard cap is crossed it
+    strips every tool for the next model call so the model MUST reply with a
+    text-only final answer (the same "last step" mechanism opencode uses).
+
+    Only the trailing run of identical (name + canonicalized args) calls counts,
+    so ordinary long tasks are unaffected. Mounted last (innermost) so its
+    overrides are applied after PhaseToolGateMiddleware / SkillMiddleware /
+    MemoryMiddleware.
+    """
+
+    def __init__(self, warn_after: int = 2, stop_after: int = 4) -> None:
+        self.warn_after = max(1, int(warn_after))
+        self.stop_after = max(self.warn_after + 1, int(stop_after))
+
+    @staticmethod
+    def _call_key(tool_call: Any) -> tuple[str, str]:
+        name = tool_call.get("name", "") if isinstance(tool_call, dict) else getattr(tool_call, "name", "")
+        args = tool_call.get("args", {}) if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
+        try:
+            canonical = json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except (TypeError, ValueError):
+            canonical = str(args)
+        return str(name), canonical
+
+    def _consecutive_repeats(self, messages: list[Any]) -> tuple[int, str, str]:
+        """Return (count, name, last_result) for the trailing run of identical
+        tool calls. ``count`` is how many identical calls are already in the
+        history (0 = none)."""
+        count = 0
+        name = ""
+        prev_key: tuple[str, str] | None = None
+        i = len(messages) - 1
+        while i >= 0:
+            msg = messages[i]
+            if isinstance(msg, ToolMessage):
+                i -= 1
+                continue
+            if isinstance(msg, AIMessage):
+                calls = getattr(msg, "tool_calls", None) or []
+                if not calls:
+                    break
+                key = self._call_key(calls[-1])
+                if prev_key is None:
+                    prev_key = key
+                    count = 1
+                elif key == prev_key:
+                    count += 1
+                else:
+                    break
+            else:
+                break
+            i -= 1
+        if prev_key is not None:
+            name = prev_key[0]
+        last_result = ""
+        for msg in reversed(messages):
+            if isinstance(msg, ToolMessage) and (getattr(msg, "name", "") or "") == name:
+                last_result = str(getattr(msg, "content", ""))[:200]
+                break
+        return count, name, last_result
+
+    def _overrides(self, request: Any) -> dict[str, Any]:
+        count, name, last_result = self._consecutive_repeats(list(request.messages or []))
+        if count < self.warn_after:
+            return {}
+        if count >= self.stop_after:
+            msg = (
+                f"STOP. You have already run '{name}' {count} times and it keeps "
+                f"failing. Do NOT make any more tool calls. Provide your final "
+                f"answer as plain text now and explain what went wrong."
+            )
+            return {"tools": [], "messages": [*request.messages, HumanMessage(content=msg)]}
+        last_line = f" Last result: {last_result}" if last_result else ""
+        msg = (
+            f"WARNING: You have already run '{name}' {count} times in a row and it "
+            f"has not succeeded. Do NOT repeat the exact same call.{last_line} "
+            f"Change approach (different path, different tool, narrower scope) "
+            f"or answer directly."
+        )
+        return {"messages": [*request.messages, HumanMessage(content=msg)]}
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        overrides = self._overrides(request)
+        if not overrides:
+            return handler(request)
+        return handler(request.override(**overrides))
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        overrides = self._overrides(request)
+        if not overrides:
+            return await handler(request)
+        return await handler(request.override(**overrides))
+
+
 # ---------------------------------------------------------------------------
 # Agent builder – single create_agent graph (official langchain idiom).
 # ---------------------------------------------------------------------------
@@ -2524,9 +2637,17 @@ def build_coworker_agent_graph(
         except Exception as exc:  # noqa: BLE001 - a broken memory middleware must not break chat
             logger.warning("Memory middleware unavailable: %s", exc)
 
+    # Loop guard (innermost): the model must never re-run the same failing
+    # tool call forever. create_agent's default recursion_limit (9_999) makes
+    # an unguarded loop effectively infinite, so cap identical consecutive
+    # calls here and force a text-only final turn on the hard cap.
+    middleware.append(RepeatedToolCallMiddleware())
+
     system_prompt = (
         f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
-        "Use workspace tools only when they are needed and keep answers concise."
+        "Use workspace tools only when they are needed and keep answers concise. "
+        "If a tool call fails, do NOT re-run the exact same call; analyze the error and "
+        "change approach (narrow the scope, pick a different tool) or summarize and answer directly."
     )
 
     kwargs: dict[str, Any] = {
@@ -3370,7 +3491,16 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 started_at = tool_state[tc_id].get("started_at")
                 duration_ms = round((time.time() - started_at) * 1000) if started_at else None
                 files = self._real_file_changes(tc_id, tool_state, session_id)
-                part: dict[str, Any] = {"type": "tool_end", "id": tc_id, "output": str(content)[:2000], "status": tool_status}
+                # Backfill the authoritative full args so the UI can replace any
+                # streamed fragments (which may be dropped/incomplete mid-stream)
+                # with the final, valid JSON the tool actually executed.
+                part: dict[str, Any] = {
+                    "type": "tool_end",
+                    "id": tc_id,
+                    "output": str(content)[:2000],
+                    "status": tool_status,
+                    "input": str(tool_state[tc_id].get("input") or ""),
+                }
                 if duration_ms is not None:
                     part["duration_ms"] = duration_ms
                 if files:
