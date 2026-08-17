@@ -52,17 +52,20 @@ const STATUS_COLORS = {
 function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
   const pct = usage.budgetChars > 0 ? Math.round((usage.usedChars / usage.budgetChars) * 100) : 0;
   const color = pct < 70 ? STATUS_COLORS.green : pct < 90 ? STATUS_COLORS.amber : STATUS_COLORS.red;
-  const usedK = usage.usedChars >= 1000 ? `${(usage.usedChars / 1000).toFixed(1)}k` : `${usage.usedChars}`;
-  const budgetK = usage.budgetChars >= 1000 ? `${(usage.budgetChars / 1000).toFixed(0)}k` : `${usage.budgetChars}`;
+  // Convert chars → tokens (÷3.5 is the same ratio used by context_budget_chars)
+  const charsPerToken = 3.5;
+  const usedTokens = Math.round(usage.usedChars / charsPerToken);
+  const budgetTokens = Math.round(usage.budgetChars / charsPerToken);
+  const formatK = (n: number) => (n >= 1_000 ? `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
 
   return (
-    <Tooltip content={`${t('titlebar.context')} · ${usedK} / ${budgetK}`}>
+    <Tooltip content={`${t('titlebar.context')} · ${formatK(usedTokens)} / ${formatK(budgetTokens)} tokens · ${pct}%`}>
       <div className="workspace-titlebar__context-budget">
         <Layers size={12} className="context-budget-icon" />
         <div className="context-budget-bar" style={{ '--ctx-color': color } as React.CSSProperties}>
           <div className="context-budget-bar__fill" style={{ width: `${Math.min(pct, 100)}%` }} />
         </div>
-        <span className="context-budget-text">{pct}%</span>
+        <span className="context-budget-text">{formatK(usedTokens)} / {formatK(budgetTokens)}</span>
       </div>
     </Tooltip>
   );

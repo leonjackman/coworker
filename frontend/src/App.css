@@ -1128,8 +1128,8 @@ body.sidebar-resizing {
 
 .context-budget-text {
   font-variant-numeric: tabular-nums;
-  min-width: 24px;
-  text-align: right;
+  min-width: 52px;
+  text-align: left;
   font-size: 11px;
 }
 
