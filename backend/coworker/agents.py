@@ -211,7 +211,7 @@ def _resolve_project_memory_dir(project_store: Any | None, workspace_root: str) 
     if project_store is None or not workspace_root:
         return ""
     try:
-        project = project_store.find_by_workspace_path(str(Path(workspace_root).resolve()))
+        project = project_store.load().find_by_workspace_path(str(Path(workspace_root).resolve()))
     except Exception:  # noqa: BLE001 - a lookup hiccup must not break chat
         return ""
     if project is None:
