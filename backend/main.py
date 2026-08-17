@@ -1677,6 +1677,14 @@ async def chat_stream(request: ChatStreamRequest):
             nonlocal terminal_sent
             if accumulated_content and not terminal_sent:
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+            elif not terminal_sent:
+                # The stream was cut before any text was emitted (client
+                # disconnected mid-tool / mid-thought). Persist a short
+                # interrupted marker so the session does not look like the
+                # assistant never answered — otherwise a half-finished turn
+                # (e.g. a team member creation that already took effect) is
+                # invisible to the user after refresh.
+                _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [])
             if in_goal_flag:
                 _goal_active_streams.pop(f"chat-goal:{session_id}", None)
                 if not any(v == session_id for v in _goal_active_streams.values()):

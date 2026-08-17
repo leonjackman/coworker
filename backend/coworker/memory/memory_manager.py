@@ -115,27 +115,49 @@ class MemoryManager:
         library = self.scanner.scan()
         team_ids: list[str] = []
         roster_lines: list[str] = []
+        identity_lines: list[str] = []
         if project_dir and agent and self.org_store is not None:
             try:
                 org = self.org_store.load(project_dir)
-                target = next((a for a in org.agents if a.id == agent), None)
+                members = {a.id: a for a in org.agents}
+                target = members.get(agent)
                 if target and target.team_id:
                     team_ids = self.org_store.team_ancestors(org, target.team_id)
-                for member in self.org_store.roster(org):
-                    role = f" · {member['role']}" if member["role"] else ""
-                    team = f" · {member['team']}" if member["team"] else ""
-                    roster_lines.append(f"- {member['name']} ({member['id']}){role}{team}")
+                if target is not None:
+                    name = target.name or agent
+                    role = f"（{target.role}）" if target.role else ""
+                    identity_lines.append(f"你是 {name} ({agent}){role}。")
+                    if target.parent:
+                        parent = members.get(target.parent)
+                        parent_label = f"{parent.name} ({parent.id})" if parent else target.parent
+                        identity_lines.append(f"你的上级是 {parent_label}。")
+                    else:
+                        identity_lines.append("你是本项目的负责人，直接向用户汇报。")
+                    for member in self.org_store.roster(org):
+                        if member["id"] == agent:
+                            continue
+                        role = f" · {member['role']}" if member["role"] else ""
+                        team = f" · {member['team']}" if member["team"] else ""
+                        hierarchy = ""
+                        m = members.get(member["id"])
+                        if m is not None and m.parent:
+                            parent = members.get(m.parent)
+                            parent_label = f"{parent.name} ({parent.id})" if parent else m.parent
+                            hierarchy = f" · 上级:{parent_label}"
+                        roster_lines.append(f"- {member['name']} ({member['id']}){role}{team}{hierarchy}")
             except Exception:  # noqa: BLE001 - roster/team injection must never break chat
                 team_ids = []
                 roster_lines = []
+                identity_lines = []
         nodes = library.injected(project_dir=project_dir, agent=agent or DEFAULT_AGENT, team_ids=team_ids)
         rendered = format_memory_prompt(nodes, self.config.char_limit)
+        if identity_lines:
+            block = "\n".join(identity_lines)
+            rendered = f"{rendered}\n\n{block}" if rendered else block
         if roster_lines:
             block = "\n".join(roster_lines)
-            if rendered:
-                rendered = f"{rendered}\n\n## 团队成员\n{block}"
-            else:
-                rendered = f"## 团队成员\n{block}"
+            section = f"## 团队成员\n{block}"
+            rendered = f"{rendered}\n\n{section}" if rendered else section
         return rendered
 
     # -- middleware factory -------------------------------------------------
