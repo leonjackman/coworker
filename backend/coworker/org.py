@@ -100,7 +100,7 @@ class OrgTeam:
 @dataclass
 class Org:
     version: int = ORG_VERSION
-    mode: str = ORG_MODE_MULTI
+    mode: str = ORG_MODE_SINGLE
     max_depth: int = DEFAULT_MAX_DEPTH
     max_concurrent: int = DEFAULT_MAX_CONCURRENT
     allow_agent_creation: bool = DEFAULT_ALLOW_AGENT_CREATION
@@ -113,7 +113,7 @@ class Org:
         teams = [OrgTeam.from_dict(t) for t in payload.get("teams", []) if isinstance(t, dict)]
         return cls(
             version=int(payload.get("version", ORG_VERSION)),
-            mode=str(payload.get("mode", ORG_MODE_MULTI)),
+            mode=str(payload.get("mode", ORG_MODE_SINGLE)),
             max_depth=int(payload.get("max_depth", DEFAULT_MAX_DEPTH)),
             max_concurrent=int(payload.get("max_concurrent", DEFAULT_MAX_CONCURRENT)),
             allow_agent_creation=bool(payload.get("allow_agent_creation", DEFAULT_ALLOW_AGENT_CREATION)),
@@ -154,8 +154,11 @@ class OrgStore:
             payload = json.loads(path.read_text(encoding="utf-8"))
             org = Org.from_dict(payload)
             org.version = ORG_VERSION
+            if org.mode not in ORG_MODES:
+                raise OrgError(f"mode must be one of {ORG_MODES}, got {org.mode!r}")
             return org
         except (OSError, ValueError, TypeError):
+            logger.warning("org manifest %s unreadable/corrupt; falling back to default", path, exc_info=True)
             return default_org()
 
     def save(self, memory_dir: str, org: Org) -> None:

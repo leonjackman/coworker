@@ -25,7 +25,7 @@ from coworker.memory.memory_store import MemoryError, MemoryStore
 from coworker.memory.memory_discovery import MemoryScanner
 from coworker.memory.registry import MemoryRegistry
 from coworker.memory.transfer import apply_import, export_memory, preview_import
-from coworker.org import OrgError, OrgStore, OrgTeam, OrgAgent, default_org
+from coworker.org import ORG_MODE_MULTI, ORG_MODE_SINGLE, OrgError, OrgStore, OrgTeam, OrgAgent, default_org
 from coworker.sessions import SessionStore
 
 CHECKS: list[str] = []
@@ -269,11 +269,16 @@ def main() -> int:
         root.mkdir(parents=True)
         org_store = OrgStore(root)
 
-        # default org + default_agent
+        # default org is single-mode (new projects default to a single agent)
+        check("default org mode is single", default_org().mode == ORG_MODE_SINGLE, default_org().mode)
+
+        # multi-mode org + default_agent
         org = default_org()
+        org.mode = ORG_MODE_MULTI
         org.agents.append(OrgAgent(id="default_agent", name="default_agent", role="team lead"))
         org_store.save("proj1", org)
         check("org save/load round trip", org_store.load("proj1").agents[0].name == "default_agent")
+        check("org keeps multi mode", org_store.load("proj1").mode == ORG_MODE_MULTI)
 
         # validation: duplicate agent rejected
         try:
@@ -344,6 +349,14 @@ def main() -> int:
         check("discover exposes teams", len(view.teams) == 1 and view.teams[0].id == "backend", str(view.teams))
         check("team goals scanned", view.teams[0].goals is not None and "加速交付" in (view.teams[0].goals.content or ""))
 
+        # single-mode scan strips teams + extra agents (only default_agent surfaces)
+        single_lib = MemoryScanner(root).scan(mode=ORG_MODE_SINGLE)
+        single_view = next(p for p in single_lib.projects if p.name == "proj1")
+        check("single scan hides teams", len(single_view.teams) == 0, str(single_view.teams))
+        single_ids = {a.id for a in single_view.agents}
+        check("single scan strips extra agents", not ({"coder", "qa", "worker"} & single_ids), str(single_ids))
+        check("single scan never surfaces default_agent in proj1", "default_agent" not in single_ids, str(single_ids))
+
         # discover agent view: id = dir name (stable), name = display name (renamed later)
         av = next(a for a in view.agents if a.id == "coder")
         check("discover agent has id", av.id == "coder", av.id)
@@ -390,6 +403,11 @@ def main() -> int:
         migrated = os2.load("proj2")
         ids = {a.id for a in migrated.agents}
         check("migration backfills agent dirs", {"default_agent", "worker"} <= ids, str(ids))
+
+        # single-mode scan on a project with default_agent + worker keeps only default_agent
+        single_lib2 = MemoryScanner(root).scan(mode=ORG_MODE_SINGLE)
+        single_proj2 = next(p for p in single_lib2.projects if p.name == "proj2")
+        check("single scan keeps only default_agent", [a.id for a in single_proj2.agents] == ["default_agent"], str([a.id for a in single_proj2.agents]))
 
         # members_for includes disabled; roster filters to active
         org6 = org_store.load("proj1")

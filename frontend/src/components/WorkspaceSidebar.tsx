@@ -216,8 +216,10 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
 function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const roster = useMemo(() => project.roster ?? [], [project.roster]);
+  const isSingle = project.mode === 'single';
 
   const groups = useMemo<AgentGroupData[]>(() => {
+    if (isSingle) return [];
     const rosterById = new Map<string, OrgRosterEntry>(roster.map((entry) => [entry.id, entry]));
     const byAgent = new Map<string, SessionSummary[]>();
     for (const session of sessions) {
@@ -250,7 +252,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
       });
     // groups sorted: default_agent first, then by newest session inside each group
     return built;
-  }, [roster, sessions]);
+  }, [roster, sessions, isSingle]);
 
   const hasSessions = sessions.length > 0;
   const active = Boolean(activeSessionId && sessions.some((s) => s.id === activeSessionId)) || (activeProjectId === project.id && hasSessions);
@@ -278,7 +280,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
                   <MessageSquare size={14} />
                   {t('sidebar.session_history')}
                 </DropdownMenuItem>
-                {onOpenOrgSettings && (
+                {onOpenOrgSettings && !isSingle && (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => onOpenOrgSettings(project.id)}>
@@ -307,23 +309,40 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
 
       {expanded && (
         <div className="sidebar-project__sessions">
-          {sessions.length === 0 && roster.length === 0 ? (
+          {sessions.length === 0 && (!isSingle ? roster.length === 0 : true) ? (
             <p className="sidebar-project__empty">{t('sidebar.project_empty')}</p>
           ) : (
             <>
-              {groups.map((group) => (
-                <AgentGroup
-                  key={group.agentId}
-                  group={group}
-                  projectId={project.id}
-                  {...(activeSessionId ? { activeSessionId } : {})}
-                  {...(runningSessionIds ? { runningSessionIds } : {})}
-                  onNewChat={onNewChat}
-                  onOpenSession={onOpenSession}
-                  onDeleteSession={onDeleteSession}
-                />
-              ))}
-              {sessions.length > 0 && groups.length === 0 && (
+              {isSingle ? (
+                sessions.length > 0 && (
+                  <div className="sidebar-project__flat-list">
+                    {sessions.map((session) => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        active={session.id === activeSessionId}
+                        running={Boolean(runningSessionIds?.has(session.id))}
+                        onOpen={onOpenSession}
+                        onDelete={onDeleteSession}
+                      />
+                    ))}
+                  </div>
+                )
+              ) : (
+                groups.map((group) => (
+                  <AgentGroup
+                    key={group.agentId}
+                    group={group}
+                    projectId={project.id}
+                    {...(activeSessionId ? { activeSessionId } : {})}
+                    {...(runningSessionIds ? { runningSessionIds } : {})}
+                    onNewChat={onNewChat}
+                    onOpenSession={onOpenSession}
+                    onDeleteSession={onDeleteSession}
+                  />
+                ))
+              )}
+              {sessions.length > 0 && !isSingle && groups.length === 0 && (
                 <p className="sidebar-project__empty">{t('sidebar.project_empty')}</p>
               )}
             </>

@@ -119,6 +119,7 @@ class MemoryManager:
         if project_dir and agent and self.org_store is not None:
             try:
                 org = self.org_store.load(project_dir)
+                multi_mode = getattr(org, "mode", "single") == "multi"
                 members = {a.id: a for a in org.agents}
                 target = members.get(agent)
                 if target and target.team_id:
@@ -133,6 +134,7 @@ class MemoryManager:
                         identity_lines.append(f"你的上级是 {parent_label}。")
                     else:
                         identity_lines.append("你是本项目的负责人，直接向用户汇报。")
+                if multi_mode:
                     for member in self.org_store.roster(org):
                         if member["id"] == agent:
                             continue

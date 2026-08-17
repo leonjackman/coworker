@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .org import ORG_MODE_MULTI, ORG_MODE_SINGLE
 from .projects import ProjectStore
 from .sessions import SessionStore
 from .workspace import TOOL_AUDIT_FILENAME, Workspace, fingerprint_path_for
@@ -67,10 +68,13 @@ class WorkspaceController:
         project = self.project_store.require(project_id)
         if not project.memory_dir:
             project.memory_dir = self.project_store.memory_dir_for(project_id)
+        mode = ORG_MODE_SINGLE
         roster: list[dict[str, Any]] = []
         if self.org_store is not None and project.memory_dir:
             org = self.org_store.load(project.memory_dir)
-            roster = self.org_store.members_for(org)
+            mode = org.mode
+            if mode == ORG_MODE_MULTI:
+                roster = self.org_store.members_for(org)
         return {
             "id": project.id,
             "name": project.name,
@@ -80,5 +84,6 @@ class WorkspaceController:
             "updated_at": project.updated_at,
             "session_count": session_count,
             "memory_dir": project.memory_dir,
+            "mode": mode,
             "roster": roster,
         }

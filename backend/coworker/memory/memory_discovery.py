@@ -140,6 +140,11 @@ class FolderView:
 TEAMS_DIR = "teams"
 TEAM_FILES = ("GOALS.md", "CONTEXT.md", "MEMORY.md")
 
+# The single-mode project has exactly one agent under this name; when a project
+# is scanned as ``mode="single"`` the scanner only surfaces this agent and
+# never scans team containers.
+DEFAULT_AGENT_NAME = "default_agent"
+
 
 @dataclass(frozen=True)
 class TeamView:
@@ -236,11 +241,15 @@ class MemoryScanner:
         self.project_name_resolver = project_name_resolver
         self.agent_name_resolver = agent_name_resolver
 
-    def scan(self, *, include_missing: bool = False) -> MemoryLibrary:
+    def scan(self, *, include_missing: bool = False, mode: str | None = None) -> MemoryLibrary:
         """Discover system files, project dirs and agent dirs.
 
         ``include_missing`` synthesizes empty nodes for expected skeleton files
         so the frontend can show a well-formed tree even before first use.
+
+        ``mode`` scopes each project to a single agent and hides team
+        containers when ``"single"`` (single-agent projects never expose team
+        structure). ``None`` keeps the default multi-agent scan.
         """
         system: list[MemoryNode] = []
         for name in SYSTEM_FILES:
@@ -264,7 +273,7 @@ class MemoryScanner:
             for entry in sorted(self.root.iterdir()):
                 if not entry.is_dir() or entry.name.startswith("."):
                     continue
-                view = self._scan_project(entry, include_missing)
+                view = self._scan_project(entry, include_missing, mode=mode)
                 if view is not None:
                     projects.append(view)
 
@@ -326,7 +335,7 @@ class MemoryScanner:
 
     # -- helpers ------------------------------------------------------------
 
-    def _scan_project(self, project_dir: Path, include_missing: bool) -> ProjectView | None:
+    def _scan_project(self, project_dir: Path, include_missing: bool, *, mode: str | None = None) -> ProjectView | None:
         base_dir = project_dir / BASE_DIR
         base: list[MemoryNode] = []
         project: list[MemoryNode] = []
@@ -350,13 +359,17 @@ class MemoryScanner:
         agents: list[AgentView] = []
         folders: list[FolderView] = []
         teams: list[TeamView] = []
+        single = mode == "single"
         for entry in sorted(project_dir.iterdir()):
             if entry.name == BASE_DIR or not entry.is_dir() or entry.name.startswith("."):
                 continue
             if entry.name == TEAMS_DIR:
-                teams = self._scan_teams(entry)
+                if not single:
+                    teams = self._scan_teams(entry)
                 continue
             if _looks_like_agent(entry):
+                if single and entry.name != DEFAULT_AGENT_NAME:
+                    continue
                 agents.append(self._scan_agent(project_dir, entry, include_missing))
             else:
                 folders.append(

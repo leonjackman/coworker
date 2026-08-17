@@ -625,6 +625,12 @@ body.sidebar-resizing {
   padding: 2px 0 4px 18px;
 }
 
+.sidebar-project__flat-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+}
+
 .sidebar-agent {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -3893,6 +3899,11 @@ body.bottom-panel-resizing {
   font-size: 12px;
 }
 
+.settings-chip--mode {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .settings-toggle [role="radio"] {
   min-width: 78px;
 }
@@ -4732,6 +4743,49 @@ body.bottom-panel-resizing {
   flex-direction: row;
   align-items: center;
   color: var(--accent);
+}
+
+.project-mode-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.project-mode-picker__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  border: 1px solid var(--material-border);
+  border-radius: 18px;
+  background: color-mix(in oklab, var(--material-control) 60%, transparent);
+  color: var(--foreground);
+  padding: 16px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.project-mode-picker__card:hover {
+  border-color: var(--ring);
+  background: var(--panel-hover);
+}
+
+.project-mode-picker__card--active {
+  border-color: var(--ring);
+  background: var(--panel-hover);
+  box-shadow: 0 0 0 1px var(--ring) inset;
+}
+
+.project-mode-picker__title {
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.project-mode-picker__desc {
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+  line-height: 1.45;
 }
 
 .workspace-dialog__hint,

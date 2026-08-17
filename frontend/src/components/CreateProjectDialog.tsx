@@ -1,6 +1,7 @@
-import { FolderPlus, X } from 'lucide-react';
+import { FolderPlus, Users, User, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { t } from '../lib/i18n';
+import type { ProjectMode } from '../types';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
@@ -8,7 +9,7 @@ interface CreateProjectDialogProps {
   open: boolean;
   onClose: () => void;
   onPickWorkspace: () => Promise<string | null>;
-  onCreate: (payload: { name: string; workspace_path: string }) => Promise<unknown>;
+  onCreate: (payload: { name: string; workspace_path: string; mode: ProjectMode }) => Promise<unknown>;
 }
 
 function folderName(path: string): string {
@@ -18,6 +19,7 @@ function folderName(path: string): string {
 export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }: CreateProjectDialogProps) {
   const [name, setName] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
+  const [mode, setMode] = useState<ProjectMode>('single');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -25,6 +27,7 @@ export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }
     if (!open) return;
     setName('');
     setWorkspacePath('');
+    setMode('single');
     setError('');
     setBusy(false);
   }, [open]);
@@ -50,7 +53,7 @@ export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }
     setBusy(true);
     setError('');
     try {
-      await onCreate({ name: name.trim(), workspace_path: workspacePath });
+      await onCreate({ name: name.trim(), workspace_path: workspacePath, mode });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -87,6 +90,30 @@ export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }
             onChange={(event) => setName(event.target.value)}
             placeholder={t('project_dialog.name_placeholder')}
           />
+        </div>
+
+        <div className="workspace-dialog__field">
+          <label>{t('project_dialog.mode_label')}</label>
+          <div className="project-mode-picker">
+            <button
+              type="button"
+              className={`project-mode-picker__card ${mode === 'single' ? 'project-mode-picker__card--active' : ''}`}
+              onClick={() => setMode('single')}
+            >
+              <User size={20} />
+              <span className="project-mode-picker__title">{t('project_dialog.mode_single')}</span>
+              <span className="project-mode-picker__desc">{t('project_dialog.mode_single_desc')}</span>
+            </button>
+            <button
+              type="button"
+              className={`project-mode-picker__card ${mode === 'multi' ? 'project-mode-picker__card--active' : ''}`}
+              onClick={() => setMode('multi')}
+            >
+              <Users size={20} />
+              <span className="project-mode-picker__title">{t('project_dialog.mode_multi')}</span>
+              <span className="project-mode-picker__desc">{t('project_dialog.mode_multi_desc')}</span>
+            </button>
+          </div>
         </div>
 
         {workspacePath && <p className="workspace-dialog__hint">{t('project_dialog.workspace_hint', { path: workspacePath })}</p>}

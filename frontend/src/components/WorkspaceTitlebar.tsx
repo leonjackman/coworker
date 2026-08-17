@@ -179,6 +179,7 @@ function titleForView(activeView: AppView, sessionTitle: string): string {
   if (activeView === 'skills') return t('skills.title');
   if (activeView === 'memory') return t('memory.title');
   if (activeView === 'settings') return t('settings.title');
+  if (activeView === 'org') return t('settings.org_group');
   return sessionTitle.trim() || t('sidebar.new_chat');
 }
 

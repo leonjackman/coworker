@@ -497,6 +497,35 @@ def test_full_inject_order_mm(tmp: Path):
     check("rendered excludes sessions", "SES_MESS" not in rendered, str(rendered[:200]))
 
 
+def test_single_mode_render(tmp: Path):
+    print("\n[R] Single-mode render (no roster / no team section)")
+    md = _next_md()
+    class MockCfg:
+        enabled = True
+        char_limit = 5000
+        auto_extract = False
+        nudge_interval = 10
+        extract_model = ""
+    from coworker.org import ORG_MODE_SINGLE, Org, OrgAgent, OrgStore
+
+    mgr = MemoryManager(data_dir=tmp, memory_dir=tmp / MEMORY_ROOT_NAME, config=MockCfg())
+    mgr.registry.ensure_root()
+    mgr.registry.ensure_agent(mgr.registry.ensure_project(md), DEFAULT_AGENT)
+    mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "single memory")
+
+    org_store = OrgStore(tmp / MEMORY_ROOT_NAME)
+    org = Org(mode=ORG_MODE_SINGLE)
+    org.agents.append(OrgAgent(id=DEFAULT_AGENT, name=DEFAULT_AGENT, role=""))
+    org_store.save(md, org)
+    mgr.org_store = org_store
+
+    rendered = mgr.render_for(md, DEFAULT_AGENT)
+    check("single render has memory", "single memory" in rendered, str(rendered[:100]))
+    check("single render no roster section", "## 团队成员" not in rendered, str(rendered[:200]))
+    check("single render no team files", "teams/" not in rendered, str(rendered[:200]))
+    check("single render identity", "default_agent" in rendered, str(rendered[:200]))
+
+
 # --- HTTP tests ---
 
 def test_http_api(url: str, project_id: str):
@@ -539,55 +568,87 @@ def test_http_api(url: str, project_id: str):
     r8 = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("API test fact"), "project_id": project_id, "agent": "default_agent"})
     check("write block", "blocks" in r8 or "error" in str(r8), str(r8.get("__error", r8)))
 
-    r9 = _http("/api/memory/register-agent", "POST", {"project_id": project_id, "agent": "stress_agent"})
-    check("register agent", r9.get("status") == "ok", str(r9.get("__error", "")))
-
     r10 = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("stress_agent wrote this"), "project_id": project_id, "agent": "stress_agent"})
     check("write to new agent", "blocks" in r10, str(r10.get("__error", r10)))
 
+    # --- org API (needs a multi-mode project) -------------------------------
+    # Create a dedicated multi project so team features are enabled regardless
+    # of the mode of the externally-provided project_id.
+    import tempfile as _tf
+    _ws = _tf.mkdtemp(prefix="cw-stress-")
+    rp = _http("/projects", "POST", {"name": _unique("org-proj"), "workspace_path": _ws, "mode": "multi"})
+    multi_id = ""
+    if "project" in rp and rp["project"].get("id"):
+        multi_id = rp["project"]["id"]
+        check("org project created in multi mode", rp["project"].get("mode") == "multi", str(rp["project"]).replace(_ws, "<ws>"))
+    else:
+        check("org project created in multi mode", False, str(rp.get("__error", rp))[:200])
+
+    if multi_id:
+        r9m = _http("/api/memory/register-agent", "POST", {"project_id": multi_id, "agent": "stress_agent"})
+        check("register agent (multi)", r9m.get("status") == "ok", str(r9m.get("__error", "")))
+        r10m = _http("/api/memory/write", "POST", {"action": "add", "content": _unique("stress_agent wrote this"), "project_id": multi_id, "agent": "stress_agent"})
+        check("write to new agent (multi)", "blocks" in r10m, str(r10m.get("__error", r10m)))
+
     # --- org API ---
-    r11 = _http(f"/api/org?project_id={project_id}")
+    r11 = _http(f"/api/org?project_id={multi_id or project_id}")
     check("org get", "agents" in r11 and "config" in r11, str(r11.get("__error", "")))
     if "agents" in r11:
         default_present = any(a.get("id") == "default_agent" for a in r11["agents"])
         check("org has default_agent", default_present, str(r11.get("agents"))[:200])
 
-    r12 = _http("/api/org/agent", "POST", {"project_id": project_id, "name": "org_worker", "role": "developer", "parent": "default_agent"})
+    r12 = _http("/api/org/agent", "POST", {"project_id": multi_id, "name": "org_worker", "role": "developer", "parent": "default_agent"})
     check("org create agent", "agents" in r12 and any(a.get("id") == "org_worker" for a in r12["agents"]), str(r12.get("__error", "")))
 
-    r12b = _http("/api/org/agent", "POST", {"project_id": project_id, "name": "org_worker", "role": "dup"})
+    r12b = _http("/api/org/agent", "POST", {"project_id": multi_id, "name": "org_worker", "role": "dup"})
     check("org duplicate agent rejected", "__error" in r12b, str(r12b)[:120])
 
-    r13 = _http("/api/org/team", "POST", {"project_id": project_id, "id": "org_team", "name": "团队", "lead": "org_worker"})
+    r13 = _http("/api/org/team", "POST", {"project_id": multi_id, "id": "org_team", "name": "团队", "lead": "org_worker"})
     check("org create team", "teams" in r13 and any(t.get("id") == "org_team" for t in r13["teams"]), str(r13.get("__error", "")))
 
-    r14 = _http("/api/org/config", "PATCH", {"project_id": project_id, "mode": "single"})
-    check("org config single", r14.get("config", {}).get("mode") == "single", str(r14.get("__error", "")))
-    r14b = _http("/api/org/config", "PATCH", {"project_id": project_id, "mode": "multi"})
-    check("org config multi", r14b.get("config", {}).get("mode") == "multi", str(r14b.get("__error", "")))
+    # mode is immutable after creation: PATCH with a different mode is ignored
+    r14 = _http("/api/org/config", "PATCH", {"project_id": multi_id, "mode": "single"})
+    check("org mode immutable", r14.get("config", {}).get("mode") == "multi", str(r14.get("__error", "")))
 
-    r15 = _http("/api/org/team", "DELETE", {"project_id": project_id, "id": "org_team"})
+    r15 = _http("/api/org/team", "DELETE", {"project_id": multi_id, "id": "org_team"})
     check("org delete team", "__error" not in r15 or r15.get("status"), str(r15)[:120])
-    r16 = _http("/api/org/agent", "DELETE", {"project_id": project_id, "id": "org_worker"})
+    r16 = _http("/api/org/agent", "DELETE", {"project_id": multi_id, "id": "org_worker"})
     check("org delete agent", "__error" not in r16 or r16.get("status"), str(r16)[:120])
 
     # default_agent is protected from deletion
-    r17 = _http("/api/org/agent", "DELETE", {"project_id": project_id, "id": "default_agent"})
+    r17 = _http("/api/org/agent", "DELETE", {"project_id": multi_id, "id": "default_agent"})
     check("org delete default_agent rejected", "__error" in r17, str(r17)[:120])
 
     # delete a working agent cascades its bound sessions
-    _http("/api/org/agent", "POST", {"project_id": project_id, "name": "cascader", "role": "developer"})
-    _http("/sessions", "POST", {"project_id": project_id, "agent_id": "cascader"})
-    _http("/sessions", "POST", {"project_id": project_id, "agent_id": "default_agent"})
-    sess_before = _http("/sessions?project_id=" + project_id)
+    _http("/api/org/agent", "POST", {"project_id": multi_id, "name": "cascader", "role": "developer"})
+    _http("/sessions", "POST", {"project_id": multi_id, "agent_id": "cascader"})
+    _http("/sessions", "POST", {"project_id": multi_id, "agent_id": "default_agent"})
+    sess_before = _http("/sessions?project_id=" + multi_id)
     cascader_count_before = sum(1 for s in sess_before.get("sessions", []) if s.get("agent_id") == "cascader")
-    r18 = _http("/api/org/agent", "DELETE", {"project_id": project_id, "id": "cascader"})
+    r18 = _http("/api/org/agent", "DELETE", {"project_id": multi_id, "id": "cascader"})
     check("org delete cascades ok", "__error" not in r18, str(r18.get("__error", ""))[:120])
-    sess_after = _http("/sessions?project_id=" + project_id)
+    sess_after = _http("/sessions?project_id=" + multi_id)
     cascader_after = [s for s in sess_after.get("sessions", []) if s.get("agent_id") == "cascader"]
     check("org delete removes agent sessions", cascader_count_before > 0 and not cascader_after, f"before={cascader_count_before} after={len(cascader_after)}")
     default_kept = any(s.get("agent_id") == "default_agent" for s in sess_after.get("sessions", []))
     check("org delete keeps other sessions", default_kept)
+
+    # --- single-mode guards: register-agent & org mutations rejected ----------
+    _ws1 = _tf.mkdtemp(prefix="cw-stress-single-")
+    rp1 = _http("/projects", "POST", {"name": _unique("single-proj"), "workspace_path": _ws1, "mode": "single"})
+    single_id = ""
+    if "project" in rp1 and rp1["project"].get("id"):
+        single_id = rp1["project"]["id"]
+        check("single project created", rp1["project"].get("mode") == "single", str(rp1["project"]).replace(_ws1, "<ws>"))
+    if single_id:
+        r_s1 = _http("/api/memory/register-agent", "POST", {"project_id": single_id, "agent": "extra"})
+        check("single register-agent rejected", "__error" in r_s1, str(r_s1)[:120])
+        r_s2 = _http("/api/org/agent", "POST", {"project_id": single_id, "name": "extra", "role": "dev"})
+        check("single org agent rejected", "__error" in r_s2, str(r_s2)[:120])
+        r_s3 = _http("/api/org/team", "POST", {"project_id": single_id, "id": "t1", "name": "t1"})
+        check("single org team rejected", "__error" in r_s3, str(r_s3)[:120])
+        r_s4 = _http(f"/api/org?project_id={single_id}")
+        check("single org readable", "agents" in r_s4 and r_s4.get("config", {}).get("mode") == "single", str(r_s4.get("__error", ""))[:120])
 
 
 def test_http_pressure(url: str, project_id: str):
@@ -643,6 +704,7 @@ def main():
         test_many_projects(tmp)
         test_memory_manager_scoping(tmp)
         test_full_inject_order_mm(tmp)
+        test_single_mode_render(tmp)
 
     if URL and PROJECT_ID:
         try:

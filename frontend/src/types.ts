@@ -391,6 +391,8 @@ export interface SessionSummary {
   goal_interrupted?: boolean;
 }
 
+export type ProjectMode = 'single' | 'multi';
+
 export interface ProjectEntry {
   id: string;
   name: string;
@@ -400,12 +402,14 @@ export interface ProjectEntry {
   updated_at: string;
   session_count: number;
   memory_dir?: string;
+  mode?: ProjectMode;
   roster?: OrgRosterEntry[];
 }
 
 export interface CreateProjectRequest {
   name: string;
   workspace_path: string;
+  mode?: ProjectMode;
 }
 
 export interface CreateSessionRequest {

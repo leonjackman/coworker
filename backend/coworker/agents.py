@@ -2754,7 +2754,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             if not project_dir or not org_store.exists(project_dir):
                 return None
             org = org_store.load(project_dir)
-            if getattr(org, "mode", "multi") != "multi":
+            if getattr(org, "mode", "single") != "multi":
                 return None
             if not org_store.is_active(org, self.agent):
                 return None
@@ -2923,7 +2923,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             if not project_dir or not org_store.exists(project_dir):
                 return None
             org = org_store.load(project_dir)
-            if getattr(org, "mode", "multi") != "multi":
+            if getattr(org, "mode", "single") != "multi":
                 return None
             if not org_store.is_active(org, self.agent):
                 return None

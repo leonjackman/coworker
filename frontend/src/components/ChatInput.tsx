@@ -606,7 +606,7 @@ export function ChatInput({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {agentOptions.length > 0 && (
+            {agentOptions.length > 1 && (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   className={`composer__ws-chip ${activeAgent && activeAgent.status === 'disabled' ? "composer__ws-chip--empty" : ""}`}

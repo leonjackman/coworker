@@ -199,13 +199,9 @@ export function OrgSettingsPanel({ projectId, onChanged }: OrgSettingsPanelProps
           <h4 className="settings-org-title">{t('settings.org_config')}</h4>
           <div className="settings-org-config-row">
             <label className="settings-org-label">{t('settings.org_mode')}</label>
-            <select
-              value={config.mode}
-              onChange={(event) => saveConfig({ mode: event.target.value as OrgConfig['mode'] })}
-            >
-              <option value="multi">{t('settings.org_mode_multi')}</option>
-              <option value="single">{t('settings.org_mode_single')}</option>
-            </select>
+            <span className="settings-chip settings-chip--mode">
+              {config.mode === 'multi' ? t('settings.org_mode_multi') : t('settings.org_mode_single')}
+            </span>
           </div>
           <div className="settings-org-config-row">
             <label className="settings-org-label">{t('settings.org_max_depth')}</label>

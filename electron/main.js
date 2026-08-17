@@ -1134,6 +1134,7 @@ ipcMain.handle('create-project', async (event, payload) => {
   return requestBackend('/projects', 'POST', {
     name: payload?.name || '',
     workspace_path: payload?.workspace_path || '',
+    mode: payload?.mode || 'single',
   });
 });
 

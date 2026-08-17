@@ -25,7 +25,7 @@ import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib
 import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -1857,7 +1857,9 @@ function App() {
     sessionIdRef.current = undefined;
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
-    setDraftAgentId(agentId ?? 'default_agent');
+    const project = projects.find((p) => p.id === projectId);
+    const resolvedAgent = project?.mode === 'single' ? 'default_agent' : (agentId ?? 'default_agent');
+    setDraftAgentId(resolvedAgent);
     // 新开对话属于新的空会话：清掉上一会话残留的 goal 卡片，避免它串到新会话显示。
     setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
     goalSessionIdRef.current = undefined;
@@ -2490,7 +2492,14 @@ function App() {
     name: project.name,
     path: project.workspace_path,
   }));
-  const agentOptions = activeProject?.roster ?? [];
+  const agentOptions = activeProject?.mode === 'single' ? [{
+    id: 'default_agent',
+    name: 'default_agent',
+    role: '',
+    team: '',
+    status: 'active',
+  } satisfies OrgRosterEntry] : (activeProject?.roster ?? []);
+  const currentProjectMode = activeProject?.mode ?? 'single';
   const orgProjectName = orgProjectId ? projects.find((p) => p.id === orgProjectId)?.name : undefined;
   const currentSessionPending = sessionId
     ? pendingRequests.filter((item) => item.session_id === sessionId)

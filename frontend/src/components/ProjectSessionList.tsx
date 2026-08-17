@@ -33,7 +33,10 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
   const [expandedLists, setExpandedLists] = useState<Set<string>>(() => new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  const isSingle = project.mode === 'single';
+
   const groups = useMemo<AgentGroupData[]>(() => {
+    if (isSingle) return [];
     const roster = project.roster ?? [];
     const rosterById = new Map<string, OrgRosterEntry>(roster.map((entry) => [entry.id, entry]));
     const byAgent = new Map<string, SessionSummary[]>();
@@ -67,7 +70,7 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
           }),
         };
       });
-  }, [project.roster, sessions]);
+  }, [project.roster, sessions, isSingle]);
 
   const handleCopyId = async (sessionId: string) => {
     try {
@@ -110,7 +113,7 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
       eyebrow={project.workspace_path}
       title={project.name}
       description={sessions.length === 0 ? t('project_session.empty_state') : t('project_session.project_sessions_count', { count: sessions.length })}
-      action={onOpenOrgSettings ? (
+      action={onOpenOrgSettings && !isSingle ? (
         <button type="button" className="project-session-list__team-btn" onClick={() => onOpenOrgSettings(project.id)}>
           <Users size={15} />
           {t('sidebar.org_team_manage')}
@@ -119,11 +122,53 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
     >
       <section className="project-session-list">
         <div className="project-session-list__items">
-          {sessions.length === 0 && (project.roster?.length ?? 0) === 0 ? (
+          {sessions.length === 0 && (!isSingle ? (project.roster?.length ?? 0) === 0 : true) ? (
             <p className="project-session-list__empty">{t('project_session.empty_state_text')}</p>
           ) : (
             <>
-              {groups.map((group) => {
+              {isSingle ? (
+                sessions.map((session) => (
+                  <div key={session.id} className="project-session-list__item">
+                    <button
+                      className="project-session-list__item-content"
+                      type="button"
+                      onClick={() => onOpenSession(session.id)}
+                    >
+                      {runningSessionIds?.has(session.id) && <Loader2 size={15} className="project-session-list__running-icon" aria-label="Running" />}
+                      <MessageSquare size={15} className="project-session-list__item-icon" />
+                      <span className="project-session-list__item-title">{session.title}</span>
+                      <span className="project-session-list__item-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
+                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        className="project-session-list__item-more"
+                        type="button"
+                        aria-label={t('titlebar.session_actions')}
+                      >
+                        <MoreHorizontal size={15} />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" alignOffset={-8}>
+                        <DropdownMenuItem onClick={() => onOpenSession(session.id)}>
+                          <MessageSquare size={14} />
+                          {t('sidebar.session_open')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => void handleCopyId(session.id)}>
+                          {copiedId === session.id ? <Check size={14} /> : <Copy size={14} />}
+                          {copiedId === session.id ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={(e) => void handleDeleteSession(session.id, e)}
+                        >
+                          <Trash2 size={14} />
+                          {t('common.delete')}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                ))
+              ) : (
+                groups.map((group) => {
                 const expanded = expandedAgentIds.has(group.agentId);
                 const listExpanded = expandedLists.has(group.agentId);
                 const hasMore = group.sessions.length > PAGE_SIZE;
@@ -210,7 +255,8 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
                     )}
                   </div>
                 );
-              })}
+              })
+              )}
             </>
           )}
         </div>

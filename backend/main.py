@@ -48,6 +48,9 @@ from coworker.memory.transfer import apply_import, export_memory, preview_import
 from coworker.org import (
     AGENT_STATUS_ACTIVE,
     ORG_MODE_MULTI,
+    ORG_MODE_SINGLE,
+    ORG_MODES,
+    Org,
     OrgAgent,
     OrgError,
     OrgStore,
@@ -601,16 +604,20 @@ def _ensure_agent_skeleton(project_dir: str, agent: str = DEFAULT_AGENT) -> str:
         return f"{project_dir}/{agent}"
 
 
-def _ensure_org(memory_dir: str) -> str:
+def _ensure_org(memory_dir: str, mode: str | None = None) -> str:
     """Materialize (or migrate) the org manifest for a project memory dir.
 
-    Returns the ``memory_dir`` on success; raises ``HTTPException(400)`` when
-    the project's memory is unavailable.
+    ``mode`` only applies when the org does not exist yet (mode is immutable
+    after creation); an existing org keeps its stored mode regardless of the
+    argument. Returns the ``memory_dir`` on success; raises
+    ``HTTPException(400)`` when the project's memory is unavailable.
     """
     if not memory_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
     if not org_store.exists(memory_dir):
         org = org_store.load(memory_dir)
+        if mode is not None:
+            org.mode = mode
         # Migration: back-fill existing agent directories discovered on disk.
         library = memory_manager.scanner.scan()
         view = next((p for p in library.projects if p.name == memory_dir), None)
@@ -633,16 +640,37 @@ def _ensure_org(memory_dir: str) -> str:
                 OrgAgent(
                     id=DEFAULT_AGENT,
                     name=DEFAULT_AGENT,
-                    role="team lead",
+                    role="team lead" if org.mode == ORG_MODE_MULTI else "",
                     description="",
                     parent="",
                     team_id="",
                     status=AGENT_STATUS_ACTIVE,
                 )
             )
-        org.mode = ORG_MODE_MULTI
         org_store.save(memory_dir, org)
     return memory_dir
+
+
+def _load_org(project_dir: str) -> Org:
+    """Load a project's org manifest, materializing it first if needed."""
+    if not project_dir:
+        raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _ensure_org(project_dir)
+    return org_store.load(project_dir)
+
+
+def _require_multi(project_dir: str) -> Org:
+    """Load a project's org and reject team features in single mode.
+
+    Returns the org when ``mode == multi``; otherwise raises ``HTTPException``.
+    """
+    org = _load_org(project_dir)
+    if org.mode != ORG_MODE_MULTI:
+        raise HTTPException(
+            status_code=400,
+            detail="project is in single mode; team features disabled",
+        )
+    return org
 
 
 def _is_agent_core_rel(rel: str) -> bool:
@@ -889,11 +917,38 @@ async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
         except Exception:  # noqa: BLE001 - org scaffold must not break discovery
             pass
     library = memory_manager.scanner.scan(include_missing=True)
+    projects = []
+    for view in library.projects:
+        mode = ORG_MODE_MULTI
+        if org_store.exists(view.name):
+            mode = org_store.load(view.name).mode
+        if mode != ORG_MODE_MULTI:
+            view = _scoped_single_project_view(view)
+        projects.append(view)
     return {
         "root": str(library.root),
         "system": [n.to_dict() for n in library.system],
-        "projects": [p.to_dict() for p in library.projects],
+        "projects": [p.to_dict() for p in projects],
     }
+
+
+def _scoped_single_project_view(view):
+    """Strip team containers and extra agents from a single-mode project view.
+
+    A single-mode project exposes exactly one agent (``default_agent``) and no
+    team structure; anything else found on disk is legacy residue and must not
+    surface in the memory tree.
+    """
+    return view.__class__(
+        name=view.name,
+        rel=view.rel,
+        project_name=view.project_name,
+        base=view.base,
+        project=view.project,
+        agents=[a for a in view.agents if a.id == DEFAULT_AGENT],
+        folders=view.folders,
+        teams=[],
+    )
 
 
 @app.get("/api/memory/file")
@@ -1083,12 +1138,15 @@ async def memory_register_project(request: MemoryWriteRequest):
 
 @app.post("/api/memory/register-agent")
 async def memory_register_agent(request: MemoryWriteRequest):
-    """Materialize an agent skeleton under a project and register it in the org."""
+    """Materialize an agent skeleton under a project and register it in the org.
+
+    Only available in multi mode (single-mode projects have exactly one agent).
+    """
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
+    _require_multi(project_dir)
     agent = request.agent or DEFAULT_AGENT
-    _ensure_org(project_dir)
     org = org_store.load(project_dir)
     if not any(a.id == agent for a in org.agents):
         org.agents.append(
@@ -1189,7 +1247,7 @@ async def org_create_agent(request: OrgAgentCreateRequest):
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    _ensure_org(project_dir)
+    _require_multi(project_dir)
     org = org_store.load(project_dir)
     if any(a.id == request.name for a in org.agents):
         raise HTTPException(status_code=400, detail=f"agent {request.name!r} already exists")
@@ -1218,7 +1276,7 @@ async def org_update_agent(request: OrgAgentUpdateRequest):
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    _ensure_org(project_dir)
+    _require_multi(project_dir)
     org = org_store.load(project_dir)
     agent = next((a for a in org.agents if a.id == request.id), None)
     if agent is None:
@@ -1258,7 +1316,7 @@ async def org_delete_agent(request: OrgAgentDeleteRequest):
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    _ensure_org(project_dir)
+    _require_multi(project_dir)
     try:
         org_store.remove_agent(project_dir, request.id)
     except OrgError as exc:
@@ -1287,7 +1345,7 @@ async def org_create_team(request: OrgTeamCreateRequest):
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    _ensure_org(project_dir)
+    _require_multi(project_dir)
     org = org_store.load(project_dir)
     if any(t.id == request.id for t in org.teams):
         raise HTTPException(status_code=400, detail=f"team {request.id!r} already exists")
@@ -1320,7 +1378,7 @@ async def org_update_team(request: OrgTeamUpdateRequest):
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    _ensure_org(project_dir)
+    _require_multi(project_dir)
     org = org_store.load(project_dir)
     team = next((t for t in org.teams if t.id == request.id), None)
     if team is None:
@@ -1346,7 +1404,7 @@ async def org_delete_team(request: OrgTeamDeleteRequest):
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
-    _ensure_org(project_dir)
+    _require_multi(project_dir)
     try:
         org_store.remove_team(project_dir, request.id)
     except OrgError as exc:
@@ -1365,7 +1423,11 @@ async def org_delete_team(request: OrgTeamDeleteRequest):
 
 @app.patch("/api/org/config")
 async def org_update_config(request: OrgConfigUpdateRequest):
-    """Update org config (mode/max_depth/max_concurrent/allow_agent_creation)."""
+    """Update org config (mode/max_depth/max_concurrent/allow_agent_creation).
+
+    ``mode`` is immutable after project creation: a mode sent in the request is
+    ignored (it is retained from the existing org manifest).
+    """
     project_dir = _project_memory_dir(request.project_id)
     if not project_dir:
         raise HTTPException(status_code=400, detail="project memory is unavailable")
@@ -1373,7 +1435,6 @@ async def org_update_config(request: OrgConfigUpdateRequest):
     try:
         org_store.update_config(
             project_dir,
-            mode=request.mode,
             max_depth=request.max_depth,
             max_concurrent=request.max_concurrent,
             allow_agent_creation=request.allow_agent_creation,
@@ -2207,6 +2268,7 @@ class SessionMessageIn(BaseModel):
 class ProjectCreateRequest(BaseModel):
     name: str
     workspace_path: str
+    mode: str = ORG_MODE_SINGLE
 
 class ProjectRenameRequest(BaseModel):
     name: str
@@ -2692,6 +2754,8 @@ async def list_projects():
 @app.post("/projects")
 async def create_project(request: ProjectCreateRequest):
     try:
+        if request.mode not in ORG_MODES:
+            raise ValueError(f"mode must be one of {list(ORG_MODES)}")
         workspace_path = workspace_controller.validate_workspace_path(request.workspace_path)
         from coworker.memory.layout import memory_dir_from_created_at
 
@@ -2701,7 +2765,7 @@ async def create_project(request: ProjectCreateRequest):
         project = project_store.create(request.name, workspace_path, memory_dir=memory_dir)
         try:
             memory_manager.registry.ensure_project(project.memory_dir)
-            _ensure_org(project.memory_dir)
+            _ensure_org(project.memory_dir, request.mode)
             memory_manager.registry.ensure_agent(memory_manager.root / project.memory_dir, DEFAULT_AGENT)
         except Exception:  # noqa: BLE001 - memory scaffold must not block project creation
             pass
