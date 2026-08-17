@@ -610,6 +610,9 @@ def test_http_api(url: str, project_id: str):
     r14 = _http("/api/org/config", "PATCH", {"project_id": multi_id, "mode": "single"})
     check("org mode immutable", r14.get("config", {}).get("mode") == "multi", str(r14.get("__error", "")))
 
+    # org_worker is a member + lead of org_team; unassign before deleting the team
+    _http("/api/org/team", "PATCH", {"project_id": multi_id, "id": "org_team", "lead": "default_agent"})
+    _http("/api/org/agent", "PATCH", {"project_id": multi_id, "id": "org_worker", "team_id": ""})
     r15 = _http("/api/org/team", "DELETE", {"project_id": multi_id, "id": "org_team"})
     check("org delete team", "__error" not in r15 or r15.get("status"), str(r15)[:120])
     r16 = _http("/api/org/agent", "DELETE", {"project_id": multi_id, "id": "org_worker"})
@@ -649,6 +652,28 @@ def test_http_api(url: str, project_id: str):
         check("single org team rejected", "__error" in r_s3, str(r_s3)[:120])
         r_s4 = _http(f"/api/org?project_id={single_id}")
         check("single org readable", "agents" in r_s4 and r_s4.get("config", {}).get("mode") == "single", str(r_s4.get("__error", ""))[:120])
+
+        # --- one folder hosts two projects (single + multi), same mode rejected ---
+        # A single-mode project already exists on _ws1; add a multi one on the same folder.
+        r_pair = _http("/projects", "POST", {"name": _unique("pair-multi"), "workspace_path": _ws1, "mode": "multi"})
+        pair_multi_id = r_pair.get("project", {}).get("id", "") if "project" in r_pair else ""
+        if pair_multi_id:
+            check("same folder multi created", r_pair["project"].get("mode") == "multi", str(r_pair.get("__error", ""))[:200])
+            check("pair projects have distinct memory_dir",
+                  r_pair["project"].get("memory_dir") != rp1["project"].get("memory_dir"),
+                  f"{r_pair['project'].get('memory_dir')} vs {rp1['project'].get('memory_dir')}")
+            # multi memory_dir carries the mode suffix (possibly + _2/_3 on collision)
+            check("multi memory_dir has _multi suffix", "_multi" in str(r_pair["project"].get("memory_dir", "")), str(r_pair["project"].get("memory_dir")))
+            # second single-mode project on the same folder must be rejected
+            r_dup = _http("/projects", "POST", {"name": _unique("dup-single"), "workspace_path": _ws1, "mode": "single"})
+            check("same folder same mode rejected", "__error" in r_dup, str(r_dup)[:200])
+            # deleting one frees the slot; recreate the same mode succeeds
+            r_del = _http(f"/projects/{pair_multi_id}", "DELETE")
+            check("delete one project ok", "__error" not in r_del or r_del.get("status") == "ok", str(r_del)[:200])
+            r_recreate = _http("/projects", "POST", {"name": _unique("recreate-multi"), "workspace_path": _ws1, "mode": "multi"})
+            check("recreate same mode after delete", "project" in r_recreate and r_recreate["project"].get("mode") == "multi", str(r_recreate.get("__error", ""))[:200])
+        else:
+            check("same folder multi created", False, str(r_pair.get("__error", ""))[:200])
 
 
 def test_http_pressure(url: str, project_id: str):

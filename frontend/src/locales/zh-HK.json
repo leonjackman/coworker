@@ -390,6 +390,7 @@
   "project_dialog.mode_label": "專案模式",
   "project_dialog.mode_single": "單一 Agent（推薦）",
   "project_dialog.mode_multi_desc": "建立團隊同部門，Agent 之間可以互相委派任務。建立之後模式唔可以更改。",
+  "project_dialog.mode_taken": "呢個資料夾已經有{mode}模式嘅專案，請刪除之後重建或者揀另一個模式",
   "project_session.project_sessions_count": "{count} 個會話",
   "project_session.empty_state": "仲未有任何會話",
   "project_session.new_chat_for_project": "為 {name} 新增會話",

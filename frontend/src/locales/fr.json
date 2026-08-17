@@ -407,6 +407,7 @@
   "project_dialog.mode_label": "Mode du projet",
   "project_dialog.mode_single": "Agent unique (recommandé)",
   "project_dialog.mode_multi_desc": "Créez des équipes et des départements ; les agents peuvent se déléguer des tâches. Le mode est figé après création.",
+  "project_dialog.mode_taken": "Un projet en mode {mode} existe déjà dans ce dossier. Supprimez-le puis recréez-le, ou choisissez un autre mode",
   "first_run.eyebrow": "Espace de travail d'abord",
   "first_run.title": "Créez un projet avant que CoWorker commence à travailler",
   "first_run.description": "L'espace de travail du projet décide où l'agent lit, modifie et exécute des commandes. Choisissez un dossier d'abord, puis chaque nouvelle session appartient à ce projet.",

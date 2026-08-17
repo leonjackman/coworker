@@ -46,6 +46,8 @@ def main() -> int:
         memory_dir_from_created_at("2026-08-12T10:00:00+00:00"),
     )
     check("timestamp fallback", len(memory_dir_from_created_at("garbage")) == 14)
+    check("timestamp + mode suffix distinct", memory_dir_from_created_at("2026-08-12T10:00:00+00:00") + "_single" != memory_dir_from_created_at("2026-08-12T10:00:00+00:00") + "_multi")
+    check("timestamp + mode suffix format", memory_dir_from_created_at("2026-08-12T10:00:00+00:00") + "_multi" == "20260812100000_multi")
     check("sanitize spaces", sanitize_name("  my project!  ") == "my_project_")
     check("sanitize empty", sanitize_name("") == "untitled")
 

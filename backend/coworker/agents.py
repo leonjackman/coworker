@@ -2701,7 +2701,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -2719,15 +2719,31 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.skill_manager = skill_manager
         self.memory_manager = memory_manager
         self.project_store = project_store
+        self.project_id = project_id or ""
         self.context_budget_chars = _runtime_context_budget(provider, model_override)
         self.agent = agent or DEFAULT_AGENT_NAME
+
+    def _resolve_project_dir(self) -> str:
+        """Resolve the project memory dir for this runtime.
+
+        Prefers the explicit ``project_id`` threaded at construction time; a
+        single workspace may host two projects (one per mode), so the legacy
+        workspace-path reverse lookup is ambiguous and only used as a fallback
+        for non-project / default-workspace runs.
+        """
+        if self.project_id:
+            try:
+                return self.project_store.memory_dir_for(self.project_id)
+            except (KeyError, ValueError):
+                pass
+        return _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
 
     @property
     def _memory(self) -> tuple[Any | None, Any | None, str]:
         """Return ``(project_scoped_manager, memory_store, agent_memory_rel)``."""
         if self.memory_manager is None or not getattr(self.memory_manager, "enabled", False):
             return None, None, ""
-        project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
+        project_dir = self._resolve_project_dir()
         view = self.memory_manager.for_project(project_dir, self.agent)
         agent_rel = ""
         if project_dir:
@@ -2750,7 +2766,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             org_store = getattr(self.memory_manager, "org_store", None)
             if org_store is None or not getattr(self.memory_manager, "enabled", False):
                 return None
-            project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
+            project_dir = self._resolve_project_dir()
             if not project_dir or not org_store.exists(project_dir):
                 return None
             org = org_store.load(project_dir)
@@ -2799,7 +2815,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AgentReply:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
-            "model": self.model_name, "workspace_path": str(self.workspace.root),
+            "model": self.model_name, "workspace_path": str(self.workspace.root), "project_id": self.project_id,
         }
         current_trace_context = trace_context(
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
@@ -2870,7 +2886,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.provider_id = provider.id
         self.provider_name = provider.name
@@ -2888,15 +2904,32 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.skill_manager = skill_manager
         self.memory_manager = memory_manager
         self.project_store = project_store
+        self.project_id = project_id or ""
         self.agent = agent or DEFAULT_AGENT_NAME
         self._delegation_buffer: list[dict[str, Any]] = []
         self.context_budget_chars = _runtime_context_budget(provider, model_override)
+
+    def _resolve_project_dir(self) -> str:
+        """Resolve the project memory dir for this runtime.
+
+        Prefers the explicit ``project_id`` threaded at construction time; a
+        single workspace may host two projects (one per mode), so the legacy
+        workspace-path reverse lookup is ambiguous and only used as a fallback
+        for non-project / default-workspace runs.
+        """
+        if self.project_id:
+            try:
+                return self.project_store.memory_dir_for(self.project_id)
+            except (KeyError, ValueError):
+                pass
+        return _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
+
     @property
     def _memory(self) -> tuple[Any | None, Any | None, str]:
         """Return ``(project_scoped_manager, memory_store, agent_memory_rel)``."""
         if self.memory_manager is None or not getattr(self.memory_manager, "enabled", False):
             return None, None, ""
-        project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
+        project_dir = self._resolve_project_dir()
         view = self.memory_manager.for_project(project_dir, self.agent)
         agent_rel = ""
         if project_dir:
@@ -2919,7 +2952,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             org_store = getattr(self.memory_manager, "org_store", None)
             if org_store is None or not getattr(self.memory_manager, "enabled", False):
                 return None
-            project_dir = _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
+            project_dir = self._resolve_project_dir()
             if not project_dir or not org_store.exists(project_dir):
                 return None
             org = org_store.load(project_dir)
@@ -3015,7 +3048,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
-            "model": self.model_name, "workspace_path": str(self.workspace.root),
+            "model": self.model_name, "workspace_path": str(self.workspace.root), "project_id": self.project_id,
         }
         current_trace_context = trace_context(
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
@@ -3552,7 +3585,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         autonomy = normalize_autonomy(context.get("autonomy"))
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
-            "model": self.model_name, "workspace_path": str(self.workspace.root),
+            "model": self.model_name, "workspace_path": str(self.workspace.root), "project_id": self.project_id,
         }
         current_trace_context = trace_context(
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
@@ -3794,27 +3827,27 @@ class AgentRuntimeRegistry:
     def _workspace_or_default(self, workspace: Workspace | None = None) -> Workspace:
         return workspace or self.default_workspace
 
-    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None) -> AgentRuntime:
+    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None, project_id: str | None = None) -> AgentRuntime:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
 
-    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None) -> AgentRuntime:
+    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None, project_id: str | None = None) -> AgentRuntime:
         if mode == "single":
-            return self._create_single_agent(provider_id, model, workspace, referenced_sessions, agent)
+            return self._create_single_agent(provider_id, model, workspace, referenced_sessions, agent, project_id)
         raise RuntimeError(f"Unsupported agent mode: {mode}")
 
     def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.trace_store.list(limit)
 
-    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None) -> AgentStreamRuntime:
+    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None, project_id: str | None = None) -> AgentStreamRuntime:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if not provider and self.settings.agent_provider == "openai":
@@ -3824,7 +3857,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
@@ -3837,31 +3870,33 @@ class AgentRuntimeRegistry:
         context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
         provider_id = str(context.get("provider_id") or "")
         model = str(context.get("model") or "")
+        project_id = str(context.get("project_id") or "") or None
         workspace_path = context.get("workspace_path")
         workspace = None
         if workspace_path:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
-        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions)
+        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions, project_id=project_id)
         async for event in runtime.resume_interrupt(approval, decisions):
             yield event
 
     def _stream_runtime_from_context(self, context: dict[str, Any]) -> AgentStreamRuntime:
         provider_id = str(context.get("provider_id") or "")
         model = str(context.get("model") or "")
+        project_id = str(context.get("project_id") or "") or None
         workspace_path = context.get("workspace_path")
         workspace = None
         if workspace_path:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
-        return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions, agent=str(context.get("agent") or "") or None)
+        return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions, agent=str(context.get("agent") or "") or None, project_id=project_id)
 
     async def rerun_stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
         provider_id: str | None = None, model: str | None = None, referenced_sessions: set[str] | None = None,
-        workspace_path: str | None = None, agent: str | None = None,
+        workspace_path: str | None = None, agent: str | None = None, project_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Reset the session checkpoint and re-run the agent from full history."""
         # The checkpoint delete touches SQLite; run it off the event loop so a
@@ -3876,6 +3911,7 @@ class AgentRuntimeRegistry:
             # wrong place (compare resume_interrupt, which passes it).
             "workspace_path": workspace_path,
             "agent": agent or "",
+            "project_id": project_id or "",
         }
         runtime = self._stream_runtime_from_context(context)
         async for event in runtime.stream_rerun(messages, session_id, language, work_mode, autonomy):

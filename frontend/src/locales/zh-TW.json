@@ -381,6 +381,7 @@
   "project_dialog.mode_label": "專案模式",
   "project_dialog.mode_single": "單一 Agent（推薦）",
   "project_dialog.mode_multi_desc": "建立團隊與部門，Agent 之間可互相委派任務。建立後模式不可變更。",
+  "project_dialog.mode_taken": "此資料夾已存在{mode}模式的專案，請刪除後重建或選擇另一模式",
   "new_chat.title": "今天我能為您做什麼？",
   "new_chat.subtitle_workspace": "在 {name} 工作區中開始對話",
   "new_chat.subtitle_empty": "請先選擇工作區，然後開始對話",

@@ -1,7 +1,7 @@
 import { FolderPlus, Users, User, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { t } from '../lib/i18n';
-import type { ProjectMode } from '../types';
+import type { ProjectEntry, ProjectMode } from '../types';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
@@ -10,13 +10,18 @@ interface CreateProjectDialogProps {
   onClose: () => void;
   onPickWorkspace: () => Promise<string | null>;
   onCreate: (payload: { name: string; workspace_path: string; mode: ProjectMode }) => Promise<unknown>;
+  projects?: ProjectEntry[];
 }
 
 function folderName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || t('sidebar.project_new');
 }
 
-export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }: CreateProjectDialogProps) {
+function normalizePath(path: string): string {
+  return path.trim().replace(/\/+$/, '');
+}
+
+export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate, projects = [] }: CreateProjectDialogProps) {
   const [name, setName] = useState('');
   const [workspacePath, setWorkspacePath] = useState('');
   const [mode, setMode] = useState<ProjectMode>('single');
@@ -31,6 +36,21 @@ export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }
     setError('');
     setBusy(false);
   }, [open]);
+
+  const takenModes = useMemo<Set<ProjectMode>>(() => {
+    if (!workspacePath) return new Set();
+    const normalized = normalizePath(workspacePath);
+    const taken = new Set<ProjectMode>();
+    for (const project of projects) {
+      if (project.workspace_path && normalizePath(project.workspace_path) === normalized && project.mode) {
+        taken.add(project.mode);
+      }
+    }
+    return taken;
+  }, [workspacePath, projects]);
+
+  const singleTaken = takenModes.has('single');
+  const multiTaken = takenModes.has('multi');
 
   if (!open) return null;
 
@@ -50,6 +70,10 @@ export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }
 
   const submit = async () => {
     if (!workspacePath || !name.trim()) return;
+    if (takenModes.has(mode)) {
+      setError(t('project_dialog.mode_taken', { mode: mode === 'single' ? t('project_dialog.mode_single') : t('project_dialog.mode_multi') }));
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -97,21 +121,27 @@ export function CreateProjectDialog({ open, onClose, onPickWorkspace, onCreate }
           <div className="project-mode-picker">
             <button
               type="button"
-              className={`project-mode-picker__card ${mode === 'single' ? 'project-mode-picker__card--active' : ''}`}
+              disabled={singleTaken}
+              className={`project-mode-picker__card ${mode === 'single' ? 'project-mode-picker__card--active' : ''} ${singleTaken ? 'project-mode-picker__card--taken' : ''}`}
               onClick={() => setMode('single')}
             >
               <User size={20} />
               <span className="project-mode-picker__title">{t('project_dialog.mode_single')}</span>
-              <span className="project-mode-picker__desc">{t('project_dialog.mode_single_desc')}</span>
+              <span className="project-mode-picker__desc">
+                {singleTaken ? t('project_dialog.mode_taken', { mode: t('project_dialog.mode_single') }) : t('project_dialog.mode_single_desc')}
+              </span>
             </button>
             <button
               type="button"
-              className={`project-mode-picker__card ${mode === 'multi' ? 'project-mode-picker__card--active' : ''}`}
+              disabled={multiTaken}
+              className={`project-mode-picker__card ${mode === 'multi' ? 'project-mode-picker__card--active' : ''} ${multiTaken ? 'project-mode-picker__card--taken' : ''}`}
               onClick={() => setMode('multi')}
             >
               <Users size={20} />
               <span className="project-mode-picker__title">{t('project_dialog.mode_multi')}</span>
-              <span className="project-mode-picker__desc">{t('project_dialog.mode_multi_desc')}</span>
+              <span className="project-mode-picker__desc">
+                {multiTaken ? t('project_dialog.mode_taken', { mode: t('project_dialog.mode_multi') }) : t('project_dialog.mode_multi_desc')}
+              </span>
             </button>
           </div>
         </div>

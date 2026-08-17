@@ -4777,6 +4777,16 @@ body.bottom-panel-resizing {
   box-shadow: 0 0 0 1px var(--ring) inset;
 }
 
+.project-mode-picker__card--taken {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-mode-picker__card--taken:hover {
+  border-color: var(--material-border);
+  background: color-mix(in oklab, var(--material-control) 60%, transparent);
+}
+
 .project-mode-picker__title {
   font-size: 0.9rem;
   font-weight: 650;

@@ -383,6 +383,7 @@
   "project_dialog.mode_label": "Projektmodus",
   "project_dialog.mode_single": "Einzelagent (empfohlen)",
   "project_dialog.mode_multi_desc": "Teams und Abteilungen erstellen; Agenten können sich gegenseitig Aufgaben delegieren. Der Modus kann nach der Erstellung nicht mehr geändert werden.",
+  "project_dialog.mode_taken": "In diesem Ordner existiert bereits ein Projekt im Modus {mode}. Löschen und neu erstellen oder anderen Modus wählen",
   "new_chat.title": "Wie kann ich Ihnen heute helfen?",
   "new_chat.subtitle_workspace": "Beginnen Sie eine Unterhaltung im {name}-Arbeitsbereich",
   "new_chat.subtitle_empty": "Wählen Sie zuerst einen Arbeitsbereich, dann beginnen Sie die Unterhaltung",

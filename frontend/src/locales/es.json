@@ -382,6 +382,7 @@
   "project_dialog.mode_label": "Modo del proyecto",
   "project_dialog.mode_single": "Agente único (recomendado)",
   "project_dialog.mode_multi_desc": "Crea equipos y departamentos; los agentes pueden delegar tareas entre sí. El modo no se puede cambiar tras la creación.",
+  "project_dialog.mode_taken": "Ya existe un proyecto en modo {mode} en esta carpeta. Elimínalo y vuelve a crearlo, o elige otro modo",
   "new_chat.title": "¿En qué puedo ayudarte hoy?",
   "new_chat.subtitle_workspace": "Iniciar una conversación en el espacio de trabajo {name}",
   "new_chat.subtitle_empty": "Primero elige un espacio de trabajo, luego inicia la conversación",

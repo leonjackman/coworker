@@ -2830,6 +2830,7 @@ function App() {
         onClose={() => setCreateProjectDialogOpen(false)}
         onPickWorkspace={pickWorkspaceDirectory}
         onCreate={createProjectWithWorkspace}
+        projects={projects}
       />
       {rollbackTarget && (
         <RollbackDialog

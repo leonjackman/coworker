@@ -382,6 +382,7 @@
   "project_dialog.mode_label": "Project mode",
   "project_dialog.mode_single": "Single Agent (Recommended)",
   "project_dialog.mode_multi_desc": "Create teams and departments; agents can delegate tasks to each other. The mode cannot be changed after creation.",
+  "project_dialog.mode_taken": "A project in {mode} mode already exists in this folder. Delete it and recreate, or choose another mode",
   "new_chat.title": "What can I help you with today?",
   "new_chat.subtitle_workspace": "Start a conversation in the {name} workspace",
   "new_chat.subtitle_empty": "Pick a workspace first, then start the conversation",

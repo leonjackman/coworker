@@ -66,6 +66,15 @@ class ProjectConfig:
                 return project
         return None
 
+    def list_by_workspace_path(self, workspace_path: str) -> list[Project]:
+        """Return every project bound to the given workspace path.
+
+        A single folder may host up to two projects (one single-mode and one
+        multi-mode); callers use this to detect which modes are already taken
+        before creating a new project on the same folder.
+        """
+        return [project for project in self.projects if project.workspace_path == workspace_path]
+
 
 class ProjectStore:
     def __init__(self, config_path: Path):
@@ -92,6 +101,15 @@ class ProjectStore:
 
     def list_projects(self) -> list[Project]:
         return self.load().projects
+
+    def list_by_workspace_path(self, workspace_path: str) -> list[Project]:
+        """Return every project bound to the given workspace path.
+
+        A single folder may host up to two projects (one single-mode and one
+        multi-mode); callers use this to detect which modes are already taken
+        before creating a new project on the same folder.
+        """
+        return self.load().list_by_workspace_path(workspace_path)
 
     def require(self, project_id: str) -> Project:
         project = self.load().find(project_id)
@@ -127,12 +145,6 @@ class ProjectStore:
         if not cleaned_workspace:
             raise ValueError("workspace path is required")
         config = self.load()
-        existing = config.find_by_workspace_path(cleaned_workspace)
-        if existing:
-            if memory_dir and not existing.memory_dir:
-                existing.memory_dir = memory_dir
-                self.save(config)
-            return existing
         now = _now()
         project = Project(
             id=str(uuid.uuid4()),

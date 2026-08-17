@@ -594,6 +594,27 @@ def _project_memory_dir(project_id: str) -> str:
         return ""
 
 
+def _unique_memory_dir(created_at: str, mode: str) -> str:
+    """Build a unique project memory dir name: ``{timestamp}_{mode}``.
+
+    The mode suffix keeps the single- and multi-agent projects of one folder
+    distinct even when created within the same second. Two different folders
+    creating a same-mode project in the same second would still collide, so a
+    ``_2/_3`` suffix is appended while the candidate exists either in the
+    project store or on disk.
+    """
+    from coworker.memory.layout import memory_dir_from_created_at
+
+    base = f"{memory_dir_from_created_at(created_at)}_{mode}"
+    taken = {p.memory_dir for p in project_store.list_projects() if p.memory_dir}
+    candidate = base
+    index = 2
+    while candidate in taken or (memory_manager.root / candidate).exists():
+        candidate = f"{base}_{index}"
+        index += 1
+    return candidate
+
+
 def _ensure_agent_skeleton(project_dir: str, agent: str = DEFAULT_AGENT) -> str:
     """Materialize the agent skeleton for a project; returns the agent rel dir."""
     project_path = memory_manager.registry.ensure_project(project_dir)
@@ -789,7 +810,7 @@ async def chat(request: ChatRequest):
         if project_dir:
             _ensure_agent_skeleton(project_dir, agent)
             _ensure_org(project_dir)
-        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent)
+        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent, project_id=request.project_id)
         agent_registry.checkpoint_manager.mark_active(session_id)
         try:
             # The sync path runs the whole LangGraph turn (LLM calls + possibly a
@@ -1538,7 +1559,7 @@ async def chat_stream(request: ChatStreamRequest):
         if project_dir:
             _ensure_agent_skeleton(project_dir, agent)
             _ensure_org(project_dir)
-        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent)
+        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent, project_id=request.project_id)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -1684,7 +1705,7 @@ async def chat_stream(request: ChatStreamRequest):
             runtime = agent_registry.get_stream_runtime(
                 request.mode, request.provider_id, request.model,
                 resolved_workspace, referenced_sessions=referenced_ids,
-                agent=agent,
+                agent=agent, project_id=request.project_id,
             )
             try:
                 stream_id = session_store.require(session_id).goal_stream_id or ""
@@ -1699,7 +1720,7 @@ async def chat_stream(request: ChatStreamRequest):
             runtime = agent_registry.get_stream_runtime(
                 request.mode, request.provider_id, request.model,
                 resolved_workspace, referenced_sessions=referenced_ids,
-                agent=agent,
+                agent=agent, project_id=request.project_id,
             )
             stream_iter = runtime.stream(
                 messages, session_id, request.language, work_mode, autonomy,
@@ -2145,7 +2166,7 @@ async def goal_resume(request: GoalResumeRequest):
     referenced_ids: set[str] = set()
     try:
         resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
-        runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids, agent=session.agent_id or DEFAULT_AGENT)
+        runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None)
     except (KeyError, ValueError, RuntimeError) as exc:
         _goal_active_streams.pop(stream_id, None)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2604,7 +2625,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         async for kind, payload in _sse_events(
             _tracked_stream(
                 agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT,
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
                 ),
                 session_id,
             ),
@@ -2726,7 +2747,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         async for kind, payload in _sse_events(
             _tracked_stream(
                 agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT,
+                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
                 ),
                 session_id,
             ),
@@ -2757,11 +2778,20 @@ async def create_project(request: ProjectCreateRequest):
         if request.mode not in ORG_MODES:
             raise ValueError(f"mode must be one of {list(ORG_MODES)}")
         workspace_path = workspace_controller.validate_workspace_path(request.workspace_path)
-        from coworker.memory.layout import memory_dir_from_created_at
-
+        # A folder hosts at most two projects (one single + one multi); reject
+        # a second project with the same mode on the same workspace path.
+        for existing in project_store.list_by_workspace_path(workspace_path):
+            existing_mode = ORG_MODE_SINGLE
+            if existing.memory_dir and org_store.exists(existing.memory_dir):
+                existing_mode = org_store.load(existing.memory_dir).mode
+            if existing_mode == request.mode:
+                label = "single" if request.mode == ORG_MODE_SINGLE else "multi"
+                raise ValueError(
+                    f"该文件夹已存在 {label} 模式的项目，请删除后重建或选择另一模式"
+                )
         from datetime import datetime, timezone
 
-        memory_dir = memory_dir_from_created_at(datetime.now(timezone.utc).isoformat())
+        memory_dir = _unique_memory_dir(datetime.now(timezone.utc).isoformat(), request.mode)
         project = project_store.create(request.name, workspace_path, memory_dir=memory_dir)
         try:
             memory_manager.registry.ensure_project(project.memory_dir)
