@@ -1,3 +1,6 @@
+// Dependency bootstrap: ensure all required npm packages are installed.
+require('./bootstrap');
+
 // Patch for Electron 43: Remove node_modules/electron package from require path
 // to allow Electron's built-in electron module to be used.
 // Without this patch, require('electron') returns a binary path string instead
