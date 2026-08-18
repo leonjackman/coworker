@@ -882,22 +882,24 @@ export function ChatInput({
 
       {showCommands && displayedItems.length > 0 && (
         <div className="slash-menu" ref={menuRef}>
-          {displayedItems.map((item, index) => (
-            <button
-              type="button"
-              key={`${item.type}:${item.command}:${item.packageName ?? ''}`}
-              className={index === activeCommandIndex ? "slash-menu__item slash-menu__item--active" : "slash-menu__item"}
-              onMouseEnter={() => setCommandIndex(index)}
-              onClick={() => insertCommand(item.command)}
-            >
-              <span className={`slash-menu__type slash-menu__type--${item.type}`}>{COMMAND_TYPE_LABEL[item.type]}</span>
-              <span className="slash-menu__cmd">{item.command}</span>
-              <small>
-                {item.packageName && <span className="slash-menu__pkg">{item.packageName}</span>}
-                {item.description || (item.type === "skill" ? "加载并运行此技能" : "")}
-              </small>
-            </button>
-          ))}
+          <div className="slash-menu-content">
+            {displayedItems.map((item, index) => (
+              <button
+                type="button"
+                key={`${item.type}:${item.command}:${item.packageName ?? ''}`}
+                className={index === activeCommandIndex ? "slash-menu__item slash-menu__item--active" : "slash-menu__item"}
+                onMouseEnter={() => setCommandIndex(index)}
+                onClick={() => insertCommand(item.command)}
+              >
+                <span className={`slash-menu__type slash-menu__type--${item.type}`}>{COMMAND_TYPE_LABEL[item.type]}</span>
+                <span className="slash-menu__cmd">{item.command}</span>
+                <small>
+                  {item.packageName && <span className="slash-menu__pkg">{item.packageName}</span>}
+                  {item.description || (item.type === "skill" ? "加载并运行此技能" : "")}
+                </small>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </footer>

@@ -3254,9 +3254,6 @@ body.bottom-panel-resizing {
   right: 8px;
   bottom: calc(100% - 12px);
   z-index: 100;
-  display: grid;
-  gap: 3px;
-  padding: 6px;
   border: 1px solid var(--material-border);
   border-radius: 12px;
   background: var(--material-panel-solid);
@@ -3264,6 +3261,8 @@ body.bottom-panel-resizing {
   backdrop-filter: var(--material-blur);
   transform-origin: bottom center;
   animation: slashPullUp .17s ease both;
+  max-height: calc(60vh - 100px);
+  overflow-y: auto;
 }
 
 @keyframes slashPullUp {
@@ -3290,6 +3289,14 @@ body.bottom-panel-resizing {
   background: transparent;
   cursor: pointer;
   text-align: left;
+  white-space: nowrap;
+}
+
+.slash-menu-content {
+  overflow-y: auto;
+  display: grid;
+  gap: 3px;
+  padding: 6px;
 }
 
 .slash-menu button:hover,
