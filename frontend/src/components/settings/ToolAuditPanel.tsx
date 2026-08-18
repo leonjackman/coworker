@@ -153,7 +153,8 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
 
   async function clearLog() {
     try {
-      await chatService.truncateLog();
+      // maxBytes=0 tells the backend to clear the log file completely.
+      await chatService.truncateLog(0);
       await fetchLogLines();
     } catch {
       // ignore

@@ -60,7 +60,7 @@ from coworker.org import (
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
-from coworker.logger import get_logger, init_logger, set_log_level as _set_log_level, truncate_log as _truncate_log
+from coworker.logger import get_logger, get_log_level, init_logger, set_log_level as _set_log_level, truncate_log as _truncate_log
 
 settings = load_settings()
 logger = get_logger(__name__)
@@ -84,18 +84,6 @@ app.add_middleware(
 log_path = init_logger(settings.data_dir, settings.log_level)
 logger.info("Unified logger initialized: level=%s json=%d file=%s", settings.log_level, settings.json_log, log_path)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 session_store = SessionStore(settings.data_dir / "sessions")
 provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
 config_controller = AppConfigController(settings, provider_manager)
@@ -3185,7 +3173,7 @@ async def save_retention_settings(request: RetentionUpdate):
 async def get_log_settings():
     """Current logging configuration."""
     return {
-        "log_level": settings.log_level,
+        "log_level": get_log_level(),
         "log_file": str(log_path),
         "log_max_bytes": settings.log_max_bytes,
         "log_backup_count": settings.log_backup_count,
@@ -3203,31 +3191,46 @@ async def set_log_level(request: LogSettingsUpdate):
     result = _set_log_level(level)
     if result != "ok":
         raise HTTPException(status_code=400, detail=result)
-    # Update the global settings object so subsequent reloads see the new value
-    settings.log_level = level
     return {"status": "ok", "log_level": level}
 
 
+class TruncateLogRequest(BaseModel):
+    max_bytes: int | None = None
+
+
 @app.post("/settings/truncate-log")
-async def truncate_log_settings(max_bytes: int | None = None):
-    """Truncate the app log file, keeping the last ``max_bytes`` bytes."""
-    mb = max_bytes if max_bytes is not None else settings.log_max_bytes
+async def truncate_log_settings(request: TruncateLogRequest):
+    """Truncate the app log file, keeping the last ``max_bytes`` bytes.
+
+    ``max_bytes`` is read from the JSON body (matches the Electron and HTTP
+    frontend clients). ``max_bytes <= 0`` clears the file completely.
+    """
+    mb = request.max_bytes if request.max_bytes is not None else settings.log_max_bytes
     result = _truncate_log(mb)
     return result
 
 @app.get("/settings/log-file")
 async def read_log_file(start: int = 0, count: int = 100):
-    """Read the last ``count`` lines from the app log file (for the UI)."""
+    """Read log lines from the tail of the app log file.
+
+    ``start`` is the number of newest lines to skip (0 = newest lines);
+    ``count`` is how many lines to return. Together they page backwards
+    from the end of the file: ``lines[-start-count:-start]``.
+    ``truncated`` is True when older lines exist before this page.
+    """
     try:
         content = log_path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines()
         total = len(lines)
-        lines = lines[-int(count):] if count > 0 else []
-        truncated = total > int(count) + int(start)
+        if count <= 0 or start < 0 or total == 0:
+            return {"total_lines": total, "lines": [], "truncated": total > 0}
+        end = max(0, total - start)
+        begin = max(0, end - count)
+        page = lines[begin:end]
         return {
             "total_lines": total,
-            "lines": lines,
-            "truncated": truncated,
+            "lines": page,
+            "truncated": begin > 0,
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

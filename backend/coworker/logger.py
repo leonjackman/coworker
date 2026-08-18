@@ -235,6 +235,7 @@ def _drain_handlers() -> None:
 # ---------------------------------------------------------------------------
 _initialized = False
 _log_file: Path | None = None
+_current_level: str = "INFO"
 
 
 def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
@@ -244,17 +245,22 @@ def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
     """
     global _initialized
     global _log_file  # must be at top of function body
+    global _current_level
+
+    if _initialized:
+        # Already initialized; just update the level if changed.
+        # NOTE: do NOT drain handlers here — a second call would tear down the
+        # configured console/file handlers and leave the app with no output.
+        if log_level:
+            _set_level(log_level)
+            _current_level = (log_level or _DEFAULT_LEVEL).upper()
+        return _log_file or _resolve_data_dir(data_dir) / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
 
     # Remove pre-existing handlers FIRST so dictConfig gets a clean slate
     _drain_handlers()
 
-    if _initialized:
-        # Already initialized; just update the level if changed.
-        if log_level:
-            _set_level(log_level)
-        return _log_file or _resolve_data_dir(data_dir) / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
-
     level = log_level or _DEFAULT_LEVEL
+    _current_level = level
     config = _build_logger_config(
         data_dir=data_dir,
         log_level=level,
@@ -283,20 +289,19 @@ def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
 def get_logger(name: str | None = None) -> logging.Logger:
     """Return a logger under the ``coworker`` hierarchy.
 
-    If ``name`` does not already start with ``coworker``, it will be
-    prefixed so that ``get_logger(__name__)`` in ``coworker/agents.py``
-    resolves to ``coworker.agents`` (or keeps its existing ``coworker.agents``
-    form).
+    If ``name`` does not already live under ``coworker``, it is prefixed so
+    that ``get_logger(__name__)`` in ``coworker/agents.py`` resolves to
+    ``coworker.agents``. Calling without a name returns the top-level
+    ``coworker`` logger.
     """
-    if name is None:
-        name = ""
+    if not name:
+        return logging.getLogger("coworker")
 
-    # Strip leading dots and ensure hierarchy
-    if not name.startswith("coworker"):
-        if not name.startswith("coworker."):
-            name = f"coworker.{name}"
+    name = name.strip()
+    if name == "coworker" or name.startswith("coworker."):
+        return logging.getLogger(name)
 
-    return logging.getLogger(name)
+    return logging.getLogger(f"coworker.{name.lstrip('.')}")
 
 
 def _set_level(level: str) -> None:
@@ -323,12 +328,19 @@ def _set_level(level: str) -> None:
 
 def set_log_level(level: str) -> str:
     """Set log level at runtime. Returns the new level string on success."""
+    global _current_level
     numeric = getattr(logging, level.upper(), None)
     if numeric is None:
         return f"Invalid log level: {level}. Must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL."
 
     _set_level(level)
+    _current_level = level.upper()
     return "ok"
+
+
+def get_log_level() -> str:
+    """Return the current effective runtime log level."""
+    return _current_level
 
 
 def truncate_log(max_bytes: int = 0) -> dict[str, Any]:

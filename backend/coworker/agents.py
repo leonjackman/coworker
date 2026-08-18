@@ -614,9 +614,7 @@ def build_workspace_tools(
                 try:
                     skill_manager.refresh()
                 except Exception:  # refresh must not mask the install result
-                    import logging
-
-                    logging.getLogger(__name__).exception("Failed to refresh skill catalog after install")
+                    logger.exception("Failed to refresh skill catalog after install")
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "install_skill")
