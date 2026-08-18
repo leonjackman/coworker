@@ -6376,7 +6376,7 @@ body.bottom-panel-resizing {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--material-border);
   background: var(--material-panel);
 }

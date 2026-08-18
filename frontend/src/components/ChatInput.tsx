@@ -571,13 +571,15 @@ export function ChatInput({
   }, [commandChip]);
 
   /** Remove the leading "/token " text currently being typed (the raw command
-   *  that a commit replaces with the chip). Returns whether anything was cut. */
+   *  that a commit replaces with the chip). The token part is optional so a bare
+   *  "/" typed before picking a command is also cleared. Returns whether any
+   *  text was cut. */
   function stripLeadingCommand(editor: HTMLElement): boolean {
     const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
     const node = walker.nextNode();
     if (!node) return false;
     const text = node.nodeValue ?? "";
-    const match = /^\/([A-Za-z0-9][A-Za-z0-9_.-]*)\s?/.exec(text);
+    const match = /^\/[A-Za-z0-9_.-]*\s?/.exec(text);
     if (!match) return false;
     const rest = text.slice(match[0].length);
     if (rest) node.nodeValue = rest;
