@@ -830,5 +830,11 @@
   "settings.clear_log": "Effacer",
   "settings.lines": "lignes",
   "settings.logs": "Journaux",
-  "settings.log_file_path": "Chemin du fichier"
+  "settings.log_file_path": "Chemin du fichier",
+  "context_menu.copy": "Copier",
+  "context_menu.cut": "Couper",
+  "context_menu.paste": "Coller",
+  "context_menu.select_all": "Tout sélectionner",
+  "context_menu.delete": "Supprimer",
+  "context_menu.clear": "Effacer"
 }

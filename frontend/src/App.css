@@ -8805,6 +8805,84 @@ body.bottom-panel-resizing {
   background: var(--material-control);
 }
 
+/* 通用右键菜单（ContextMenu 组件）：position 由组件内联 style 控制 */
+.context-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 168px;
+  max-width: 260px;
+  display: grid;
+  gap: 1px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--popover, var(--background));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--foreground);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font, inherit);
+  text-align: left;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.context-menu__item:hover:not(:disabled) {
+  color: var(--accent-hover, var(--foreground));
+  background: var(--material-control);
+}
+
+.context-menu__item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.context-menu__item--danger {
+  color: var(--destructive);
+}
+
+.context-menu__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--muted-foreground);
+}
+
+.context-menu__item--danger .context-menu__icon {
+  color: inherit;
+}
+
+.context-menu__label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-menu__shortcut {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  padding-left: 12px;
+}
+
+.context-menu__divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
 .memory-tree__empty {
   padding: 16px;
   font-size: 0.88rem;

@@ -5,6 +5,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   getRuntimeConfig: () => ipcRenderer.invoke('get-runtime-config'),
+  clipboardReadText: () => ipcRenderer.invoke('clipboard-read-text'),
+  clipboardWriteText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
   updateRuntimeConfig: (payload) => ipcRenderer.invoke('update-runtime-config', payload),
   fetchSettings: () => ipcRenderer.invoke('fetchSettings'),
   saveSettings: (payload) => ipcRenderer.invoke('saveSettings', payload),

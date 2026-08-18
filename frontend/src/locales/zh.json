@@ -830,5 +830,11 @@
   "settings.clear_log": "清空日志",
   "settings.lines": "行",
   "settings.logs": "日志",
-  "settings.log_file_path": "日志路径"
+  "settings.log_file_path": "日志路径",
+  "context_menu.copy": "复制",
+  "context_menu.cut": "剪切",
+  "context_menu.paste": "粘贴",
+  "context_menu.select_all": "全选",
+  "context_menu.delete": "删除",
+  "context_menu.clear": "清空"
 }

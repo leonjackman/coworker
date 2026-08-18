@@ -41,7 +41,7 @@ require('./bootstrap');
   };
 })();
 
-const { app, BrowserWindow, ipcMain, Menu, Tray, dialog, nativeImage, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage, nativeTheme, shell } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -707,6 +707,15 @@ function requestBackend(pathname, method = 'GET', payload = undefined, timeoutMs
 
 ipcMain.handle('get-runtime-config', async () => {
   return requestBackend('/config');
+});
+
+// Clipboard read/write for the renderer's context-menu copy/paste slots.
+// The renderer runs sandboxed with contextIsolation, so it cannot reach the
+// Electron clipboard module directly — bridge it over IPC instead of relying
+// on navigator.clipboard permission grants in the shell.
+ipcMain.handle('clipboard-read-text', () => clipboard.readText());
+ipcMain.handle('clipboard-write-text', (_event, text) => {
+  clipboard.writeText(String(text ?? ''));
 });
 
 // Raw-text request helper for export endpoints (PlainTextResponse), which

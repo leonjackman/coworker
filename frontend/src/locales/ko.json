@@ -830,5 +830,11 @@
   "settings.clear_log": "지우기",
   "settings.lines": "줄",
   "settings.logs": "로그",
-  "settings.log_file_path": "파일 경로"
+  "settings.log_file_path": "파일 경로",
+  "context_menu.copy": "복사",
+  "context_menu.cut": "잘라내기",
+  "context_menu.paste": "붙여넣기",
+  "context_menu.select_all": "전체 선택",
+  "context_menu.delete": "삭제",
+  "context_menu.clear": "지우기"
 }

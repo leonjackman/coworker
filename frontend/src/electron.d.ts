@@ -65,6 +65,8 @@ declare global {
   interface Window {
     electronAPI?: {
       platform: string;
+      clipboardReadText: () => Promise<string>;
+      clipboardWriteText: (text: string) => Promise<void>;
       getRuntimeConfig: () => Promise<RuntimeConfig>;
       updateRuntimeConfig: (payload: RuntimeConfigUpdate) => Promise<RuntimeConfig>;
       streamChatMessage: (requestId: string, payload: ChatRequest, onEvent: StreamEventCallback) => Promise<void>;

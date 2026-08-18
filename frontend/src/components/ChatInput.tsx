@@ -36,6 +36,7 @@ import {
 } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 import { Tooltip } from "./ui/tooltip";
+import { ContextMenu } from "./ui/context-menu";
 import { SidebarScrollbar } from "./ui/sidebar-scrollbar";
 import { TypeCapsule, TYPE_CAPSULE_LABELS, type SlashCommandType } from "./ui/type-capsule";export interface ModelOption {
   id: string;
@@ -230,6 +231,7 @@ export function ChatInput({
   >([]);
   const [addError, setAddError] = useState<string | null>(null);
   const addErrorTimer = useRef<number | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   const showAddError = (message: string) => {
     setAddError(message);
@@ -711,6 +713,11 @@ export function ChatInput({
               value={value}
               onChange={(event) => onChange(event.target.value)}
               onPaste={(event) => void handlePaste(event)}
+              onContextMenu={(event) => {
+                if (disabled) return;
+                event.preventDefault();
+                setContextMenu({ x: event.clientX, y: event.clientY });
+              }}
               onCompositionStart={() => { isComposingRef.current = true; }}
               onCompositionEnd={() => { isComposingRef.current = false; }}
               onScroll={(event) => {
@@ -910,6 +917,16 @@ export function ChatInput({
           </div>
         </SidebarScrollbar>
       )}
+
+      <ContextMenu
+        open={contextMenu !== null}
+        x={contextMenu?.x ?? 0}
+        y={contextMenu?.y ?? 0}
+        onClose={() => setContextMenu(null)}
+        targetRef={textareaRef}
+        clipboardSlots={["copy", "cut", "paste", "selectAll", "delete", "clear"]}
+        onSlotPaste={(text) => void addReferenceFromText(text)}
+      />
     </footer>
   );
 }

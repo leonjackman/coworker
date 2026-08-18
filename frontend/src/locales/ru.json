@@ -830,5 +830,11 @@
   "settings.clear_log": "Очистить",
   "settings.lines": "строк",
   "settings.logs": "Журналы",
-  "settings.log_file_path": "Путь к файлу"
+  "settings.log_file_path": "Путь к файлу",
+  "context_menu.copy": "Копировать",
+  "context_menu.cut": "Вырезать",
+  "context_menu.paste": "Вставить",
+  "context_menu.select_all": "Выбрать все",
+  "context_menu.delete": "Удалить",
+  "context_menu.clear": "Очистить"
 }

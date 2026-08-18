@@ -830,5 +830,11 @@
   "settings.clear_log": "Limpiar",
   "settings.lines": "líneas",
   "settings.logs": "Registros",
-  "settings.log_file_path": "Ruta del archivo"
+  "settings.log_file_path": "Ruta del archivo",
+  "context_menu.copy": "Copiar",
+  "context_menu.cut": "Cortar",
+  "context_menu.paste": "Pegar",
+  "context_menu.select_all": "Seleccionar todo",
+  "context_menu.delete": "Eliminar",
+  "context_menu.clear": "Vaciar"
 }
