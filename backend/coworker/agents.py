@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from .checkpoints import CheckpointManager
 from .changes import ChangeStore
-from .snapshot import ProjectSnapshotManager
+from .project_snapshot import ProjectSnapshotManager
 from .config import BackendSettings
 from .mcp.mcp import McpManager
 from .providers import ProviderEntry, ProviderManager
