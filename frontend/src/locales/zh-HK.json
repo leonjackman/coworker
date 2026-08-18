@@ -264,7 +264,7 @@
   "settings.goal_rounds_custom": "自訂",
   "settings.goal_rounds_unit": "步",
   "settings.revert_code": "編輯時回滾檔案改動",
-  "settings.revert_code_desc": "重新編輯用戶訊息時，自動回滾該輪 agent 改動嘅檔案之後再重跑（對齊 opencode/Codex 行為）。",
+  "settings.revert_code_desc": "重新編輯用戶訊息時，自動回滾該輪 agent 改動嘅檔案之後再重跑（對齊 opencode/Codex 行為）。工作區係 Git 倉庫時基於快照回滾，可以還原 shell 改動；多會話並發時自動退化為僅會話內改動。",
   "settings.attachment_group": "附件",
   "settings.attachment_group_desc": "控制跟訊息傳送嘅附件大小上限。",
   "settings.max_attachment_mb": "檔案大小上限",

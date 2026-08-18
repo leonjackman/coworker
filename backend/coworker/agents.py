@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from .checkpoints import CheckpointManager
 from .changes import ChangeStore
+from .snapshot import ProjectSnapshotManager
 from .config import BackendSettings
 from .mcp.mcp import McpManager
 from .providers import ProviderEntry, ProviderManager
@@ -3780,6 +3781,7 @@ class AgentRuntimeRegistry:
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
         self.change_store = ChangeStore(settings.data_dir)
+        self.snapshot_manager = ProjectSnapshotManager(settings.data_dir)
         self.provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
         self.mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
         self.mcp_session_manager = mcp_session_manager

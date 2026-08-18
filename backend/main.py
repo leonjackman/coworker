@@ -150,6 +150,7 @@ trim_jsonl_file(settings.data_dir / AGENT_TRACE_FILENAME, MAX_TRACE_LINES)
 # incremental vacuum. Threads with an in-flight stream are skipped.
 
 _checkpoint_sweep_task: asyncio.Task | None = None
+_snapshot_gc_task: asyncio.Task | None = None
 
 
 async def _checkpoint_sweep_loop() -> None:
@@ -160,6 +161,16 @@ async def _checkpoint_sweep_loop() -> None:
             logger.info("checkpoint sweep: %s", stats)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("checkpoint sweep failed: %s", exc)
+
+
+async def _snapshot_gc_loop() -> None:
+    while True:
+        await asyncio.sleep(settings.checkpoint_sweep_interval_seconds)
+        try:
+            stats = await asyncio.to_thread(agent_registry.snapshot_manager.gc)
+            logger.info("snapshot gc: %s", stats)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("snapshot gc failed: %s", exc)
 
 
 async def _tracked_stream(stream_iter: Any, session_id: str):
@@ -182,6 +193,8 @@ async def _startup_checkpoint_maintenance() -> None:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("checkpoint sweep (startup) failed: %s", exc)
     _checkpoint_sweep_task = asyncio.create_task(_checkpoint_sweep_loop())
+    global _snapshot_gc_task
+    _snapshot_gc_task = asyncio.create_task(_snapshot_gc_loop())
     # Best-effort: tag already-installed skills (from before the provenance
     # feature) so their market cards show as "already installed". Retries until
     # the upstream market is reachable, then stops.
@@ -249,6 +262,15 @@ async def _stop_checkpoint_maintenance() -> None:
         task.cancel()
         try:
             await task
+        except (asyncio.CancelledError, Exception):
+            pass
+    global _snapshot_gc_task
+    snap_task = _snapshot_gc_task
+    _snapshot_gc_task = None
+    if snap_task is not None:
+        snap_task.cancel()
+        try:
+            await snap_task
         except (asyncio.CancelledError, Exception):
             pass
 
@@ -1397,6 +1419,7 @@ async def org_delete_agent(request: OrgAgentDeleteRequest):
             continue
         await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
         agent_registry.change_store.delete_session(session["id"])
+        agent_registry.snapshot_manager.delete_session(session["id"])
     session_store.delete_by_agent(request.project_id, request.id)
     # Trash the agent's memory directory (recoverable), never blocking the delete.
     from coworker.memory.memory_store import MemoryStore
@@ -1639,6 +1662,7 @@ async def chat_stream(request: ChatStreamRequest):
 
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
     session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
+    snapshot_user_message_id = request.user_message_id or session_store.require(session_id).messages[-1].id
     # has_runtime_checkpoint opens a fresh sqlite connection; keep it off the
     # event loop so a transient DB lock can never stall every other request.
     if runtime.owns_runtime_messages and await asyncio.to_thread(agent_registry.has_runtime_checkpoint, session_id):
@@ -1849,19 +1873,31 @@ async def chat_stream(request: ChatStreamRequest):
             terminal_sent = True
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
-        async for kind, payload in _sse_events(_tracked_stream(stream_iter, session_id), on_event=_on_event, on_end=_on_end, on_error=_on_error):
-            if kind == "heartbeat":
-                # SSE comment line: keep the connection (and the client's idle
-                # watchdog) alive while the agent is busy thinking/working.
-                yield ": ping\n\n"
-            elif kind == "end":
-                break
-            elif kind == "event" and payload.get("type") == "idle_warning":
-                # Forward idle-warning to the frontend so it can show a countdown.
-                payload["session_id"] = session_id
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            else:
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        # Snapshot the workspace BEFORE the turn runs so editing this user
+        # message later can restore the files that turn changed (git-backed,
+        # session-scoped; a no-op for non-git workspaces).
+        snapshot_pre = await asyncio.to_thread(
+            agent_registry.snapshot_manager.begin_turn, session_id, snapshot_user_message_id, resolved_workspace,
+        )
+        try:
+            async for kind, payload in _sse_events(_tracked_stream(stream_iter, session_id), on_event=_on_event, on_end=_on_end, on_error=_on_error):
+                if kind == "heartbeat":
+                    # SSE comment line: keep the connection (and the client's idle
+                    # watchdog) alive while the agent is busy thinking/working.
+                    yield ": ping\n\n"
+                elif kind == "end":
+                    break
+                elif kind == "event" and payload.get("type") == "idle_warning":
+                    # Forward idle-warning to the frontend so it can show a countdown.
+                    payload["session_id"] = session_id
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            if snapshot_pre is not None:
+                await asyncio.to_thread(
+                    agent_registry.snapshot_manager.end_turn, session_id, snapshot_user_message_id, resolved_workspace,
+                )
         # Goal stream ended (normal, error, or disconnect): drop the active marker
         # and release the per-session goal lock/cancel state so long-running use
         # does not leak (goal_resume cleans up the same way).
@@ -2333,6 +2369,15 @@ async def goal_resume(request: GoalResumeRequest):
                         logger.warning("update_goal failed (cancel) for session %s", request.session_id, exc_info=True)
                 return {"type": "error", "session_id": request.session_id, "error": str(exc)[:400]}
 
+            # Snapshot the workspace before resuming the goal so a later edit of
+            # the goal trigger can still restore the files the goal changed.
+            # preserve_existing keeps the goal's original pre baseline shared
+            # across resume rounds.
+            goal_user_ids = [m.id for m in session.messages if m.role == "user"]
+            snapshot_goal_msg = goal_user_ids[-1] if goal_user_ids else request.session_id
+            snapshot_pre = await asyncio.to_thread(
+                agent_registry.snapshot_manager.begin_turn, request.session_id, snapshot_goal_msg, resolved_workspace, preserve_existing=True,
+            )
             try:
                 async for kind, payload in _sse_events(_tracked_stream(_goal_iter(), request.session_id), on_error=_on_error):
                     if kind == "heartbeat":
@@ -2342,6 +2387,10 @@ async def goal_resume(request: GoalResumeRequest):
                         if kind == "end":
                             break
             finally:
+                if snapshot_pre is not None:
+                    await asyncio.to_thread(
+                        agent_registry.snapshot_manager.end_turn, request.session_id, snapshot_goal_msg, resolved_workspace,
+                    )
                 _goal_cancel_events.pop(request.session_id, None)
                 _goal_active_streams.pop(stream_id, None)
                 # Goal loop fully ended: release the per-session lock so it does
@@ -2414,6 +2463,7 @@ async def delete_session(session_id: str):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
     await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
     agent_registry.change_store.delete_session(session_id)
+    agent_registry.snapshot_manager.delete_session(session_id)
     _goal_locks.pop(session_id, None)
     _goal_cancel_events.pop(session_id, None)
     return {"status": "ok"}
@@ -2574,6 +2624,17 @@ async def redo_message(session_id: str, message_id: str):
     restored_ids = [r.get("id") for r in restored if r.get("id")]
     if restored_ids:
         agent_registry.change_store.delete_records(session_id, restored_ids)
+    # Git-backed redo for the records whose content was too large for the
+    # change store (and any shell-driven changes reverted during the edit).
+    try:
+        git_redo = await asyncio.to_thread(
+            agent_registry.snapshot_manager.redo_turn, session_id, message_id, workspace,
+        )
+    except Exception:  # noqa: BLE001 - snapshot redo must never break the request
+        logger.warning("redo_message: snapshot redo skipped for %s: %s", session_id, exc_info=True)
+        git_redo = {}
+    restored += git_redo.get("restored") or []
+    conflicts += git_redo.get("conflicts") or []
     return {
         "status": "ok",
         "session_id": session_id,
@@ -2696,22 +2757,38 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
             _persist_partial()
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
-        async for kind, payload in _sse_events(
-            _tracked_stream(
-                agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
+        snapshot_workspace = None
+        try:
+            snapshot_workspace = workspace_controller.workspace_for_session(session_id)
+        except (ValueError, KeyError, Exception):  # noqa: BLE001 - default/workspace-less sessions skip snapshot
+            snapshot_workspace = None
+        snapshot_pre = None
+        if snapshot_workspace is not None:
+            snapshot_pre = await asyncio.to_thread(
+                agent_registry.snapshot_manager.begin_turn, session_id, user_message.id, snapshot_workspace,
+            )
+        try:
+            async for kind, payload in _sse_events(
+                _tracked_stream(
+                    agent_registry.rerun_stream(
+                        history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
+                    ),
+                    session_id,
                 ),
-                session_id,
-            ),
-            on_event=_on_event,
-            on_error=_on_error,
-        ):
-            if kind == "heartbeat":
-                yield ": ping\n\n"
-            elif kind == "end":
-                break
-            else:
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                on_event=_on_event,
+                on_error=_on_error,
+            ):
+                if kind == "heartbeat":
+                    yield ": ping\n\n"
+                elif kind == "end":
+                    break
+                else:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            if snapshot_pre is not None and snapshot_workspace is not None:
+                await asyncio.to_thread(
+                    agent_registry.snapshot_manager.end_turn, session_id, user_message.id, snapshot_workspace,
+                )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -2734,18 +2811,30 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         if request.revert_code and dropped_assistant_ids:
             try:
                 workspace = workspace_controller.workspace_for_session(session_id)
+                # ① Record-level revert (authoritative, session-scoped).
                 summary = agent_registry.change_store.revert_changes(session_id, dropped_assistant_ids, workspace)
                 reverted_ids = [c.get("id") for c in summary.get("reverted", []) if c.get("id")]
                 conflict_ids = [c.get("id") for c in summary.get("conflicts", []) if c.get("id")]
+                # ② Git content carrier: records whose full content was too
+                # large for the change store are restored from the snapshot pre
+                # tree (still session-scoped + current==post gated).
+                dropped_records = agent_registry.change_store.changes_for_message_ids(session_id, dropped_assistant_ids)
+                too_large_paths = {str(c.get("file_path") or "") for c in dropped_records if c.get("too_large")}
+                record_paths = {str(c.get("file_path") or "") for c in dropped_records}
+                git_summary = await asyncio.to_thread(
+                    agent_registry.snapshot_manager.revert_turn, session_id, message_id, workspace, too_large_paths=too_large_paths, record_paths=record_paths,
+                )
+                git_reverted = git_summary.get("reverted") or []
+                git_conflicts = git_summary.get("conflicts") or []
                 if reverted_ids:
                     agent_registry.change_store.mark_reverted(session_id, reverted_ids, message_id)
                 if conflict_ids:
                     agent_registry.change_store.mark_abandoned(session_id, conflict_ids)
                 revert_summary = {
-                    "reverted_count": summary.get("reverted_count", 0),
-                    "conflict_count": summary.get("conflict_count", 0),
-                    "total": summary.get("total", 0),
-                    "reverted_paths": [c.get("path") for c in summary.get("reverted", []) if c.get("path")],
+                    "reverted_count": summary.get("reverted_count", 0) + len(git_reverted),
+                    "conflict_count": summary.get("conflict_count", 0) + len(git_conflicts),
+                    "total": summary.get("total", 0) + len(git_reverted) + len(git_conflicts),
+                    "reverted_paths": [c.get("path") for c in summary.get("reverted", []) if c.get("path")] + [c.get("path") for c in git_reverted if c.get("path")],
                 }
             except (ValueError, KeyError) as exc:
                 # Workspace unavailable or session missing: skip file revert but
@@ -2849,22 +2938,38 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             _persist_partial()
             return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
 
-        async for kind, payload in _sse_events(
-            _tracked_stream(
-                agent_registry.rerun_stream(
-                    history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
+        snapshot_workspace = None
+        try:
+            snapshot_workspace = workspace_controller.workspace_for_session(session_id)
+        except (ValueError, KeyError, Exception):  # noqa: BLE001 - default/workspace-less sessions skip snapshot
+            snapshot_workspace = None
+        snapshot_pre = None
+        if snapshot_workspace is not None:
+            snapshot_pre = await asyncio.to_thread(
+                agent_registry.snapshot_manager.begin_turn, session_id, message_id, snapshot_workspace,
+            )
+        try:
+            async for kind, payload in _sse_events(
+                _tracked_stream(
+                    agent_registry.rerun_stream(
+                        history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
+                    ),
+                    session_id,
                 ),
-                session_id,
-            ),
-            on_event=_on_event,
-            on_error=_on_error,
-        ):
-            if kind == "heartbeat":
-                yield ": ping\n\n"
-            elif kind == "end":
-                break
-            else:
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                on_event=_on_event,
+                on_error=_on_error,
+            ):
+                if kind == "heartbeat":
+                    yield ": ping\n\n"
+                elif kind == "end":
+                    break
+                else:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            if snapshot_pre is not None and snapshot_workspace is not None:
+                await asyncio.to_thread(
+                    agent_registry.snapshot_manager.end_turn, session_id, message_id, snapshot_workspace,
+                )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -2933,6 +3038,7 @@ async def delete_project(project_id: str):
     for session in session_store.list_sessions(project_id):
         await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
         agent_registry.change_store.delete_session(session["id"])
+        agent_registry.snapshot_manager.delete_session(session["id"])
     session_store.delete_by_project(project_id)
     if memory_dir:
         project_memory = memory_manager.root / memory_dir

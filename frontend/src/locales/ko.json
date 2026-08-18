@@ -521,7 +521,7 @@
   "settings.goal_rounds_desc": "자율 목표 루프가 진전할 수 있는 단계 수. 무제한 = 한계 없음, 기본값 = 50단계, 사용자 지정 = 특정 단계 수(1~1000)를 직접 입력.",
   "settings.goal_rounds_unit": "단계",
   "settings.revert_code": "편집 시 파일 변경 되돌리기",
-  "settings.revert_code_desc": "사용자 메시지를 다시 편집할 때 해당 턴에서 에이전트가 변경한 파일을 자동으로 되돌린 후 다시 실행합니다(opencode/Codex 동작에 맞춤).",
+  "settings.revert_code_desc": "사용자 메시지를 다시 편집할 때 해당 턴에서 에이전트가 변경한 파일을 자동으로 되돌린 후 다시 실행합니다(opencode/Codex 동작에 맞춤). Git 저장소 워크스페이스에서는 스냅샷 기반으로 shell 변경도 되돌릴 수 있으며, 다중 세션 동시 실행 시 세션 내 변경만으로 자동 축소됩니다.",
   "settings.goal_rounds_unlimited": "무제한",
   "settings.heading": "어플리케이션 설정",
   "settings.interface_group": "인터페이스",

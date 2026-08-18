@@ -236,7 +236,7 @@
   "settings.goal_rounds_custom": "カスタム",
   "settings.goal_rounds_unit": "ステップ",
   "settings.revert_code": "編集時にファイル変更を元に戻す",
-  "settings.revert_code_desc": "ユーザーメッセージを再編集する際、そのターンでエージェントが変更したファイルを自動的に元に戻してから再実行します（opencode/Codex の動作に準拠）。",
+  "settings.revert_code_desc": "ユーザーメッセージを再編集する際、そのターンでエージェントが変更したファイルを自動的に元に戻してから再実行します（opencode/Codex の動作に準拠）。Git リポジトリのワークスペースではスナップショットベースで、shell による変更も元に戻せます；セッションが並行するとセッション内の変更のみに自動的に縮小されます。",
   "settings.attachment_group": "添付ファイル",
   "settings.attachment_group_desc": "メッセージで送信する添付ファイルのサイズ制限を制御。",
   "settings.max_attachment_mb": "最大ファイルサイズ",
