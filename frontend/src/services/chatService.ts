@@ -30,6 +30,7 @@ import type {
   RuntimeConfig,
   RuntimeConfigUpdate,
   RedoResponse,
+  EditBeginResponse,
   SessionChangesResponse,
   SessionDetailResponse,
   SessionMessageRecord,
@@ -131,6 +132,8 @@ export interface ChatService {
   getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
   getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
   redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
+  beginEditMessage: (sessionId: string, messageId: string, revertCode: boolean) => Promise<EditBeginResponse>;
+  cancelEditMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
   exportToolAudit: () => Promise<string>;
   clearToolAudit: () => Promise<{ status: string }>;
   exportAgentTraces: () => Promise<string>;
@@ -582,6 +585,16 @@ class ElectronChatService implements ChatService {
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.redoMessage(sessionId, messageId);
+  }
+
+  async beginEditMessage(sessionId: string, messageId: string, revertCode: boolean): Promise<EditBeginResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.editMessageBegin(sessionId, messageId, revertCode);
+  }
+
+  async cancelEditMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.editMessageCancel(sessionId, messageId);
   }
 
   getTerminalUrl(projectId?: string): string {
@@ -1041,6 +1054,20 @@ class HttpChatService implements ChatService {
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
     return this.request<RedoResponse>(
       `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/redo`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
+    );
+  }
+
+  async beginEditMessage(sessionId: string, messageId: string, revertCode: boolean): Promise<EditBeginResponse> {
+    return this.request<EditBeginResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit-begin`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revert_code: revertCode }) },
+    );
+  }
+
+  async cancelEditMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
+    return this.request<RedoResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit-cancel`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
     );
   }

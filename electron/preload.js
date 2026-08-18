@@ -72,6 +72,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSession: (sessionId) => ipcRenderer.invoke('get-session', sessionId),
   redoMessage: (sessionId, messageId) =>
     ipcRenderer.invoke('redo-message', { session_id: sessionId, message_id: messageId }),
+  editMessageBegin: (sessionId, messageId, revertCode) =>
+    ipcRenderer.invoke('edit-message-begin', { session_id: sessionId, message_id: messageId, revert_code: revertCode }),
+  editMessageCancel: (sessionId, messageId) =>
+    ipcRenderer.invoke('edit-message-cancel', { session_id: sessionId, message_id: messageId }),
   streamRegenerateMessage: (requestId, sessionId, messageId, onEvent, language) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;

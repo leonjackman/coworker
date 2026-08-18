@@ -2526,6 +2526,10 @@ class RegenerateRequest(BaseModel):
     language: Language = "zh"
 
 
+class EditBeginRequest(BaseModel):
+    revert_code: bool = True
+
+
 async def _guard_session_not_streaming(session_id: str) -> None:
     """Reject destructive session mutations while a stream is in flight.
 
@@ -2594,14 +2598,74 @@ def _session_provider_context(session) -> tuple[str, str]:
     return "", ""
 
 
+async def _revert_turn_changes(
+    session_id: str,
+    message_id: str,
+    dropped_assistant_ids: list[str],
+    *,
+    mark: bool = True,
+) -> dict[str, Any]:
+    """Two-layer revert of the code changes a turn produced.
+
+    Layer 1 (record-level, authoritative): ``revert_changes`` restores every
+    ``active`` record via safe inverse edits. Layer 2 (git content carrier):
+    ``revert_turn`` restores records whose content was too large for the change
+    store and, when the workspace is exclusive, any shell-driven changes that
+    left no record. Reverts that succeed are marked ``reverted`` so a later
+    "redo" can re-apply them. Returns the merged ``revert_summary``.
+    """
+    revert_summary: dict[str, Any] = {"reverted_count": 0, "conflict_count": 0, "total": 0, "reverted_paths": []}
+    if not dropped_assistant_ids:
+        return revert_summary
+    try:
+        workspace = workspace_controller.workspace_for_session(session_id)
+        # ① Record-level revert (authoritative, session-scoped).
+        summary = agent_registry.change_store.revert_changes(session_id, dropped_assistant_ids, workspace)
+        reverted_ids = [c.get("id") for c in summary.get("reverted", []) if c.get("id")]
+        conflict_ids = [c.get("id") for c in summary.get("conflicts", []) if c.get("id")]
+        # ② Git content carrier: records whose full content was too large for
+        # the change store (and shell-driven changes, when exclusive) are
+        # restored from the snapshot trees (session-scoped + current==post gated).
+        dropped_records = agent_registry.change_store.changes_for_message_ids(session_id, dropped_assistant_ids)
+        too_large_paths = {str(c.get("file_path") or "") for c in dropped_records if c.get("too_large")}
+        record_paths = {str(c.get("file_path") or "") for c in dropped_records}
+        git_summary = await asyncio.to_thread(
+            agent_registry.snapshot_manager.revert_turn, session_id, message_id, workspace, too_large_paths=too_large_paths, record_paths=record_paths,
+        )
+        git_reverted = git_summary.get("reverted") or []
+        git_conflicts = git_summary.get("conflicts") or []
+        if mark:
+            if reverted_ids:
+                agent_registry.change_store.mark_reverted(session_id, reverted_ids, message_id)
+            if conflict_ids:
+                agent_registry.change_store.mark_abandoned(session_id, conflict_ids)
+        revert_summary = {
+            "reverted_count": summary.get("reverted_count", 0) + len(git_reverted),
+            "conflict_count": summary.get("conflict_count", 0) + len(git_conflicts),
+            "total": summary.get("total", 0) + len(git_reverted) + len(git_conflicts),
+            "reverted_paths": [c.get("path") for c in summary.get("reverted", []) if c.get("path")] + [c.get("path") for c in git_reverted if c.get("path")],
+        }
+    except (ValueError, KeyError) as exc:
+        # Workspace unavailable or session missing: skip file revert but keep the
+        # caller's flow (message edit still allowed).
+        logger.warning("_revert_turn_changes: code revert skipped for %s: %s", session_id, exc)
+    except Exception as exc:  # noqa: BLE001 - revert must never break the edit/regenerate request
+        logger.warning("_revert_turn_changes: code revert failed for %s: %s", session_id, exc, exc_info=True)
+    return revert_summary
+
+
 @app.post("/sessions/{session_id}/messages/{message_id}/redo")
-async def redo_message(session_id: str, message_id: str):
+async def redo_message(session_id: str, message_id: str, keep_state: bool = False):
     """Re-apply the file changes that editing the given user message reverted
     (undo-the-undo). Each ``reverted`` change record bound to that edit is
     restored to its recorded ``after`` content, with conflict detection: a
     record whose file no longer matches the recorded ``before`` state (e.g. the
     user hand-edited it) is reported as a conflict and left untouched. Records
     restored successfully are removed from the change store.
+
+    With ``keep_state=true`` (cancelling a pending edit) the records and the
+    snapshot pair return to ``active`` instead of being discarded, so the same
+    message can be reverted again by a later edit.
     """
     await _guard_session_not_streaming(session_id)
     try:
@@ -2623,15 +2687,93 @@ async def redo_message(session_id: str, message_id: str):
             conflicts.append(result)
     restored_ids = [r.get("id") for r in restored if r.get("id")]
     if restored_ids:
-        agent_registry.change_store.delete_records(session_id, restored_ids)
+        if keep_state:
+            agent_registry.change_store.mark_active(session_id, restored_ids)
+        else:
+            agent_registry.change_store.delete_records(session_id, restored_ids)
     # Git-backed redo for the records whose content was too large for the
     # change store (and any shell-driven changes reverted during the edit).
     try:
         git_redo = await asyncio.to_thread(
-            agent_registry.snapshot_manager.redo_turn, session_id, message_id, workspace,
+            agent_registry.snapshot_manager.redo_turn, session_id, message_id, workspace, keep_state=keep_state,
         )
     except Exception:  # noqa: BLE001 - snapshot redo must never break the request
         logger.warning("redo_message: snapshot redo skipped for %s: %s", session_id, exc_info=True)
+        git_redo = {}
+    restored += git_redo.get("restored") or []
+    conflicts += git_redo.get("conflicts") or []
+    return {
+        "status": "ok",
+        "session_id": session_id,
+        "message_id": message_id,
+        "restored": restored,
+        "conflicts": conflicts,
+        "restored_count": len(restored),
+        "conflict_count": len(conflicts),
+    }
+
+
+@app.post("/sessions/{session_id}/messages/{message_id}/edit-begin")
+async def edit_message_begin(session_id: str, message_id: str, request: EditBeginRequest):
+    """Enter edit mode for a user message: revert its downstream file changes
+    immediately (two-layer revert) so the user sees a clean file state while
+    editing. No messages are truncated or re-run yet. If ``revert_code`` is off
+    this is a no-op revert (returns zeros). A later ``edit-cancel`` restores the
+    files and returns the records to ``active``.
+    """
+    await _guard_session_not_streaming(session_id)
+    try:
+        session = session_store.require(session_id)
+        index = session_store.find_message_index(session_id, message_id)
+        if session.messages[index].role != "user":
+            raise HTTPException(status_code=400, detail="Only user messages can be edited")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail="message not found") from exc
+
+    dropped_assistant_ids = [m.id for m in session.messages[index + 1 :] if m.role == "assistant"]
+    if request.revert_code and dropped_assistant_ids:
+        revert_summary = await _revert_turn_changes(session_id, message_id, dropped_assistant_ids, mark=True)
+    else:
+        revert_summary = {"reverted_count": 0, "conflict_count": 0, "total": 0, "reverted_paths": []}
+    return {"status": "ok", "session_id": session_id, "message_id": message_id, **revert_summary}
+
+
+@app.post("/sessions/{session_id}/messages/{message_id}/edit-cancel")
+async def edit_message_cancel(session_id: str, message_id: str):
+    """Cancel a pending edit: restore the files the ``edit-begin`` reverted and
+    return the change records and snapshot pair to ``active`` so the message can
+    be reverted again. Conflicts (files changed in the meantime) are reported
+    and left untouched.
+    """
+    await _guard_session_not_streaming(session_id)
+    try:
+        session_store.require(session_id)
+        workspace = workspace_controller.workspace_for_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    records = agent_registry.change_store.reverted_records(session_id, message_id)
+    restored: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    for record in records:
+        result = workspace.redo_change(record)
+        if result.get("status") == "restored":
+            restored.append(result)
+        else:
+            conflicts.append(result)
+    restored_ids = [r.get("id") for r in restored if r.get("id")]
+    if restored_ids:
+        agent_registry.change_store.mark_active(session_id, restored_ids)
+    try:
+        git_redo = await asyncio.to_thread(
+            agent_registry.snapshot_manager.redo_turn, session_id, message_id, workspace, keep_state=True,
+        )
+    except Exception:  # noqa: BLE001 - snapshot redo must never break the request
+        logger.warning("edit_message_cancel: snapshot restore skipped for %s: %s", session_id, exc_info=True)
         git_redo = {}
     restored += git_redo.get("restored") or []
     conflicts += git_redo.get("conflicts") or []
@@ -2665,14 +2807,14 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         if user_index < 0:
             raise HTTPException(status_code=400, detail="No user message to regenerate from")
         user_message = session.messages[user_index]
-        # Regeneration drops the assistant messages after this user message but
-        # does NOT revert their file changes (the agent may redo them). Hide the
-        # dropped turn's change records so they don't linger as stale entries.
+        # Regeneration drops the assistant messages after this user message and
+        # reverts their file changes (two-layer revert, same as edit) so the
+        # re-run starts from a clean file state. Reverted records stay redo-able;
+        # conflicted ones are hidden.
         dropped_assistant_ids = [m.id for m in session.messages[user_index:] if m.role == "assistant"]
+        revert_summary: dict[str, Any] = {"reverted_count": 0, "conflict_count": 0, "total": 0}
         if dropped_assistant_ids:
-            dropped_change_ids = [c.get("id") for c in agent_registry.change_store.changes_for_message_ids(session_id, dropped_assistant_ids) if c.get("id")]
-            if dropped_change_ids:
-                agent_registry.change_store.mark_abandoned(session_id, dropped_change_ids)
+            revert_summary = await _revert_turn_changes(session_id, user_message.id, dropped_assistant_ids, mark=True)
         session_store.truncate_from(session_id, user_message.id)
         # Checkpoint deletion touches SQLite; run off the event loop so a
         # transient DB writer lock cannot stall unrelated requests.
@@ -2701,6 +2843,11 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
     async def event_stream():
         accumulated_content = ""
         terminal_sent = False
+
+        # Surface the file-revert result to the UI as the first event, so the
+        # client can show "reverted N file changes / restore" right away.
+        if revert_summary.get("reverted_count", 0) > 0 or revert_summary.get("conflict_count", 0) > 0:
+            yield f"data: {json.dumps({'type': 'revert_summary', 'session_id': session_id, **revert_summary}, ensure_ascii=False)}\n\n"
 
         def _persist_partial():
             nonlocal accumulated_content, terminal_sent
@@ -2806,40 +2953,13 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         # Editing re-runs from this user message: the assistant messages after
         # it are dropped. When ``revert_code`` is on (default), their file
         # changes are reverted first (safe inverse edits, conflict-detected),
-        # mirroring opencode/Codex "edit = redo from a clean file state".
+        # mirroring opencode/Codex "edit = redo from a clean file state". Only
+        # ``active`` records are reverted: if ``edit-begin`` already reverted
+        # this message's turn, the records are now ``reverted`` and this step is
+        # idempotently skipped.
         dropped_assistant_ids = [m.id for m in session.messages[index + 1 :] if m.role == "assistant"]
         if request.revert_code and dropped_assistant_ids:
-            try:
-                workspace = workspace_controller.workspace_for_session(session_id)
-                # ① Record-level revert (authoritative, session-scoped).
-                summary = agent_registry.change_store.revert_changes(session_id, dropped_assistant_ids, workspace)
-                reverted_ids = [c.get("id") for c in summary.get("reverted", []) if c.get("id")]
-                conflict_ids = [c.get("id") for c in summary.get("conflicts", []) if c.get("id")]
-                # ② Git content carrier: records whose full content was too
-                # large for the change store are restored from the snapshot pre
-                # tree (still session-scoped + current==post gated).
-                dropped_records = agent_registry.change_store.changes_for_message_ids(session_id, dropped_assistant_ids)
-                too_large_paths = {str(c.get("file_path") or "") for c in dropped_records if c.get("too_large")}
-                record_paths = {str(c.get("file_path") or "") for c in dropped_records}
-                git_summary = await asyncio.to_thread(
-                    agent_registry.snapshot_manager.revert_turn, session_id, message_id, workspace, too_large_paths=too_large_paths, record_paths=record_paths,
-                )
-                git_reverted = git_summary.get("reverted") or []
-                git_conflicts = git_summary.get("conflicts") or []
-                if reverted_ids:
-                    agent_registry.change_store.mark_reverted(session_id, reverted_ids, message_id)
-                if conflict_ids:
-                    agent_registry.change_store.mark_abandoned(session_id, conflict_ids)
-                revert_summary = {
-                    "reverted_count": summary.get("reverted_count", 0) + len(git_reverted),
-                    "conflict_count": summary.get("conflict_count", 0) + len(git_conflicts),
-                    "total": summary.get("total", 0) + len(git_reverted) + len(git_conflicts),
-                    "reverted_paths": [c.get("path") for c in summary.get("reverted", []) if c.get("path")] + [c.get("path") for c in git_reverted if c.get("path")],
-                }
-            except (ValueError, KeyError) as exc:
-                # Workspace unavailable or session missing: skip file revert but
-                # still allow the conversation edit.
-                logger.warning("edit_message: code revert skipped for %s: %s", session_id, exc)
+            revert_summary = await _revert_turn_changes(session_id, message_id, dropped_assistant_ids, mark=True)
         session_store.update_message_content(session_id, message_id, request.content)
         session_store.truncate_from(session_id, message_id)
         # Checkpoint deletion touches SQLite; run off the event loop so a

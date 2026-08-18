@@ -236,7 +236,7 @@
   "settings.goal_rounds_custom": "Benutzerdefiniert",
   "settings.goal_rounds_unit": "Schritte",
   "settings.revert_code": "Dateiänderungen beim Bearbeiten rückgängig machen",
-  "settings.revert_code_desc": "Beim erneuten Bearbeiten einer Benutzernachricht werden die in diesem Zug geänderten Dateien automatisch zurückgesetzt, bevor neu ausgeführt wird (entspricht opencode/Codex). In Git-Workspaces basiert der Rollback auf Snapshots und deckt auch Shell-Änderungen ab; bei parallelen Sitzungen wird automatisch auf sitzungsinterne Änderungen reduziert.",
+  "settings.revert_code_desc": "Beim erneuten Bearbeiten einer Benutzernachricht werden die in diesem Zug geänderten Dateien automatisch zurückgesetzt, bevor neu ausgeführt wird (entspricht opencode/Codex). In Git-Workspaces basiert der Rollback auf Snapshots und deckt auch Shell-Änderungen ab; bei parallelen Sitzungen wird automatisch auf sitzungsinterne Änderungen reduziert. Klicken auf Bearbeiten setzt sofort zurück; Abbrechen stellt die Dateien wieder her.",
   "settings.attachment_group": "Anhänge",
   "settings.attachment_group_desc": "Steuerung der Grenzgröße für Anhänge, die mit einer Nachricht gesendet werden.",
   "settings.max_attachment_mb": "Maximale Dateigröße",

@@ -1227,10 +1227,69 @@ function App() {
 
   const [editingMessage, setEditingMessage] = useState<{ id: string; content: string } | null>(null);
   const [editDraft, setEditDraft] = useState('');
+  // 点编辑键即回滚（edit-begin）后，记下待恢复的 (session, message)，取消编辑 /
+  // 内容未变退出 / 切换会话时自动调用 edit-cancel 恢复文件。
+  const pendingEditRevertRef = useRef<{ sessionId: string; messageId: string } | null>(null);
 
   const beginEditMessage = (messageId: string, content: string) => {
     setEditingMessage({ id: messageId, content });
     setEditDraft(content);
+    // 点击编辑即回滚：立即还原该消息之后回合的代码改动，让用户在干净的
+    // 文件态下编辑。取消/内容未变/切走会话时自动恢复（restorePendingEdit）。
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId || !revertCode) return;
+    void (async () => {
+      try {
+        const response = await chatService.beginEditMessage(currentSessionId, messageId, revertCode);
+        if (response.reverted_count > 0) {
+          pendingEditRevertRef.current = { sessionId: currentSessionId, messageId };
+          setMessages((current) =>
+            current.map((item) => (item.id === messageId ? { ...item, revertedFiles: response.reverted_count } : item)),
+          );
+        }
+        if (response.conflict_count > 0) {
+          window.alert(
+            t('edit.revert_conflicts', {
+              reverted: response.reverted_count,
+              conflicts: response.conflict_count,
+            }),
+          );
+        }
+      } catch (error) {
+        // 回滚失败不阻塞编辑；发送时后端仍会再试一次（幂等）。
+        console.error('Failed to begin edit revert:', error);
+      }
+    })();
+  };
+
+  // 取消待处理的编辑回滚：恢复文件并把记录/快照对还原为 active，供下次再回滚。
+  const restorePendingEdit = async () => {
+    const pending = pendingEditRevertRef.current;
+    if (!pending) return;
+    pendingEditRevertRef.current = null;
+    try {
+      const response = await chatService.cancelEditMessage(pending.sessionId, pending.messageId);
+      if (response.conflict_count > 0) {
+        window.alert(
+          t('edit.redo_conflicts', {
+            restored: response.restored_count,
+            conflicts: response.conflict_count,
+          }),
+        );
+      }
+      if (response.restored_count > 0) {
+        setMessages((current) =>
+          current.map((item) => {
+            if (item.id !== pending.messageId) return item;
+            const { revertedFiles: _ignored, ...next } = item;
+            return next;
+          }),
+        );
+        setChangesRefreshKey((value) => value + 1);
+      }
+    } catch (error) {
+      console.error('Failed to cancel edit revert:', error);
+    }
   };
 
   const commitEditMessage = async (messageId: string, content: string) => {
@@ -1238,15 +1297,18 @@ function App() {
     if (!currentSessionId) return;
     const trimmed = content.trim();
     if (!trimmed) return;
-    // 内容未变化：退出编辑态即可，避免无意义的回滚+重跑。
+    // 内容未变化：退出编辑态并恢复点编辑时已回滚的文件。
     const original = messages.find((m) => m.id === messageId)?.content;
     if (original !== undefined && trimmed === (original ?? '').trim()) {
       setEditingMessage(null);
       setEditDraft('');
+      void restorePendingEdit();
       return;
     }
     setEditingMessage(null);
     setEditDraft('');
+    // 已进入发送流程：清掉待恢复标记，避免切换会话时重复恢复。
+    pendingEditRevertRef.current = null;
 
     // 编辑会重跑该会话，任何同会话仍在跑的流都会被本次编辑取代。先中止旧流，
     // 否则后端 _guard_session_not_streaming 会拒绝这次 /edit（409），且旧流的
@@ -1255,6 +1317,9 @@ function App() {
 
     // 编辑模式下，如果内容包含 /goal 等斜杠命令，走 sendMessage 路径
     if (trimmed.startsWith('/')) {
+      // 斜杠命令路径不做 /edit 截断重跑：先恢复点编辑时已回滚的文件，
+      // 避免旧回合改动停留在已回滚态。
+      void restorePendingEdit();
       handleSlashCommand(trimmed);
       return;
     }
@@ -1477,6 +1542,10 @@ function App() {
   const handleRegenerateMessage = async (messageId: string) => {
     const currentSessionId = sessionIdRef.current;
     if (!currentSessionId || isThinking) return;
+    // 触发这次重新生成的用户消息（重生成的回滚结果挂到它上面，展示「恢复」按钮）。
+    const thisSessionNow = messages.filter((m) => !m.sessionId || m.sessionId === currentSessionId);
+    const idxNow = thisSessionNow.findIndex((m) => m.id === messageId);
+    const triggerUserMessageId = idxNow > 0 ? thisSessionNow[idxNow - 1]?.id : undefined;
     bumpSessionSeq(currentSessionId);
     const myRequestSeq = getSessionSeq(currentSessionId);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1513,6 +1582,25 @@ function App() {
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
         setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        return;
+      }
+      if (event.type === 'revert_summary') {
+        // 重新生成也回滚（与编辑一致）：把待恢复的改动数挂到触发它的用户消息上。
+        if (event.reverted_count > 0 && triggerUserMessageId) {
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === triggerUserMessageId ? { ...item, revertedFiles: event.reverted_count } : item,
+            ),
+          );
+        }
+        if (event.conflict_count > 0) {
+          window.alert(
+            t('edit.revert_conflicts', {
+              reverted: event.reverted_count,
+              conflicts: event.conflict_count,
+            }),
+          );
+        }
         return;
       }
       if (event.type === 'delta') {
@@ -1895,6 +1983,8 @@ function App() {
   const startProjectDraft = (projectId?: string, firstMessage = '', agentId?: string) => {
     // 新开对话不中止任何会话的流：并行任务各自在后台继续跑（真·多进程互不干扰）。
     // 消息数组保留所有会话的消息，hero/草稿视图按 sessionId 过滤隐藏，切回即可见。
+    // 离开会话前恢复上一会话点编辑时已回滚的文件。
+    void restorePendingEdit();
     requestSeqRef.current += 1;
     setMessages((current) => current.filter((m) => m.sessionId));
     setInput(firstMessage);
@@ -2010,6 +2100,8 @@ function App() {
       setActiveView('chat');
       return;
     }
+    // 切走会话前，自动恢复上一会话点编辑时已回滚的文件，避免代码停留在已回滚态。
+    void restorePendingEdit();
     // 不要中止正在运行的流：它属于另一个会话，让它在后台继续更新自己的消息，
     // 切回时仍能看到半截回复并原地续流（displayedMessages 会按 sessionId 过滤）。
     // 只切换当前视图，各会话的流由 per-session 的 controller 独立管理。
@@ -2785,6 +2877,7 @@ function App() {
                         onCancelEdit={() => {
                           setEditingMessage(null);
                           setEditDraft('');
+                          void restorePendingEdit();
                         }}
                         branchStatus={branchStatus}
                         showWorkspacePicker={showNewChatHero}

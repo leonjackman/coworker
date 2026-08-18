@@ -250,11 +250,16 @@ class ChangeStore:
         performs a safe inverse edit and reports a conflict (without writing) when
         the file no longer matches the recorded state. Returns a summary of
         reverted and conflicted changes; conflicted changes are left untouched.
+
+        Only ``active`` records are reverted: records already marked ``reverted``
+        (e.g. by an earlier "edit-begin" on the same message) are skipped, so a
+        later edit request stays idempotent.
         """
         changes = self.changes_for_message_ids(session_id, message_ids)
+        active_changes = [c for c in changes if c.get("state", "active") == "active"]
         reverted: list[dict[str, Any]] = []
         conflicts: list[dict[str, Any]] = []
-        for change in reversed(changes):
+        for change in reversed(active_changes):
             result = workspace.revert_change(change)
             if result.get("status") == "reverted":
                 reverted.append(result)
@@ -263,7 +268,7 @@ class ChangeStore:
         return {
             "reverted": reverted,
             "conflicts": conflicts,
-            "total": len(changes),
+            "total": len(active_changes),
             "reverted_count": len(reverted),
             "conflict_count": len(conflicts),
         }
@@ -285,6 +290,29 @@ class ChangeStore:
                 if entry.get("id") in ids and entry.get("state", "active") == "active":
                     entry["state"] = "reverted"
                     entry["reverted_by"] = reverted_by
+                    count += 1
+            if count:
+                self._write_entries(path, entries)
+        return count
+
+    def mark_active(self, session_id: str, record_ids: list[str]) -> int:
+        """Restore reverted records back to ``active`` (undo-the-undo).
+
+        Used when a pending edit is cancelled: the files are re-applied to their
+        ``after`` state and the records return to ``active`` so a future edit on
+        the same message can revert them again.
+        """
+        ids = set(record_ids or [])
+        if not ids:
+            return 0
+        with self._lock:
+            path = self._session_path(session_id)
+            entries = self._read_entries(path)
+            count = 0
+            for entry in entries:
+                if entry.get("id") in ids and entry.get("state") == "reverted":
+                    entry["state"] = "active"
+                    entry.pop("reverted_by", None)
                     count += 1
             if count:
                 self._write_entries(path, entries)

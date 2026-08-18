@@ -1122,6 +1122,18 @@ ipcMain.handle('redo-message', async (event, payload) => {
   return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/redo`, 'POST', {});
 });
 
+ipcMain.handle('edit-message-begin', async (event, payload) => {
+  return requestBackend(
+    `/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/edit-begin`,
+    'POST',
+    { revert_code: Boolean(payload.revert_code) },
+  );
+});
+
+ipcMain.handle('edit-message-cancel', async (event, payload) => {
+  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/edit-cancel`, 'POST', {});
+});
+
 ipcMain.handle('list-projects', async () => {
   return requestBackend('/projects');
 });

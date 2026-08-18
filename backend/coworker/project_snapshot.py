@@ -347,8 +347,13 @@ class ProjectSnapshotManager:
             self._mark_reverted(session_id, pair["id"], sorted(touched))
         return result
 
-    def redo_turn(self, session_id: str, user_message_id: str, workspace: Any) -> dict[str, Any]:
-        """Re-apply the changes that ``revert_turn`` restored (undo-the-undo)."""
+    def redo_turn(self, session_id: str, user_message_id: str, workspace: Any, *, keep_state: bool = False) -> dict[str, Any]:
+        """Re-apply the changes that ``revert_turn`` restored (undo-the-undo).
+
+        When ``keep_state`` is true (cancelling a pending edit), the snapshot
+        pair is restored to ``active`` so the same turn can be reverted again;
+        otherwise the pair is discarded (final redo).
+        """
         result: dict[str, Any] = {"restored": [], "conflicts": [], "restored_count": 0, "conflict_count": 0}
         if not self.enabled_for(workspace):
             return result
@@ -374,7 +379,10 @@ class ProjectSnapshotManager:
                 result["conflicts"].append(status)
                 result["conflict_count"] += 1
         if touched:
-            self._mark_done(session_id, pair["id"])
+            if keep_state:
+                self._mark_active(session_id, pair["id"])
+            else:
+                self._mark_done(session_id, pair["id"])
         return result
 
     def _latest_pair(self, session_id: str, user_message_id: str, *, state: str) -> dict[str, Any] | None:
@@ -419,6 +427,15 @@ class ProjectSnapshotManager:
             if pair.get("id") == pair_id and pair.get("state") == "active":
                 pair["state"] = "reverted"
                 pair["reverted_paths"] = touched
+                break
+        self._write_pairs(session_id, pairs)
+
+    def _mark_active(self, session_id: str, pair_id: str) -> None:
+        pairs = self._read_pairs(session_id)
+        for pair in pairs:
+            if pair.get("id") == pair_id and pair.get("state") == "reverted":
+                pair["state"] = "active"
+                pair["reverted_paths"] = []
                 break
         self._write_pairs(session_id, pairs)
 

@@ -260,7 +260,7 @@
   "settings.goal_rounds_custom": "Personnalisé",
   "settings.goal_rounds_unit": "étages",
   "settings.revert_code": "Annuler les modifications lors de l'édition",
-  "settings.revert_code_desc": "En rééditant un message utilisateur, annulez automatiquement les fichiers modifiés par l'agent lors de ce tour avant de relancer (conforme à opencode/Codex). Sur un workspace Git, le rollback repose sur des instantanés et couvre aussi les modifications shell ; en cas de sessions concurrentes, il se réduit automatiquement aux modifications de la session.",
+  "settings.revert_code_desc": "En rééditant un message utilisateur, annulez automatiquement les fichiers modifiés par l'agent lors de ce tour avant de relancer (conforme à opencode/Codex). Sur un workspace Git, le rollback repose sur des instantanés et couvre aussi les modifications shell ; en cas de sessions concurrentes, il se réduit automatiquement aux modifications de la session. Cliquer sur modifier annule immédiatement ; annuler restaure les fichiers.",
   "settings.attachment_group": "Pièces jointes",
   "settings.attachment_group_desc": "Contrôlez la limite de taille des pièces jointes envoyées avec un message.",
   "settings.max_attachment_mb": "Taille maximale du fichier",

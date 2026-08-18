@@ -237,7 +237,7 @@
   "settings.goal_rounds_custom": "Custom",
   "settings.goal_rounds_unit": "steps",
   "settings.revert_code": "Revert file changes when editing",
-  "settings.revert_code_desc": "When re-editing a user message, automatically revert the files the agent changed in that turn before re-running (aligns with opencode/Codex behavior). On Git-repo workspaces the rollback is snapshot-backed and also covers shell-driven changes; under concurrent sessions it automatically degrades to session-only changes.",
+  "settings.revert_code_desc": "When re-editing a user message, automatically revert the files the agent changed in that turn before re-running (aligns with opencode/Codex behavior). On Git-repo workspaces the rollback is snapshot-backed and also covers shell-driven changes; under concurrent sessions it automatically degrades to session-only changes. Clicking edit reverts immediately; cancelling restores the files.",
   "settings.attachment_group": "Attachments",
   "settings.attachment_group_desc": "Control the size limit for attachments sent with a message.",
   "settings.max_attachment_mb": "Max file size",

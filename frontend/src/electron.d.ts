@@ -98,6 +98,8 @@ declare global {
       getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
       getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
       redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
+      editMessageBegin: (sessionId: string, messageId: string, revertCode: boolean) => Promise<EditBeginResponse>;
+      editMessageCancel: (sessionId: string, messageId: string) => Promise<RedoResponse>;
       streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback, language?: string) => Promise<void>;
       streamEditMessage: (
         requestId: string,

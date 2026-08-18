@@ -236,7 +236,7 @@
   "settings.goal_rounds_custom": "Personalizado",
   "settings.goal_rounds_unit": "pasos",
   "settings.revert_code": "Revertir cambios de archivo al editar",
-  "settings.revert_code_desc": "Al reeditar un mensaje de usuario, revierte automáticamente los archivos que el agente cambió en ese turno antes de volver a ejecutar (alineado con opencode/Codex). En workspaces Git el rollback se basa en snapshots y también cubre cambios vía shell; con sesiones concurrentes se reduce automáticamente a cambios de la sesión.",
+  "settings.revert_code_desc": "Al reeditar un mensaje de usuario, revierte automáticamente los archivos que el agente cambió en ese turno antes de volver a ejecutar (alineado con opencode/Codex). En workspaces Git el rollback se basa en snapshots y también cubre cambios vía shell; con sesiones concurrentes se reduce automáticamente a cambios de la sesión. Al hacer clic en editar se revierte de inmediato; al cancelar se restauran los archivos.",
   "settings.attachment_group": "Archivos adjuntos",
   "settings.attachment_group_desc": "Controla el límite de tamaño para los archivos adjuntos enviados con un mensaje.",
   "settings.max_attachment_mb": "Tamaño máximo del archivo",

@@ -197,6 +197,16 @@ export interface RedoResponse {
   conflict_count: number;
 }
 
+export interface EditBeginResponse {
+  status: string;
+  session_id: string;
+  message_id: string;
+  reverted_count: number;
+  conflict_count: number;
+  total: number;
+  reverted_paths?: string[];
+}
+
 export interface PartTool {
   type: 'tool';
   id: string;
