@@ -340,7 +340,7 @@ function App() {
     () =>
       (goal.running && goalSessionIdRef.current === sessionId) ||
       messages.some(
-        (m) => m.status === 'running' && (!m.sessionId || m.sessionId === sessionId),
+        (m) => (m.status === 'running' || m.status === 'waiting') && (!m.sessionId || m.sessionId === sessionId),
       ),
     [goal.running, goalSessionIdRef.current, messages, sessionId],
   );
@@ -354,7 +354,7 @@ function App() {
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const m of messages) {
-      if (m.status === 'running' && m.sessionId) ids.add(m.sessionId);
+      if ((m.status === 'running' || m.status === 'waiting') && m.sessionId) ids.add(m.sessionId);
     }
     if (goal.running && goalSessionIdRef.current) ids.add(goalSessionIdRef.current);
     for (const id of backendActiveSessionIds) ids.add(id);
@@ -912,7 +912,7 @@ function App() {
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] }
+              ? { ...item, content: t('chat.waiting_resolution'), status: 'waiting', parts: [...localParts] }
               : item,
           ),
         );
@@ -1366,7 +1366,7 @@ function App() {
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
+            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'waiting', parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'done') {
@@ -1561,7 +1561,7 @@ function App() {
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'done', parts: [...localParts] } : item,
+            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'waiting', parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'done') {
@@ -1826,7 +1826,7 @@ function App() {
             setMessages((current) =>
               current.map((item) =>
                 item.id === targetMessageId
-                  ? { ...item, content: t('chat.waiting_resolution'), status: 'done' as const, parts: mergeMessageParts(item.parts || [], resumeParts) }
+                  ? { ...item, content: t('chat.waiting_resolution'), status: 'waiting', parts: mergeMessageParts(item.parts || [], resumeParts) }
                   : item,
               ),
             );

@@ -838,46 +838,73 @@ ipcMain.handle('saveSettings', async (event, payload) => {
 
 const activeStreams = new Map();
 
-ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
-  const data = JSON.stringify(payload);
-  const options = {
+/**
+ * Unified SSE stream opener — handles:
+ *  • GET / POST HTTP requests
+ *  • SSE frame parsing with multi-line `data:` concatenation
+ *  • 60s idle watchdog
+ *  • non-2xx → error event + error detail from body
+ *  • trailing buffer forwarding (last incomplete frame)
+ *  • consistent `{ status: 'ok' | 'error' }` return value
+ */
+function openSseStream({
+  requestId,
+  method = 'POST',
+  path,
+  payload,
+  sender,
+  eventName = 'chat-stream-event',
+  idleTimeoutMs = 60_000,
+}) {
+  const httpOptions = {
     hostname: BACKEND_HOST,
     port: BACKEND_PORT,
-    path: '/chat/stream',
-    method: 'POST',
+    path,
+    method,
     headers: {
       'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(data),
     },
   };
 
-  const sender = event.sender;
-  let idleTimer = null;
-  let lastActivity = Date.now();
   return new Promise((resolve, reject) => {
-    const req = http.request(options, (res) => {
+    let req;
+    if (method === 'POST' || method === 'PUT') {
+      const body = JSON.stringify(payload);
+      httpOptions.headers['Content-Length'] = Buffer.byteLength(body);
+      req = http.request(httpOptions, handleResponse);
+      req.write(body);
+      req.end();
+    } else {
+      // GET (approval events)
+      req = http.request(httpOptions, handleResponse);
+      req.end();
+    }
+
+    function handleResponse(res) {
       res.setEncoding('utf8');
       let buffer = '';
+      let idleTimer = null;
+      let lastActivity = Date.now();
 
-      // Idle timeout: if no data for 60s, consider the connection dead
+      // Idle timeout watchdog
       idleTimer = setInterval(() => {
         const elapsed = Date.now() - lastActivity;
-        if (elapsed > 60_000) {
-          // No data for 60s — backend might be hung. Terminate the request.
-          req.destroy(new Error('Stream idle for 60 seconds'));
+        if (elapsed > idleTimeoutMs) {
+          req.destroy(new Error(`Stream idle for ${idleTimeoutMs / 1000} seconds`));
         }
       }, 5000);
 
-      res.on('data', (chunk) => {
+      function _pushSseData(chunk) {
         lastActivity = Date.now();
         buffer += chunk.replace(/\r\n/g, '\n');
         let sepIndex;
         while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
           const frame = buffer.slice(0, sepIndex);
           buffer = buffer.slice(sepIndex + 2);
-          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
-          if (!dataLine) continue;
-          const raw = dataLine.slice(5).trim();
+          // SSE multi-line `data:` – collect ALL `data:` lines and join with newline
+          const dataLines = frame.split('\n').filter(l => l.startsWith('data:'));
+          if (dataLines.length === 0) continue;
+          const raw = dataLines.map(l => l.slice(5).trim()).join('\n');
           if (!raw) continue;
           let parsed;
           try {
@@ -886,29 +913,30 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
             console.warn('[Electron] skipped malformed SSE frame:', raw?.slice(0, 200));
             continue;
           }
-          sender.send('chat-stream-event', { requestId, event: parsed });
+          if (sender) sender.send(eventName, { requestId, event: parsed });
         }
-      });
+      }
+
+      res.on('data', _pushSseData);
+
       res.on('end', () => {
         if (idleTimer) clearInterval(idleTimer);
+        // Error response: surface as error event with body `.detail`
         if (res.statusCode >= 400) {
-          // Non-SSE error body: surface it as an error event instead of
-          // silently resolving "ok" and leaving the running bubble counting.
           let detail = `Backend returned ${res.statusCode}`;
           try {
             const parsed = JSON.parse(buffer);
             if (parsed && parsed.detail) detail = parsed.detail;
-          } catch {
-            // not JSON, keep the status-based message
-          }
-          sender.send('chat-stream-event', { requestId, event: { type: 'error', error: detail } });
+          } catch { /* not JSON, keep status-based */ }
+          if (sender) sender.send(eventName, { requestId, event: { type: 'error', error: detail } });
         } else if (buffer) {
-          const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
-          if (dataLine) {
-            const raw = dataLine.slice(5).trim();
+          // Forward any remaining (trailing partial) buffer using multi-line rule
+          const dataLines = buffer.split('\n').filter(l => l.startsWith('data:'));
+          if (dataLines.length > 0) {
+            const raw = dataLines.map(l => l.slice(5).trim()).join('\n');
             if (raw) {
               try {
-                sender.send('chat-stream-event', { requestId, event: JSON.parse(raw) });
+                if (sender) sender.send(eventName, { requestId, event: JSON.parse(raw) });
               } catch {
                 // ignore trailing partial frame
               }
@@ -918,18 +946,32 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
         activeStreams.delete(requestId);
         resolve({ status: 'ok' });
       });
-    });
+    }
 
-    req.on('error', (e) => {
+    function handleError(e) {
       if (idleTimer) clearInterval(idleTimer);
       activeStreams.delete(requestId);
-      sender.send('chat-stream-event', { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
+      if (sender) {
+        sender.send(eventName, { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
+      }
       resolve({ status: 'error' });
-    });
+    }
 
+    req.on('error', handleError);
+
+    // Register in activeStreams for abort (before potential end/error)
     activeStreams.set(requestId, req);
-    req.write(data);
-    req.end();
+  });
+}
+
+ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
+  return openSseStream({
+    requestId,
+    method: 'POST',
+    path: '/chat/stream',
+    payload,
+    sender: event.sender,
+    eventName: 'chat-stream-event',
   });
 });
 
@@ -944,64 +986,13 @@ ipcMain.on('abort-chat-stream', (event, requestId) => {
 });
 
 ipcMain.handle('start-approval-stream', async (event, { requestId, resumeId }) => {
-  const options = {
-    hostname: BACKEND_HOST,
-    port: BACKEND_PORT,
-    path: `/command-approvals/events/${encodeURIComponent(resumeId)}`,
+  return openSseStream({
+    requestId,
     method: 'GET',
-  };
-
-  const sender = event.sender;
-  return new Promise((resolve, reject) => {
-    const req = http.request(options, (res) => {
-      res.setEncoding('utf8');
-      let buffer = '';
-      res.on('data', (chunk) => {
-        buffer += chunk.replace(/\r\n/g, '\n');
-        let sepIndex;
-        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, sepIndex);
-          buffer = buffer.slice(sepIndex + 2);
-          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
-          if (!dataLine) continue;
-          const raw = dataLine.slice(5).trim();
-          if (!raw) continue;
-          let parsed;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {
-            continue;
-          }
-          sender.send('approval-stream-event', { requestId, event: parsed });
-        }
-      });
-      res.on('end', () => {
-        if (buffer) {
-          const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
-          if (dataLine) {
-            const raw = dataLine.slice(5).trim();
-            if (raw) {
-              try {
-                sender.send('approval-stream-event', { requestId, event: JSON.parse(raw) });
-              } catch {
-                // ignore trailing partial frame
-              }
-            }
-          }
-        }
-        activeStreams.delete(requestId);
-        resolve({ status: 'ok' });
-      });
-    });
-
-    req.on('error', (e) => {
-      activeStreams.delete(requestId);
-      sender.send('approval-stream-event', { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
-      resolve({ status: 'error' });
-    });
-
-    activeStreams.set(requestId, req);
-    req.end();
+    path: `/command-approvals/events/${encodeURIComponent(resumeId)}`,
+    sender: event.sender,
+    eventName: 'approval-stream-event',
+    idleTimeoutMs: 300_000, // 5 min — backend sends SSE ping every 1s, frontend watchdog is 300s
   });
 });
 
@@ -1045,82 +1036,7 @@ ipcMain.handle('generate-title', async (event, payload) => {
 });
 
 function startStreamingRequest(requestId, path, payload, sender, eventName = 'chat-stream-event') {
-  const data = JSON.stringify(payload);
-  const options = {
-    hostname: BACKEND_HOST,
-    port: BACKEND_PORT,
-    path,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(data),
-    },
-  };
-
-  return new Promise((resolve, reject) => {
-    const req = http.request(options, (res) => {
-      res.setEncoding('utf8');
-      let buffer = '';
-      res.on('data', (chunk) => {
-        buffer += chunk.replace(/\r\n/g, '\n');
-        let sepIndex;
-        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, sepIndex);
-          buffer = buffer.slice(sepIndex + 2);
-          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
-          if (!dataLine) continue;
-          const raw = dataLine.slice(5).trim();
-          if (!raw) continue;
-          let parsed;
-          try {
-            parsed = JSON.parse(raw);
-          } catch {
-            continue;
-          }
-          if (sender) sender.send(eventName, { requestId, event: parsed });
-        }
-      });
-      res.on('end', () => {
-        if (res.statusCode >= 400) {
-          // Non-SSE error body (e.g. 409 while the same session is still
-          // generating): surface it as an error event instead of silently
-          // resolving "ok" and leaving the running bubble counting forever.
-          let detail = `Backend returned ${res.statusCode}`;
-          try {
-            const parsed = JSON.parse(buffer);
-            if (parsed && parsed.detail) detail = parsed.detail;
-          } catch {
-            // not JSON, keep the status-based message
-          }
-          if (sender) sender.send(eventName, { requestId, event: { type: 'error', error: detail } });
-        } else if (buffer) {
-          const dataLine = buffer.split('\n').find((line) => line.startsWith('data:'));
-          if (dataLine) {
-            const raw = dataLine.slice(5).trim();
-            if (raw) {
-              try {
-                if (sender) sender.send(eventName, { requestId, event: JSON.parse(raw) });
-              } catch {
-                // ignore
-              }
-            }
-          }
-        }
-        activeStreams.delete(requestId);
-        resolve({ status: 'ok' });
-      });
-    });
-
-    req.on('error', (e) => {
-      activeStreams.delete(requestId);
-      if (sender) sender.send(eventName, { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
-      resolve({ status: 'error' });
-    });
-
-    activeStreams.set(requestId, req);
-    req.write(data);
-    req.end();
-  });
+  return openSseStream({ requestId, method: 'POST', path, payload, sender, eventName });
 }
 
 ipcMain.handle('rollback-message', async (event, payload) => {
@@ -1139,8 +1055,8 @@ ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id,
 
 ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, language }) => {
   const payload = { content, language: language || 'zh' };
-  if (work_mode) payload.work_mode = work_mode;
-  if (autonomy) payload.autonomy = autonomy;
+  if (work_mode != null) payload.work_mode = work_mode;
+  if (autonomy != null) payload.autonomy = autonomy;
   return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/edit`, payload, event.sender);
 });
 
@@ -1229,56 +1145,13 @@ ipcMain.handle('goal-delete', async (event, sessionId) => {
 });
 
 ipcMain.handle('start-goal-resume', async (event, { requestId, sessionId, language }) => {
-  const data = JSON.stringify({ session_id: sessionId, language: language || 'zh' });
-  const options = {
-    hostname: BACKEND_HOST,
-    port: BACKEND_PORT,
-    path: '/goal/resume',
+  return openSseStream({
+    requestId,
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(data),
-    },
-  };
-  const sender = event.sender;
-  return new Promise((resolve, reject) => {
-    const req = http.request(options, (res) => {
-      res.setEncoding('utf8');
-      let buffer = '';
-      res.on('data', (chunk) => {
-        buffer += chunk.replace(/\r\n/g, '\n');
-        let sepIndex;
-        while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
-          const frame = buffer.slice(0, sepIndex);
-          buffer = buffer.slice(sepIndex + 2);
-          const dataLine = frame.split('\n').find((line) => line.startsWith('data:'));
-          if (dataLine === undefined) continue;
-          let payload;
-          try {
-            payload = JSON.parse(dataLine.slice(5).trim());
-          } catch {
-            continue;
-          }
-          sender.send('chat-stream-event', { requestId, event: payload });
-        }
-      });
-      res.on('end', () => {
-        activeStreams.delete(requestId);
-        resolve({ ok: true });
-      });
-      res.on('error', (err) => {
-        activeStreams.delete(requestId);
-        reject(err);
-      });
-    });
-    // Register so the Stop button's abort-chat-stream can cancel a running resume.
-    activeStreams.set(requestId, req);
-    req.on('error', (err) => {
-      activeStreams.delete(requestId);
-      reject(err);
-    });
-    req.write(data);
-    req.end();
+    path: '/goal/resume',
+    payload: { session_id: sessionId, language: language || 'zh' },
+    sender: event.sender,
+    eventName: 'chat-stream-event',
   });
 });
 

@@ -646,9 +646,18 @@ class ElectronChatService implements ChatService {
     const requestId = `approval-${resumeId}-${Date.now()}`;
     const abortStream = () => window.electronAPI?.abortChatStream(requestId);
     const detachAbortListener = attachAbortListener(signal, abortStream);
+    // Idle watchdog: backend sends SSE ping every 1s, 300s timeout matches other streams
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => abortStream(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
+    const wrappedEvent: StreamEventCallback = (event) => { resetIdle(); onEvent(event); };
     try {
-      await window.electronAPI.streamApprovalEvents(requestId, resumeId, onEvent);
+      await window.electronAPI.streamApprovalEvents(requestId, resumeId, wrappedEvent);
     } finally {
+      if (idleTimer) clearTimeout(idleTimer);
       detachAbortListener();
     }
   }
@@ -742,7 +751,22 @@ class ElectronChatService implements ChatService {
 
   async resumeGoal(sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    await window.electronAPI.goalResume(`goal-resume-${Date.now()}`, sessionId, onEvent, getLanguage(), signal);
+    const requestId = `goal-resume-${Date.now()}`;
+    const abortStream = () => window.electronAPI?.abortChatStream(requestId);
+    const detachAbortListener = attachAbortListener(signal, abortStream);
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => abortStream(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
+    const wrappedEvent: StreamEventCallback = (event) => { resetIdle(); onEvent(event); };
+    try {
+      await window.electronAPI.goalResume(requestId, sessionId, wrappedEvent, getLanguage(), signal);
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      detachAbortListener();
+    }
   }
 
   async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number }> {
@@ -879,9 +903,10 @@ class HttpChatService implements ChatService {
           const frames = buffer.split('\n\n');
           buffer = frames.pop() ?? '';
           for (const frame of frames) {
-            const line = frame.split('\n').find((item) => item.startsWith('data:'));
-            if (!line) continue;
-            const raw = line.slice(5).trim();
+            // SSE multi-line `data:` — collect ALL lines and join, not just first `.find()`
+            const dataLines = frame.split('\n').filter((item) => item.startsWith('data:'));
+            if (dataLines.length === 0) continue;
+            const raw = dataLines.map((item) => item.slice(5).trim()).join('\n');
             if (!raw) continue;
             try {
               onEvent(JSON.parse(raw) as StreamEvent);
@@ -890,12 +915,16 @@ class HttpChatService implements ChatService {
             }
           }
         }
-        const remaining = buffer.split('\n').find((item) => item.startsWith('data:'));
-        if (remaining) {
-          try {
-            onEvent(JSON.parse(remaining.slice(5).trim()) as StreamEvent);
-          } catch {
-            // skip
+        // Trailing partial buffer — also use multi-line rule
+        const dataLines = buffer.split('\n').filter((item) => item.startsWith('data:'));
+        if (dataLines.length > 0) {
+          const raw = dataLines.map((item) => item.slice(5).trim()).join('\n');
+          if (raw) {
+            try {
+              onEvent(JSON.parse(raw) as StreamEvent);
+            } catch {
+              // skip
+            }
           }
         }
       } finally {
@@ -1057,38 +1086,54 @@ class HttpChatService implements ChatService {
   }
 
   async subscribeApprovalEvents(resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
-    const response = await fetch(`${BACKEND_URL}/command-approvals/events/${encodeURIComponent(resumeId)}`, {
-      ...(signal instanceof AbortSignal ? { signal } : {}),
-    });
-    if (!response.ok) {
-      throw new Error(`Backend returned ${response.status}`);
-    }
-    if (!response.body) return;
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+    // Merge external abort with idle watchdog + Duck-typed signal support (attachAbortListener)
+    const internal = new AbortController();
+    const detachExternal = attachAbortListener(signal, () => internal.abort());
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => internal.abort(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-        const frames = buffer.split('\n\n');
-        buffer = frames.pop() ?? '';
-        for (const frame of frames) {
-          const line = frame.split('\n').find((item) => item.startsWith('data:'));
-          if (!line) continue;
-          const raw = line.slice(5).trim();
-          if (!raw) continue;
-          try {
-            onEvent(JSON.parse(raw) as StreamEvent);
-          } catch {
-            // skip malformed frames
+      const response = await fetch(`${BACKEND_URL}/command-approvals/events/${encodeURIComponent(resumeId)}`, {
+        signal: internal.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned ${response.status}`);
+      }
+      if (!response.body) return;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          resetIdle();
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
+            // SSE multi-line `data:` — collect ALL lines and join
+            const dataLines = frame.split('\n').filter((item) => item.startsWith('data:'));
+            if (dataLines.length === 0) continue;
+            const raw = dataLines.map((item) => item.slice(5).trim()).join('\n');
+            if (!raw) continue;
+            try {
+              onEvent(JSON.parse(raw) as StreamEvent);
+            } catch {
+              // skip malformed frames
+            }
           }
         }
+      } finally {
+        reader.releaseLock();
       }
     } finally {
-      reader.releaseLock();
+      if (idleTimer) clearTimeout(idleTimer);
+      detachExternal();
     }
   }
 
@@ -1183,9 +1228,10 @@ class HttpChatService implements ChatService {
           const frames = buffer.split('\n\n');
           buffer = frames.pop() ?? '';
           for (const frame of frames) {
-            const line = frame.split('\n').find((item) => item.startsWith('data:'));
-            if (!line) continue;
-            const raw = line.slice(5).trim();
+            // SSE multi-line `data:` — collect ALL lines and join
+            const dataLines = frame.split('\n').filter((item) => item.startsWith('data:'));
+            if (dataLines.length === 0) continue;
+            const raw = dataLines.map((item) => item.slice(5).trim()).join('\n');
             if (!raw) continue;
             try {
               onEvent(JSON.parse(raw) as StreamEvent);

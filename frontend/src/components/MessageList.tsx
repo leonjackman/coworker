@@ -256,7 +256,7 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
         <div className="user-bubble-meta">
           <span className="user-bubble-meta__time">{formatTime(message.timestamp)}</span>
         </div>
-        {!message.content.includes(t('chat.waiting_resolution')) && (
+        {(message.status !== 'waiting') && (
           <MessageActions
             role="user"
             content={message.content}
@@ -275,7 +275,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
   const isInterrupted = message.status === 'interrupted';
   const isRunning = message.status === 'running';
   const isRunningEmpty = isRunning && !message.content;
-  const isWaiting = message.content.includes(t('chat.waiting_resolution'));
+  const isWaiting = message.status === 'waiting';
 
   // 流式进行中，让计时每秒跳动（否则只在收到 token 时刷新，思考阶段会"卡住"）
   const [, forceTick] = useState(0);
