@@ -3022,6 +3022,35 @@ body.bottom-panel-resizing {
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-weight: 650;
 }
+/* 命令类型胶囊标签：sys=蓝、skill=黄、mcp=绿；背景/文字对比度均 ≥4.5:1 */
+.slash-menu__type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 17px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  line-height: 1;
+  text-transform: uppercase;
+  user-select: none;
+}
+.slash-menu__type--sys {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+.slash-menu__type--skill {
+  background: #facc15;
+  color: #1c1917;
+}
+.slash-menu__type--mcp {
+  background: #15803d;
+  color: #ffffff;
+}
 .slash-menu__pkg {
   display: inline-block;
   margin-right: 6px;

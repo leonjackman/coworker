@@ -96,6 +96,23 @@ interface ChatInputProps {
 }
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/settings", "/memory"];
+
+/** Command source type, shown as a coloured capsule in the "/" menu. Extensible:
+ *  "sys" (built-in, blue), "skill" (Agent Skill, yellow), "mcp" (MCP tool, green). */
+export type SlashCommandType = "sys" | "skill" | "mcp";
+
+interface SlashCommandItem {
+  command: string;
+  description?: string;
+  packageName?: string;
+  type: SlashCommandType;
+}
+
+const COMMAND_TYPE_LABEL: Record<SlashCommandType, string> = {
+  sys: "sys",
+  skill: "skill",
+  mcp: "mcp",
+};
 const MAX_ATTACHMENT_CHARS = 120_000;
 // 二进制附件内联字节的体积上限由设置页的「文件体积上限」控制（默认 25MB），
 // 经 maxAttachmentMb prop 传入。超过则只保留元信息、不内联，由后端在提示词中
@@ -300,17 +317,18 @@ export function ChatInput({
     if (showCommands) onOpenCommands?.();
   }, [showCommands, onOpenCommands]);
 
-  // Installed skills become "/skill <name>" entries in the command card.
-  const skillCommandItems = useMemo(
+  // Installed skills become direct "/<name>" entries in the command card (the
+  // "skill" keyword is dropped: "/skill ego-browser" -> "/ego-browser").
+  const skillCommandItems = useMemo<SlashCommandItem[]>(
     () =>
       (skills ?? [])
         .filter((skill) => skill.enabled !== false)
-        .map((skill) => ({ command: `/skill ${skill.name}`, description: skill.description ?? "" })),
+        .map((skill) => ({ command: `/${skill.name}`, description: skill.description ?? "", type: "skill" })),
     [skills],
   );
   // Each skill's sub-commands become direct "/<command>" entries, tagged with
   // the owning package name so the menu reads "command · package · description".
-  const skillSubCommandItems = useMemo(
+  const skillSubCommandItems = useMemo<SlashCommandItem[]>(
     () =>
       (skills ?? [])
         .filter((skill) => skill.enabled !== false)
@@ -319,6 +337,7 @@ export function ChatInput({
             command: `/${cmd.name}`,
             description: cmd.description ?? "",
             packageName: skill.name,
+            type: "skill" as const,
           })),
         ),
     [skills],
@@ -326,8 +345,9 @@ export function ChatInput({
   const staticCommandItems = SLASH_COMMANDS.map((command) => ({
     command,
     description: t(`chat.command_${command.slice(1)}`),
+    type: "sys" as const,
   }));
-  const commandItems = useMemo<Array<{ command: string; description?: string; packageName?: string }>>(
+  const commandItems = useMemo<SlashCommandItem[]>(
     () => [...staticCommandItems, ...skillSubCommandItems, ...skillCommandItems],
     [staticCommandItems, skillSubCommandItems, skillCommandItems],
   );
@@ -335,12 +355,19 @@ export function ChatInput({
     commandItems.some((item) => item.command.slice(1).startsWith(name));
 
   // Leading slash token (text after the leading "/", up to whitespace) for
-  // filtering — only the leading command is a real command. When the partial
-  // matches nothing (e.g. "/" inserted at the head of existing text), fall back
-  // to showing ALL commands so the card still pops.
+  // filtering — only the leading command is a real command. The menu filters
+  // dynamically as the user types: a query matches the command name, the
+  // package name, the description, or the type capsule (case-insensitive).
+  // When nothing matches, fall back to showing ALL commands so the card still
+  // pops (e.g. "/" inserted at the head of existing text).
   const nonWs = value.search(/\S/);
   const commandQuery = nonWs === 0 && value.charAt(0) === "/" ? value.slice(1).split(/\s/)[0] ?? "" : "";
-  const filteredItems = commandItems.filter((item) => item.command.slice(1).startsWith(commandQuery));
+  const queryLower = commandQuery.toLowerCase();
+  const filteredItems = commandItems.filter((item) => {
+    if (!queryLower) return true;
+    const haystack = `${item.command.slice(1)} ${item.packageName ?? ""} ${item.description ?? ""} ${item.type}`.toLowerCase();
+    return haystack.includes(queryLower);
+  });
   const displayedItems = filteredItems.length > 0 ? filteredItems : commandItems;
   const activeCommandIndex = Math.min(commandIndex, Math.max(0, displayedItems.length - 1));
 
@@ -858,15 +885,16 @@ export function ChatInput({
           {displayedItems.map((item, index) => (
             <button
               type="button"
-              key={item.command}
+              key={`${item.type}:${item.command}:${item.packageName ?? ''}`}
               className={index === activeCommandIndex ? "slash-menu__item slash-menu__item--active" : "slash-menu__item"}
               onMouseEnter={() => setCommandIndex(index)}
               onClick={() => insertCommand(item.command)}
             >
+              <span className={`slash-menu__type slash-menu__type--${item.type}`}>{COMMAND_TYPE_LABEL[item.type]}</span>
               <span className="slash-menu__cmd">{item.command}</span>
               <small>
                 {item.packageName && <span className="slash-menu__pkg">{item.packageName}</span>}
-                {item.description || "加载并运行此技能"}
+                {item.description || (item.type === "skill" ? "加载并运行此技能" : "")}
               </small>
             </button>
           ))}

@@ -277,7 +277,7 @@ function App() {
 
   // Global index of sub-command name -> owning package name, used to dispatch
   // the bare "/<command>" entries that the chat-input "/" card can insert.
-  const skillCommandIndex = useMemo<Record<string, string>>(() => {
+  const skillSubCommandIndex = useMemo<Record<string, string>>(() => {
     const index: Record<string, string> = {};
     for (const skill of skillEntries) {
       for (const cmd of skill.commands ?? []) {
@@ -286,6 +286,14 @@ function App() {
     }
     return index;
   }, [skillEntries]);
+
+  // Set of enabled skill names: the "/" card now lists each skill directly as
+  // "/<name>" (the "skill" keyword is dropped), so a bare "/<name>" token must
+  // be dispatched as a full-skill activation.
+  const skillNameIndex = useMemo<Set<string>>(
+    () => new Set(skillEntries.filter((skill) => skill.enabled !== false).map((skill) => skill.name)),
+    [skillEntries],
+  );
 
   // Only show messages that belong to the currently active session so that
   // running messages preserved from other sessions (after a session switch)
@@ -626,14 +634,21 @@ function App() {
     if (!typedMessage && attachments.length === 0) return;
 
     if (typedMessage.startsWith('/')) {
-      // 消息墙也要显示命令令牌
-      const provider = providers.find((p) => p.id === selectedModel);
-      const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
-      const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
-      setMessages((current) => [
-        ...current,
-        createMessage('user', typedMessage, { status: 'done', autonomy, provider: providerName, model }),
-      ]);
+      // 消息墙也要显示命令令牌（/goal、/new、/help 等系统命令显示原始令牌）。
+      // 技能命令不显示原始令牌——由 handler 以「已加载技能」的干净标签气泡展示。
+      const command = typedMessage.split(/\s+/)[0] ?? '';
+      const bareCmd = command.startsWith('/') ? command.slice(1) : '';
+      const isSkillCommand =
+        command === '/skill' || Boolean(skillSubCommandIndex[bareCmd]) || skillNameIndex.has(bareCmd);
+      if (!isSkillCommand) {
+        const provider = providers.find((p) => p.id === selectedModel);
+        const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
+        const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
+        setMessages((current) => [
+          ...current,
+          createMessage('user', typedMessage, { status: 'done', autonomy, provider: providerName, model }),
+        ]);
+      }
       handleSlashCommand(typedMessage);
       return;
     }
@@ -2338,21 +2353,33 @@ function App() {
       return;
     }
     if (command === '/skill') {
-      void handleSkillSlash(message);
+      // Backward-compatible "/skill <name> [task]" -> "/<name> [task]".
+      const rest = message.slice('/skill'.length).trim();
+      if (rest) {
+        void handleSkillSlash(`/${rest}`);
+      } else {
+        setMessages((current) => [...current, createMessage('assistant', t('skills.slash_usage'), { status: 'done' })]);
+      }
       return;
     }
-    // Bare sub-command: "/<cmd>" where <cmd> is a known skill sub-command.
+    // Bare "/<cmd>": a known skill sub-command first, then a full skill name.
     const bareCmd = command ? (command.startsWith('/') ? command.slice(1) : command) : '';
-    if (bareCmd && skillCommandIndex[bareCmd]) {
-      void handleSubCommandSlash(skillCommandIndex[bareCmd], bareCmd, message);
+    if (bareCmd && skillSubCommandIndex[bareCmd]) {
+      void handleSubCommandSlash(skillSubCommandIndex[bareCmd], bareCmd, message);
+      return;
+    }
+    if (bareCmd && skillNameIndex.has(bareCmd)) {
+      void handleSkillSlash(message);
       return;
     }
     setMessages((current) => [...current, createMessage('assistant', t('chat.command_help_text'), { status: 'done' })]);
   };
 
-  /** /skill <name> [free-form prompt] -- load the skill body and send it with the prompt. */
+  /** /<skill-name> [free-form prompt] -- validate the skill, then send a hidden
+   *  activation tag so the backend injects the SKILL.md body into the system
+   *  prompt (the body itself never appears in the conversation). */
   const handleSkillSlash = async (message: string) => {
-    const rest = message.slice('/skill'.length).trim();
+    const rest = message.replace(/^\//, '').trim();
     const skillName = rest.split(/\s+/)[0] ?? '';
     const prompt = rest.slice(skillName.length).trim();
     if (!skillName) {
@@ -2362,11 +2389,11 @@ function App() {
     try {
       const response = await chatService.getSkill(skillName);
       const skill = response.skill;
-      if (!skill?.body || !skill.enabled) {
+      if (!skill?.enabled) {
         setMessages((current) => [...current, createMessage('assistant', t('skills.slash_not_found').replace('{name}', skillName), { status: 'done' })]);
         return;
       }
-      const injected = `${t('skills.slash_loaded').replace('{name}', skillName)}\n\n${skill.body}\n\n---\n${prompt}`;
+      const injected = `[skill:${skillName}]${prompt ? `\n\n${prompt}` : ''}`;
       setInput('');
       void sendMessage({ message: injected });
     } catch (error) {
@@ -2380,14 +2407,14 @@ function App() {
     try {
       const response = await chatService.getSkill(pkg, cmd);
       const skill = response.skill;
-      if (!skill?.body || !skill.enabled) {
+      if (!skill?.enabled) {
         setMessages((current) => [
           ...current,
           createMessage('assistant', t('skills.slash_not_found').replace('{name}', `${pkg} / ${cmd}`), { status: 'done' }),
         ]);
         return;
       }
-      const injected = `${t('skills.slash_loaded').replace('{name}', `${pkg} / ${cmd}`)}\n\n${skill.body}\n\n---\n${prompt}`;
+      const injected = `[skill:${pkg}:${cmd}]${prompt ? `\n\n${prompt}` : ''}`;
       setInput('');
       void sendMessage({ message: injected });
     } catch (error) {

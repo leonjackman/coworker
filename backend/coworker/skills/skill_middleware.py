@@ -4,6 +4,13 @@ Only the catalog (name + description + location + version) is injected into
 the system prompt; the full ``SKILL.md`` body is loaded on demand through the
 existing ``read_file`` tool (progressive disclosure, Agent Skills standard).
 
+The user can also **explicitly activate** a skill by including a
+``[skill:<name>]`` (or ``[skill:<name>:<command>]`` for a sub-command) tag in
+their message — the frontend ``/`` command card produces these tags. Activated
+skills get their full body injected straight into the system prompt (hidden,
+never echoed into the visible conversation), following the mainstream
+"label in the message, body stays hidden" pattern.
+
 Skills are hidden entirely in the ``discuss`` (plan) phase, matching the
 product decision that planning is read-only and never pulls in workflow
 instructions.
@@ -11,6 +18,7 @@ instructions.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -22,6 +30,12 @@ from .skills import format_skills_prompt
 from coworker.logger import get_logger
 logger = get_logger(__name__)
 
+# ``[skill:name]`` for a whole skill, ``[skill:name:command]`` for a sub-command.
+# Skill/command slugs only contain [A-Za-z0-9_-] (plus '.' for skill dirs).
+SKILL_MARKER_RE = re.compile(
+    r"\[skill:([A-Za-z0-9][A-Za-z0-9_.-]*)(?::([A-Za-z0-9][A-Za-z0-9_.-]*))?\]"
+)
+
 
 def _phase_is_discuss(state: Any) -> bool:
     """Mirror of ``agents.normalize_phase`` (avoid a circular import)."""
@@ -32,10 +46,83 @@ def _phase_is_discuss(state: Any) -> bool:
     return work_mode == "plan"
 
 
+def _message_text(message: Any) -> str:
+    """Best-effort text of a message (BaseMessage or dict, plain or multimodal)."""
+    content = getattr(message, "content", "")
+    if isinstance(content, list):
+        return "\n".join(str(part) for part in content)
+    return str(content or "")
+
+
+def _format_active_skills(active: list[dict[str, str]]) -> str:
+    """Render the full bodies of explicitly activated skills into a prompt block."""
+    lines = [
+        "\n\nThe user explicitly activated the following skill(s) with their `[skill:...]` tag. "
+        "Follow their instructions for the current task.",
+        "<activated_skills>",
+    ]
+    for item in active:
+        lines.append("  <skill>")
+        lines.append(f"    <name>{item['name']}</name>")
+        if item.get("location"):
+            lines.append(f"    <location>{item['location']}</location>")
+        lines.append("    <instructions>")
+        lines.append(item["body"])
+        lines.append("    </instructions>")
+        lines.append("  </skill>")
+    lines.append("</activated_skills>")
+    return "\n".join(lines)
+
+
 class SkillMiddleware(AgentMiddleware):
 
     def __init__(self, manager: SkillManager):
         self.manager = manager
+        # Per-request memo of resolved (name, command) -> (body, base_dir) so a
+        # long agent turn doesn't re-read the same SKILL.md on every model call.
+        self._body_cache: dict[tuple[str, str], tuple[str, str] | None] = {}
+
+    def _resolve_body(self, name: str, command: str) -> tuple[str, str] | None:
+        key = (name, command)
+        if key not in self._body_cache:
+            if command:
+                self._body_cache[key] = self.manager.read_command_body(name, command)
+            else:
+                self._body_cache[key] = self.manager.read_body(name)
+        return self._body_cache[key]
+
+    def _extract_active_skills(self, request: Any) -> list[dict[str, str]]:
+        """Scan the conversation for ``[skill:...]`` tags and load their bodies.
+
+        Scans every user message so a skill activated earlier in the session
+        stays active across later turns (mirrors the old inline-body behaviour
+        where the body remained visible in history).
+        """
+        state = getattr(request, "state", None) or {}
+        messages = state.get("messages", []) or []
+        allowed = {s.name for s in self.manager.injection_list()}
+        seen: set[tuple[str, str]] = set()
+        active: list[dict[str, str]] = []
+        for msg in messages:
+            if getattr(msg, "type", None) != "human":
+                continue
+            content = _message_text(msg)
+            if not content:
+                continue
+            for match in SKILL_MARKER_RE.finditer(content):
+                name = match.group(1)
+                command = match.group(2) or ""
+                key = (name, command)
+                if key in seen or name not in allowed:
+                    continue
+                seen.add(key)
+                body = self._resolve_body(name, command)
+                if body is None:
+                    continue
+                active.append(
+                    {"name": name, "command": command, "body": body[0], "location": body[1]}
+                )
+        return active
 
     def _overrides(self, request: Any) -> dict[str, Any]:
         if _phase_is_discuss(getattr(request, "state", None)):
@@ -43,13 +130,17 @@ class SkillMiddleware(AgentMiddleware):
             return {}
         try:
             skills = self.manager.injection_list()
+            active = self._extract_active_skills(request)
         except Exception as exc:  # noqa: BLE001 - a scan failure must not break chat
             logger.warning("Skill catalog refresh failed: %s", exc)
             return {}
-        if not skills:
+
+        section = format_skills_prompt(skills) if skills else ""
+        if active:
+            section = f"{section}\n\n{_format_active_skills(active)}".strip()
+        if not section:
             return {}
 
-        section = format_skills_prompt(skills)
         current = getattr(request, "system_message", None)
         base_text = getattr(current, "text", "") or ""
         overrides: dict[str, Any] = {}
