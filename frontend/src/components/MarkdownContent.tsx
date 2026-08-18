@@ -173,12 +173,24 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: Markdo
       code(props) {
         const { className, children } = props;
         const match = /language-([\w-]+)/.exec(className || '');
-        const isBlock = Boolean(className && className.includes('language-'));
         const text = String(children ?? '').replace(/\n$/, '');
+        // A fenced code block is multi-line even when it has no language tag,
+        // while inline code is a single token. Detecting by language class alone
+        // wrongly rendered language-less fenced blocks (e.g. the H3 prompt
+        // block) as inline <code>, which react-markdown then wrapped in a <pre>
+        // with white-space:pre and forced the long line to overflow.
+        const isBlock = Boolean(match) || text.includes('\n');
         if (isBlock) {
           return <CodeBlock code={text} {...(match?.[1] ? { language: match[1] } : {})} />;
         }
         return <InlineCode>{children}</InlineCode>;
+      },
+      pre(props) {
+        // CodeBlock already renders its own <div class="markdown-code"> box, so
+        // drop react-markdown's default <pre> wrapper. Keeping it produced an
+        // invalid <pre><div> nesting whose white-space:pre broke wrapping and
+        // overflowed the page for language-less fenced blocks.
+        return <>{props.children}</>;
       },
       a(props) {
         return (

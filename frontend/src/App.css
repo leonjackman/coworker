@@ -2145,6 +2145,8 @@ body.bottom-panel-resizing {
   line-height: 1.7;
   color: var(--foreground);
   word-break: break-word;
+  overflow-wrap: break-word;
+  min-width: 0;
 }
 
 .markdown-body > *:first-child {
@@ -2157,6 +2159,7 @@ body.bottom-panel-resizing {
 
 .markdown-body p {
   margin: 8px 0;
+  overflow-wrap: break-word;
 }
 
 .markdown-body h1,
@@ -2224,6 +2227,16 @@ body.bottom-panel-resizing {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Safety net: any <pre> inside markdown must wrap and stay within bounds so a
+   long line can never push past the page edge. */
+.markdown-body pre {
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .markdown-body hr {
@@ -2259,6 +2272,8 @@ body.bottom-panel-resizing {
   background: var(--material-control);
   font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
   font-size: 0.88em;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .markdown-code {
@@ -2317,6 +2332,9 @@ body.bottom-panel-resizing {
   font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
   font-size: 13px;
   line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .markdown-code__body pre code {
@@ -2333,6 +2351,7 @@ body.bottom-panel-resizing {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .markdown-code__body .shiki {
