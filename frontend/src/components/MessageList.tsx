@@ -21,7 +21,7 @@ interface MessageListProps {
   isThinking?: boolean;
   onEditMessage?: (messageId: string, content: string) => void;
   onRegenerateMessage?: (messageId: string) => void;
-  onRollbackMessage?: (messageId: string) => void;
+  onRedoMessage?: (messageId: string) => void;
 }
 
 const CONTEXT_TOOLS = new Set(['read_file', 'search_files']);
@@ -223,7 +223,7 @@ function formatDuration(ms: number): string {
   return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
-function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; onEdit?: (content: string) => void; onRollback?: () => void }) {
+function UserMessage({ message, onEdit, onRedo }: { message: ChatMessage; onEdit?: (content: string) => void; onRedo?: () => void }) {
   return (
     <div className="stream-row stream-row--user">
       <div className="stream-bubble-wrap">
@@ -261,7 +261,7 @@ function UserMessage({ message, onEdit, onRollback }: { message: ChatMessage; on
             role="user"
             content={message.content}
             {...(onEdit ? { onEdit } : {})}
-            {...(onRollback ? { onRollback } : {})}
+            {...(onRedo ? { onRedo, revertedFiles: message.revertedFiles ?? 0 } : {})}
           />
         )}
       </div>
@@ -424,13 +424,11 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
   );
 }
 
-function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRollbackMessage }: MessageListProps) {
+function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRedoMessage }: MessageListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const lastUserMessageIdRef = useRef<string | undefined>(undefined);
   const lastCountRef = useRef(0);
-  // 整个会话只有 1 条用户消息时，撤回会清空会话，隐藏撤销按钮。
-  const userMessageCount = messages.filter((m) => m.role === 'user').length;
 
   const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
     const viewport = viewportRef.current;
@@ -481,7 +479,7 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
               key={message.id}
               message={message}
               {...(onEditMessage ? { onEdit: (content) => onEditMessage(message.id, content) } : {})}
-              {...(onRollbackMessage && index > 0 && userMessageCount > 1 ? { onRollback: () => onRollbackMessage(message.id) } : {})}
+              {...(onRedoMessage && message.revertedFiles ? { onRedo: () => onRedoMessage(message.id) } : {})}
             />
           ) : (
             <AssistantMessage
@@ -498,14 +496,14 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
 }
 
 export function MessageList(props: MessageListProps) {
-  const { messages, isThinking, onEditMessage, onRegenerateMessage, onRollbackMessage } = props;
+  const { messages, isThinking, onEditMessage, onRegenerateMessage, onRedoMessage } = props;
   return (
     <MessageListView
       messages={messages}
       isThinking={isThinking ?? false}
       {...(onEditMessage ? { onEditMessage } : {})}
       {...(onRegenerateMessage ? { onRegenerateMessage } : {})}
-      {...(onRollbackMessage ? { onRollbackMessage } : {})}
+      {...(onRedoMessage ? { onRedoMessage } : {})}
     />
   );
 }

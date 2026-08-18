@@ -1886,6 +1886,7 @@ class GoalStopRequest(BaseModel):
 class SettingsUpdate(BaseModel):
     goal_max_rounds: int = 50
     max_attachment_mb: int = 25
+    revert_code: Optional[bool] = None
 
 
 SETTING_FILE = str(settings.data_dir / ".coworker_settings.json")
@@ -1924,6 +1925,19 @@ def read_user_max_attachment_mb() -> int:
     except Exception:
         pass
     return DEFAULT_MAX_ATTACHMENT_MB
+
+
+def read_user_revert_code() -> bool:
+    """Read the user-level "edit message reverts code changes" toggle.
+
+    Defaults to True (align with opencode/Codex: editing a message starts from
+    a clean file state). Absent/legacy settings fall back to True.
+    """
+    try:
+        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
+        return bool(data.get("revert_code", True))
+    except Exception:
+        return True
 
 
 def _load_user_settings_file() -> dict:
@@ -2022,16 +2036,17 @@ apply_stored_retention_settings()
 
 @app.get("/settings")
 async def get_settings():
-    """Get user-level settings (goal cap + attachment size cap)."""
+    """Get user-level settings (goal cap + attachment size cap + edit revert)."""
     return {
         "goal_max_rounds": read_user_goal_max_rounds(),
         "max_attachment_mb": read_user_max_attachment_mb(),
+        "revert_code": read_user_revert_code(),
     }
 
 
 @app.post("/settings")
 async def set_settings(request: SettingsUpdate):
-    """Update user-level settings (goal cap + attachment size cap)."""
+    """Update user-level settings (goal cap + attachment size cap + edit revert)."""
     max_rounds = request.goal_max_rounds
     if max_rounds < 0 or max_rounds > 1000:
         max_rounds = max(0, min(1000, max_rounds))
@@ -2040,11 +2055,23 @@ async def set_settings(request: SettingsUpdate):
         # Merge so the two keys don't clobber each other across saves.
         existing: dict = _load_user_settings_file()
         existing.update({"goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb})
+        if request.revert_code is not None:
+            existing["revert_code"] = bool(request.revert_code)
         _save_user_settings_file(existing)
     except Exception as exc:
-        print(f"[settings] failed to persist settings: {exc!r}", file=sys.stderr)
-        return {"status": "error", "goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb, "detail": str(exc)}
-    return {"status": "ok", "goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb}
+        return {
+            "status": "error",
+            "goal_max_rounds": max_rounds,
+            "max_attachment_mb": max_attachment_mb,
+            "revert_code": read_user_revert_code(),
+            "detail": str(exc),
+        }
+    return {
+        "status": "ok",
+        "goal_max_rounds": max_rounds,
+        "max_attachment_mb": max_attachment_mb,
+        "revert_code": read_user_revert_code(),
+    }
 
 
 @app.post("/goal/stop")
@@ -2431,14 +2458,11 @@ class EditMessageRequest(BaseModel):
     work_mode: Optional[str] = None
     autonomy: Optional[str] = None
     language: Language = "zh"
+    revert_code: bool = True
 
 
 class RegenerateRequest(BaseModel):
     language: Language = "zh"
-
-
-class RollbackRequest(BaseModel):
-    with_code: bool = False
 
 
 async def _guard_session_not_streaming(session_id: str) -> None:
@@ -2509,60 +2533,45 @@ def _session_provider_context(session) -> tuple[str, str]:
     return "", ""
 
 
-@app.post("/sessions/{session_id}/messages/{message_id}/rollback")
-async def rollback_message(session_id: str, message_id: str, request: RollbackRequest | None = None):
-    """Revert the conversation to the state right before the given message.
-    The target message and everything after it are truncated; the agent
-    checkpoint is reset so the next turn continues from that point.
-
-    When ``with_code`` is true, the code changes made by the truncated
-    assistant messages are reverted first (safe inverse edits with conflict
-    detection — files that were changed by another session or the user are
-    reported as conflicts and left untouched).
+@app.post("/sessions/{session_id}/messages/{message_id}/redo")
+async def redo_message(session_id: str, message_id: str):
+    """Re-apply the file changes that editing the given user message reverted
+    (undo-the-undo). Each ``reverted`` change record bound to that edit is
+    restored to its recorded ``after`` content, with conflict detection: a
+    record whose file no longer matches the recorded ``before`` state (e.g. the
+    user hand-edited it) is reported as a conflict and left untouched. Records
+    restored successfully are removed from the change store.
     """
-    with_code = bool(request and request.with_code)
     await _guard_session_not_streaming(session_id)
     try:
-        session = session_store.require(session_id)
-        target_index = session_store.find_message_index(session_id, message_id)
-        dropped_messages = session.messages[target_index:]
-        dropped_assistant_ids = [m.id for m in dropped_messages if m.role == "assistant"]
-
-        revert_summary: dict[str, Any] = {"reverted": [], "conflicts": [], "reverted_count": 0, "conflict_count": 0, "total": 0}
-        if with_code and dropped_assistant_ids:
-            workspace = workspace_controller.workspace_for_session(session_id)
-            revert_summary = agent_registry.change_store.revert_changes(session_id, dropped_assistant_ids, workspace)
-            changed_ids = [c.get("id") for c in revert_summary.get("reverted", []) if c.get("id")]
-            if changed_ids:
-                agent_registry.change_store.delete_records(session_id, changed_ids)
-
-        session_store.truncate_before(session_id, message_id)
-        # Checkpoint deletion touches SQLite; run off the event loop so a
-        # transient DB writer lock cannot stall unrelated requests for 30s.
-        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
+        session_store.require(session_id)
+        workspace = workspace_controller.workspace_for_session(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    session = session_store.require(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    records = agent_registry.change_store.reverted_records(session_id, message_id)
+    restored: list[dict[str, Any]] = []
+    conflicts: list[dict[str, Any]] = []
+    for record in records:
+        result = workspace.redo_change(record)
+        if result.get("status") == "restored":
+            restored.append(result)
+        else:
+            conflicts.append(result)
+    restored_ids = [r.get("id") for r in restored if r.get("id")]
+    if restored_ids:
+        agent_registry.change_store.delete_records(session_id, restored_ids)
     return {
         "status": "ok",
-        "messages": [m.__dict__ for m in session.messages],
-        "revert": revert_summary,
+        "session_id": session_id,
+        "message_id": message_id,
+        "restored": restored,
+        "conflicts": conflicts,
+        "restored_count": len(restored),
+        "conflict_count": len(conflicts),
     }
-
-
-@app.get("/sessions/{session_id}/messages/{message_id}/revert-preview")
-async def revert_preview(session_id: str, message_id: str):
-    """Return the code changes that a rollback to (before) the given message
-    would revert, so the UI can show a diff preview before confirming."""
-    try:
-        session = session_store.require(session_id)
-        target_index = session_store.find_message_index(session_id, message_id)
-        dropped_messages = session.messages[target_index:]
-        dropped_assistant_ids = [m.id for m in dropped_messages if m.role == "assistant"]
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    changes = agent_registry.change_store.changes_for_message_ids(session_id, dropped_assistant_ids)
-    return {"status": "ok", "changes": changes, "count": len(changes)}
 
 
 @app.post("/sessions/{session_id}/messages/{message_id}/regenerate")
@@ -2584,6 +2593,14 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         if user_index < 0:
             raise HTTPException(status_code=400, detail="No user message to regenerate from")
         user_message = session.messages[user_index]
+        # Regeneration drops the assistant messages after this user message but
+        # does NOT revert their file changes (the agent may redo them). Hide the
+        # dropped turn's change records so they don't linger as stale entries.
+        dropped_assistant_ids = [m.id for m in session.messages[user_index:] if m.role == "assistant"]
+        if dropped_assistant_ids:
+            dropped_change_ids = [c.get("id") for c in agent_registry.change_store.changes_for_message_ids(session_id, dropped_assistant_ids) if c.get("id")]
+            if dropped_change_ids:
+                agent_registry.change_store.mark_abandoned(session_id, dropped_change_ids)
         session_store.truncate_from(session_id, user_message.id)
         # Checkpoint deletion touches SQLite; run off the event loop so a
         # transient DB writer lock cannot stall unrelated requests.
@@ -2692,11 +2709,37 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
 async def edit_message(session_id: str, message_id: str, request: EditMessageRequest):
     """Edit a user message and re-run the conversation from that point."""
     await _guard_session_not_streaming(session_id)
+    revert_summary: dict[str, Any] = {"reverted_count": 0, "conflict_count": 0, "total": 0}
     try:
         session = session_store.require(session_id)
         index = session_store.find_message_index(session_id, message_id)
         if session.messages[index].role != "user":
             raise HTTPException(status_code=400, detail="Only user messages can be edited")
+        # Editing re-runs from this user message: the assistant messages after
+        # it are dropped. When ``revert_code`` is on (default), their file
+        # changes are reverted first (safe inverse edits, conflict-detected),
+        # mirroring opencode/Codex "edit = redo from a clean file state".
+        dropped_assistant_ids = [m.id for m in session.messages[index + 1 :] if m.role == "assistant"]
+        if request.revert_code and dropped_assistant_ids:
+            try:
+                workspace = workspace_controller.workspace_for_session(session_id)
+                summary = agent_registry.change_store.revert_changes(session_id, dropped_assistant_ids, workspace)
+                reverted_ids = [c.get("id") for c in summary.get("reverted", []) if c.get("id")]
+                conflict_ids = [c.get("id") for c in summary.get("conflicts", []) if c.get("id")]
+                if reverted_ids:
+                    agent_registry.change_store.mark_reverted(session_id, reverted_ids, message_id)
+                if conflict_ids:
+                    agent_registry.change_store.mark_abandoned(session_id, conflict_ids)
+                revert_summary = {
+                    "reverted_count": summary.get("reverted_count", 0),
+                    "conflict_count": summary.get("conflict_count", 0),
+                    "total": summary.get("total", 0),
+                    "reverted_paths": [c.get("path") for c in summary.get("reverted", []) if c.get("path")],
+                }
+            except (ValueError, KeyError) as exc:
+                # Workspace unavailable or session missing: skip file revert but
+                # still allow the conversation edit.
+                logger.warning("edit_message: code revert skipped for %s: %s", session_id, exc)
         session_store.update_message_content(session_id, message_id, request.content)
         session_store.truncate_from(session_id, message_id)
         # Checkpoint deletion touches SQLite; run off the event loop so a
@@ -2734,6 +2777,11 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     async def event_stream():
         accumulated_content = ""
         terminal_sent = False
+
+        # Surface the file-revert result to the UI as the first event, so the
+        # client can show "reverted N file changes / restore" right away.
+        if revert_summary.get("reverted_count", 0) > 0 or revert_summary.get("conflict_count", 0) > 0:
+            yield f"data: {json.dumps({'type': 'revert_summary', 'session_id': session_id, **revert_summary}, ensure_ascii=False)}\n\n"
 
         def _persist_partial():
             nonlocal accumulated_content, terminal_sent

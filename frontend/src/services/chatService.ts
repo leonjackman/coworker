@@ -29,8 +29,7 @@ import type {
   ProviderUpdatePayload,
   RuntimeConfig,
   RuntimeConfigUpdate,
-  RevertPreviewResponse,
-  RollbackResponse,
+  RedoResponse,
   SessionChangesResponse,
   SessionDetailResponse,
   SessionMessageRecord,
@@ -131,8 +130,7 @@ export interface ChatService {
   getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
   getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
   getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
-  getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
-  rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
+  redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
   exportToolAudit: () => Promise<string>;
   clearToolAudit: () => Promise<{ status: string }>;
   exportAgentTraces: () => Promise<string>;
@@ -148,15 +146,15 @@ export interface ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean },
   ) => Promise<void>;
   getGoalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
   pauseGoal: (sessionId: string) => Promise<{ status: string }>;
   editGoal: (sessionId: string, goal: string) => Promise<{ status: string }>;
   deleteGoal: (sessionId: string) => Promise<{ status: string }>;
   resumeGoal: (sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
-  fetchSettings: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number }>;
-  saveSettings: (settings: { goal_max_rounds?: number; max_attachment_mb?: number }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>;
+  fetchSettings: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
+  saveSettings: (settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
   listMcps: () => Promise<McpServerListPayload>;
   discoverMcps: () => Promise<McpDiscoverPayload>;
   createMcp: (request: McpServerCreateRequest) => Promise<McpServerEntry>;
@@ -577,14 +575,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.getWorkspaceBranch(projectId);
   }
 
-  async getRevertPreview(sessionId: string, messageId: string): Promise<RevertPreviewResponse> {
+  async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getRevertPreview(sessionId, messageId);
-  }
-
-  async rollbackMessage(sessionId: string, messageId: string, withCode = false): Promise<RollbackResponse> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.rollbackMessage(sessionId, messageId, withCode);
+    return window.electronAPI.redoMessage(sessionId, messageId);
   }
 
   getTerminalUrl(projectId?: string): string {
@@ -696,7 +689,7 @@ class ElectronChatService implements ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean },
   ): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const signal = options?.signal;
@@ -723,6 +716,7 @@ class ElectronChatService implements ChatService {
       await window.electronAPI.streamEditMessage(requestId, sessionId, messageId, content, wrappedEvent, {
         ...(options?.workMode ? { work_mode: options.workMode } : {}),
         ...(options?.autonomy ? { autonomy: options.autonomy } : {}),
+        ...(options?.revertCode !== undefined ? { revert_code: options.revertCode } : {}),
       }, getLanguage());
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
@@ -769,14 +763,14 @@ class ElectronChatService implements ChatService {
     }
   }
 
-  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number }> {
+  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.fetchSettings?.() ?? { goal_max_rounds: 50, max_attachment_mb: 25 };
+    return window.electronAPI.fetchSettings?.() ?? { goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true };
   }
 
-  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }> {
+  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', goal_max_rounds: 50, max_attachment_mb: 25 };
+    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true };
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -1020,14 +1014,10 @@ class HttpChatService implements ChatService {
     return this.request<WorkspaceBranchResponse>(`/workspace/branch${query ? `?${query}` : ''}`);
   }
 
-  async getRevertPreview(sessionId: string, messageId: string): Promise<RevertPreviewResponse> {
-    return this.request<RevertPreviewResponse>(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/revert-preview`);
-  }
-
-  async rollbackMessage(sessionId: string, messageId: string, withCode = false): Promise<RollbackResponse> {
-    return this.request<RollbackResponse>(
-      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/rollback`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ with_code: withCode }) },
+  async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
+    return this.request<RedoResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/redo`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
     );
   }
 
@@ -1146,11 +1136,12 @@ class HttpChatService implements ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean },
   ): Promise<void> {
     const payload: Record<string, unknown> = { content, language: getLanguage() };
     if (options?.workMode) payload.work_mode = options.workMode;
     if (options?.autonomy) payload.autonomy = options.autonomy;
+    if (options?.revertCode !== undefined) payload.revert_code = options.revertCode;
     await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, payload, onEvent, options?.signal);
   }
 
@@ -1319,12 +1310,12 @@ class HttpChatService implements ChatService {
     return response.title;
   }
 
-  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number }> {
-    return this.request<{ goal_max_rounds: number; max_attachment_mb: number }>('/settings');
+  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
+    return this.request<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>('/settings');
   }
 
-  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }> {
-    return this.request<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>('/settings', {
+  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
+    return this.request<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>('/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),

@@ -19,7 +19,6 @@ import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
 import { WorkspaceInspector } from './components/WorkspaceInspector';
 import { ChangesPanel } from './components/ChangesPanel';
-import { RollbackDialog } from './components/RollbackDialog';
 import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { useUpdateCenter } from './lib/useUpdateCenter';
@@ -230,6 +229,8 @@ function App() {
     }
   };
   const [maxAttachmentMb, setMaxAttachmentMb] = useState<number>(loadMaxAttachmentMb);
+  // 编辑用户消息时是否回滚该轮被改动的文件（默认开，对齐 opencode/Codex）。
+  const [revertCode, setRevertCode] = useState<boolean>(true);
   const [workMode, setWorkMode] = useState<WorkMode>(() => {
     const stored = localStorage.getItem('cw.workMode') as WorkMode | null;
     return stored === 'plan' || stored === 'build' ? stored : 'build';
@@ -516,6 +517,9 @@ function App() {
             try {
               localStorage.setItem(MAX_ATTACHMENT_MB_STORAGE_KEY, String(fromBackend));
             } catch { /* ignore */ }
+          }
+          if (typeof settings.revert_code === 'boolean') {
+            setRevertCode(settings.revert_code);
           }
         } catch { /* ignore */ }
         try {
@@ -1234,6 +1238,13 @@ function App() {
     if (!currentSessionId) return;
     const trimmed = content.trim();
     if (!trimmed) return;
+    // 内容未变化：退出编辑态即可，避免无意义的回滚+重跑。
+    const original = messages.find((m) => m.id === messageId)?.content;
+    if (original !== undefined && trimmed === (original ?? '').trim()) {
+      setEditingMessage(null);
+      setEditDraft('');
+      return;
+    }
     setEditingMessage(null);
     setEditDraft('');
 
@@ -1286,6 +1297,26 @@ function App() {
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
         setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        return;
+      }
+      if (event.type === 'revert_summary') {
+        // 编辑触发的文件回滚结果：把待恢复的改动数挂到被编辑的用户消息上，
+        // 以便展示「恢复」按钮。
+        if (event.reverted_count > 0) {
+          setMessages((current) =>
+            current.map((item) =>
+              item.id === messageId ? { ...item, revertedFiles: event.reverted_count } : item,
+            ),
+          );
+        }
+        if (event.conflict_count > 0) {
+          window.alert(
+            t('edit.revert_conflicts', {
+              reverted: event.reverted_count,
+              conflicts: event.conflict_count,
+            }),
+          );
+        }
         return;
       }
       if (event.type === 'delta') {
@@ -1405,6 +1436,7 @@ function App() {
         signal: controller.signal,
         workMode,
         autonomy,
+        revertCode,
       });
       await refreshSessions();
       await refreshProjects();
@@ -1633,45 +1665,33 @@ function App() {
     }
   };
 
-  const [rollbackTarget, setRollbackTarget] = useState<{ sessionId: string; messageId: string } | null>(null);
-
-  const handleRollbackMessage = (messageId: string) => {
+  const handleRedoMessage = async (messageId: string) => {
     const currentSessionId = sessionIdRef.current;
     if (!currentSessionId) return;
-    setRollbackTarget({ sessionId: currentSessionId, messageId });
-  };
-
-  const performRollback = async (withCode: boolean) => {
-    if (!rollbackTarget) return;
     try {
-      const response = await chatService.rollbackMessage(rollbackTarget.sessionId, rollbackTarget.messageId, withCode);
-      const rollbackMessages = response.messages.map((m) =>
-        createMessage(m.role as 'user' | 'assistant', m.content, {
-          id: m.id,
-          status: 'done',
-          sessionId: rollbackTarget.sessionId,
-          parts: (m.parts as MessagePart[]) ?? [],
-        }),
-      );
-      setMessages((current) => {
-        // 只替换目标会话的消息，保留所有其他会话（含后台 streaming）的消息。
-        const others = current.filter((m) => !m.sessionId || m.sessionId !== rollbackTarget.sessionId);
-        return [...others, ...rollbackMessages];
-      });
-      await refreshSessions();
-      await refreshProjects();
-      setChangesRefreshKey((value) => value + 1);
-      if (response.revert && response.revert.conflict_count > 0) {
+      const response = await chatService.redoMessage(currentSessionId, messageId);
+      if (response.conflict_count > 0) {
         window.alert(
-          t('rollback.result_with_conflicts', {
-            reverted: response.revert.reverted_count,
-            conflicts: response.revert.conflict_count,
+          t('edit.redo_conflicts', {
+            restored: response.restored_count,
+            conflicts: response.conflict_count,
           }),
         );
       }
+      if (response.restored_count > 0) {
+        // 恢复成功：清除待恢复标记并刷新变更面板。
+        setMessages((current) =>
+          current.map((item) => {
+            if (item.id !== messageId) return item;
+            const { revertedFiles: _ignored, ...next } = item;
+            return next;
+          }),
+        );
+        setChangesRefreshKey((value) => value + 1);
+      }
     } catch (error) {
-      console.error('Failed to rollback message:', error);
-      window.alert(translateError(error) || t('rollback.failed'));
+      console.error('Failed to redo message changes:', error);
+      window.alert(translateError(error) || t('edit.redo_failed'));
     }
   };
 
@@ -2586,6 +2606,11 @@ function App() {
     chatService.saveSettings({ max_attachment_mb: clamped }).catch(() => { /* ignore */ });
   };
 
+  const changeRevertCode = (value: boolean) => {
+    setRevertCode(value);
+    chatService.saveSettings({ revert_code: value }).catch(() => { /* ignore */ });
+  };
+
   const changeMemorySettings = (patch: MemorySettingsPatch) => {
     setMemorySettings((cur) => {
       const base: MemorySettings = cur ?? {
@@ -2696,7 +2721,7 @@ function App() {
                         isThinking={isThinking}
                         onEditMessage={(messageId, content) => beginEditMessage(messageId, content)}
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
-                        onRollbackMessage={(messageId) => void handleRollbackMessage(messageId)}
+                        onRedoMessage={(messageId) => void handleRedoMessage(messageId)}
                       />
                       {streamIdleWarning && (
                         <div className="stream-idle-warning">
@@ -2806,6 +2831,8 @@ function App() {
                   onGoalMaxRoundsChange={changeGoalMaxRounds}
                   maxAttachmentMb={maxAttachmentMb}
                   onMaxAttachmentMbChange={changeMaxAttachmentMb}
+                  revertCode={revertCode}
+                  onRevertCodeChange={changeRevertCode}
                   onThemeSettingsChange={changeThemeSettings}
                   onAutonomyChange={setAutonomy}
                   memorySettings={memorySettings}
@@ -2866,14 +2893,6 @@ function App() {
         onCreate={createProjectWithWorkspace}
         projects={projects}
       />
-      {rollbackTarget && (
-        <RollbackDialog
-          sessionId={rollbackTarget.sessionId}
-          messageId={rollbackTarget.messageId}
-          onClose={() => setRollbackTarget(null)}
-          onConfirm={(withCode) => performRollback(withCode)}
-        />
-      )}
       <UpdateToastCard center={updateCenter} onOpenSettings={() => setActiveView('settings')} />
     </main>
   );

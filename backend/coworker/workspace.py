@@ -946,6 +946,75 @@ class Workspace:
         self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
         return {"status": "reverted", "path": file_path, "kind": kind, "added": int(change.get("added") or 0), "removed": int(change.get("removed") or 0), **({"id": change_id} if change_id else {})}
 
+    def redo_change(self, change: dict[str, Any]) -> dict[str, Any]:
+        """Re-apply a change that was reverted by editing a message (undo-the-undo).
+
+        Restores the recorded ``after`` content for a reverted change. The file
+        must still match the recorded ``before`` state (the state the revert left
+        it in); otherwise a conflict is reported and the file is left untouched.
+        Records whose full content was too large to capture cannot be restored
+        safely and are reported as conflicts.
+
+        Returns ``{"status": "restored"|"conflict", path, ...}``.
+        """
+        file_path = str(change.get("file_path") or "")
+        change_id = str(change.get("id") or "")
+        result: dict[str, Any] = {"status": "conflict", "path": file_path, "reason": ""}
+        if change_id:
+            result["id"] = change_id
+        if not file_path:
+            result["reason"] = "missing file path"
+            return result
+
+        kind = str(change.get("kind") or "edit")
+        file_existed = bool(change.get("file_existed"))
+        too_large = bool(change.get("too_large"))
+        before = change.get("before")
+        after = change.get("after")
+
+        if too_large or after is None:
+            result["reason"] = "oversized change cannot be re-applied safely"
+            return result
+
+        try:
+            target = self.resolve_write_path(file_path)
+        except (PathBoundaryError, OSError) as exc:
+            result["reason"] = str(exc)[:200]
+            return result
+
+        if file_existed:
+            if not target.is_file():
+                if before == "":
+                    # The file existed but was empty; revert deleted it. Recreate.
+                    pass
+                else:
+                    result["reason"] = "file was deleted after the revert"
+                    return result
+            else:
+                current = target.read_text(encoding="utf-8", errors="replace")
+                if before is not None and current != before:
+                    result["reason"] = "file changed since it was reverted; refusing to overwrite"
+                    return result
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(after, encoding="utf-8")
+            except OSError as exc:
+                result["reason"] = str(exc)[:200]
+                return result
+        else:
+            # File was created by the change and deleted on revert. Recreate.
+            if target.exists():
+                result["reason"] = "file recreated after the revert; refusing to overwrite"
+                return result
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(after, encoding="utf-8")
+            except OSError as exc:
+                result["reason"] = str(exc)[:200]
+                return result
+        self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
+        return {"status": "restored", "path": file_path, "kind": kind, **({"id": change_id} if change_id else {})}
+
     @staticmethod
     def _apply_inverse_hunks(content: str, hunks: list[dict[str, Any]]) -> str | None:
         """Apply the inverse of structured hunks to ``content``.

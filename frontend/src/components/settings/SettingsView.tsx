@@ -19,6 +19,8 @@ interface SettingsViewProps {
   onGoalMaxRoundsChange: (value: number) => void;
   maxAttachmentMb: number;
   onMaxAttachmentMbChange: (value: number) => void;
+  revertCode: boolean;
+  onRevertCodeChange: (value: boolean) => void;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAutonomyChange: (mode: Autonomy) => void;
   memorySettings: MemorySettings | null;
@@ -36,6 +38,8 @@ export function SettingsView({
   onGoalMaxRoundsChange,
   maxAttachmentMb,
   onMaxAttachmentMbChange,
+  revertCode,
+  onRevertCodeChange,
   onThemeSettingsChange,
   onAutonomyChange,
   memorySettings,
@@ -148,6 +152,18 @@ export function SettingsView({
                 description: t('settings.goal_rounds_desc'),
                 value: goalMaxRounds,
                 onChange: onGoalMaxRoundsChange,
+              },
+              {
+                id: 'revert_code',
+                type: 'toggle',
+                label: t('settings.revert_code'),
+                description: t('settings.revert_code_desc'),
+                value: revertCode ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onRevertCodeChange(value === 'true'),
               },
               {
                 id: 'audit',

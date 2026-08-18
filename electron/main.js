@@ -824,7 +824,7 @@ ipcMain.handle('fetchSettings', async () => {
   try {
     return await requestBackend('/settings');
   } catch (e) {
-    return { goal_max_rounds: 50, max_attachment_mb: 25 };
+    return { goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true };
   }
 });
 
@@ -832,7 +832,7 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   try {
     return await requestBackend('/settings', 'POST', payload);
   } catch (e) {
-    return { status: 'error', goal_max_rounds: 50, max_attachment_mb: 25, detail: e.message };
+    return { status: 'error', goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true, detail: e.message };
   }
 });
 
@@ -1039,25 +1039,20 @@ function startStreamingRequest(requestId, path, payload, sender, eventName = 'ch
   return openSseStream({ requestId, method: 'POST', path, payload, sender, eventName });
 }
 
-ipcMain.handle('rollback-message', async (event, payload) => {
-  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/rollback`, 'POST', {
-    with_code: !!payload?.with_code,
-  }, 60000);
-});
-
-ipcMain.handle('get-revert-preview', async (event, payload) => {
-  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/revert-preview`);
-});
-
 ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language }) => {
   return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/regenerate`, { language: language || 'zh' }, event.sender);
 });
 
-ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, language }) => {
+ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, revert_code, language }) => {
   const payload = { content, language: language || 'zh' };
   if (work_mode != null) payload.work_mode = work_mode;
   if (autonomy != null) payload.autonomy = autonomy;
+  if (revert_code != null) payload.revert_code = !!revert_code;
   return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/edit`, payload, event.sender);
+});
+
+ipcMain.handle('redo-message', async (event, payload) => {
+  return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/messages/${encodeURIComponent(payload.message_id)}/redo`, 'POST', {});
 });
 
 ipcMain.handle('list-projects', async () => {

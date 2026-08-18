@@ -23,8 +23,7 @@ import type {
   ProviderUpdatePayload,
   RuntimeConfig,
   RuntimeConfigUpdate,
-  RevertPreviewResponse,
-  RollbackResponse,
+  RedoResponse,
   SessionChangesResponse,
   SessionDetailResponse,
   SessionMessageRecord,
@@ -98,8 +97,7 @@ declare global {
       resolveCommandApproval: (approvalId: string, decision: CommandApprovalDecision) => Promise<CommandApprovalResult>;
       getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
       getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
-      getRevertPreview: (sessionId: string, messageId: string) => Promise<RevertPreviewResponse>;
-      rollbackMessage: (sessionId: string, messageId: string, withCode?: boolean) => Promise<RollbackResponse>;
+      redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
       streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback, language?: string) => Promise<void>;
       streamEditMessage: (
         requestId: string,
@@ -107,7 +105,7 @@ declare global {
         messageId: string,
         content: string,
         onEvent: StreamEventCallback,
-        options?: { work_mode?: string; autonomy?: string },
+        options?: { work_mode?: string; autonomy?: string; revert_code?: boolean },
         language?: string,
       ) => Promise<void>;
       goalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
@@ -115,8 +113,8 @@ declare global {
       goalEdit: (payload: { session_id: string; goal: string }) => Promise<{ status: string }>;
       goalDelete: (sessionId: string) => Promise<{ status: string }>;
   goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback, language?: string, signal?: AbortSignalLike) => Promise<void>;
-      fetchSettings?: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number }>;
-      saveSettings?: (settings: { goal_max_rounds?: number; max_attachment_mb?: number }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number }>;
+      fetchSettings?: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
+      saveSettings?: (settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
       listMcps: () => Promise<McpServerListPayload>;
       discoverMcps: () => Promise<McpDiscoverPayload>;
       createMcp: (request: McpServerCreateRequest) => Promise<{ server: McpServerEntry }>;

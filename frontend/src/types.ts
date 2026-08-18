@@ -187,34 +187,14 @@ export interface CurrentDiffResponse {
   note: string;
 }
 
-export interface RevertChangeItem {
-  id: string;
-  path: string;
-  kind?: string;
-  added: number;
-  removed: number;
-  deleted?: boolean;
-  noop?: boolean;
-}
-
-export interface RevertPreviewResponse {
+export interface RedoResponse {
   status: string;
-  changes: SessionChangeRecord[];
-  count: number;
-}
-
-export interface RevertSummary {
-  reverted: RevertChangeItem[];
+  session_id: string;
+  message_id: string;
+  restored: Array<{ id?: string; path: string; kind?: string }>;
   conflicts: Array<{ status: string; path: string; reason: string; id?: string }>;
-  total: number;
-  reverted_count: number;
+  restored_count: number;
   conflict_count: number;
-}
-
-export interface RollbackResponse {
-  status: string;
-  messages: SessionMessageRecord[];
-  revert: RevertSummary;
 }
 
 export interface PartTool {
@@ -277,6 +257,8 @@ export interface ChatMessage {
   attachments?: ComposerAttachment[];
   parts?: MessagePart[];
   references?: SessionReference[];
+  /** Number of file changes reverted by editing this user message (awaiting redo). */
+  revertedFiles?: number;
 }
 
 export interface RuntimeConfig {
@@ -685,7 +667,15 @@ export interface PendingRequest {
     | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string }
     | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string }
     | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; session_id?: string }
-    | { type: 'idle_warning'; seconds_idle: number; session_id?: string };
+    | { type: 'idle_warning'; seconds_idle: number; session_id?: string }
+    | {
+        type: 'revert_summary';
+        session_id: string;
+        reverted_count: number;
+        conflict_count: number;
+        total: number;
+        reverted_paths?: string[];
+      };
 
 /** Live context-budget usage surfaced by the backend's context-window middleware. */
 export interface ContextUsage {

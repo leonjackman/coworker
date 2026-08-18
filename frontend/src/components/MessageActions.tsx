@@ -1,4 +1,4 @@
-import { Check, Copy, Pencil, RefreshCw, RotateCcw } from 'lucide-react';
+import { Check, Copy, Pencil, RefreshCw, Undo2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { Tooltip } from './ui/tooltip';
@@ -9,11 +9,12 @@ export interface MessageActionsProps {
   content: string;
   onEdit?: (content: string) => void;
   onRegenerate?: () => void;
-  onRollback?: () => void;
+  onRedo?: () => void;
+  revertedFiles?: number;
   disabled?: boolean;
 }
 
-export function MessageActions({ role, content, onEdit, onRegenerate, onRollback, disabled = false }: MessageActionsProps) {
+export function MessageActions({ role, content, onEdit, onRegenerate, onRedo, revertedFiles = 0, disabled = false }: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -75,16 +76,16 @@ export function MessageActions({ role, content, onEdit, onRegenerate, onRollback
         </Tooltip>
       )}
 
-      {role === 'user' && onRollback && (
-        <Tooltip content={t('message.rollback')}>
+      {role === 'user' && onRedo && revertedFiles > 0 && (
+        <Tooltip content={t('message.redo', { count: revertedFiles })}>
           <Button
             variant="ghost"
             size="icon-xs"
-            className="message-actions__btn message-actions__btn--danger"
-            onClick={() => onRollback()}
-            aria-label={t('message.rollback')}
+            className="message-actions__btn"
+            onClick={() => onRedo()}
+            aria-label={t('message.redo', { count: revertedFiles })}
           >
-            <RotateCcw size={13} />
+            <Undo2 size={13} />
           </Button>
         </Tooltip>
       )}

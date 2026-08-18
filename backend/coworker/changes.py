@@ -165,6 +165,7 @@ class ChangeStore:
                 "file_existed": bool(file_existed),
                 "seq": len(entries),
                 "message_id": "",
+                "state": "active",
                 "added": int(computed.get("added") or 0),
                 "removed": int(computed.get("removed") or 0),
                 "truncated": bool(computed.get("truncated")),
@@ -267,6 +268,55 @@ class ChangeStore:
             "conflict_count": len(conflicts),
         }
 
+    def mark_reverted(self, session_id: str, record_ids: list[str], reverted_by: str) -> int:
+        """Mark change records as reverted (files restored to ``before``).
+
+        The records are kept (not deleted) so a later "redo" can re-apply the
+        ``after`` content. Only ``active`` records transition to ``reverted``.
+        """
+        ids = set(record_ids or [])
+        if not ids:
+            return 0
+        with self._lock:
+            path = self._session_path(session_id)
+            entries = self._read_entries(path)
+            count = 0
+            for entry in entries:
+                if entry.get("id") in ids and entry.get("state", "active") == "active":
+                    entry["state"] = "reverted"
+                    entry["reverted_by"] = reverted_by
+                    count += 1
+            if count:
+                self._write_entries(path, entries)
+        return count
+
+    def mark_abandoned(self, session_id: str, record_ids: list[str]) -> int:
+        """Mark change records as abandoned (truncated/conflicted).
+
+        Abandoned records are hidden from the changes panel; their files are
+        left untouched on disk.
+        """
+        ids = set(record_ids or [])
+        if not ids:
+            return 0
+        with self._lock:
+            path = self._session_path(session_id)
+            entries = self._read_entries(path)
+            count = 0
+            for entry in entries:
+                if entry.get("id") in ids and entry.get("state", "active") == "active":
+                    entry["state"] = "abandoned"
+                    count += 1
+            if count:
+                self._write_entries(path, entries)
+        return count
+
+    def reverted_records(self, session_id: str, reverted_by: str) -> list[dict[str, Any]]:
+        """Return records reverted by editing the given user message (for redo)."""
+        with self._lock:
+            entries = self._read_entries(self._session_path(session_id))
+        return [e for e in entries if e.get("state") == "reverted" and e.get("reverted_by") == reverted_by]
+
     def next_turn_index(self, session_id: str) -> int:
         entries = self.list_changes(session_id)
         indices = [int(entry.get("turn_index") or 0) for entry in entries]
@@ -274,8 +324,9 @@ class ChangeStore:
 
     def changes_by_turn(self, session_id: str) -> list[dict[str, Any]]:
         entries = self.list_changes(session_id)
+        visible = [e for e in entries if e.get("state", "active") == "active"]
         turns: dict[int, list[dict[str, Any]]] = {}
-        for entry in reversed(entries):
+        for entry in reversed(visible):
             turns.setdefault(int(entry.get("turn_index") or 1), []).append(entry)
         return [{"turn_index": index, "changes": turns[index]} for index in sorted(turns)]
 

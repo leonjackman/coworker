@@ -70,10 +70,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       language: language || 'zh',
     }),
   getSession: (sessionId) => ipcRenderer.invoke('get-session', sessionId),
-  rollbackMessage: (sessionId, messageId, withCode) =>
-    ipcRenderer.invoke('rollback-message', { session_id: sessionId, message_id: messageId, with_code: !!withCode }),
-  getRevertPreview: (sessionId, messageId) =>
-    ipcRenderer.invoke('get-revert-preview', { session_id: sessionId, message_id: messageId }),
+  redoMessage: (sessionId, messageId) =>
+    ipcRenderer.invoke('redo-message', { session_id: sessionId, message_id: messageId }),
   streamRegenerateMessage: (requestId, sessionId, messageId, onEvent, language) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;
@@ -90,7 +88,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onEvent(data.event);
     };
     ipcRenderer.on('chat-stream-event', listener);
-    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content, work_mode: options?.work_mode, autonomy: options?.autonomy, language: language || 'zh' }).finally(() => {
+    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content, work_mode: options?.work_mode, autonomy: options?.autonomy, revert_code: options?.revert_code, language: language || 'zh' }).finally(() => {
       ipcRenderer.removeListener('chat-stream-event', listener);
     });
   },
