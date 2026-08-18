@@ -102,7 +102,15 @@ class JsonFormatter(logging.Formatter):
 
 
 class PlainFormatter(logging.Formatter):
-    """Human-readable plain-text formatter for console output in non-JSON mode."""
+    """Human-readable plain-text formatter for terminal output with ANSI colours."""
+
+    _COLOURS = {
+        "DEBUG":    "36",    # cyan
+        "INFO":     "32",    # green
+        "WARNING":  "33",    # yellow
+        "ERROR":    "31",    # red
+        "CRITICAL": "31;1",  # red bold
+    }
 
     def __init__(
         self,
@@ -114,11 +122,30 @@ class PlainFormatter(logging.Formatter):
     ) -> None:
         logging.Formatter.__init__(
             self,
-            "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+            "%(message)s",
             "%Y-%m-%d %H:%M:%S",
             "%",
             False,
         )
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = self.formatTime(record, self.datefmt)
+
+        # Level tag with colour
+        lvl = record.levelname
+        colour = self._COLOURS.get(lvl, "0")
+        level_tag = f"\033[{colour}m{lvl:<8s}\033[0m"
+
+        # Logger name (light weight)
+        name = record.name
+        name_tag = f" {name}:" if name else ""
+
+        msg = record.getMessage()
+        if record.exc_info and record.exc_info[0] is not None:
+            msg += "\n" + self.formatException(record.exc_info)
+
+        # Build a single line
+        return f"{ts} [{level_tag}]{name_tag} {msg}"
 
 
 def _resolve_data_dir(data_dir: Path) -> Path:
@@ -138,26 +165,28 @@ def _build_logger_config(
     """Return a ``logging.config.dictConfig`` compatible config dict."""
     log_file = str(_resolve_data_dir(data_dir) / f"{log_file_prefix}.log")
 
-    formatters: dict[str, Any] = {}
+    formatters: dict[str, Any] = {
+        "plain": {
+            "class": f"{PlainFormatter.__module__}.{PlainFormatter.__name__}",
+        },
+    }
     if json_log:
-        formatters["default"] = {
+        formatters["json"] = {
             "class": f"{JsonFormatter.__module__}.{JsonFormatter.__name__}",
         }
-    else:
-        formatters["default"] = {
-            "class": f"{PlainFormatter.__module__}.{PlainFormatter.__name__}",
-        }
 
+    # Console: always human-readable (coloured plain-text)
+    # File: JSON only when json_log=True
     handlers: dict[str, Any] = {
         "console": {
             "class": "logging.StreamHandler",
-            "formatter": "default",
+            "formatter": "plain",  # plain-text with ANSI colours
             "level": log_level,
             "stream": "ext://sys.stdout",
         },
         "file": {
             "class": "logging.handlers.RotatingFileHandler",
-            "formatter": "default",
+            "formatter": "json",
             "level": log_level,
             "filename": log_file,
             "maxBytes": log_max_bytes,
@@ -272,10 +301,14 @@ def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
         logging.config.dictConfig(config)
     except (ValueError, AttributeError) as exc:
         # Fallback: minimal basicConfig so the app never crashes on init failure
+        _fallback_handler = logging.StreamHandler(sys.stdout)
+        _fallback_handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+            "%Y-%m-%d %H:%M:%S",
+        ))
         logging.basicConfig(
             level=getattr(logging, level.upper(), logging.INFO),
-            stream=sys.stdout,
-            format="%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+            handlers=[_fallback_handler],
             force=True,
         )
 

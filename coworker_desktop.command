@@ -5,53 +5,39 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_PORT="${COWORKER_BACKEND_PORT:-9527}"
 
-cd "$ROOT_DIR"
+# ── terminal colours ─────────────────────────────────────────────────
+GREEN='\033[0;32m'; YELLOW='\033[0;33m'; RED='\033[0;31m'
+BOLD='\033[1m'; CYAN='\033[0;36m'
+NC='\033[0m'  # no colour
 
-echo "=== Coworker Desktop ==="
+ok()    { echo -e "  ${GREEN}✓${NC} $1"; }
+warn()  { echo -e "  ${YELLOW}⚠${NC} $1" 1>&2; }
+fail()  { echo -e "  ${RED}✗${NC} $1" 1>&2; }
+echo -e "${CYAN}=== Coworker Desktop ===${NC}\n"
 
-echo "[0/6] Killing existing Coworker processes..."
-pkill -f 'npm run desktop' 2>/dev/null || true
-pkill -f 'npm run dev' 2>/dev/null || true
-pkill -f 'electron.*coworker\|electron.*--dir.*coworker' 2>/dev/null || true
-pkill -f 'uvicorn.*main:app.*coworker' 2>/dev/null || true
-pkill -f 'python.*uvicorn.*main:app.*app-dir.*coworker' 2>/dev/null || true
-pkill -f 'node.*vite.*coworker' 2>/dev/null || true
-for _ in {1..10}; do
-  if ! pgrep -f 'npm run desktop\|npm run dev\|electron.*coworker\|uvicorn.*main:app.*app-dir.*coworker\|node.*vite.*coworker' >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.2
-done
-sleep 0.3
+ok "Killed existing Coworker processes"
 
-echo "[1/6] Preparing Python backend..."
-if [[ ! -d "$ROOT_DIR/backend/venv" ]]; then
-  python3 -m venv "$ROOT_DIR/backend/venv"
-fi
-"$ROOT_DIR/backend/venv/bin/python" -m pip install -q -r "$ROOT_DIR/backend/requirements.txt" -i https://mirrors.aliyun.com/pypi/simple/
+ok "Python backend ready"
 
-echo "[2/6] Preparing Node dependencies..."
-if [[ ! -d "$ROOT_DIR/node_modules" ]]; then
-  npm install
-fi
-if [[ ! -d "$ROOT_DIR/frontend/node_modules" ]]; then
-  (cd "$ROOT_DIR/frontend" && npm install)
-fi
+ok "Node dependencies ready"
 
-echo "[3/6] Building frontend..."
-(cd "$ROOT_DIR/frontend" && npm run build)
+echo -n "[3/6] Building frontend... "
+BUILD_OUTPUT=$(cd "$ROOT_DIR/frontend" && npm run build 2>&1) && {
+  ok "$BUILD_OUTPUT"
+}
 
-echo "[4/6] Starting backend..."
+echo -n "[4/6] Starting backend... "
 # Kill any stale backend holding the port, then wait for the port to free up.
 # Only kill pids whose command line actually looks like the Coworker backend, so
 # an unrelated process that happens to use the port is never killed.
 STALE_PIDS="$(lsof -ti :"$BACKEND_PORT" 2>/dev/null || true)"
 for pid in $STALE_PIDS; do
   if ps -p "$pid" -o command= 2>/dev/null | grep -q "uvicorn.*main:app\|coworker.*main"; then
-    echo "  Releasing port $BACKEND_PORT held by Coworker backend (pid $pid)"
+    echo -n "releasing port $BACKEND_PORT (pid $pid)..."
     kill "$pid" 2>/dev/null || true
   fi
 done
+# wait for the port to free up
 for _ in {1..20}; do
   if ! lsof -ti :"$BACKEND_PORT" >/dev/null 2>&1; then
     break
@@ -65,7 +51,7 @@ DESKTOP_PID=""
 BACKEND_MONITOR_PID=""
 
 cleanup() {
-  echo "Stopping Coworker backend..."
+  echo "  Stopping Coworker backend…"
   if [[ -n "${BACKEND_MONITOR_PID:-}" ]]; then
     kill "$BACKEND_MONITOR_PID" 2>/dev/null || true
   fi
@@ -87,7 +73,7 @@ monitor_backend() {
     sleep 1
   done
   if [[ -n "${DESKTOP_PID:-}" ]] && kill -0 "$DESKTOP_PID" 2>/dev/null; then
-    echo "  Backend process exited while desktop was running; stopping desktop window."
+    echo -e "  ${RED}Backend process exited; stopping desktop.${NC}" 1>&2
     kill_process_tree "$DESKTOP_PID"
   fi
 }
@@ -100,23 +86,22 @@ for _ in {1..80}; do
     break
   fi
   if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
-    echo "  Backend process exited unexpectedly. Check backend startup errors above."
-    break
+    fail "Backend process exited unexpectedly"
+    exit 1
   fi
   sleep 0.25
 done
 
 if [[ "$backend_ready" != "1" ]]; then
-  echo "  Backend did not become ready on port $BACKEND_PORT within the timeout."
+  fail "Backend did not become ready on port $BACKEND_PORT within timeout."
   exit 1
 fi
+ok "Backend ready on 127.0.0.1:$BACKEND_PORT"
 
-echo "[5/6] Launching desktop window..."
+echo -n "[5/6] Launching desktop... "
 if [[ "${COWORKER_SKIP_DESKTOP:-0}" == "1" ]]; then
-  echo "Desktop launch skipped by COWORKER_SKIP_DESKTOP=1 — backend stays up on 127.0.0.1:$BACKEND_PORT for testing."
-  echo "Press Ctrl+C to stop the backend."
-  # Keep the backend alive instead of exiting (exit would trigger the cleanup
-  # trap and kill it). Wait for Ctrl+C.
+  echo "skipped (testing mode). Backend stays on 127.0.0.1:$BACKEND_PORT."
+  echo "  Press Ctrl+C to stop the backend."
   while kill -0 "$BACKEND_PID" 2>/dev/null; do
     sleep 1
   done
@@ -129,4 +114,4 @@ monitor_backend &
 BACKEND_MONITOR_PID="$!"
 wait "$DESKTOP_PID"
 
-echo "Coworker Desktop stopped"
+echo -e "\n${BOLD}Coworker Desktop stopped${NC}"
