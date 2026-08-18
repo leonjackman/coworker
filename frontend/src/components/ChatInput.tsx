@@ -213,6 +213,7 @@ export function ChatInput({
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const mirrorRef = useRef<HTMLDivElement>(null);
   const [showCommands, setShowCommands] = useState(false);
@@ -675,6 +676,8 @@ export function ChatInput({
               value={value}
               onChange={(event) => onChange(event.target.value)}
               onPaste={(event) => void handlePaste(event)}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onCompositionEnd={() => { isComposingRef.current = false; }}
               onScroll={(event) => {
                 const mirror = mirrorRef.current;
                 if (mirror) mirror.scrollTop = event.currentTarget.scrollTop;
@@ -692,7 +695,7 @@ export function ChatInput({
                     setCommandIndex((index) => (index - 1 + displayedItems.length) % displayedItems.length);
                     return;
                   }
-                  if (event.key === "Enter" && !event.shiftKey) {
+                  if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
                     event.preventDefault();
                     insertCommand(displayedItems[activeCommandIndex]?.command ?? displayedItems[0]?.command ?? "");
                     return;
@@ -713,7 +716,7 @@ export function ChatInput({
                     }
                   }
                 }
-                if (event.key === "Enter" && !event.shiftKey) {
+                if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
                   event.preventDefault();
                   onSend();
                 }

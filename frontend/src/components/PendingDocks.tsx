@@ -262,6 +262,7 @@ function QuestionDock({ request, total, onResolve, onStop }: { request: PendingR
   // Use refs to preserve form state across view switches (component unmount/remount)
   const pickedRef = useRef<number[]>([]);
   const customAnswerRef = useRef('');
+  const isComposingRef = useRef(false);
   // Sync refs to state for rendering, but only once on mount
   const [picked, setPicked] = useState(() => { pickedRef.current = request._savedPicked || []; return pickedRef.current; });
   const [customAnswer, setCustomAnswer] = useState(() => { customAnswerRef.current = request._savedAnswer || ''; return customAnswerRef.current; });
@@ -438,8 +439,10 @@ function QuestionDock({ request, total, onResolve, onStop }: { request: PendingR
           placeholder={request.options ? t('chat.question_other_placeholder') : (t('chat.question_custom_input') || t('chat.question_input_placeholder'))}
           value={customAnswer}
           onChange={(e) => setCustomAnswer(e.target.value)}
+          onCompositionStart={() => { isComposingRef.current = true; }}
+          onCompositionEnd={() => { isComposingRef.current = false; }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !isComposingRef.current) {
               e.preventDefault();
               handleSubmit();
             }
