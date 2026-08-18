@@ -30,8 +30,8 @@ interface ContextMenuProps {
   clipboardSlots?: ContextMenuSlotId[];
   /** 自定义操作项，追加在剪贴板槽位之后 */
   items?: ContextMenuItem[];
-  /** 剪贴板槽位作用的输入元素（textarea/input） */
-  targetRef?: RefObject<HTMLTextAreaElement | HTMLInputElement | null>;
+  /** 剪贴板槽位作用的输入元素（textarea/input 或 contentEditable 元素） */
+  targetRef?: RefObject<HTMLElement | null>;
   /** 粘贴槽位完成后回调（可用于提取 session 引用等） */
   onSlotPaste?: (text: string) => void;
 }
@@ -96,6 +96,68 @@ async function writeClipboardText(text: string): Promise<void> {
 
 function getSelectionRange(el: HTMLTextAreaElement | HTMLInputElement) {
   return { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 };
+}
+
+/** contentEditable 元素当前选中文本（textarea/input 则读其 selection 值） */
+function getSelectedText(el: HTMLElement): string {
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    return el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0);
+  }
+  return window.getSelection()?.toString() ?? "";
+}
+
+function isFormElement(el: HTMLElement): el is HTMLTextAreaElement | HTMLInputElement {
+  return el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement;
+}
+
+/** Delete the current selection inside a contentEditable element while leaving
+ *  non-editable children (e.g. the composer's command chip) in place. A raw
+ *  execCommand("delete") would strip those spans out from under React, leaving
+ *  a missing child that crashes the next unmount. */
+function deleteContentEditableSelection(el: HTMLElement) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return;
+  const range = selection.getRangeAt(0).cloneRange();
+  const isInsideNonEditable = (node: Node): boolean => {
+    let p: Element | null = node.parentElement;
+    while (p && p !== el) {
+      if (p.getAttribute("contenteditable") === "false") return true;
+      p = p.parentElement;
+    }
+    return false;
+  };
+  // Collect elements fully inside the range (safe to drop) BEFORE mutating text.
+  const removeEls: Element[] = [];
+  const elWalker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT, {
+    acceptNode(node) {
+      const elNode = node as Element;
+      if (elNode === el || elNode.getAttribute("contenteditable") === "false") return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let n: Node | null;
+  const rangeContains = (node: Node, partly: boolean): boolean => {
+    const r = range as Range & { containsNode(node: Node, partlyContained: boolean): boolean };
+    return r.containsNode(node, partly);
+  };
+  while ((n = elWalker.nextNode())) {
+    if (rangeContains(n as Element, true)) removeEls.push(n as Element);
+  }
+  removeEls.reverse().forEach((elNode) => elNode.parentNode?.removeChild(elNode));
+  // Delete the overlapping slice of every selected text node (skip chip text).
+  const textWalker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  while ((n = textWalker.nextNode())) {
+    const tn = n as Text;
+    const len = tn.nodeValue?.length ?? 0;
+    if (len === 0 || !range.intersectsNode(tn) || isInsideNonEditable(tn)) continue;
+    const start = range.startContainer === tn ? range.startOffset : 0;
+    const end = range.endContainer === tn ? range.endOffset : len;
+    if (end <= start) continue;
+    const full = tn.nodeValue ?? "";
+    const next = full.slice(0, start) + full.slice(end);
+    if (next) tn.nodeValue = next;
+    else tn.parentNode?.removeChild(tn);
+  }
 }
 
 export function ContextMenu({
@@ -164,8 +226,7 @@ export function ContextMenu({
       const handle = () => {
         const el = targetRef?.current;
         if (!el) return;
-        const range = getSelectionRange(el);
-        const selected = el.value.slice(range.start, range.end);
+        const selected = getSelectedText(el);
 
         switch (slot) {
           case "copy":
@@ -174,41 +235,82 @@ export function ContextMenu({
           case "cut":
             if (selected) {
               void writeClipboardText(selected);
-              setElementValue(el, el.value.slice(0, range.start) + el.value.slice(range.end));
-              el.setSelectionRange(range.start, range.start);
+              if (isFormElement(el)) {
+                const range = getSelectionRange(el);
+                setElementValue(el, el.value.slice(0, range.start) + el.value.slice(range.end));
+                el.setSelectionRange(range.start, range.start);
+              } else {
+                deleteContentEditableSelection(el);
+              }
             }
             break;
           case "paste":
             void (async () => {
               const text = await readClipboardText();
               if (!text) return;
-              const next = el.value.slice(0, range.start) + text + el.value.slice(range.end);
-              setElementValue(el, next);
-              el.setSelectionRange(range.start + text.length, range.start + text.length);
+              if (isFormElement(el)) {
+                const range = getSelectionRange(el);
+                const next = el.value.slice(0, range.start) + text + el.value.slice(range.end);
+                setElementValue(el, next);
+                el.setSelectionRange(range.start + text.length, range.start + text.length);
+              } else {
+                el.focus();
+                // Replace the selected text (keeping any non-editable chip) so
+                // pasting never strips a React-managed span.
+                deleteContentEditableSelection(el);
+                document.execCommand("insertText", false, text);
+              }
               onSlotPaste?.(text);
             })();
             break;
           case "selectAll":
             el.focus();
-            el.setSelectionRange(0, el.value.length);
+            if (isFormElement(el)) {
+              el.setSelectionRange(0, el.value.length);
+            } else {
+              const selection = window.getSelection();
+              if (selection) {
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                selection.removeAllRanges();
+                selection.addRange(range);
+              }
+            }
             break;
           case "delete":
-            if (range.start !== range.end) {
-              setElementValue(el, el.value.slice(0, range.start) + el.value.slice(range.end));
-              el.setSelectionRange(range.start, range.start);
+            if (selected) {
+              if (isFormElement(el)) {
+                const range = getSelectionRange(el);
+                setElementValue(el, el.value.slice(0, range.start) + el.value.slice(range.end));
+                el.setSelectionRange(range.start, range.start);
+              } else {
+                deleteContentEditableSelection(el);
+              }
             }
             break;
           case "clear":
-            setElementValue(el, "");
+            if (isFormElement(el)) {
+              setElementValue(el, "");
+            } else {
+              el.focus();
+              const selection = window.getSelection();
+              if (selection) {
+                const range = document.createRange();
+                range.selectNodeContents(el);
+                selection.removeAllRanges();
+                selection.addRange(range);
+              }
+              deleteContentEditableSelection(el);
+            }
             break;
         }
       };
 
       const slotDisabled =
         disabled ||
-        (slot === "copy" && !(target && target.value.slice(target.selectionStart ?? 0, target.selectionEnd ?? 0))) ||
-        (slot === "cut" && !(target && target.value.slice(target.selectionStart ?? 0, target.selectionEnd ?? 0))) ||
-        (slot === "delete" && !(target && (target.selectionStart ?? 0) !== (target.selectionEnd ?? 0)));
+        (slot === "copy" && !(target && getSelectedText(target))) ||
+        (slot === "cut" && !(target && getSelectedText(target))) ||
+        (slot === "delete" && !(target && getSelectedText(target)));
 
       return {
         id: slot,

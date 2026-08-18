@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ChatInput, extractSessionIds } from './components/ChatInput';
+import { ChatInput, extractSessionIds, type CommandChip } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { GoalCard } from './components/GoalCard';
@@ -580,21 +580,13 @@ function App() {
   };
 
   const sendMessage = async (override?: { message: string; projectId?: string; goalMode?: boolean; goalText?: string }) => {
-    // 目标编辑模式：从 DOM 读取 textarea 值，更新目标卡
+    // 目标编辑模式：composer 已是 contentEditable（无 textarea），草稿经
+    // ChatInput 的 onChange 同步进 input state，这里直接读它更新目标卡。
     if (editingGoalDraft) {
-      // Scope to the composer's own textarea — the goal-edit draft lives in the
-      // composer. A bare document.querySelector would grab any other textarea
-      // (e.g. a memory editor panel) on the page.
-      const textarea = document.querySelector<HTMLTextAreaElement>('.composer textarea');
-      let newGoal: string;
-      if (override?.message) {
-        newGoal = override.message;
-      } else if (textarea && textarea.value.trim()) {
-        newGoal = textarea.value.trim();
+      const newGoal = (override?.message ?? input).trim();
+      if (newGoal && !override) {
         setInput(newGoal);
         goalDraftRef.current = newGoal;
-      } else {
-        newGoal = input.trim();
       }
       if (!newGoal) {
         setInput('');
@@ -630,6 +622,34 @@ function App() {
 
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) return;
+
+    // 命令 chip 路径：skill/子命令/goal 已作为真实 chip 提交，raw 文字不再携带
+    // 命令 token，这里把 chip + 提示词组合回注入标记并走既有 handler（含气泡逻辑）。
+    const chip = commandChip;
+    if (chip && !override) {
+      const prompt = input.trim();
+      setCommandChip(null);
+      if (chip.type === 'skill') {
+        setInput('');
+        if (chip.packageName) {
+          void handleSubCommandSlash(chip.packageName, chip.command.slice(1), `${chip.command}${prompt ? ` ${prompt}` : ''}`);
+        } else {
+          void handleSkillSlash(`${chip.command}${prompt ? ` ${prompt}` : ''}`);
+        }
+        return;
+      }
+      if (chip.command === '/goal') {
+        setInput('');
+        if (!prompt) {
+          setMessages((current) => [...current, createMessage('assistant', t('chat.goal_help_text'), { status: 'done' })]);
+          return;
+        }
+        setGoal({ goalText: prompt, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
+        void sendMessage({ message: prompt, goalMode: true, goalText: prompt });
+        return;
+      }
+      return;
+    }
 
     if (!typedMessage && attachments.length === 0) return;
 
@@ -1242,13 +1262,19 @@ function App() {
 
   const [editingMessage, setEditingMessage] = useState<{ id: string; content: string } | null>(null);
   const [editDraft, setEditDraft] = useState('');
+  // 已提交到 composer 的命令 chip（skill/子命令/goal）。真实 DOM 元素渲染在
+  // ChatInput 里，这里持有权威状态供 sendMessage / 编辑流程使用。
+  const [commandChip, setCommandChip] = useState<CommandChip | null>(null);
   // 点编辑键即回滚（edit-begin）后，记下待恢复的 (session, message)，取消编辑 /
   // 内容未变退出 / 切换会话时自动调用 edit-cancel 恢复文件。
   const pendingEditRevertRef = useRef<{ sessionId: string; messageId: string } | null>(null);
 
   const beginEditMessage = (messageId: string, content: string) => {
     setEditingMessage({ id: messageId, content });
-    setEditDraft(content);
+    // skill 命令消息存储为注入标记：编辑时反解成 chip + 剩余提示词，与 composer 一致。
+    const parsed = parseSkillMarker(content);
+    setEditDraft(parsed?.text ?? content);
+    setCommandChip(parsed?.chip ?? null);
     // 点击编辑即回滚：立即还原该消息之后回合的代码改动，让用户在干净的
     // 文件态下编辑。取消/内容未变/切走会话时自动恢复（restorePendingEdit）。
     const currentSessionId = sessionIdRef.current;
@@ -1310,7 +1336,14 @@ function App() {
   const commitEditMessage = async (messageId: string, content: string) => {
     const currentSessionId = sessionIdRef.current;
     if (!currentSessionId) return;
-    const trimmed = content.trim();
+    // 编辑时 chip 存在 → 把「chip + 编辑文字」编码回注入标记作为新消息内容。
+    const chip = commandChip;
+    const encoded =
+      chip?.type === 'skill'
+        ? `${encodeSkillMarker(chip)}${content.trim() ? `\n\n${content.trim()}` : ''}`
+        : content;
+    const trimmed = encoded.trim();
+    setCommandChip(null);
     if (!trimmed) return;
     // 内容未变化：退出编辑态并恢复点编辑时已回滚的文件。
     const original = messages.find((m) => m.id === messageId)?.content;
@@ -2425,6 +2458,73 @@ function App() {
     }
   };
 
+  /** 从存储的用户消息反解出命令 chip：`[skill:name]` -> {command:'/name'}，
+   *  `[skill:pkg:cmd]` -> {command:'/cmd', packageName:'pkg'}。 */
+  const parseSkillMarker = (content: string): { chip: CommandChip; text: string } | null => {
+    const match = /^\[skill:([A-Za-z0-9][A-Za-z0-9_.-]*)(?::([A-Za-z0-9][A-Za-z0-9_.-]*))?\](?:\n\n|\n)?/.exec(content);
+    if (!match) return null;
+    const [, pkg, cmd] = match;
+    const text = content.slice(match[0].length);
+    if (cmd) {
+      return { chip: { command: `/${cmd}`, type: 'skill', packageName: pkg as string }, text };
+    }
+    return { chip: { command: `/${pkg as string}`, type: 'skill' }, text };
+  };
+
+  const encodeSkillMarker = (chip: CommandChip): string =>
+    chip.packageName ? `[skill:${chip.packageName}:${chip.command.slice(1)}]` : `[skill:${chip.command.slice(1)}]`;
+
+  /** ChatInput 提交/移除命令 chip。skill 型在此异步验证（无效立即拒绝并提示），
+   *  即时 sys 命令直接执行（不留 chip），/goal 与 skill 型保留 chip 等提示词。 */
+  // 正在异步验证的 chip（防较慢的旧验证把更新的提交覆盖掉）
+  const pendingCommandRef = useRef<CommandChip | null>(null);
+
+  const handleCommandCommit = useCallback(
+    (chip: CommandChip | null) => {
+      pendingCommandRef.current = chip;
+      if (!chip) {
+        setCommandChip(null);
+        return;
+      }
+      if (chip.type === 'sys' && chip.command !== '/goal') {
+        setCommandChip(null);
+        handleSlashCommand(chip.command);
+        return;
+      }
+      if (chip.type === 'skill') {
+        const name = chip.packageName ? `${chip.packageName} / ${chip.command.slice(1)}` : chip.command.slice(1);
+        void (async () => {
+          try {
+            const response = await chatService.getSkill(
+              chip.packageName ?? chip.command.slice(1),
+              chip.packageName ? chip.command.slice(1) : undefined,
+            );
+            if (pendingCommandRef.current !== chip) return;
+            if (!response.skill?.enabled) {
+              setMessages((current) => [
+                ...current,
+                createMessage('assistant', t('skills.slash_not_found').replace('{name}', name), { status: 'done' }),
+              ]);
+              setCommandChip(null);
+              return;
+            }
+            setCommandChip(chip);
+          } catch (error) {
+            if (pendingCommandRef.current !== chip) return;
+            setMessages((current) => [
+              ...current,
+              createMessage('assistant', t('skills.slash_not_found').replace('{name}', name), { status: 'done' }),
+            ]);
+            setCommandChip(null);
+          }
+        })();
+        return;
+      }
+      setCommandChip(chip);
+    },
+    [handleSlashCommand],
+  );
+
   const pauseGoal = async () => {
     if (!sessionIdRef.current) return;
     try {
@@ -2496,8 +2596,8 @@ function App() {
 
   const draftEditGoal = () => {
     if (!sessionIdRef.current || !goal.goalText) return;
-    const textarea = document.querySelector('textarea');
-    const currentComposerVal = textarea?.value || goal.goalText;
+    // composer 已是 contentEditable（无 textarea），草稿即 input state。
+    const currentComposerVal = input.trim() || goal.goalText;
     setInput(currentComposerVal);
     goalDraftRef.current = currentComposerVal;
     setEditingGoalDraft(true);
@@ -2892,6 +2992,8 @@ function App() {
                         references={references}
                         modelOptions={modelOptions}
                         editing={Boolean(editingMessage)}
+                        commandChip={commandChip}
+                        onCommandCommit={handleCommandCommit}
                         onChange={editingMessage ? setEditDraft : setInput}
                         onSend={editingMessage ? () => void commitEditMessage(editingMessage.id, editDraft) : sendMessage}
                         onStop={stopMessage}
@@ -2904,6 +3006,7 @@ function App() {
                         onCancelEdit={() => {
                           setEditingMessage(null);
                           setEditDraft('');
+                          setCommandChip(null);
                           void restorePendingEdit();
                         }}
                         branchStatus={branchStatus}

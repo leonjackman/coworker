@@ -34,11 +34,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./ui/select";
-import { Textarea } from "./ui/textarea";
 import { Tooltip } from "./ui/tooltip";
 import { ContextMenu } from "./ui/context-menu";
 import { SidebarScrollbar } from "./ui/sidebar-scrollbar";
-import { TypeCapsule, TYPE_CAPSULE_LABELS, type SlashCommandType } from "./ui/type-capsule";export interface ModelOption {
+import { TypeCapsule, TYPE_CAPSULE_LABELS, type SlashCommandType } from "./ui/type-capsule";
+
+/** A committed command chip rendered inline at the start of the composer text. */
+export interface CommandChip {
+  command: string;
+  type: SlashCommandType;
+  /** Skill package name when the chip is a skill sub-command (e.g. /cmd of pkg). */
+  packageName?: string;
+}
+
+export interface ModelOption {
   id: string;
   label: string;
   provider?: string;
@@ -94,6 +103,10 @@ interface ChatInputProps {
   }>;
   /** Called when the "/" command menu opens, so the parent can refresh the skill list. */
   onOpenCommands?: () => void;
+  /** The committed command chip (a real inline element at the start of the editor). */
+  commandChip?: CommandChip | null;
+  /** Called when the user commits or removes the command chip. */
+  onCommandCommit?: (chip: CommandChip | null) => void;
 }
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/settings", "/memory"];
@@ -218,17 +231,15 @@ export function ChatInput({
   onSelectAgent,
   skills = [],
   onOpenCommands,
+  commandChip = null,
+  onCommandCommit,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const isComposingRef = useRef(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const mirrorRef = useRef<HTMLDivElement>(null);
   const [showCommands, setShowCommands] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
-  const [highlights, setHighlights] = useState<
-    { left: number; top: number; width: number; height: number; text: string; type: SlashCommandType }[]
-  >([]);
   const [addError, setAddError] = useState<string | null>(null);
   const addErrorTimer = useRef<number | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -287,9 +298,13 @@ export function ChatInput({
   const workspaceMissing = showWorkspacePicker && !activeWorkspace;
   const activeAgent = agentOptions.find((entry) => entry.id === activeAgentId);
   const canSend =
-    Boolean(value.trim() || attachments.length > 0) && !workspaceMissing;
+    Boolean(value.trim() || attachments.length > 0 || Boolean(commandChip)) && !workspaceMissing;
 
   useEffect(() => {
+    if (commandChip) {
+      setShowCommands(false);
+      return;
+    }
     const nonWs = value.search(/\S/);
     const startsSlash = nonWs === 0 && value.charAt(0) === "/";
     const firstToken = startsSlash ? value.slice(1).split(/\s/)[0] ?? "" : "";
@@ -297,13 +312,14 @@ export function ChatInput({
     // Pop only while a NEW leading command is being typed (starts with "/" and
     // no whitespace after it yet). A committed command (followed by whitespace)
     // closes the menu; mid-string "/" never pops (industry: commands at start).
-    if (commandCommitted || !startsSlash) {
+    // "/skill" is a legacy typed command, not a menu entry — never pop for it.
+    if (commandCommitted || !startsSlash || firstToken === "skill") {
       setShowCommands(false);
     } else {
       setShowCommands(true);
       setCommandIndex(0);
     }
-  }, [value]);
+  }, [value, commandChip]);
 
   // When the "/" menu opens, ask the parent to refresh the installed-skill
   // catalog so a skill installed via chat in a previous turn shows up here.
@@ -345,8 +361,6 @@ export function ChatInput({
     () => [...staticCommandItems, ...skillSubCommandItems, ...skillCommandItems],
     [staticCommandItems, skillSubCommandItems, skillCommandItems],
   );
-  const isKnownCommand = (name: string) =>
-    commandItems.some((item) => item.command.slice(1).startsWith(name));
 
   // Leading slash token (text after the leading "/", up to whitespace) for
   // filtering — only the leading command is a real command. The menu filters
@@ -370,69 +384,6 @@ export function ChatInput({
     const active = menuRef.current?.querySelector(".slash-menu__item--active");
     active?.scrollIntoView({ block: "nearest" });
   }, [activeCommandIndex, showCommands]);
-
-  /** Resolve a command name (exact first, then prefix) to its type capsule. */
-  function commandTypeFor(name: string): SlashCommandType {
-    const exact = commandItems.find((item) => item.command.slice(1) === name);
-    if (exact) return exact.type;
-    const partial = commandItems.find((item) => item.command.slice(1).startsWith(name));
-    return partial?.type ?? "sys";
-  }
-
-  /** The LEADING command token only (a known command or a prefix being typed).
-   * Only the leading token executes (industry: commands run at message start),
-   * so only it gets the capsule — mid-string "/goal" is plain text. */
-  function commandTokenRanges(text: string): { start: number; end: number; text: string; type: SlashCommandType }[] {
-    const startIndex = text.search(/\S/); // first non-whitespace char
-    if (startIndex === -1) return [];
-    const match = /\/[\w-]+/.exec(text.slice(startIndex));
-    if (!match || match.index !== 0) return []; // slash token must be the FIRST token
-    const token = match[0];
-    const name = token.slice(1);
-    if (!isKnownCommand(name)) return [];
-    return [{ start: startIndex + match.index, end: startIndex + match.index + token.length, text: token, type: commandTypeFor(name) }];
-  }
-
-  /** Measure command tokens and position capsule overlays over them.
-   * The mirror renders plain text (identical metrics to the textarea) so the
-   * caret stays aligned; the capsule is a non-layout overlay. */
-  function updateHighlights() {
-    const mirror = mirrorRef.current;
-    const node = mirror?.firstChild;
-    if (!mirror || !node || !value) {
-      setHighlights([]);
-      return;
-    }
-    const mirrorRect = mirror.getBoundingClientRect();
-    const boxes = commandTokenRanges(value)
-      .map((range) => {
-        try {
-          const domRange = document.createRange();
-          domRange.setStart(node, range.start);
-          domRange.setEnd(node, range.end);
-          const rect = domRange.getBoundingClientRect();
-          return {
-            left: rect.left - mirrorRect.left - 4,
-            top: rect.top - mirrorRect.top - 1,
-            width: rect.width + 8,
-            height: rect.height + 2,
-            text: range.text,
-            type: range.type,
-          };
-        } catch {
-          return null;
-        }
-      })
-      .filter(
-        (box): box is { left: number; top: number; width: number; height: number; text: string; type: SlashCommandType } =>
-          box !== null,
-      );
-    setHighlights(boxes);
-  }
-
-  useEffect(() => {
-    updateHighlights();
-  }, [value]);
 
   async function addFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -495,79 +446,307 @@ export function ChatInput({
     onReferencesChange(merged);
   }
 
-  async function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const pasted = event.clipboardData.getData("text");
-    if (pasted && extractSessionIds(pasted).length > 0) {
+  function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+    const pasted = event.clipboardData.getData("text/plain");
+    if (!pasted) return;
+    // contentEditable would paste rich HTML by default — force plain text so
+    // the composer keeps a single text node (readable + IME-safe).
+    event.preventDefault();
+    if (extractSessionIds(pasted).length > 0) {
       void addReferenceFromText(pasted);
     }
+    // Pasting over a selection that includes the chip would strip the chip span
+    // out from under React — drop it through the parent first, then paste.
+    const editor = editorRef.current;
+    const chip = editor?.querySelector("[data-command-chip]");
+    const selection = window.getSelection();
+    if (editor && chip && selection && !selection.isCollapsed && selection.containsNode(chip, true)) {
+      onCommandCommit?.(null);
+      onChange?.("");
+      Array.from(editor.childNodes).forEach((node) => {
+        if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
+        editor.removeChild(node);
+      });
+    }
+    document.execCommand("insertText", false, pasted);
   }
 
   function removeReference(id: string) {
     onReferencesChange(references.filter((reference) => reference.id !== id));
   }
 
-  function insertCommand(command: string) {
-    const current = value;
-    const selStart = textareaRef.current?.selectionStart ?? current.length;
-    // Replace the slash token the cursor is currently inside (scan back from the
-    // cursor to the preceding "/", stopping at whitespace), so "hello /" + select
-    // /help produces "hello /help " instead of "hello //help ".
-    let tokenStart = -1;
-    for (let i = selStart - 1; i >= 0; i -= 1) {
-      if (current.charAt(i) === "/") {
-        tokenStart = i;
+  /** Read the composer text, skipping the (non-editable) command chip. Block
+   *  elements and <br> are normalised back to newlines. */
+  function getPromptText(editor: HTMLElement): string {
+    const parts: string[] = [];
+    const collect = (parent: Node, out: string[]) => {
+      parent.childNodes.forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          out.push(child.nodeValue ?? "");
+          return;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) return;
+        const el = child as HTMLElement;
+        if (el.dataset.commandChip !== undefined) return;
+        if (el.tagName === "BR") {
+          out.push("\n");
+          return;
+        }
+        collect(child, out);
+        if (/^(DIV|P|LI)$/.test(el.tagName)) out.push("\n");
+      });
+    };
+    collect(editor, parts);
+    return parts.join("");
+  }
+
+  /** Set the composer text, keeping the chip (if any) at the head. Only used
+   *  for external value changes (edit-mode hydrate / send reset) — user typing
+   *  never goes through React, so the caret never jumps. */
+  function hydrateText(editor: HTMLElement, text: string) {
+    Array.from(editor.childNodes).forEach((node) => {
+      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
+      editor.removeChild(node);
+    });
+    if (!text) return; // leave the editor truly empty so the placeholder shows
+    const textNode = document.createTextNode(text);
+    const chip = editor.querySelector("[data-command-chip]");
+    if (chip) chip.after(textNode);
+    else editor.appendChild(textNode);
+  }
+
+  /** Chrome leaves a <br>/empty <div> behind when a contentEditable is cleared.
+   *  Normalise that back to a truly empty editor so the :empty placeholder
+   *  shows and a fresh "/cmd" typed afterwards still auto-commits. */
+  function normalizeEmptyEditor(editor: HTMLElement) {
+    let empty = true;
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if ((walker.currentNode as Text).nodeValue?.trim()) {
+        empty = false;
         break;
       }
-      if (/\s/.test(current.charAt(i))) break;
     }
-    const next =
-      tokenStart >= 0
-        ? current.slice(0, tokenStart) + `${command} ` + current.slice(selStart)
-        : current.slice(0, selStart) + `${command} ` + current.slice(selStart);
-    onChange(next);
+    if (!empty) return;
+    Array.from(editor.childNodes).forEach((node) => {
+      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
+      editor.removeChild(node);
+    });
+  }
+
+  // Sync externally-driven `value` (edit mode / send reset) into the
+  // uncontrolled editor, but never clobber the user's in-flight typing.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (getPromptText(editor) === value) return;
+    hydrateText(editor, value);
+  }, [value]);
+
+  // The chip is a React-managed child; React appends it, so re-anchor it to the
+  // head of the editor after it renders, and pull any caret parked at the very
+  // start (e.g. the commit-time caret landed before the chip rendered) to right
+  // after the chip so subsequent typing continues the prompt.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !commandChip) return;
+    const chip = editor.querySelector("[data-command-chip]");
+    if (chip && editor.firstChild !== chip) editor.prepend(chip);
+    const selection = window.getSelection();
+    if (selection && selection.isCollapsed && selection.anchorNode === editor && selection.anchorOffset <= 1) {
+      const range = document.createRange();
+      const next = chip?.nextSibling;
+      if (next) {
+        range.setStart(next, 0);
+        range.collapse(true);
+      } else if (chip) {
+        range.setStartAfter(chip);
+        range.collapse(true);
+      } else {
+        return;
+      }
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }, [commandChip]);
+
+  /** Remove the leading "/token " text currently being typed (the raw command
+   *  that a commit replaces with the chip). Returns whether anything was cut. */
+  function stripLeadingCommand(editor: HTMLElement): boolean {
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode();
+    if (!node) return false;
+    const text = node.nodeValue ?? "";
+    const match = /^\/([A-Za-z0-9][A-Za-z0-9_.-]*)\s?/.exec(text);
+    if (!match) return false;
+    const rest = text.slice(match[0].length);
+    if (rest) node.nodeValue = rest;
+    else node.parentNode?.removeChild(node);
+    return true;
+  }
+
+  /** Place the caret right after the chip (start of the prompt text). */
+  function focusAfterChip() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    const chip = editor.querySelector("[data-command-chip]");
+    let firstText: Text | null = null;
+    while (walker.nextNode()) {
+      const candidate = walker.currentNode as Text;
+      if (chip && candidate.parentElement === chip) continue;
+      firstText = candidate;
+      break;
+    }
+    if (firstText) {
+      range.setStart(firstText, 0);
+      range.collapse(true);
+    } else if (chip) {
+      // chip is the only content — park the caret right after it so typing
+      // continues the prompt instead of landing inside the chip or before it.
+      range.setStartAfter(chip);
+      range.collapse(true);
+    } else if (editor.childNodes.length > 0) {
+      const last = editor.lastChild as ChildNode;
+      range.setStart(
+        last,
+        last.nodeType === Node.TEXT_NODE ? (last as Text).nodeValue?.length ?? 0 : last.childNodes.length,
+      );
+      range.collapse(true);
+    } else {
+      range.setStart(editor, 0);
+      range.collapse(true);
+    }
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  /** Commit a command: strip the typed leading token, lift the chip up to the
+   *  parent (which validates/executes), and park the caret after the chip. */
+  function commitCommand(item: SlashCommandItem | null) {
+    if (!item) {
+      setShowCommands(false);
+      return;
+    }
+    const editor = editorRef.current;
+    let stripped = false;
+    if (editor && !commandChip) {
+      stripped = stripLeadingCommand(editor);
+    }
     setShowCommands(false);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      const pos = tokenStart >= 0 ? tokenStart + command.length + 1 : selStart + command.length + 1;
-      try {
-        textareaRef.current?.setSelectionRange(pos, pos);
-      } catch {
-        // ignore
-      }
+    if (stripped && editor) onChange(getPromptText(editor));
+    onCommandCommit?.({
+      command: item.command,
+      type: item.type,
+      ...(item.packageName ? { packageName: item.packageName } : {}),
+    });
+    requestAnimationFrame(focusAfterChip);
+  }
+
+  /** A delete/cut/drag operation whose selection contains the chip would strip
+   *  the chip span out from under React (it becomes a missing child → React
+   *  crashes with "removeChild not a child" on the next unmount). Intercept and
+   *  drop the chip through the parent instead, clearing the remaining text. */
+  function handleBeforeInput(event: React.FormEvent<HTMLDivElement>) {
+    const editor = editorRef.current;
+    const chip = editor?.querySelector("[data-command-chip]");
+    if (!editor || !chip) return;
+    const native = event.nativeEvent as InputEvent;
+    const inputType = native.inputType ?? "";
+    if (!inputType.startsWith("delete") && inputType !== "deleteByCut") return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.containsNode(chip, true)) return;
+    event.preventDefault();
+    onCommandCommit?.(null);
+    onChange?.("");
+    Array.from(editor.childNodes).forEach((node) => {
+      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
+      editor.removeChild(node);
     });
   }
 
-  /** True when the caret sits on/right after the LEADING command token.
-   * Only the leading command is a real command (industry), so only it gets
-   * whole-token backspace deletion. */
-  function commandTokenAt(cursor: number): { start: number; end: number } | null {
-    const current = value;
-    const nonWs = current.search(/\S/);
-    if (nonWs !== 0 || current.charAt(0) !== "/") return null;
-    // The FULL leading token (from "/" to the next whitespace/end).
-    let end = 1;
-    while (end < current.length && !/\s/.test(current.charAt(end))) end += 1;
-    const name = current.slice(1, end);
-    if (!isKnownCommand(name)) return null;
-    if (current.charAt(end) === " ") end += 1;
-    // Only whole-delete when the caret is on/at the token (not past it).
-    if (cursor > end) return null;
-    return { start: 0, end };
+  function handleEditorInput() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    normalizeEmptyEditor(editor);
+    const text = getPromptText(editor);
+    // Auto-commit: a fully-typed known command token followed by a space turns
+    // into the chip at once (no menu interaction needed).
+    if (!commandChip && !isComposingRef.current) {
+      const match = /^\/([A-Za-z0-9][A-Za-z0-9_.-]*)\s/.exec(text);
+      if (match) {
+        const item = commandItems.find((candidate) => candidate.command.slice(1) === match[1]);
+        if (item) {
+          commitCommand(item);
+          return;
+        }
+      }
+    }
+    onChange(text);
   }
 
-  function deleteCommandToken(cursor: number): void {
-    const token = commandTokenAt(cursor);
-    if (!token) return;
-    const next = value.slice(0, token.start) + value.slice(token.end);
-    onChange(next);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      try {
-        textareaRef.current?.setSelectionRange(token.start, token.start);
-      } catch {
-        // ignore
+  function handleEditorKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (showCommands && displayedItems.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setCommandIndex((index) => (index + 1) % displayedItems.length);
+        return;
       }
-    });
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setCommandIndex((index) => (index - 1 + displayedItems.length) % displayedItems.length);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
+        // Commit only on a genuine filter match; the fallback "show all" list
+        // must not hijack unknown "/..." input (that falls through to send).
+        if (filteredItems.length > 0) {
+          event.preventDefault();
+          commitCommand(displayedItems[activeCommandIndex] ?? displayedItems[0] ?? null);
+          return;
+        }
+      }
+    }
+    if (event.key === "Backspace") {
+      const selection = window.getSelection();
+      const chip = editor.querySelector("[data-command-chip]");
+      if (chip && selection && selection.isCollapsed) {
+        const after = chip.nextSibling;
+        const anchor = selection.anchorNode;
+        const chipIndex = Array.prototype.indexOf.call(editor.childNodes, chip);
+        const atStart =
+          anchor === chip ||
+          (after !== null && anchor === after && selection.anchorOffset === 0) ||
+          (after !== null && after.contains(anchor as Node) && selection.anchorOffset === 0) ||
+          (anchor === editor && selection.anchorOffset === chipIndex + 1);
+        if (atStart) {
+          event.preventDefault();
+          onCommandCommit?.(null);
+          return;
+        }
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
+      event.preventDefault();
+      // Sync the latest DOM text into the parent before sending.
+      onChange(getPromptText(editor));
+      onSend();
+      return;
+    }
+    if (event.key === "Escape") {
+      setShowCommands(false);
+      return;
+    }
+    if (event.key === "Tab") {
+      event.preventDefault();
+      document.execCommand("insertText", false, "  ");
+    }
   }
 
   const nextAutonomy: Autonomy = autonomy === "supervised" ? "guarded" : autonomy === "guarded" ? "autonomous" : "supervised";
@@ -693,82 +872,55 @@ export function ChatInput({
         )}
 
         <div className="composer__input-box">
-          <div className="composer__editor">
-            <div className="composer__input-mirror" ref={mirrorRef} aria-hidden="true">
-              {value}
-              {highlights.map((box, index) => (
-                <TypeCapsule
-                  key={index}
-                  type={box.type}
-                  className="composer__cmd-capsule"
-                  style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+          <div
+            ref={editorRef}
+            className="composer__editor"
+            contentEditable={!disabled}
+            suppressContentEditableWarning
+            data-placeholder={t("chat.placeholder")}
+            onInput={handleEditorInput}
+            onBeforeInput={handleBeforeInput}
+            onPaste={handlePaste}
+            onKeyDown={handleEditorKeyDown}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onCompositionEnd={() => { isComposingRef.current = false; handleEditorInput(); }}
+            onContextMenu={(event) => {
+              if (disabled) return;
+              event.preventDefault();
+              setContextMenu({ x: event.clientX, y: event.clientY });
+            }}
+          >
+            {commandChip && (
+              <span
+                className="composer__command-chip"
+                contentEditable={false}
+                data-command-chip=""
+                data-cmd-type={commandChip.type}
+                title={`${commandChip.command}（点击可更换命令）`}
+                onClick={() => {
+                  if (disabled) return;
+                  setShowCommands(true);
+                  setCommandIndex(0);
+                }}
+              >
+                <span className={`type-capsule type-capsule--${commandChip.type} composer__command-chip__label`}>
+                  {commandChip.command}
+                </span>
+                <span
+                  className="composer__command-chip__x"
+                  role="button"
+                  aria-label={`移除命令 ${commandChip.command}`}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onCommandCommit?.(null);
+                    editorRef.current?.focus();
+                  }}
                 >
-                  {box.text}
-                </TypeCapsule>
-              ))}
-            </div>
-            <Textarea
-              ref={textareaRef}
-              className="composer__input"
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              onPaste={(event) => void handlePaste(event)}
-              onContextMenu={(event) => {
-                if (disabled) return;
-                event.preventDefault();
-                setContextMenu({ x: event.clientX, y: event.clientY });
-              }}
-              onCompositionStart={() => { isComposingRef.current = true; }}
-              onCompositionEnd={() => { isComposingRef.current = false; }}
-              onScroll={(event) => {
-                const mirror = mirrorRef.current;
-                if (mirror) mirror.scrollTop = event.currentTarget.scrollTop;
-                updateHighlights();
-              }}
-              onKeyDown={(event) => {
-                if (showCommands && displayedItems.length > 0) {
-                  if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    setCommandIndex((index) => (index + 1) % displayedItems.length);
-                    return;
-                  }
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    setCommandIndex((index) => (index - 1 + displayedItems.length) % displayedItems.length);
-                    return;
-                  }
-                  if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
-                    event.preventDefault();
-                    insertCommand(displayedItems[activeCommandIndex]?.command ?? displayedItems[0]?.command ?? "");
-                    return;
-                  }
-                }
-                if (event.key === "Backspace") {
-                  const el = textareaRef.current;
-                  // A real selection (e.g. Cmd+A) must be deleted as a whole by the
-                  // default behavior — only whole-delete the leading command when
-                  // the caret sits on it (no selection).
-                  if (el && el.selectionStart === el.selectionEnd) {
-                    const cursor = el.selectionStart ?? value.length;
-                    const token = commandTokenAt(cursor);
-                    if (token && cursor <= token.end) {
-                      event.preventDefault();
-                      deleteCommandToken(cursor);
-                      return;
-                    }
-                  }
-                }
-                if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
-                  event.preventDefault();
-                  onSend();
-                }
-                if (event.key === "Escape") {
-                  setShowCommands(false);
-                }
-              }}
-              placeholder={t("chat.placeholder")}
-              disabled={disabled}
-            />
+                  ×
+                </span>
+              </span>
+            )}
           </div>
 
           {references.length > 0 && (
@@ -904,7 +1056,7 @@ export function ChatInput({
                 key={`${item.type}:${item.command}:${item.packageName ?? ''}`}
                 className={index === activeCommandIndex ? "slash-menu__item slash-menu__item--active" : "slash-menu__item"}
                 onMouseEnter={() => setCommandIndex(index)}
-                onClick={() => insertCommand(item.command)}
+                onClick={() => commitCommand(item)}
               >
               <TypeCapsule type={item.type} className="slash-menu__type">{TYPE_CAPSULE_LABELS[item.type]}</TypeCapsule>
               <span className="slash-menu__cmd">{item.command}</span>
@@ -923,7 +1075,7 @@ export function ChatInput({
         x={contextMenu?.x ?? 0}
         y={contextMenu?.y ?? 0}
         onClose={() => setContextMenu(null)}
-        targetRef={textareaRef}
+        targetRef={editorRef}
         clipboardSlots={["copy", "cut", "paste", "selectAll", "delete", "clear"]}
         onSlotPaste={(text) => void addReferenceFromText(text)}
       />

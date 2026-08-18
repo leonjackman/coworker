@@ -3155,15 +3155,9 @@ body.bottom-panel-resizing {
 }
 
 .composer__editor {
-  position: relative;
-}
-
-.composer__input-mirror {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  min-height: 54px;
+  max-height: 200px;
+  overflow-y: auto;
   padding: 14px 16px 12px;
   color: var(--foreground);
   font-size: 15px;
@@ -3171,41 +3165,57 @@ body.bottom-panel-resizing {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  overflow: hidden;
-  pointer-events: none;
+  caret-color: var(--foreground);
+  outline: none;
   box-sizing: border-box;
 }
 
-/* 输入框命令 token 胶囊：绝对定位覆盖在命令文字上（颜色/圆角由 TypeCapsule 提供） */
-.composer__cmd-capsule {
-  position: absolute;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 15px;
-  font-weight: 650;
-  white-space: pre;
-  overflow: hidden;
+.composer__editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted, #888);
   pointer-events: none;
 }
 
-.composer__input {
-  position: relative;
-  z-index: 1;
-  min-height: 54px;
-  max-height: 200px;
-  border: 0;
-  border-radius: 0;
-  padding: 14px 16px 12px;
-  color: transparent;
-  caret-color: var(--foreground);
-  background: transparent;
-  box-shadow: none;
+/* 命令 chip：contentEditable=false 的真实 inline 元素，位于文字流开头。
+ * 配色由内部 TypeCapsule span 提供，这里只负责布局与交互。 */
+.composer__command-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 3px;
+  vertical-align: baseline;
+  cursor: pointer;
+  user-select: none;
   font-size: 15px;
   line-height: 1.5;
-  resize: none;
 }
 
-.composer__input:focus {
-  box-shadow: none;
+.composer__command-chip__label {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 650;
+}
+
+.composer__command-chip__x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.composer__command-chip__x:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.composer__command-chip[contenteditable="false"] {
+  user-select: none;
 }
 
 .slash-menu {
