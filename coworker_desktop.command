@@ -15,25 +15,26 @@ warn()  { echo -e "  ${YELLOW}⚠${NC} $1" 1>&2; }
 fail()  { echo -e "  ${RED}✗${NC} $1" 1>&2; }
 echo -e "${CYAN}=== Coworker Desktop ===${NC}\n"
 
+echo "[0/6] Killing existing Coworker processes..."
 ok "Killed existing Coworker processes"
 
+echo "[1/6] Preparing Python backend..."
 ok "Python backend ready"
 
+echo "[2/6] Preparing Node dependencies..."
 ok "Node dependencies ready"
 
-echo -n "[3/6] Building frontend... "
-BUILD_OUTPUT=$(cd "$ROOT_DIR/frontend" && npm run build 2>&1) && {
-  ok "$BUILD_OUTPUT"
-}
+echo "[3/6] Building frontend..."
+(cd "$ROOT_DIR/frontend" && npm run build) && ok "Frontend built"
 
-echo -n "[4/6] Starting backend... "
+echo "[4/6] Starting backend..."
 # Kill any stale backend holding the port, then wait for the port to free up.
 # Only kill pids whose command line actually looks like the Coworker backend, so
 # an unrelated process that happens to use the port is never killed.
 STALE_PIDS="$(lsof -ti :"$BACKEND_PORT" 2>/dev/null || true)"
 for pid in $STALE_PIDS; do
   if ps -p "$pid" -o command= 2>/dev/null | grep -q "uvicorn.*main:app\|coworker.*main"; then
-    echo -n "releasing port $BACKEND_PORT (pid $pid)..."
+    echo "  Releasing port $BACKEND_PORT held by Coworker backend (pid $pid)"
     kill "$pid" 2>/dev/null || true
   fi
 done
@@ -98,9 +99,9 @@ if [[ "$backend_ready" != "1" ]]; then
 fi
 ok "Backend ready on 127.0.0.1:$BACKEND_PORT"
 
-echo -n "[5/6] Launching desktop... "
+echo "[5/6] Launching desktop..."
 if [[ "${COWORKER_SKIP_DESKTOP:-0}" == "1" ]]; then
-  echo "skipped (testing mode). Backend stays on 127.0.0.1:$BACKEND_PORT."
+  echo "  skipped (testing mode). Backend stays on 127.0.0.1:$BACKEND_PORT."
   echo "  Press Ctrl+C to stop the backend."
   while kill -0 "$BACKEND_PID" 2>/dev/null; do
     sleep 1

@@ -102,14 +102,20 @@ class JsonFormatter(logging.Formatter):
 
 
 class PlainFormatter(logging.Formatter):
-    """Human-readable plain-text formatter for terminal output with ANSI colours."""
+    """Uvicorn-style plain-text formatter for terminal output with ANSI colours.
+
+    Mirrors the default uvicorn ``INFO:     message`` look that existed before
+    the unified logger refactor: a coloured ``LEVEL:`` prefix padded to 8
+    chars followed by the message. No timestamp / logger name noise on the
+    console; the JSON file handler keeps the full detail.
+    """
 
     _COLOURS = {
-        "DEBUG":    "36",    # cyan
-        "INFO":     "32",    # green
-        "WARNING":  "33",    # yellow
-        "ERROR":    "31",    # red
-        "CRITICAL": "31;1",  # red bold
+        "DEBUG":    "38;5;245",  # gray
+        "INFO":     "32",        # green
+        "WARNING":  "33",        # yellow
+        "ERROR":    "31",        # red
+        "CRITICAL": "31;1",      # red bold
     }
 
     def __init__(
@@ -129,23 +135,18 @@ class PlainFormatter(logging.Formatter):
         )
 
     def format(self, record: logging.LogRecord) -> str:
-        ts = self.formatTime(record, self.datefmt)
-
-        # Level tag with colour
+        # Match uvicorn's exact "LEVEL: " prefix (8-char field) as used before
+        # the unified logger refactor.
         lvl = record.levelname
         colour = self._COLOURS.get(lvl, "0")
-        level_tag = f"\033[{colour}m{lvl:<8s}\033[0m"
-
-        # Logger name (light weight)
-        name = record.name
-        name_tag = f" {name}:" if name else ""
+        separator = " " * (8 - len(lvl))
+        level_tag = f"\033[{colour}m{lvl}:{separator}\033[0m"
 
         msg = record.getMessage()
         if record.exc_info and record.exc_info[0] is not None:
             msg += "\n" + self.formatException(record.exc_info)
 
-        # Build a single line
-        return f"{ts} [{level_tag}]{name_tag} {msg}"
+        return f"{level_tag} {msg}"
 
 
 def _resolve_data_dir(data_dir: Path) -> Path:
