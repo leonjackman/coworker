@@ -1631,7 +1631,7 @@ class HttpChatService implements ChatService {
   }
 
   async updateOrgConfig(request: OrgConfigPayload): Promise<OrgSnapshot> {
-    return this._orgRequest<OrgSnapshot>('/api/org/config', {
+    return this.request<OrgSnapshot>('/api/org/config', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -1639,23 +1639,27 @@ class HttpChatService implements ChatService {
   }
 
   async getLogSettings(): Promise<{ log_level: string; log_file: string; log_max_bytes: number; log_backup_count: number; json_log: boolean }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.getLogSettings();
+    return this.request('/settings/log');
   }
 
   async setLogLevel(level: string): Promise<{ log_level: string }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.setLogLevel(level);
+    return this.request('/settings/log-level', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ log_level: level }),
+    });
   }
 
   async readLogFile(start = 0, count = 200): Promise<{ total_lines: number; lines: string[]; truncated: boolean }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.readLogFile(start, count);
+    return this.request(`/settings/log-file?start=${start}&count=${count}`);
   }
 
   async truncateLog(maxBytes?: number): Promise<{ status: string }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.truncateLog(maxBytes);
+    return this.request('/settings/truncate-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(maxBytes != null && { max_bytes: maxBytes }) }),
+    });
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

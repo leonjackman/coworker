@@ -234,6 +234,7 @@ def _drain_handlers() -> None:
 # Public API
 # ---------------------------------------------------------------------------
 _initialized = False
+_log_file: Path | None = None
 
 
 def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
@@ -242,6 +243,7 @@ def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
     Returns the path to the log file so callers can surface it in the UI.
     """
     global _initialized
+    global _log_file  # must be at top of function body
 
     # Remove pre-existing handlers FIRST so dictConfig gets a clean slate
     _drain_handlers()
@@ -250,8 +252,7 @@ def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
         # Already initialized; just update the level if changed.
         if log_level:
             _set_level(log_level)
-        path = _resolve_data_dir(data_dir) / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
-        return path
+        return _log_file or _resolve_data_dir(data_dir) / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
 
     level = log_level or _DEFAULT_LEVEL
     config = _build_logger_config(
@@ -274,9 +275,9 @@ def init_logger(data_dir: Path, log_level: str | None = None) -> Path:
         )
 
     _initialized = True
-
-    path = _resolve_data_dir(data_dir) / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
-    return path
+    log_file_path = _resolve_data_dir(data_dir) / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
+    _log_file = log_file_path
+    return log_file_path
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
@@ -299,10 +300,20 @@ def get_logger(name: str | None = None) -> logging.Logger:
 
 
 def _set_level(level: str) -> None:
-    """Change the effective log level for ``coworker`` and sub-modules."""
+    """Change the effective log level for ``coworker``, sub-modules, and all handlers."""
     numeric = getattr(logging, level.upper(), logging.INFO)
-    root = logging.getLogger("coworker")
-    root.setLevel(numeric)
+
+    # Update the "coworker" logger and all its children
+    for name in list(logging.Logger.manager.loggerDict.keys()):
+        if name == "coworker" or name.startswith("coworker."):
+            lg = logging.getLogger(name)
+            lg.setLevel(numeric)
+
+    # Update handlers on root and coworker loggers
+    for lg in (logging.getLogger(""), logging.getLogger("coworker")):
+        for h in lg.handlers:
+            h.setLevel(numeric)
+
     # Also set uvicorn to WARNING so request logs don't overwhelm console
     for name in ("uvicorn", "langgraph", "langchain"):
         lg = logging.getLogger(name)
@@ -325,9 +336,9 @@ def truncate_log(max_bytes: int = 0) -> dict[str, Any]:
 
     Returns a dict with ``status``, ``lines_before``, ``lines_after``.
     """
-    import shutil
-
-    log_file = _resolve_data_dir(Path.home() / "Library/Application Support/Coworker") / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
+    log_file = _log_file
+    if log_file is None:
+        log_file = _resolve_data_dir(Path.home() / "Library/Application Support/Coworker") / f"{_DEFAULT_LOG_FILE_PREFIX}.log"
     if not log_file.exists():
         return {"status": "no_log_file"}
 
