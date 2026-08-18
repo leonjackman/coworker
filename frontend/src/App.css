@@ -2998,34 +2998,16 @@ body.bottom-panel-resizing {
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-weight: 650;
 }
-/* 命令类型胶囊标签：sys=蓝、skill=黄、mcp=绿；背景/文字对比度均 ≥4.5:1 */
+/* 命令类型胶囊标签：尺寸/字体（颜色由 TypeCapsule 组件内定义） */
 .slash-menu__type {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   min-width: 38px;
   height: 17px;
   padding: 0 7px;
-  border-radius: 999px;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: .4px;
-  line-height: 1;
   text-transform: uppercase;
-  user-select: none;
-}
-.slash-menu__type--sys {
-  background: #1d4ed8;
-  color: #ffffff;
-}
-.slash-menu__type--skill {
-  background: #facc15;
-  color: #1c1917;
-}
-.slash-menu__type--mcp {
-  background: #15803d;
-  color: #ffffff;
 }
 .slash-menu__pkg {
   display: inline-block;
@@ -3194,13 +3176,15 @@ body.bottom-panel-resizing {
   box-sizing: border-box;
 }
 
-.composer__cmd-highlight {
+/* 输入框命令 token 胶囊：绝对定位覆盖在命令文字上（颜色/圆角由 TypeCapsule 提供） */
+.composer__cmd-capsule {
   position: absolute;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 15px;
+  font-weight: 650;
+  white-space: pre;
+  overflow: hidden;
   pointer-events: none;
-  box-sizing: border-box;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--ring) 45%, transparent);
-  background: color-mix(in srgb, var(--ring) 12%, transparent);
 }
 
 .composer__input {

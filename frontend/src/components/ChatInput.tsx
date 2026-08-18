@@ -36,7 +36,8 @@ import {
 } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 import { Tooltip } from "./ui/tooltip";
-import { SidebarScrollbar } from "./ui/sidebar-scrollbar";export interface ModelOption {
+import { SidebarScrollbar } from "./ui/sidebar-scrollbar";
+import { TypeCapsule, TYPE_CAPSULE_LABELS, type SlashCommandType } from "./ui/type-capsule";export interface ModelOption {
   id: string;
   label: string;
   provider?: string;
@@ -96,22 +97,12 @@ interface ChatInputProps {
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/settings", "/memory"];
 
-/** Command source type, shown as a coloured capsule in the "/" menu. Extensible:
- *  "sys" (built-in, blue), "skill" (Agent Skill, yellow), "mcp" (MCP tool, green). */
-export type SlashCommandType = "sys" | "skill" | "mcp";
-
 interface SlashCommandItem {
   command: string;
   description?: string;
   packageName?: string;
   type: SlashCommandType;
 }
-
-const COMMAND_TYPE_LABEL: Record<SlashCommandType, string> = {
-  sys: "sys",
-  skill: "skill",
-  mcp: "mcp",
-};
 const MAX_ATTACHMENT_CHARS = 120_000;
 // 二进制附件内联字节的体积上限由设置页的「文件体积上限」控制（默认 25MB），
 // 经 maxAttachmentMb prop 传入。超过则只保留元信息、不内联，由后端在提示词中
@@ -234,7 +225,9 @@ export function ChatInput({
   const mirrorRef = useRef<HTMLDivElement>(null);
   const [showCommands, setShowCommands] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
-  const [highlights, setHighlights] = useState<{ left: number; top: number; width: number; height: number }[]>([]);
+  const [highlights, setHighlights] = useState<
+    { left: number; top: number; width: number; height: number; text: string; type: SlashCommandType }[]
+  >([]);
   const [addError, setAddError] = useState<string | null>(null);
   const addErrorTimer = useRef<number | null>(null);
 
@@ -376,10 +369,18 @@ export function ChatInput({
     active?.scrollIntoView({ block: "nearest" });
   }, [activeCommandIndex, showCommands]);
 
+  /** Resolve a command name (exact first, then prefix) to its type capsule. */
+  function commandTypeFor(name: string): SlashCommandType {
+    const exact = commandItems.find((item) => item.command.slice(1) === name);
+    if (exact) return exact.type;
+    const partial = commandItems.find((item) => item.command.slice(1).startsWith(name));
+    return partial?.type ?? "sys";
+  }
+
   /** The LEADING command token only (a known command or a prefix being typed).
    * Only the leading token executes (industry: commands run at message start),
-   * so only it gets the highlight box — mid-string "/goal" is plain text. */
-  function commandTokenRanges(text: string): { start: number; end: number }[] {
+   * so only it gets the capsule — mid-string "/goal" is plain text. */
+  function commandTokenRanges(text: string): { start: number; end: number; text: string; type: SlashCommandType }[] {
     const startIndex = text.search(/\S/); // first non-whitespace char
     if (startIndex === -1) return [];
     const match = /\/[\w-]+/.exec(text.slice(startIndex));
@@ -387,12 +388,12 @@ export function ChatInput({
     const token = match[0];
     const name = token.slice(1);
     if (!isKnownCommand(name)) return [];
-    return [{ start: startIndex + match.index, end: startIndex + match.index + token.length }];
+    return [{ start: startIndex + match.index, end: startIndex + match.index + token.length, text: token, type: commandTypeFor(name) }];
   }
 
-  /** Measure command tokens and position rounded-highlight boxes over them.
+  /** Measure command tokens and position capsule overlays over them.
    * The mirror renders plain text (identical metrics to the textarea) so the
-   * caret stays aligned; the pill is a non-layout overlay. */
+   * caret stays aligned; the capsule is a non-layout overlay. */
   function updateHighlights() {
     const mirror = mirrorRef.current;
     const node = mirror?.firstChild;
@@ -409,16 +410,21 @@ export function ChatInput({
           domRange.setEnd(node, range.end);
           const rect = domRange.getBoundingClientRect();
           return {
-            left: rect.left - mirrorRect.left - 3,
+            left: rect.left - mirrorRect.left - 4,
             top: rect.top - mirrorRect.top - 1,
-            width: rect.width + 6,
+            width: rect.width + 8,
             height: rect.height + 2,
+            text: range.text,
+            type: range.type,
           };
         } catch {
           return null;
         }
       })
-      .filter((box): box is { left: number; top: number; width: number; height: number } => box !== null);
+      .filter(
+        (box): box is { left: number; top: number; width: number; height: number; text: string; type: SlashCommandType } =>
+          box !== null,
+      );
     setHighlights(boxes);
   }
 
@@ -689,11 +695,14 @@ export function ChatInput({
             <div className="composer__input-mirror" ref={mirrorRef} aria-hidden="true">
               {value}
               {highlights.map((box, index) => (
-                <span
+                <TypeCapsule
                   key={index}
-                  className="composer__cmd-highlight"
+                  type={box.type}
+                  className="composer__cmd-capsule"
                   style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
-                />
+                >
+                  {box.text}
+                </TypeCapsule>
               ))}
             </div>
             <Textarea
@@ -890,8 +899,8 @@ export function ChatInput({
                 onMouseEnter={() => setCommandIndex(index)}
                 onClick={() => insertCommand(item.command)}
               >
-                <span className={`slash-menu__type slash-menu__type--${item.type}`}>{COMMAND_TYPE_LABEL[item.type]}</span>
-                <span className="slash-menu__cmd">{item.command}</span>
+              <TypeCapsule type={item.type} className="slash-menu__type">{TYPE_CAPSULE_LABELS[item.type]}</TypeCapsule>
+              <span className="slash-menu__cmd">{item.command}</span>
                 <small>
                   {item.packageName && <span className="slash-menu__pkg">{item.packageName}</span>}
                   {item.description || (item.type === "skill" ? "加载并运行此技能" : "")}

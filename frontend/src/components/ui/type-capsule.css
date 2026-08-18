@@ -1,0 +1,26 @@
+/* Command type capsule — colours live with the component. Per-context sizing
+ * (menu vs input) is applied by the caller via the `className` prop. */
+.type-capsule {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  box-sizing: border-box;
+  line-height: 1;
+  user-select: none;
+}
+
+.type-capsule--sys {
+  background: #1d4ed8;
+  color: #ffffff;
+}
+
+.type-capsule--skill {
+  background: #facc15;
+  color: #1c1917;
+}
+
+.type-capsule--mcp {
+  background: #15803d;
+  color: #ffffff;
+}
