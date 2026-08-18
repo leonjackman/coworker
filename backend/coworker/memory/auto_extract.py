@@ -23,7 +23,8 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 def build_extract_llm(provider_entry: Any | None, extract_model: str = "") -> Any | None:

@@ -31,7 +31,8 @@ from pydantic import AnyUrl
 from mcp.client.auth.oauth2 import OAuthClientProvider
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 #: How long the authorization flow waits for the user to finish in the browser.
 OAUTH_AUTH_TIMEOUT_SECONDS = 300.0

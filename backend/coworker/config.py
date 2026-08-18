@@ -3,7 +3,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -38,6 +39,10 @@ class BackendSettings:
     memory_auto_extract: bool
     memory_nudge_interval: int
     memory_extract_model: str
+    log_level: str
+    log_max_bytes: int
+    log_backup_count: int
+    json_log: bool
 
 
 def load_settings() -> BackendSettings:
@@ -64,6 +69,17 @@ def load_settings() -> BackendSettings:
     memory_nudge_interval = _env_int("COWORKER_MEMORY_NUDGE_INTERVAL", 10)
     memory_extract_model = os.getenv("COWORKER_MEMORY_EXTRACT_MODEL", "").strip()
 
+    # Logging subsystem (see coworker.logger).
+    log_level = os.getenv("COWORKER_LOG_LEVEL", "INFO").strip().upper()
+    valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    if log_level not in valid_levels:
+        log_level = "INFO"
+    log_max_bytes = _env_int("COWORKER_LOG_MAX_BYTES", 10485760)
+    log_backup_count = _env_int("COWORKER_LOG_BACKUP_COUNT", 5)
+    json_log = os.getenv("COWORKER_JSON_LOG", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
     data_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     memory_dir = (data_dir / "memory").resolve()
@@ -84,4 +100,8 @@ def load_settings() -> BackendSettings:
         memory_auto_extract=memory_auto_extract,
         memory_nudge_interval=memory_nudge_interval,
         memory_extract_model=memory_extract_model,
+        log_level=log_level,
+        log_max_bytes=log_max_bytes,
+        log_backup_count=log_backup_count,
+        json_log=json_log,
     )

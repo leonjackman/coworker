@@ -17,7 +17,8 @@ import os
 import subprocess
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 _SECRET_DIR_NAME = ".coworker_secrets"
 

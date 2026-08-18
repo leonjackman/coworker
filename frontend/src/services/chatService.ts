@@ -197,7 +197,11 @@ export interface ChatService {
   createOrgTeam: (request: OrgTeamPayload) => Promise<OrgSnapshot>;
   updateOrgTeam: (request: OrgTeamUpdatePayload) => Promise<OrgSnapshot>;
   deleteOrgTeam: (projectId: string, id: string) => Promise<OrgSnapshot>;
-  updateOrgConfig: (request: OrgConfigPayload) => Promise<OrgSnapshot>;
+   updateOrgConfig: (request: OrgConfigPayload) => Promise<OrgSnapshot>;
+   getLogSettings: () => Promise<{ log_level: string; log_file: string; log_max_bytes: number; log_backup_count: number; json_log: boolean }>;
+   setLogLevel: (level: string) => Promise<{ log_level: string }>;
+   readLogFile: (start?: number, count?: number) => Promise<{ total_lines: number; lines: string[]; truncated: boolean }>;
+   truncateLog: (maxBytes?: number) => Promise<{ status: string }>;
 }
 
 class ElectronChatService implements ChatService {
@@ -819,6 +823,26 @@ class ElectronChatService implements ChatService {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.generateTitle(sessionId, firstUserMessage, assistantResponse, getLanguage());
     return response.title;
+  }
+
+  async getLogSettings(): Promise<{ log_level: string; log_file: string; log_max_bytes: number; log_backup_count: number; json_log: boolean }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getLogSettings();
+  }
+
+  async setLogLevel(level: string): Promise<{ log_level: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.setLogLevel(level);
+  }
+
+  async readLogFile(start = 0, count = 200): Promise<{ total_lines: number; lines: string[]; truncated: boolean }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.readLogFile(start, count);
+  }
+
+  async truncateLog(maxBytes?: number): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.truncateLog(maxBytes);
   }
 }
 
@@ -1607,11 +1631,31 @@ class HttpChatService implements ChatService {
   }
 
   async updateOrgConfig(request: OrgConfigPayload): Promise<OrgSnapshot> {
-    return this.request<OrgSnapshot>('/api/org/config', {
+    return this._orgRequest<OrgSnapshot>('/api/org/config', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
     });
+  }
+
+  async getLogSettings(): Promise<{ log_level: string; log_file: string; log_max_bytes: number; log_backup_count: number; json_log: boolean }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getLogSettings();
+  }
+
+  async setLogLevel(level: string): Promise<{ log_level: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.setLogLevel(level);
+  }
+
+  async readLogFile(start = 0, count = 200): Promise<{ total_lines: number; lines: string[]; truncated: boolean }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.readLogFile(start, count);
+  }
+
+  async truncateLog(maxBytes?: number): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.truncateLog(maxBytes);
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {

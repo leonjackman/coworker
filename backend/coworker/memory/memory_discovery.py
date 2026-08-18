@@ -32,7 +32,8 @@ from .layout import (
 from .memory_file import MemoryFile, load_file
 from .registry import normalize_agent_layout
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 _KINDS = ("system", "base_file", "project_file", "agent_file", "session_file", "folder_file")
 

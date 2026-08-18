@@ -23,7 +23,8 @@ from langchain_core.messages import SystemMessage
 
 from .mcp_session import McpSessionManager
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 # Cap on how much of a tool result is copied into the audit trail.
 _AUDIT_PREVIEW_CHARS = 400

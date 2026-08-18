@@ -1,4 +1,4 @@
-import { Download, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { Download, FileText, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
@@ -67,6 +67,12 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
   const [resumeMessage, setResumeMessage] = useState('');
   const [traceLines, setTraceLines] = useState(100);
   const [auditLines, setAuditLines] = useState(100);
+  const [logLevel, setLogLevel] = useState('INFO');
+  const [jsonLog, setJsonLog] = useState(true);
+  const [logFilePath, setLogFilePath] = useState('');
+  const [logLines, setLogLines] = useState<string[]>([]);
+  const [logTotalLines, setLogTotalLines] = useState(0);
+  const [logLoading, setLogLoading] = useState(false);
 
   async function loadRetention() {
     try {
@@ -108,6 +114,49 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('settings.audit_load_failed'));
+    }
+  }
+
+  async function refreshLogConfig() {
+    setLogLoading(true);
+    try {
+      const settings = await chatService.getLogSettings();
+      setLogLevel(settings.log_level);
+      setJsonLog(settings.json_log);
+      setLogFilePath(settings.log_file);
+      setLogLines([]);
+    } catch {
+      // ignore
+    } finally {
+      setLogLoading(false);
+    }
+  }
+
+  async function fetchLogLines() {
+    try {
+      const res = await chatService.readLogFile(0, 200);
+      setLogLines(res.lines);
+      setLogTotalLines(res.total_lines);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleLogLevelChange(newLevel: string) {
+    try {
+      await chatService.setLogLevel(newLevel);
+      setLogLevel(newLevel);
+    } catch {
+      // ignore
+    }
+  }
+
+  async function clearLog() {
+    try {
+      await chatService.truncateLog();
+      await fetchLogLines();
+    } catch {
+      // ignore
     }
   }
 
@@ -157,6 +206,7 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
   useEffect(() => {
     void refreshAudit();
     void loadRetention();
+    void refreshLogConfig();
     const timer = window.setInterval(() => {
       void refreshApprovalsOnly();
     }, 5000);
@@ -171,10 +221,16 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
             <h2 id="settings-group-audit">{t('settings.audit_group')}</h2>
             <p>{t('settings.audit_group_desc')}</p>
           </div>
-          <Button variant="secondary" onClick={refreshAudit} disabled={loading}>
-            <RefreshCw size={14} className={loading ? 'settings-audit__spin' : ''} />
-            {t('settings.audit_refresh')}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={refreshAudit} disabled={loading}>
+              <RefreshCw size={14} className={loading ? 'settings-audit__spin' : ''} />
+              {t('settings.audit_refresh')}
+            </Button>
+            <Button variant="secondary" onClick={refreshLogConfig} disabled={loading}>
+              <RefreshCw size={14} className={logLoading ? 'settings-audit__spin' : ''} />
+              {t('settings.logs')}
+            </Button>
+          </div>
         </div>
       )}
 
@@ -225,6 +281,61 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
             </Button>
           </span>
         </div>
+
+        {/* Logging configuration */}
+        <div className="settings-audit__retention">
+          <div>
+            <h3 style={{marginBottom: '8px', fontSize: '14px', fontWeight: 600}}>{t('settings.logging')}</h3>
+            <div style={{display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap'}}>
+              <label htmlFor="log-level-select" style={{fontSize: '12px', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap'}}>
+                {t('settings.log_level')}
+              </label>
+              <select
+                id="log-level-select"
+                className="settings-input"
+                value={logLevel}
+                onChange={(e) => handleLogLevelChange(e.target.value)}
+                disabled={logLoading}
+              >
+                {['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'].map((level) => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
+              </select>
+            </div>
+            {logFilePath && (
+              <div style={{fontSize: '11px', color: 'var(--color-text-secondary)', marginBottom: '8px', wordBreak: 'break-all'}}>
+                {t('settings.log_file')}: {logFilePath}
+                {jsonLog && <span style={{marginLeft: '8px', color: 'var(--color-text-accent)'}}>(JSON)</span>}
+                {logTotalLines > 0 && <span> · {logTotalLines} {t('settings.lines')}</span>}
+              </div>
+            )}
+            <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
+              <Button variant="secondary" onClick={fetchLogLines} disabled={logLoading} size="sm">
+                <FileText size={14} /> {t('settings.load_log')}
+              </Button>
+              <Button variant="ghost" onClick={clearLog} size="sm">
+                <Trash2 size={14} /> {t('settings.clear_log')}
+              </Button>
+            </div>
+            {logLines.length > 0 && (
+              <pre style={{
+                maxHeight: '200px',
+                overflowY: 'auto',
+                fontSize: '11px',
+                background: 'var(--color-surface-secondary)',
+                padding: '8px',
+                borderRadius: '4px',
+                marginTop: '8px',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+                lineHeight: 1.5,
+              }}>
+                {logLines.join('\n')}
+              </pre>
+            )}
+          </div>
+        </div>
+
         {error && <div className="settings-audit__empty">{error}</div>}
         {!error && resumeMessage && (
           <article className="settings-audit__event settings-audit__event--approval">

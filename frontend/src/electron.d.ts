@@ -165,6 +165,10 @@ declare global {
       installUpdate: () => Promise<{ status: string }>;
       skipVersion: () => Promise<{ status: string; skippedVersion: string | null }>;
       clearSkipVersion: () => Promise<{ status: string }>;
+      getLogSettings: () => Promise<{ log_level: string; log_file: string; log_max_bytes: number; log_backup_count: number; json_log: boolean }>;
+      setLogLevel: (level: string) => Promise<{ log_level: string }>;
+      readLogFile: (start?: number, count?: number) => Promise<{ total_lines: number; lines: string[]; truncated: boolean }>;
+      truncateLog: (maxBytes?: number) => Promise<{ status: string }>;
       onUpdateState: (callback: (state: UpdateStateSnapshot) => void) => () => void;
     };
   }

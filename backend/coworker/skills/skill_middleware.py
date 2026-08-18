@@ -20,7 +20,8 @@ from langchain_core.messages import SystemMessage
 from .skill_manager import SkillManager
 from .skills import format_skills_prompt
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 def _phase_is_discuss(state: Any) -> bool:

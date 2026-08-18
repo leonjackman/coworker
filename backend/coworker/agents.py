@@ -11,7 +11,9 @@ from collections.abc import AsyncGenerator, Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _llm_stream_chunk_timeout() -> float:

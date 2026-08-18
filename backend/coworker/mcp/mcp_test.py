@@ -13,7 +13,8 @@ from .mcp_loader import (
     run_blocking,
 )
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 def _flatten_exceptions(exc: BaseException) -> list[BaseException]:

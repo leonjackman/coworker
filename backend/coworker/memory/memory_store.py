@@ -28,7 +28,8 @@ from pathlib import Path
 
 from .memory_file import MemoryFile, load_file, render_blocks, split_blocks
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 class MemoryError(ValueError):

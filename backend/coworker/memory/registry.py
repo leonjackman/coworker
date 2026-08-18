@@ -30,7 +30,8 @@ from .layout import (
 # projects settle on the current ALL-CAPS skeleton.
 _DEPRECATED_BASE_FILES = ("project.md", "game_rule.md", "BASE.md", "clean_code_rule.md")
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 class MemoryRegistry:

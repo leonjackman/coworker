@@ -30,7 +30,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 _DEFAULT_CAP_PER_SESSION = 500
 _DEFAULT_MAX_BYTES_PER_THREAD = 32 * 1024 * 1024  # 32 MB

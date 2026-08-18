@@ -24,7 +24,8 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 class MemoryMiddleware(AgentMiddleware):

@@ -25,7 +25,8 @@ from .skills import (
     load_skill_from_file,
 )
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 AGENTS_SKILLS_DIR = ".agents/skills"
 COWORKER_SKILLS_DIR = ".coworker/skills"

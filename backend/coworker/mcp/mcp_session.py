@@ -48,7 +48,8 @@ from .mcp_oauth import (
     build_oauth_provider,
 )
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 DEFAULT_CONNECT_TIMEOUT = 30.0
 DEFAULT_CALL_TIMEOUT = 60.0

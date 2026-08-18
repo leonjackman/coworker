@@ -836,6 +836,72 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   }
 });
 
+// ── Logging subsystem IPC ────────────────────────────────────────────────
+ipcMain.handle('get-settings-log', async () => {
+  try {
+    return await requestBackend('/settings/log');
+  } catch (e) {
+    return { log_level: 'INFO', log_file: '', log_max_bytes: 10485760, log_backup_count: 5, json_log: true, error: e.message };
+  }
+});
+
+ipcMain.handle('set-log-level', async (event, level) => {
+  try {
+    return await requestBackend('/settings/log-level', 'POST', { log_level: level });
+  } catch (e) {
+    return { status: 'error', detail: e.message };
+  }
+});
+
+ipcMain.handle('read-log-file', async (event, start = 0, count = 200) => {
+  try {
+    return await requestBackend(`/settings/log-file?start=${start}&count=${count}`, 'GET');
+  } catch (e) {
+    return { total_lines: 0, lines: [], truncated: false, error: e.message };
+  }
+});
+
+ipcMain.handle('truncate-log', async (event, maxBytes) => {
+  try {
+    return await requestBackend('/settings/truncate-log', 'POST', maxBytes != null ? { max_bytes: maxBytes } : {});
+  } catch (e) {
+    return { status: 'error', detail: e.message };
+  }
+});
+
+// ── Logging subsystem IPC (legacy aliases) ─────────────────────────────
+ipcMain.handle('getLogSettings', async () => {
+  try {
+    return await requestBackend('/settings/log');
+  } catch (e) {
+    return { log_level: 'INFO', log_file: '', log_max_bytes: 10485760, log_backup_count: 5, json_log: true };
+  }
+});
+
+ipcMain.handle('setLogLevel', async (event, level) => {
+  try {
+    return await requestBackend('/settings/log-level', 'POST', { log_level: level });
+  } catch (e) {
+    return { status: 'error', log_level: 'INFO' };
+  }
+});
+
+ipcMain.handle('readLogFile', async (event, start = 0, count = 200) => {
+  try {
+    return await requestBackend(`/settings/log-file?start=${start}&count=${count}`, 'GET');
+  } catch (e) {
+    return { total_lines: 0, lines: [], truncated: false };
+  }
+});
+
+ipcMain.handle('truncateLog', async (event, maxBytes) => {
+  try {
+    return await requestBackend('/settings/truncate-log', 'POST', maxBytes != null ? { max_bytes: maxBytes } : {});
+  } catch (e) {
+    return { status: 'error' };
+  }
+});
+
 const activeStreams = new Map();
 
 /**

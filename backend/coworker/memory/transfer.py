@@ -28,7 +28,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 _MEMORY_SUFFIXES = (".md", ".markdown")
 _EXPORT_SUBDIR = "memory_exports"

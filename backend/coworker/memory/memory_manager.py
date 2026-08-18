@@ -24,7 +24,8 @@ from .memory_prompt import format_memory_prompt
 from .memory_store import MemoryStore
 from .registry import MemoryRegistry
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 DEFAULT_AGENT = "default_agent"
 

@@ -17,7 +17,8 @@ import shlex
 import threading
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 

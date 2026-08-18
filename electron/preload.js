@@ -156,6 +156,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installUpdate: () => ipcRenderer.invoke('install-update'),
   skipVersion: () => ipcRenderer.invoke('skip-version'),
   clearSkipVersion: () => ipcRenderer.invoke('clear-skip'),
+  // Logging subsystem
+  getLogSettings: () => ipcRenderer.invoke('getLogSettings'),
+  setLogLevel: (level) => ipcRenderer.invoke('setLogLevel', level),
+  readLogFile: (start = 0, count = 200) => ipcRenderer.invoke('readLogFile', start, count),
+  truncateLog: (maxBytes) => ipcRenderer.invoke('truncateLog', maxBytes),
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('app:update-state', listener);

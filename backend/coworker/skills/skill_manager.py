@@ -27,7 +27,8 @@ from typing import Any
 from .skill_discovery import ScanResult, SkillScanner
 from .skills import SkillDiagnostic, SkillEntry
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 SKILLS_CONFIG_FILENAME = "skills_config.json"
 

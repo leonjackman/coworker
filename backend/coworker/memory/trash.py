@@ -14,7 +14,8 @@ import shutil
 import sys
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from coworker.logger import get_logger
+logger = get_logger(__name__)
 
 
 def system_trash_dir() -> Path | None:
