@@ -922,6 +922,8 @@ function openSseStream({
   eventName = 'chat-stream-event',
   idleTimeoutMs = 60_000,
 }) {
+  let idleTimer = null;
+
   const httpOptions = {
     hostname: BACKEND_HOST,
     port: BACKEND_PORT,
@@ -949,7 +951,6 @@ function openSseStream({
     function handleResponse(res) {
       res.setEncoding('utf8');
       let buffer = '';
-      let idleTimer = null;
       let lastActivity = Date.now();
 
       // Idle timeout watchdog
