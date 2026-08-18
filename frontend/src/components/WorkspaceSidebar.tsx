@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { Tooltip } from './ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
+import { SidebarScrollbar } from './ui/sidebar-scrollbar';
 import {
   DndContext,
   PointerSensor,
@@ -580,6 +581,7 @@ export function WorkspaceSidebar({
 
       {!collapsed && (
         <div className="sidebar__scroll">
+          <SidebarScrollbar>
           <section className="sidebar-group" aria-labelledby="sidebar-projects-title">
             <div className="sidebar-group__header">
               <h2 id="sidebar-projects-title">{t('sidebar.projects')}</h2>
@@ -616,8 +618,9 @@ export function WorkspaceSidebar({
                 ))}
               </SortableContext>
             </DndContext>
-          </section>
-        </div>
+            </section>
+            </SidebarScrollbar>
+          </div>
       )}
 
       <div className="sidebar__settings">
