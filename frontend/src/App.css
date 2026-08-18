@@ -3269,7 +3269,6 @@ body.bottom-panel-resizing {
 }
 
 .slash-menu-content {
-  overflow-y: auto;
   display: grid;
   gap: 3px;
   padding: 6px;

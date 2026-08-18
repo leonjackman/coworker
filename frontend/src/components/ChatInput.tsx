@@ -36,8 +36,7 @@ import {
 } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 import { Tooltip } from "./ui/tooltip";
-
-export interface ModelOption {
+import { SidebarScrollbar } from "./ui/sidebar-scrollbar";export interface ModelOption {
   id: string;
   label: string;
   provider?: string;
@@ -881,7 +880,7 @@ export function ChatInput({
       </CardSlot>
 
       {showCommands && displayedItems.length > 0 && (
-        <div className="slash-menu" ref={menuRef}>
+        <SidebarScrollbar ref={menuRef} className="slash-menu">
           <div className="slash-menu-content">
             {displayedItems.map((item, index) => (
               <button
@@ -900,7 +899,7 @@ export function ChatInput({
               </button>
             ))}
           </div>
-        </div>
+        </SidebarScrollbar>
       )}
     </footer>
   );

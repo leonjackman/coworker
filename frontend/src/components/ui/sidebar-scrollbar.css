@@ -1,27 +1,37 @@
-/* Sidebar scrollbar — Firefox */
-.sidebar__scroll {
+/* Sidebar / SlashMenu scrollbar — Firefox */
+.sidebar-scrollbar,
+.sidebar__scroll,
+.slash-menu {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--foreground) 20%, transparent) transparent;
 }
 
-/* Sidebar scrollbar — Chromium / Electron */
-.sidebar__scroll::-webkit-scrollbar {
+/* Sidebar / SlashMenu scrollbar — Chromium / Electron */
+.sidebar-scrollbar::-webkit-scrollbar,
+.sidebar__scroll::-webkit-scrollbar,
+.slash-menu::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-.sidebar__scroll::-webkit-scrollbar-track {
+.sidebar-scrollbar::-webkit-scrollbar-track,
+.sidebar__scroll::-webkit-scrollbar-track,
+.slash-menu::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.sidebar__scroll::-webkit-scrollbar-thumb {
+.sidebar-scrollbar::-webkit-scrollbar-thumb,
+.sidebar__scroll::-webkit-scrollbar-thumb,
+.slash-menu::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--foreground) 20%, transparent);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
-.sidebar__scroll::-webkit-scrollbar-thumb:hover {
+.sidebar-scrollbar::-webkit-scrollbar-thumb:hover,
+.sidebar__scroll::-webkit-scrollbar-thumb:hover,
+.slash-menu::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--foreground) 35%, transparent);
   background-clip: padding-box;
 }
