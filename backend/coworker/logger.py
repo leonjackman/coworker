@@ -31,7 +31,6 @@ import sys
 import time
 import traceback
 from datetime import datetime, timezone
-from logging.handlers import TimedRotatingFileHandler, WatchedFileHandler
 from pathlib import Path
 from typing import Any
 

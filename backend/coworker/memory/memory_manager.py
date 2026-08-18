@@ -12,7 +12,6 @@ feeds the nudge trigger, and extraction itself lives in ``auto_extract``.
 
 from __future__ import annotations
 
-import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path

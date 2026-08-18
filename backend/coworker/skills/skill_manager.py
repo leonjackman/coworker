@@ -17,7 +17,6 @@ Config file layout (``data_dir/skills_config.json``):
 from __future__ import annotations
 
 import json
-import logging
 import os
 import shutil
 import threading

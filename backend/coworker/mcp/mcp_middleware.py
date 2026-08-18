@@ -13,7 +13,6 @@ read-only and never touches external services.
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from pathlib import Path
 from typing import Any

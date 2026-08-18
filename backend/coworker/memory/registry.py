@@ -7,7 +7,6 @@ the frontend and the injection path always see a well-formed tree.
 
 from __future__ import annotations
 
-import logging
 import threading
 from pathlib import Path
 

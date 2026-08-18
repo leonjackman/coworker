@@ -21,7 +21,6 @@ The concurrency hardening from the original ``§``-delimited store is preserved:
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import threading
 from pathlib import Path

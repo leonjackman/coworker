@@ -8,7 +8,6 @@ directory, which the scanner ignores (dot-prefixed path parts).
 
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 import sys

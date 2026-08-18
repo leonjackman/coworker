@@ -12,7 +12,6 @@ this module deliberately contains no caching or process-spawning logic.
 from __future__ import annotations
 
 import asyncio
-import logging
 import shlex
 import threading
 from typing import Any

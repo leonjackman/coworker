@@ -12,7 +12,6 @@ The Keychain item is keyed by ``(service, account)``; the fallback file is
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import subprocess
 from pathlib import Path
