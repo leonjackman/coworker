@@ -125,13 +125,7 @@ class MemoryStore:
                 except OSError:
                     pass
                 try:
-                    from .trash import send_to_trash, system_trash_dir
-
-                    if trash_dir is not None:
-                        dest_dir = trash_dir
-                    else:
-                        dest_dir = system_trash_dir() or (self.root / ".trash")
-                    send_to_trash(path, dest_dir)
+                    self._move_to_trash(path, trash_dir)
                     for lock in path.rglob("*.lock"):
                         try:
                             lock.unlink(missing_ok=True)
@@ -143,17 +137,33 @@ class MemoryStore:
             if not path.exists():
                 return False
             try:
-                from .trash import send_to_trash, system_trash_dir
-
-                if trash_dir is not None:
-                    dest_dir = trash_dir
-                else:
-                    dest_dir = system_trash_dir() or (self.root / ".trash")
-                send_to_trash(path, dest_dir)
+                self._move_to_trash(path, trash_dir)
                 _cleanup_lock(path)
                 return True
             except OSError:
                 return False
+
+    def _move_to_trash(self, path: Path, trash_dir: Path | None) -> str:
+        """Move ``path`` into trash.
+
+        With no explicit ``trash_dir``, tries the OS trash first and falls
+        back to the hidden in-library ``.trash/`` when the OS trash is
+        unavailable or not writable (e.g. sandboxed environments), so a
+        removal never silently fails just because the system trash is
+        inaccessible.
+        """
+        from .trash import send_to_trash, system_trash_dir
+
+        if trash_dir is not None:
+            # Explicit destination (tests): single attempt, no fallback.
+            return send_to_trash(path, trash_dir)
+        system = system_trash_dir()
+        if system is not None:
+            try:
+                return send_to_trash(path, system)
+            except OSError:
+                pass  # fall through to the in-library .trash/ fallback
+        return send_to_trash(path, self.root / ".trash")
 
     def move_file(self, rel: str, new_rel: str) -> str:
         """Move/rename a memory file, returning the new rel path."""

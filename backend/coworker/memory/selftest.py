@@ -601,6 +601,27 @@ def main() -> int:
                 break
         bus.close("seftest_sse_pub")
 
+        # 1b) publish drops the OLDEST queued event when full (latest-wins)
+        q3 = bus.subscribe("seftest_sse_dropold")
+        for i in range(256):
+            q3.put_nowait({"i": i})
+        await asyncio.wait_for(
+            bus.publish("seftest_sse_dropold", {"type": "newest"}),
+            timeout=1.0,
+        )
+        drained = []
+        while True:
+            try:
+                drained.append(q3.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        check(
+            "publish drops oldest on full queue (latest-wins)",
+            len(drained) == 256 and drained[-1].get("type") == "newest" and drained[0].get("i") == 1,
+            f"len={len(drained)} first={drained[0] if drained else None} last={drained[-1] if drained else None}",
+        )
+        bus.close("seftest_sse_dropold")
+
         # 2) unsubscribe drains the queue to prevent memory leak
         q2 = bus.subscribe("seftest_sse_unsub")
         for i in range(100):
@@ -611,15 +632,35 @@ def main() -> int:
         check("ApprovalEventBus unsubscribe drains queue", before > 0 and after == 0, f"before={before} after={after}")
         bus.close("seftest_sse_unsub")
 
-    # 3) _sse_events _last_activity_ts initialized at stream start (not 0.0)
-    src_lines = open(str(Path(__file__).resolve().parents[2] / "main.py")).readlines()
-    init_ok = False
-    for line in src_lines:
-        s = line.strip()
-        if "_last_activity_ts = _get_monotonic()" in s and "0.0" not in s:
-            init_ok = True
-            break
-    check("_sse_events _last_activity_ts initialized to monotonic()", init_ok, "still 0.0 or missing")
+        # 3) _sse_events idle_warning: fires after the 240s threshold and
+        #    seconds_idle counts from stream start (mock monotonic clock).
+        fake_time = [1000.0]
+        original = _m._get_monotonic
+        _m._get_monotonic = lambda: fake_time[0]
+
+        async def _never_iter():
+            await asyncio.sleep(3600)
+            yield {}  # pragma: no cover - stream never produces an event
+
+        try:
+            gen = _m._sse_events(_never_iter())
+            kind1, payload1 = await anext(gen)  # 1s wait_for timeout -> heartbeat
+            check("idle heartbeat emitted before threshold", kind1 == "heartbeat", f"kind={kind1}")
+            fake_time[0] = 1300.0  # +300s from stream start, > 240s threshold
+            kind2, payload2 = await anext(gen)
+            check(
+                "idle_warning fired after 240s idle (mock clock)",
+                kind2 == "event" and isinstance(payload2, dict) and payload2.get("type") == "idle_warning",
+                f"kind={kind2} payload={payload2}",
+            )
+            check(
+                "seconds_idle counted from stream start",
+                isinstance(payload2, dict) and payload2.get("seconds_idle") == 300,
+                f"seconds_idle={payload2.get('seconds_idle') if isinstance(payload2, dict) else payload2}",
+            )
+            await gen.aclose()
+        finally:
+            _m._get_monotonic = original
 
     asyncio.run(_sse_async_checks())
 

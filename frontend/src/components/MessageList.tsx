@@ -404,6 +404,11 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
           </div>
         ) : isStopped ? (
           <div className="stream-stopped">{message.content}</div>
+        ) : isWaiting ? (
+          <div className="stream-waiting">
+            <span className="stream-waiting__dot" aria-hidden="true" />
+            <span className="stream-waiting__text">{message.content || t('chat.waiting_resolution')}</span>
+          </div>
         ) : null}
 
         {/* interrupted messages keep the regenerate action so the user can act on

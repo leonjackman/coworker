@@ -291,8 +291,9 @@ class ApprovalEventBus:
     async def publish(self, resume_id: str, event: dict[str, Any]) -> None:
         """Publish an event to all subscribers for a given resume_id.
 
-        Non-blocking: if any subscriber queue is full the event is dropped
-        for that subscriber (progress events are idempotent / latest-wins).
+        Non-blocking: if any subscriber queue is full the OLDEST queued event
+        is dropped to make room (latest-wins — the newest event, e.g. a
+        terminal ``stream_end`` or ``approval_resolved``, must not be lost).
         This prevents a single slow subscriber from back-pressuring and
         stalling the entire HITL resume pipeline.
         """
@@ -305,12 +306,15 @@ class ApprovalEventBus:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                # Best-effort: drop the event for this subscriber rather than
-                # blocking the resume pipeline.  A full queue already means the
-                # subscriber is falling behind — dropping an *older* event would
-                # not help either (events within the same resume_id are
-                # idempotent / latest-wins).
-                pass
+                # Drop the oldest queued event to make room for the newest
+                # (latest-wins). If it is still full (e.g. a concurrent
+                # drainer took the slot), drop the incoming event itself
+                # rather than ever blocking the pipeline.
+                try:
+                    queue.get_nowait()
+                    queue.put_nowait(event)
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    pass
 
     def close(self, resume_id: str) -> None:
         queues = self._subscribers.pop(resume_id, [])
@@ -406,14 +410,15 @@ async def _sse_events(
             try:
                 kind, payload = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                # Emit SSE keep-alive comment every second of idle.
-                if _last_activity_ts > 0:
-                    elapsed = _get_monotonic() - _last_activity_ts
-                    if elapsed >= _IDLE_WARN_THRESHOLD and not _idle_warning_emitted:
-                        # Push an idle-warning event so the frontend can show
-                        # a countdown before the client's idle timeout fires.
-                        _idle_warning_emitted = True
-                        yield "event", {"type": "idle_warning", "seconds_idle": int(elapsed)}
+                # Emit SSE keep-alive comment every second of idle. Idle
+                # accounting starts at stream init (`_last_activity_ts` is
+                # monotonic from the start), so no 0-sentinel guard needed.
+                elapsed = _get_monotonic() - _last_activity_ts
+                if elapsed >= _IDLE_WARN_THRESHOLD and not _idle_warning_emitted:
+                    # Push an idle-warning event so the frontend can show
+                    # a countdown before the client's idle timeout fires.
+                    _idle_warning_emitted = True
+                    yield "event", {"type": "idle_warning", "seconds_idle": int(elapsed)}
                 yield "heartbeat", None
                 continue
             yield kind, payload

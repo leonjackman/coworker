@@ -2011,6 +2011,47 @@ body.bottom-panel-resizing {
   padding-left: 12px;
 }
 
+/* HITL waiting state: agent paused mid-turn waiting for user decision.
+   Mirrors the PendingDocks visual language (accent-tinted left border). */
+.stream-content--waiting {
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, var(--material-border));
+  padding-left: 12px;
+}
+
+.stream-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.stream-waiting__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+  animation: stream-waiting-pulse 1.2s ease-in-out infinite;
+}
+
+.stream-waiting__text {
+  line-height: 1.5;
+}
+
+@keyframes stream-waiting-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
 .stream-role {
   margin-bottom: 4px;
   color: var(--muted-foreground);
