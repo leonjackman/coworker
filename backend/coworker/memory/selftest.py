@@ -11,7 +11,9 @@ failure.
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
+import time
 from pathlib import Path
 import sys
 import json
@@ -569,6 +571,57 @@ def main() -> int:
             mock_open.return_value = _Resp()
             discovered = ProviderManager.fetch_context_window(ollama)
         check("ollama fetch parses model_info", discovered == 40960, str(discovered))
+
+    # --- SSE infrastructure: ApprovalEventBus non-blocking publish + unsubscribe drain ---
+    async def _sse_async_checks() -> None:
+        import main as _m
+        bus = _m.approval_event_bus
+
+        # 1) publish never blocks on full queue
+        q = bus.subscribe("seftest_sse_pub")
+        for i in range(256):
+            q.put_nowait({"i": i})
+        t0 = time.monotonic()
+        try:
+            await asyncio.wait_for(
+                bus.publish("seftest_sse_pub", {"type": "nack-test"}),
+                timeout=1.0,
+            )
+            check(
+                "ApprovalEventBus publish() never blocks on full queue",
+                time.monotonic() - t0 < 0.5,
+                f"elapsed={time.monotonic()-t0:.4f}s",
+            )
+        except asyncio.TimeoutError:
+            check("ApprovalEventBus publish() never blocks on full queue", False, "timeout 1s")
+        while True:
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        bus.close("seftest_sse_pub")
+
+        # 2) unsubscribe drains the queue to prevent memory leak
+        q2 = bus.subscribe("seftest_sse_unsub")
+        for i in range(100):
+            q2.put_nowait({"i": i})
+        before = q2.qsize()
+        bus.unsubscribe("seftest_sse_unsub", q2)
+        after = q2.qsize()
+        check("ApprovalEventBus unsubscribe drains queue", before > 0 and after == 0, f"before={before} after={after}")
+        bus.close("seftest_sse_unsub")
+
+    # 3) _sse_events _last_activity_ts initialized at stream start (not 0.0)
+    src_lines = open(str(Path(__file__).resolve().parents[2] / "main.py")).readlines()
+    init_ok = False
+    for line in src_lines:
+        s = line.strip()
+        if "_last_activity_ts = _get_monotonic()" in s and "0.0" not in s:
+            init_ok = True
+            break
+    check("_sse_events _last_activity_ts initialized to monotonic()", init_ok, "still 0.0 or missing")
+
+    asyncio.run(_sse_async_checks())
 
     print("\n".join(CHECKS))
     failures = [c for c in CHECKS if c.startswith("FAIL")]

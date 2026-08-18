@@ -281,8 +281,21 @@ class ApprovalEventBus:
             queues.remove(queue)
         if not queues:
             self._subscribers.pop(resume_id, None)
+        # Drain the queue to release queued events and prevent memory leak.
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     async def publish(self, resume_id: str, event: dict[str, Any]) -> None:
+        """Publish an event to all subscribers for a given resume_id.
+
+        Non-blocking: if any subscriber queue is full the event is dropped
+        for that subscriber (progress events are idempotent / latest-wins).
+        This prevents a single slow subscriber from back-pressuring and
+        stalling the entire HITL resume pipeline.
+        """
         buffer = self._buffer[resume_id]
         buffer.append(event)
         if len(buffer) > self._buffer_size:
@@ -292,7 +305,12 @@ class ApprovalEventBus:
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
-                await queue.put(event)
+                # Best-effort: drop the event for this subscriber rather than
+                # blocking the resume pipeline.  A full queue already means the
+                # subscriber is falling behind — dropping an *older* event would
+                # not help either (events within the same resume_id are
+                # idempotent / latest-wins).
+                pass
 
     def close(self, resume_id: str) -> None:
         queues = self._subscribers.pop(resume_id, [])
@@ -351,9 +369,9 @@ async def _sse_events(
     """
     queue: asyncio.Queue = asyncio.Queue()
     _SENTINEL = object()
-    _last_activity_ts: float = 0.0  # monotonic timestamp of last event
     _IDLE_WARN_THRESHOLD = 240.0  # 4 min — push idle-warning at 80% of 5 min
     _idle_warning_emitted = False
+    _last_activity_ts = _get_monotonic()  # start from stream init, not 0
 
     async def _producer():
         nonlocal _last_activity_ts, _idle_warning_emitted
