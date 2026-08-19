@@ -55,21 +55,16 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
   // fall back to char-based values for older backends — B3/B4.
   const used = usage.usedTokens ?? Math.round(usage.usedChars / CHARS_PER_TOKEN);
   const windowTok = usage.windowTokens ?? usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
-  const budget = usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
   // Bar is measured against the model's REAL window so the meter reflects true
   // context fullness; trimming kicks in at 75% (the safety budget) — see B2.
   const pct = windowTok > 0 ? Math.min(100, Math.round((used / windowTok) * 100)) : 0;
   const color = pct < 70 ? STATUS_COLORS.green : pct < 90 ? STATUS_COLORS.amber : STATUS_COLORS.red;
   const formatK = (n: number) => (n >= 1_000 ? `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
-  const sourceHint =
-    usage.windowSource === "user" ? "（Provider 手动设置）"
-    : usage.windowSource === "table" ? "（模型表）"
-    : usage.windowSource === "discovered" ? "（自动探测）"
-    : "（默认 128k）";
-  const tooltip =
-    `${t('titlebar.context')} · ${formatK(used)} / ${formatK(windowTok)} tokens（${pct}% 窗口）` +
-    ` · 安全预算 ${formatK(budget)} · 来源${sourceHint}` +
-    (usage.compacted ? " · 已压缩" : "");
+  const tooltip = [
+    t('titlebar.context_usage', { used: formatK(used), window: formatK(windowTok), pct }),
+    t('titlebar.context_trim_hint'),
+    ...(usage.compacted ? [t('titlebar.context_compressed')] : []),
+  ].join(' · ');
 
   return (
     <Tooltip content={tooltip}>
@@ -79,7 +74,11 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
           <div className="context-budget-bar__fill" style={{ width: `${pct}%` }} />
         </div>
         <span className="context-budget-text">{formatK(used)} / {formatK(windowTok)}</span>
-        {usage.compacted && <span className="context-budget-badge" title="会话历史已被压缩">已压缩</span>}
+        {usage.compacted && (
+          <span className="context-budget-badge" title={t('titlebar.context_compressed')}>
+            {t('titlebar.context_badge')}
+          </span>
+        )}
       </div>
     </Tooltip>
   );
