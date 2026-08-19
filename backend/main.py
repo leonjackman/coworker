@@ -14,6 +14,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 from urllib.parse import urlparse
+from dataclasses import replace
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -1602,6 +1603,24 @@ class ChatStreamRequest(ChatRequest):
     # （超过的附件不内联、在提示词中说明未转发）。None 时后端用默认 25MB。
     max_attachment_bytes: Optional[int] = None
 
+def _cached_provider_unreachable(provider_id: str | None, model: str | None) -> str | None:
+    """Best-effort fast-fail guard: return the cached "LLM 服务不可达" message
+    when the requested provider's context discovery recently failed, else
+    ``None``. Pure cache read — never probes, never blocks the event loop.
+    """
+    try:
+        if not provider_id:
+            return None
+        provider = provider_manager.load().find_enabled(provider_id)
+        if not provider:
+            return None
+        if model and model != provider.model:
+            provider = replace(provider, model=model)
+        return ProviderManager.cached_context_error(provider)
+    except Exception:  # noqa: BLE001 - a guard failure must never break a turn
+        return None
+
+
 @app.post("/chat/stream")
 async def chat_stream(request: ChatStreamRequest):
     if not request.session_id and not request.project_id:
@@ -1677,6 +1696,15 @@ async def chat_stream(request: ChatStreamRequest):
         stream_iter: Any
         in_goal_flag = bool(request.goal_mode)
         cancel_event: asyncio.Event | None = None
+
+        # Fast-fail: when the requested provider was recently discovered as
+        # unreachable (cached probe failure), refuse to start the agent and
+        # surface the reason immediately instead of letting the client wait on
+        # a connect timeout. Pure cache read — never probes, never blocks.
+        cached_block = _cached_provider_unreachable(request.provider_id, request.model)
+        if cached_block:
+            yield f"data: {json.dumps({'type': 'error', 'session_id': session_id, 'error': cached_block}, ensure_ascii=False)}\n\n"
+            return
 
         def _persist_assistant(content, mode, provider, model, parts):
             try:

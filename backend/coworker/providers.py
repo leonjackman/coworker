@@ -531,6 +531,24 @@ class ProviderManager:
         return window, error
 
     @staticmethod
+    def cached_context_error(provider: ProviderEntry) -> str | None:
+        """Return the cached discovery error for a provider WITHOUT probing.
+
+        This is a pure dict read — it never touches the network, so async
+        handlers can call it without blocking the event loop. Returns the
+        human-readable unreachable message only when a fresh failed probe is
+        cached (within TTL), else ``None``.
+        """
+        key = f"{provider.provider_type}|{(provider.base_url or '').rstrip('/')}|{provider.model}"
+        entry = _CTX_DISCOVERY_CACHE.get(key)
+        if entry is None:
+            return None
+        ts, _window, error = entry
+        if time.monotonic() - ts >= _CTX_DISCOVERY_TTL_SECONDS:
+            return None
+        return error
+
+    @staticmethod
     def fetch_context_window(provider: ProviderEntry) -> int:
         """Best-effort discovery of the context window from a local server.
 

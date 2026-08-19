@@ -75,6 +75,7 @@
   "chat.workspace_pick": "Seleccionar espacio de trabajo",
   "chat.workspace_switch": "Cambiar espacio de trabajo",
   "chat.workspace_new": "Nuevo proyecto (desde carpeta)...",
+  "chat.model_unreachable_switch": "Cambia a un modelo LLM alcanzable y vuelve a intentarlo.",
   "chat.model_unreachable": "Servicio LLM inalcanzable",
   "chat.model_unselected": "Sin modelo configurado",
   "chat.work_plan": "Planificar",

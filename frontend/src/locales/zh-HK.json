@@ -102,6 +102,7 @@
   "chat.workspace_pick": "揀選工作區",
   "chat.workspace_switch": "切換工作區",
   "chat.workspace_new": "新增專案（由資料夾）…",
+  "chat.model_unreachable_switch": "請更換為可連線的 LLM 模型後再傳送。",
   "chat.model_unreachable": "LLM 服務無法連線",
   "chat.model_unselected": "未設定模型",
   "chat.work_plan": "規劃",

@@ -76,6 +76,7 @@
   "chat.workspace_pick": "Select workspace",
   "chat.workspace_switch": "Switch workspace",
   "chat.workspace_new": "New project (from folder)…",
+  "chat.model_unreachable_switch": "Please switch to a reachable LLM model and try again.",
   "chat.model_unreachable": "LLM service unreachable",
   "chat.model_unselected": "No model configured",
   "chat.work_plan": "Plan",

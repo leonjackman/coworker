@@ -75,6 +75,7 @@
   "chat.workspace_pick": "ワークスペースを選択",
   "chat.workspace_switch": "ワークスペースを切り替え",
   "chat.workspace_new": "新規プロジェクト（フォルダから）…",
+  "chat.model_unreachable_switch": "接続可能な LLM モデルに切り替えてから再度送信してください。",
   "chat.model_unreachable": "LLMサービスに接続できません",
   "chat.model_unselected": "モデルが構成されていません",
   "chat.work_plan": "計画",

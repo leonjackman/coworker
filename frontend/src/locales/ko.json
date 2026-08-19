@@ -92,6 +92,7 @@
   "chat.mode_plan": "계획",
   "chat.mode_plan_tip": "파일 변경 전 먼저 계획",
   "chat.model": "모델",
+  "chat.model_unreachable_switch": "연결 가능한 LLM 모델로 전환한 후 다시 보내세요.",
   "chat.model_unreachable": "LLM 서비스에 연결할 수 없음",
   "chat.model_unselected": "모델이 구성되지 않음",
   "chat.new_chat_tooltip": "새 대화 시작",

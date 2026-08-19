@@ -75,6 +75,7 @@
   "chat.workspace_pick": "Выберите рабочее пространство",
   "chat.workspace_switch": "Переключить рабочее пространство",
   "chat.workspace_new": "Новый проект (из папки)…",
+  "chat.model_unreachable_switch": "Переключитесь на доступную LLM-модель и повторите попытку.",
   "chat.model_unreachable": "LLM-сервис недоступен",
   "chat.model_unselected": "Модель не настроена",
   "chat.work_plan": "План",

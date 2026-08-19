@@ -76,6 +76,7 @@
   "chat.workspace_pick": "选择工作空间",
   "chat.workspace_switch": "切换工作空间",
   "chat.workspace_new": "新建项目（从文件夹）…",
+  "chat.model_unreachable_switch": "请更换为可达的 LLM 模型后再发送。",
   "chat.model_unreachable": "LLM服务不可达",
   "chat.model_unselected": "未配置模型",
   "chat.work_plan": "规划",

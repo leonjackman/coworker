@@ -673,6 +673,19 @@ function App() {
       return;
     }
 
+    // 阻断发送：当前模型对应的 LLM 服务不可达（探测失败缓存），不发起请求，
+    // 立即在消息墙提示用户更换模型。输入内容保留在 composer，换模型后可直接重发。
+    const blockingProvider = providers.find((provider) => provider.id === selectedModel);
+    if (blockingProvider?.context_error) {
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', `${t('chat.model_unreachable')}：${blockingProvider.context_error}。${t('chat.model_unreachable_switch')}`, {
+          status: 'error',
+        }),
+      ]);
+      return;
+    }
+
     const requestProjectId = override?.projectId || pendingProjectIdRef.current;
 
     // 未选择 workspace 时不发送，停留在草稿态提示用户先选工作空间
