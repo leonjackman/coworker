@@ -1867,6 +1867,12 @@ DEFAULT_CONTEXT_WINDOW_CHARS = 128_000
 CONTEXT_SAFETY_FACTOR = 0.75
 CHARS_PER_TOKEN = 3.5
 KEEP_RECENT_FACTOR = 0.6
+# Conservative chars/token used when TRUNCATING an oversized message to fit a
+# token budget. CJK is ~1.6 chars/token (0.6 tokens/char); truncating to
+# ``budget * 1.5`` chars keeps the result under ``budget`` tokens for pure CJK
+# (1.5 * 0.6 = 0.9) and well under for Latin — unlike ``budget * CHARS_PER_TOKEN``,
+# which leaves a CJK message ~2.2x over its token budget.
+TRUNCATE_CHARS_PER_TOKEN = 1.5
 
 
 def context_budget_chars(context_window_tokens: int) -> int:
@@ -2077,9 +2083,10 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         for msg in messages[:1]:
             tokens = _msg_tokens(msg)
             if tokens > budget:
-                # Convert the token budget to a conservative char cap (Latin
-                # chars/token ≈ 3.5; CJK is denser so this over-trims CJK — safe).
-                msg = _truncate_message(msg, max(200, int(budget * CHARS_PER_TOKEN)))
+                # Convert the token budget to a conservative char cap. CJK is
+                # denser than the flat 3.5 chars/token, so use TRUNCATE_CHARS_PER_TOKEN
+                # to guarantee the truncated message fits the token budget.
+                msg = _truncate_message(msg, max(200, int(budget * TRUNCATE_CHARS_PER_TOKEN)))
             head.append(msg)
             budget -= _msg_tokens(msg)
 
@@ -2089,7 +2096,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             if tokens >= self.budget_tokens:
                 # Oversized message: truncate user/system, drop tool/AI.
                 if getattr(msg, "type", "") in ("human", "system", "user"):
-                    kept_tail.append(_truncate_message(msg, max(200, int(self.budget_tokens * CHARS_PER_TOKEN))))
+                    kept_tail.append(_truncate_message(msg, max(200, int(self.budget_tokens * TRUNCATE_CHARS_PER_TOKEN))))
                     budget = 0
                     break
                 continue
@@ -4119,7 +4126,12 @@ class AgentRuntimeRegistry:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
-        runtime = self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions, project_id=project_id)
+        # Runtime construction resolves the context window with a synchronous
+        # network probe (cold cache); keep it off the event loop.
+        runtime = await asyncio.to_thread(
+            self.get_stream_runtime, "single", provider_id or None, model or None, workspace,
+            referenced_sessions=referenced_sessions, project_id=project_id,
+        )
         async for event in runtime.resume_interrupt(approval, decisions):
             yield event
 
@@ -4155,6 +4167,9 @@ class AgentRuntimeRegistry:
             "agent": agent or "",
             "project_id": project_id or "",
         }
-        runtime = self._stream_runtime_from_context(context)
+        # Runtime construction resolves the context window with a synchronous
+        # network probe (cold cache); keep it off the event loop (regenerate/edit
+        # are async SSE handlers).
+        runtime = await asyncio.to_thread(self._stream_runtime_from_context, context)
         async for event in runtime.stream_rerun(messages, session_id, language, work_mode, autonomy):
             yield event

@@ -887,7 +887,12 @@ async def chat(request: ChatRequest):
         if project_dir:
             _ensure_agent_skeleton(project_dir, agent)
             _ensure_org(project_dir)
-        runtime = agent_registry.get_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent, project_id=request.project_id)
+        # Runtime construction resolves the context window with a synchronous
+        # network probe (cold cache); keep it off the event loop.
+        runtime = await asyncio.to_thread(
+            agent_registry.get_runtime, request.mode, request.provider_id, request.model, resolved_workspace,
+            referenced_sessions=referenced_ids, agent=agent, project_id=request.project_id,
+        )
         agent_registry.checkpoint_manager.mark_active(session_id)
         try:
             # The sync path runs the whole LangGraph turn (LLM calls + possibly a
@@ -1610,8 +1615,13 @@ class ChatStreamRequest(ChatRequest):
 
 def _cached_provider_unreachable(provider_id: str | None, model: str | None) -> str | None:
     """Best-effort fast-fail guard: return the cached "LLM 服务不可达" message
-    when the requested provider's context discovery recently failed, else
+    when the requested LOCAL provider's context discovery recently failed, else
     ``None``. Pure cache read — never probes, never blocks the event loop.
+
+    Only LOCAL providers fast-fail here: a failed discovery probe (e.g. a 401/404
+    from a cloud/gateway endpoint that omits ``/v1/models``) does not mean chat
+    completions are down, and the UI's ``context_error`` warning is only surfaced
+    for local providers too — so the two must agree. See ``_resolve_context_window_full``.
     """
     try:
         if not provider_id:
@@ -1621,9 +1631,39 @@ def _cached_provider_unreachable(provider_id: str | None, model: str | None) -> 
             return None
         if model and model != provider.model:
             provider = replace(provider, model=model)
+        if not ProviderManager._is_local(provider):
+            return None
         return ProviderManager.cached_context_error(provider)
     except Exception:  # noqa: BLE001 - a guard failure must never break a turn
         return None
+
+
+async def _build_stream_runtime(
+    mode: str,
+    provider_id: str | None,
+    model: str | None,
+    workspace: Any,
+    referenced_ids: set[str],
+    agent: str,
+    project_id: str | None,
+) -> Any:
+    """Build a stream runtime WITHOUT blocking the event loop.
+
+    Runtime construction resolves the provider's context window, which performs
+    a synchronous network probe whenever the discovery cache is cold (up to the
+    3s probe timeout). That must never freeze the event loop that also serves
+    other sessions' SSE streams/heartbeats, so the whole init runs on a thread.
+    """
+    return await asyncio.to_thread(
+        agent_registry.get_stream_runtime,
+        mode,
+        provider_id,
+        model,
+        workspace,
+        referenced_sessions=referenced_ids,
+        agent=agent,
+        project_id=project_id,
+    )
 
 
 @app.post("/chat/stream")
@@ -1655,7 +1695,7 @@ async def chat_stream(request: ChatStreamRequest):
         if project_dir:
             _ensure_agent_skeleton(project_dir, agent)
             _ensure_org(project_dir)
-        runtime = agent_registry.get_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_sessions=referenced_ids, agent=agent, project_id=request.project_id)
+        runtime = await _build_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_ids, agent, request.project_id)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -1817,10 +1857,9 @@ async def chat_stream(request: ChatStreamRequest):
                 pass
             cancel_event = asyncio.Event()
             _goal_cancel_events[session_id] = cancel_event
-            runtime = agent_registry.get_stream_runtime(
+            runtime = await _build_stream_runtime(
                 request.mode, request.provider_id, request.model,
-                resolved_workspace, referenced_sessions=referenced_ids,
-                agent=agent, project_id=request.project_id,
+                resolved_workspace, referenced_ids, agent, request.project_id,
             )
             try:
                 stream_id = session_store.require(session_id).goal_stream_id or ""
@@ -1832,10 +1871,9 @@ async def chat_stream(request: ChatStreamRequest):
                 _cancel_event=cancel_event, goal_stream_id=stream_id,
             )
         else:
-            runtime = agent_registry.get_stream_runtime(
+            runtime = await _build_stream_runtime(
                 request.mode, request.provider_id, request.model,
-                resolved_workspace, referenced_sessions=referenced_ids,
-                agent=agent, project_id=request.project_id,
+                resolved_workspace, referenced_ids, agent, request.project_id,
             )
             stream_iter = runtime.stream(
                 messages, session_id, request.language, work_mode, autonomy,
@@ -2335,7 +2373,7 @@ async def goal_resume(request: GoalResumeRequest):
     referenced_ids: set[str] = set()
     try:
         resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
-        runtime = agent_registry.get_stream_runtime("single", None, None, resolved_workspace, referenced_sessions=referenced_ids, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None)
+        runtime = await _build_stream_runtime("single", None, None, resolved_workspace, referenced_ids, session.agent_id or DEFAULT_AGENT, session.project_id or None)
     except (KeyError, ValueError, RuntimeError) as exc:
         _goal_active_streams.pop(stream_id, None)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

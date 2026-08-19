@@ -521,6 +521,13 @@ class ProviderManager:
                     note = (
                         f"服务端实际 max_model_len={discovered}，上下文窗口已按 {discovered} 计算"
                     )
+            elif ProviderManager._is_local(provider) and discovered_error:
+                # A local server with a user-configured window failed the probe:
+                # surface the reason so the UI (composer warning / provider card)
+                # agrees with the chat fast-fail guard instead of silently falling
+                # through. Non-local providers keep a silent fallback — a probe
+                # failure there does not imply chat is down.
+                note = discovered_error
             elif effective > _UNVERIFIED_CONTEXT_WINDOW_WARN:
                 note = (
                     f"上下文窗口 {effective} 未经服务端验证且偏大。若出现卡死或流式超时，"
