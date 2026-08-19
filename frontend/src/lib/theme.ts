@@ -7,7 +7,16 @@ import {
 const STORAGE_KEY = 'coworker-theme-settings';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
-export type ThemePresetId = 'mineral' | 'hermes' | 'ember' | 'sage' | 'graphite';
+export type ThemePresetId =
+  | 'mineral'
+  | 'hermes'
+  | 'ember'
+  | 'sage'
+  | 'graphite'
+  | 'azure'
+  | 'nocturne'
+  | 'solarized'
+  | 'monokai';
 
 export interface ThemePalette extends Palette {}
 
@@ -113,6 +122,72 @@ const PRESET_SEEDS: PresetSeed[] = [
       accent: { l: 0.86, c: 0.004, h: 100 },
       bg: { l: 0.11, c: 0, h: 0 },
       neutralH: 250,
+    },
+  },
+
+  /* ---- VS Code 风格主题（参考其表面层级与色板标准）---- */
+  {
+    id: 'azure',
+    labelKey: 'theme.preset_azure',
+    descriptionKey: 'theme.preset_azure_desc',
+    preview: ['#eef2f6', '#0e639c', '#1e1e1e'],
+    light: {
+      accent: { l: 0.55, c: 0.13, h: 254 },
+      bg: { l: 0.94, c: 0.012, h: 250 },
+      neutralH: 250,
+    },
+    dark: {
+      accent: { l: 0.62, c: 0.13, h: 254 },
+      bg: { l: 0.13, c: 0.008, h: 250 },
+      neutralH: 250,
+    },
+  },
+  {
+    id: 'nocturne',
+    labelKey: 'theme.preset_nocturne',
+    descriptionKey: 'theme.preset_nocturne_desc',
+    preview: ['#eef1f5', '#61afef', '#282c34'],
+    light: {
+      accent: { l: 0.6, c: 0.11, h: 250 },
+      bg: { l: 0.94, c: 0.012, h: 250 },
+      neutralH: 250,
+    },
+    dark: {
+      accent: { l: 0.78, c: 0.1, h: 250 },
+      bg: { l: 0.16, c: 0.012, h: 250 },
+      neutralH: 250,
+    },
+  },
+  {
+    id: 'solarized',
+    labelKey: 'theme.preset_solarized',
+    descriptionKey: 'theme.preset_solarized_desc',
+    preview: ['#fdf6e3', '#268bd2', '#002b36'],
+    light: {
+      accent: { l: 0.6, c: 0.12, h: 250 },
+      bg: { l: 0.96, c: 0.02, h: 90 },
+      neutralH: 90,
+    },
+    dark: {
+      accent: { l: 0.62, c: 0.11, h: 200 },
+      bg: { l: 0.2, c: 0.02, h: 195 },
+      neutralH: 195,
+    },
+  },
+  {
+    id: 'monokai',
+    labelKey: 'theme.preset_monokai',
+    descriptionKey: 'theme.preset_monokai_desc',
+    preview: ['#efeae0', '#f92672', '#272822'],
+    light: {
+      accent: { l: 0.62, c: 0.18, h: 350 },
+      bg: { l: 0.94, c: 0.012, h: 100 },
+      neutralH: 100,
+    },
+    dark: {
+      accent: { l: 0.64, c: 0.2, h: 350 },
+      bg: { l: 0.18, c: 0.015, h: 100 },
+      neutralH: 100,
     },
   },
 ];

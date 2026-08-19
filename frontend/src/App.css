@@ -479,13 +479,20 @@ body.sidebar-resizing {
   transition: color 150ms ease, background 150ms ease;
 }
 
+/* Hover = neutral lift; Active = accent-soft chip (与设计稿 .cw-session.on 一致，
+   让"被选中"读起来是品牌色系而非中性灰，保留侧栏的视觉层级) */
 .sidebar-nav-item:hover,
 .sidebar-session:hover,
-.sidebar-project__title:hover,
-.sidebar-nav-item--active,
-.sidebar-session--active {
+.sidebar-project__title:hover {
   color: var(--foreground);
   background: var(--material-control);
+}
+
+.sidebar-nav-item--active,
+.sidebar-session--active {
+  color: var(--accent-soft-foreground);
+  background: var(--accent-soft);
+  font-weight: 650;
 }
 
 .sidebar-nav-item--strong {
