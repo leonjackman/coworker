@@ -1027,7 +1027,7 @@ export function ChatInput({
                   )}
                   {branchStatus && (
                     <span
-                     style={{ display: "flex", alignItems: "center", gap: "4px" ,color: "#666666"}}
+                     style={{ display: "flex", alignItems: "center", gap: "4px" ,color: "var(--muted-foreground)"}}
                       title={branchStatus.branch ? `当前分支（仅显示，不可编辑）：${branchStatus.branch}` : (branchStatus.isRepo ? "当前处于 detached HEAD（无分支名）" : "当前项目不是 git 仓库")}
                     >
                       <GitBranch size={14} />

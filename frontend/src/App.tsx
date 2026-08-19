@@ -237,6 +237,9 @@ function App() {
   const updateCenter = useUpdateCenter();
   const { playSound } = useSound();
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
+  // Keep latest theme settings reachable from event handlers without resubscribing.
+  const themeSettingsRef = useRef(themeSettings);
+  themeSettingsRef.current = themeSettings;
   const [activeView, setActiveView] = useState<AppView>('chat');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(276);
@@ -666,6 +669,16 @@ function App() {
   useEffect(() => {
     applyTheme(themeSettings);
   }, [themeSettings]);
+
+  // In `system` mode, follow the OS light/dark preference live.
+  useEffect(() => {
+    if (themeSettings.mode !== 'system') return;
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mql = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = () => applyTheme(themeSettingsRef.current);
+    mql.addEventListener('change', handler);
+    return () => mql.removeEventListener('change', handler);
+  }, [themeSettings.mode]);
 
   useEffect(() => {
     document.title = t('app.title');

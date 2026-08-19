@@ -468,7 +468,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
       {initialLoading ? (
         <div className="skill-market-loading-overlay">
           <Loader2 size={32} className="animate-spin" />
-          <p style={{ marginTop: '16px', color: '#666' }}>{t('skills.loading')}</p>
+          <p style={{ marginTop: '16px', color: 'var(--muted-foreground)' }}>{t('skills.loading')}</p>
         </div>
       ) : skills.length === 0 ? (
         <div className="skill-empty">

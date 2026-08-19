@@ -1,16 +1,11 @@
-import { ArrowLeft, Palette } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import {
-  CUSTOM_COLOR_KEYS,
   THEME_PRESETS,
-  customBasePalette,
-  resolveThemePalette,
-  type ThemeColorKey,
   type ThemePresetId,
   type ThemeSettings,
 } from '../../lib/theme';
 import { t } from '../../lib/i18n';
 import { Button } from '../ui/button';
-import { Switch } from '../ui/switch';
 import { WorkspacePage } from '../ui/workspace-page';
 
 interface ThemeCustomizerProps {
@@ -19,26 +14,9 @@ interface ThemeCustomizerProps {
   onBack: () => void;
 }
 
-function colorLabel(key: ThemeColorKey): string {
-  return t(`theme.color_${key}`);
-}
-
 export function ThemeCustomizer({ settings, onChange, onBack }: ThemeCustomizerProps) {
-  const palette = settings.presetId === 'custom' ? customBasePalette(settings) : resolveThemePalette(settings);
-
   function selectPreset(presetId: ThemePresetId) {
     onChange({ ...settings, presetId });
-  }
-
-  function changeColor(key: ThemeColorKey, value: string) {
-    onChange({
-      ...settings,
-      presetId: 'custom',
-      customPalette: {
-        ...settings.customPalette,
-        [key]: value,
-      },
-    });
   }
 
   return (
@@ -71,56 +49,7 @@ export function ThemeCustomizer({ settings, onChange, onBack }: ThemeCustomizerP
             <small>{t(preset.descriptionKey)}</small>
           </button>
         ))}
-        <button
-          className={`theme-preset-card theme-preset-card--custom ${settings.presetId === 'custom' ? 'theme-preset-card--active' : ''}`}
-          type="button"
-          onClick={() => selectPreset('custom')}
-        >
-          <span className="theme-preset-card__swatches">
-            <span style={{ background: palette.background }} />
-            <span style={{ background: palette.accent }} />
-            <span style={{ background: palette.messageUser }} />
-          </span>
-          <strong>{t('theme.preset_custom')}</strong>
-          <small>{t('theme.preset_custom_desc')}</small>
-        </button>
-      </div>
-
-      <div className={`settings-card color-card ${settings.presetId !== 'custom' ? 'color-card--disabled' : ''}`}>
-        <div className="settings-row">
-          <div className="settings-row__copy">
-            <label>{t('settings.custom_palette')}</label>
-            <p>{t('settings.custom_palette_desc')}</p>
-          </div>
-          <div className="settings-row__control">
-            <span className="palette-badge">
-              <Palette size={14} />
-              {settings.presetId === 'custom' ? t('theme.preset_custom') : t('settings.select_custom_first')}
-            </span>
-          </div>
-        </div>
-        <div className="color-grid">
-          {CUSTOM_COLOR_KEYS.map((key) => (
-            <label className="color-field" key={key}>
-              <span>{colorLabel(key)}</span>
-              <div>
-                <input
-                  type="color"
-                  value={normalizeColor((settings.customPalette[key] as string | undefined) ?? palette[key])}
-                  onChange={(event) => changeColor(key, event.target.value)}
-                  disabled={settings.presetId !== 'custom'}
-                />
-                <code>{(settings.customPalette[key] as string | undefined) ?? palette[key]}</code>
-              </div>
-            </label>
-          ))}
-        </div>
       </div>
     </WorkspacePage>
   );
-}
-
-function normalizeColor(color: string): string {
-  if (/^#[0-9a-fA-F]{6}$/.test(color)) return color;
-  return '#2b6f8f';
 }

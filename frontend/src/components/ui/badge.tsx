@@ -9,9 +9,9 @@ const variants: Record<NonNullable<BadgeProps['variant']>, string> = {
   default: 'bg-[var(--accent)] text-[var(--accent-foreground)]',
   secondary: 'bg-[var(--material-control)] text-[var(--foreground)]',
   outline: 'border border-[var(--material-border)] text-[var(--foreground)]',
-  success: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100',
-  warning: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-100',
-  destructive: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-100',
+  success: 'badge--success',
+  warning: 'badge--warning',
+  destructive: 'badge--destructive',
 };
 
 export function Badge({ className, variant = 'secondary', ...props }: BadgeProps) {

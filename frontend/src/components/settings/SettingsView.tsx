@@ -128,7 +128,7 @@ export function SettingsView({
                 label: t('settings.palette_group'),
                 description: t('settings.palette_entry_desc'),
                 actionLabel: t('settings.configure'),
-                meta: <span className="settings-chip">{themeSettings.presetId === 'custom' ? t('theme.preset_custom') : t(currentPreset?.labelKey ?? 'theme.preset_mineral')}</span>,
+                meta: <span className="settings-chip">{t(currentPreset?.labelKey ?? 'theme.preset_mineral')}</span>,
                 onAction: () => setSettingsPage('theme'),
               },
             ],

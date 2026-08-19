@@ -44,9 +44,9 @@ interface WorkspaceTitlebarProps {
 }
 
 const STATUS_COLORS = {
-  green: '#2fa06d',
-  amber: '#c79a2f',
-  red: '#c95343',
+  green: 'var(--success)',
+  amber: 'var(--warning)',
+  red: 'var(--danger)',
 } as const;
 
 function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {

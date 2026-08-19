@@ -12,16 +12,16 @@
 }
 
 .type-capsule--sys {
-  background: #1d4ed8;
-  color: #ffffff;
+  background: var(--accent);
+  color: var(--accent-foreground);
 }
 
 .type-capsule--skill {
-  background: #facc15;
-  color: #1c1917;
+  background: var(--warning);
+  color: var(--warning-foreground);
 }
 
 .type-capsule--mcp {
-  background: #15803d;
-  color: #ffffff;
+  background: var(--success);
+  color: var(--success-foreground);
 }
