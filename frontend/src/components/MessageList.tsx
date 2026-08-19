@@ -375,10 +375,10 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
                   {summaryData.count > 0 && ' · '}
                   {summaryData.fileCount} file{summaryData.fileCount > 1 ? 's' : ''}
                   {summaryData.addedLines > 0 && (
-                    <span className="text-success"> +{summaryData.addedLines}</span>
+                    <span className="file-counts__add"> +{summaryData.addedLines}</span>
                   )}
                   {summaryData.removedLines > 0 && (
-                    <span className="text-warning"> -{summaryData.removedLines}</span>
+                    <span className="file-counts__del"> -{summaryData.removedLines}</span>
                   )}
                 </>
               )}

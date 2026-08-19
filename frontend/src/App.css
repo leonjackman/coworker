@@ -492,7 +492,7 @@ body.sidebar-resizing {
 
 .sidebar-nav-item--active,
 .sidebar-session--active {
-  color: var(--accent-foreground);
+    color: var(--accent-foreground);
   background: var(--accent);
   font-weight: 650;
 }
@@ -2493,7 +2493,28 @@ body.bottom-panel-resizing {
 }
 
 .sidebar-session--active .sidebar-session__inner {
-  color: var(--foreground);
+  color: var(--accent-foreground);
+  font-weight: 650;
+}
+
+/* Active session children must stay readable on the solid accent fill. */
+.sidebar-session--active .sidebar-session__time {
+  color: var(--accent-foreground);
+  opacity: 0.78;
+}
+
+.sidebar-session--active .sidebar-session__goal-icon,
+.sidebar-session--active .sidebar-session__running-icon {
+  color: var(--accent-foreground);
+  opacity: 0.9;
+}
+
+.sidebar-session--active .sidebar-session__more-trigger {
+  color: var(--accent-foreground);
+}
+
+.sidebar-session--active .sidebar-session__more-trigger:hover {
+  background: color-mix(in srgb, var(--accent-foreground) 16%, transparent);
 }
 
 .sidebar-session__title {
@@ -6269,6 +6290,10 @@ body.bottom-panel-resizing {
 .file-counts__add {
   color: oklch(0.55 0.15 145);
 }
+.file-counts__del {
+  color: oklch(0.55 0.15 40);
+}
+
 .file-counts__empty {
   color: var(--muted-foreground);
   opacity: 0.7;
@@ -9485,13 +9510,6 @@ body.bottom-panel-resizing {
   margin-top: 12px;
 }
 
-.text-success {
-  color: var(--success-foreground, #22c55e);
-}
-
-.text-warning {
-  color: var(--warning, #d99100);
-}
 
 .add-skill-page__form {
   display: grid;
