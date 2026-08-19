@@ -198,6 +198,8 @@
   "theme.preset_solarized_desc": "Solarized в двух режимах — тщательно сбалансированные светлый и тёмный.",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Яркий Monokai — высокая насыщенность, энергичный кодинг.",
+  "theme.preset_violet": "Фиолетовый",
+  "theme.preset_violet_desc": "Фиолетовый с холодными нейтральными серыми — из пользовательской палитры.",
   "settings.title": "Настройки",
   "settings.heading": "Настройки приложения",
   "settings.description": "Управляйте предпочтениями интерфейса, темой и настройками чата в одном месте.",

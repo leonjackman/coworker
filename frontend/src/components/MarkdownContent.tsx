@@ -24,7 +24,135 @@ type SupportedLanguage =
   | 'html'
   | 'diff'
   | 'yaml'
-  | 'xml';
+  | 'xml'
+  | 'java'
+  | 'go'
+  | 'rust'
+  | 'c'
+  | 'cpp'
+  | 'csharp'
+  | 'sql'
+  | 'php'
+  | 'ruby'
+  | 'kotlin'
+  | 'swift'
+  | 'powershell'
+  | 'dockerfile'
+  | 'toml'
+  | 'ini'
+  | 'graphql'
+  | 'jsonc'
+  | 'vue'
+  | 'svelte'
+  | 'makefile'
+  | 'cmake'
+  | 'scala'
+  | 'dart'
+  | 'lua'
+  | 'r'
+  | 'haskell'
+  | 'fish'
+  | 'groovy'
+  | 'objective-c'
+  | 'nginx'
+  | 'mermaid'
+  | 'latex'
+  | 'protobuf'
+  | 'solidity'
+  | 'zig';
+
+/** Canonical language ids (also includes aliases via LANGUAGE_ALIASES). */
+const SUPPORTED_LANGS: readonly SupportedLanguage[] = [
+  'text',
+  'javascript',
+  'typescript',
+  'tsx',
+  'jsx',
+  'python',
+  'bash',
+  'json',
+  'markdown',
+  'css',
+  'html',
+  'diff',
+  'yaml',
+  'xml',
+  'java',
+  'go',
+  'rust',
+  'c',
+  'cpp',
+  'csharp',
+  'sql',
+  'php',
+  'ruby',
+  'kotlin',
+  'swift',
+  'powershell',
+  'dockerfile',
+  'toml',
+  'ini',
+  'graphql',
+  'jsonc',
+  'vue',
+  'svelte',
+  'makefile',
+  'cmake',
+  'scala',
+  'dart',
+  'lua',
+  'r',
+  'haskell',
+  'fish',
+  'groovy',
+  'objective-c',
+  'nginx',
+  'mermaid',
+  'latex',
+  'protobuf',
+  'solidity',
+  'zig',
+];
+
+/** Common fence aliases -> canonical shiki language id. */
+const LANGUAGE_ALIASES: Record<string, SupportedLanguage> = {
+  js: 'javascript',
+  ts: 'typescript',
+  py: 'python',
+  sh: 'bash',
+  shell: 'bash',
+  zsh: 'bash',
+  md: 'markdown',
+  mdx: 'markdown',
+  yml: 'yaml',
+  golang: 'go',
+  rs: 'rust',
+  'c++': 'cpp',
+  cc: 'cpp',
+  csharp: 'csharp',
+  cs: 'csharp',
+  'c#': 'csharp',
+  rb: 'ruby',
+  kt: 'kotlin',
+  pwsh: 'powershell',
+  ps1: 'powershell',
+  docker: 'dockerfile',
+  cfg: 'ini',
+  properties: 'ini',
+  gql: 'graphql',
+  json5: 'jsonc',
+  make: 'makefile',
+  mk: 'makefile',
+  hs: 'haskell',
+  objc: 'objective-c',
+  m: 'objective-c',
+  nginxconf: 'nginx',
+  tex: 'latex',
+  proto: 'protobuf',
+  sol: 'solidity',
+};
+
+const PLAIN_ALIASES: ReadonlySet<string> = new Set(['text', 'plain', 'txt', 'plaintext']);
 
 type CodeToHtml = (
   code: string,
@@ -57,6 +185,41 @@ function loadCodeToHtml(): Promise<CodeToHtml> {
         diff: () => import('shiki/langs/diff'),
         yaml: () => import('shiki/langs/yaml'),
         xml: () => import('shiki/langs/xml'),
+        java: () => import('shiki/langs/java'),
+        go: () => import('shiki/langs/go'),
+        rust: () => import('shiki/langs/rust'),
+        c: () => import('shiki/langs/c'),
+        cpp: () => import('shiki/langs/cpp'),
+        csharp: () => import('shiki/langs/csharp'),
+        sql: () => import('shiki/langs/sql'),
+        php: () => import('shiki/langs/php'),
+        ruby: () => import('shiki/langs/ruby'),
+        kotlin: () => import('shiki/langs/kotlin'),
+        swift: () => import('shiki/langs/swift'),
+        powershell: () => import('shiki/langs/powershell'),
+        dockerfile: () => import('shiki/langs/dockerfile'),
+        toml: () => import('shiki/langs/toml'),
+        ini: () => import('shiki/langs/ini'),
+        graphql: () => import('shiki/langs/graphql'),
+        jsonc: () => import('shiki/langs/jsonc'),
+        vue: () => import('shiki/langs/vue'),
+        svelte: () => import('shiki/langs/svelte'),
+        makefile: () => import('shiki/langs/makefile'),
+        cmake: () => import('shiki/langs/cmake'),
+        scala: () => import('shiki/langs/scala'),
+        dart: () => import('shiki/langs/dart'),
+        lua: () => import('shiki/langs/lua'),
+        r: () => import('shiki/langs/r'),
+        haskell: () => import('shiki/langs/haskell'),
+        fish: () => import('shiki/langs/fish'),
+        groovy: () => import('shiki/langs/groovy'),
+        'objective-c': () => import('shiki/langs/objective-c'),
+        nginx: () => import('shiki/langs/nginx'),
+        mermaid: () => import('shiki/langs/mermaid'),
+        latex: () => import('shiki/langs/latex'),
+        protobuf: () => import('shiki/langs/protobuf'),
+        solidity: () => import('shiki/langs/solidity'),
+        zig: () => import('shiki/langs/zig'),
       },
       themes: {
         'github-light': () => import('shiki/themes/github-light'),
@@ -72,25 +235,10 @@ function loadCodeToHtml(): Promise<CodeToHtml> {
 function languageFor(language?: string): SupportedLanguage {
   if (!language) return 'text';
   const normalized = language.trim().toLowerCase();
-  if (normalized === 'js') return 'javascript';
-  if (normalized === 'ts') return 'typescript';
-  if (normalized === 'tsx') return 'tsx';
-  if (normalized === 'jsx') return 'jsx';
-  if (normalized === 'py') return 'python';
-  if (normalized === 'shell' || normalized === 'sh' || normalized === 'bash' || normalized === 'zsh') return 'bash';
-  if (normalized === 'md' || normalized === 'mdx') return 'markdown';
-  if (normalized === 'yml') return 'yaml';
-  if (
-    normalized === 'json' ||
-    normalized === 'markdown' ||
-    normalized === 'css' ||
-    normalized === 'html' ||
-    normalized === 'diff' ||
-    normalized === 'yaml' ||
-    normalized === 'xml'
-  ) {
-    return normalized;
-  }
+  if (PLAIN_ALIASES.has(normalized)) return 'text';
+  const aliased = LANGUAGE_ALIASES[normalized];
+  if (aliased) return aliased;
+  if ((SUPPORTED_LANGS as readonly string[]).includes(normalized)) return normalized as SupportedLanguage;
   return 'text';
 }
 

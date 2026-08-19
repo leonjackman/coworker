@@ -198,6 +198,8 @@
   "theme.preset_solarized_desc": "Solarized de modo duplo — claro e escuro cuidadosamente equilibrados.",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Monokai vívido — alta saturação, coding energético.",
+  "theme.preset_violet": "Violeta",
+  "theme.preset_violet_desc": "Violeta com cinzas neutros frios — da paleta personalizada.",
   "settings.title": "Configurações",
   "settings.heading": "Configurações do aplicativo",
   "settings.description": "Gerencie preferências de interface, tema e padrões de conversa em um só lugar.",

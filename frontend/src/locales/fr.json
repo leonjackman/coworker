@@ -223,6 +223,8 @@
   "theme.preset_solarized_desc": "Solarized en mode double — clair et sombre soigneusement équilibrés.",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Monokai vif — saturation élevée, coding énergétique.",
+  "theme.preset_violet": "Violet",
+  "theme.preset_violet_desc": "Violet avec des gris neutres froids — issu de la palette personnalisée.",
   "settings.title": "Paramètres",
   "settings.heading": "Paramètres de l'application",
   "settings.description": "Gérez les préférences d'interface, le thème et les paramètres de discussion au même endroit.",

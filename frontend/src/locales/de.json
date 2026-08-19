@@ -198,6 +198,8 @@
   "theme.preset_solarized_desc": "Solarized Dual-Modus — sorgfältig ausbalanciertes Hell & Dunkel.",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Monokai lebendig — hohe Sättigung, energetisches Coden.",
+  "theme.preset_violet": "Violett",
+  "theme.preset_violet_desc": "Violett mit kühlen neutralen Grautönen — aus der Custom-Palette.",
   "settings.title": "Einstellungen",
   "settings.heading": "Anwendungseinstellungen",
   "settings.description": "Verwalten Sie Oberflächeneinstellungen, Thema und Chat-Standardwerte an einem Ort.",

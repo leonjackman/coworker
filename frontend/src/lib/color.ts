@@ -205,7 +205,9 @@ export interface PaletteInput {
   mode: ThemeMode;
   /** The brand accent, in OKLCH. */
   accent: Oklch;
-  /** Page background, in OKLCH. */
+  /** Background in OKLCH — kept for seed compatibility; the fixed elevation
+   *  ladder in buildPalette (0.94/1.0/0.965… light, 0.13/0.18/0.23… dark)
+   *  drives the actual surfaces, matching theme-demo.html. */
   bg: Oklch;
   /** Hue used to tint neutral surfaces, borders and muted text. */
   neutralH: number;
@@ -213,9 +215,9 @@ export interface PaletteInput {
   neutralC?: number;
   /** Foreground lightness override (default 0.18 light / 0.95 dark). */
   fgL?: number;
-  /** How far elevated surfaces lift from the background lightness. */
+  /** Kept for seed compatibility; no longer used (fixed ladder wins). */
   panelLift?: number;
-  /** Chroma of the surface tint. */
+  /** Kept for seed compatibility; no longer used. */
   surfaceTint?: number;
 }
 
@@ -254,16 +256,10 @@ const BLACK_HEX = '#0a0a0b';
  * This is the single source of truth shared by presets and custom themes.
  */
 export function buildPalette(input: PaletteInput): Palette {
-  const { mode, accent, bg, neutralH } = input;
+  const { mode, accent, neutralH } = input;
   const isLight = mode === 'light';
-  const neutralC = input.neutralC ?? 0.01;
+  const neutralC = input.neutralC ?? (isLight ? 0.012 : 0.008);
   const fgL = input.fgL ?? (isLight ? 0.18 : 0.95);
-  const panelLift = input.panelLift ?? (isLight ? 0.05 : 0.045);
-  // Keep surfaces near-neutral with only a hint of the neutral hue. The accent
-  // color must stay scarce — that's what makes the UI look coordinated instead
-  // of tinted. (surfaceTint is kept in the interface for backwards compat but
-  // no longer used as a strong accent-derived tint.)
-  const surfaceChroma = neutralC;
 
   // --- Accent scale (sweep lightness, keep hue & chroma) ---
   // Solid accent fills (buttons, user bubble) use WHITE text per Apple/VS Code.
@@ -275,37 +271,52 @@ export function buildPalette(input: PaletteInput): Palette {
   const accentHoverL = clamp(safeAccent.l + (isLight ? -0.06 : 0.06), 0.12, 0.96);
   const accentHover = oklchString({ l: accentHoverL, c: safeAccent.c, h: safeAccent.h });
 
-  // Soft chip / active-tab background: very light (light mode) or tinted-dark
+  // Soft chip / active-tab background: light-tinted (light mode) or tinted-dark
   // (dark mode), carrying a hint of the accent hue.
-  const softL = isLight ? 0.95 : 0.22;
-  const softC = Math.min(safeAccent.c * 0.6, 0.07);
+  const softL = isLight ? 0.94 : 0.2;
+  const softC = Math.min(safeAccent.c * 0.5, 0.05);
   const accentSoft = oklchString({ l: softL, c: softC, h: safeAccent.h });
   // Text on the soft background: a deeper / brighter accent for contrast.
-  const softFgL = isLight ? clamp(safeAccent.l - 0.15, 0.32, 0.5) : clamp(safeAccent.l + 0.16, 0.8, 0.95);
+  const softFgL = isLight ? clamp(safeAccent.l - 0.12, 0.3, 0.45) : clamp(safeAccent.l + 0.18, 0.8, 0.95);
   const accentSoftForeground = oklchString({ l: softFgL, c: safeAccent.c, h: safeAccent.h });
 
-  // --- Neutral surfaces: receded frame vs lifted content ---
-  // Use neutralC for the background too so the receded frame never carries a
-  // strong theme tint. Only the accent should read as colorful.
-  const bgL = bg.l;
-  const background = oklchString({ l: bgL, c: neutralC, h: neutralH });
-  // Sidebar shares the receded frame tone so the content area can pop.
-  const sidebar = background;
-  const panelL = clamp(bgL + panelLift, 0, 1);
-  const panel = oklchString({ l: panelL, c: surfaceChroma, h: neutralH });
-  const panelSolid = panel;
-  const panelHover = oklchString({ l: clamp(panelL + (isLight ? 0.03 : 0.035), 0, 1), c: surfaceChroma, h: neutralH });
-  const control = panelHover;
-  const controlActive = oklchString({ l: clamp(panelL + (isLight ? 0.05 : 0.06), 0, 1), c: surfaceChroma, h: neutralH });
-  const inputField = oklchString({ l: clamp(panelL - (isLight ? 0.015 : -0.01), 0, 1), c: surfaceChroma * 0.5, h: neutralH });
+  // --- Neutral family — FIXED elevation ladder (设计稿对齐) ---
+  // Independent of the accent hue: a receded frame (canvas + sidebar share one
+  // tone) with lifted reading surfaces. bg/panelLift are kept in the interface
+  // for backwards compat but no longer drive lightness — the ladder below is
+  // the single source of truth, matching theme-demo.html's buildPalette.
+  const n = (l: number, c?: number) => oklchString({ l, c: c ?? neutralC, h: neutralH });
 
-  // --- Borders / dividers ---
-  const border = isLight
-    ? oklchString({ l: clamp(bgL * 0.9, 0.86, 0.94), c: surfaceChroma, h: neutralH })
-    : oklchString({ l: clamp(bgL * 2.1, 0.24, 0.32), c: surfaceChroma, h: neutralH });
-
-  // --- Muted text (must stay >= 4.5:1 on the surface) ---
-  const mutedForeground = oklchString({ l: isLight ? 0.46 : 0.72, c: surfaceChroma, h: neutralH });
+  let background: string;
+  let sidebar: string;
+  let panel: string;
+  let panelHover: string;
+  let control: string;
+  let controlActive: string;
+  let inputField: string;
+  let border: string;
+  let muted: string;
+  if (isLight) {
+    background = n(0.94);      // receded frame
+    sidebar = n(0.94);         // sidebar shares the frame tone
+    panel = n(1.0);            // brightest reading surface
+    panelHover = n(0.965);
+    control = n(0.965);
+    controlActive = n(0.94);
+    inputField = n(1.0);
+    border = n(0.9);
+    muted = n(0.46);
+  } else {
+    background = n(0.13);      // receded frame
+    sidebar = n(0.13);
+    panel = n(0.18);           // lifted content
+    panelHover = n(0.23);
+    control = n(0.23);
+    controlActive = n(0.27);
+    inputField = n(0.15);
+    border = n(0.28);
+    muted = n(0.72);
+  }
 
   // --- Foreground ---
   const foreground = oklchString({ l: fgL, c: 0, h: 0 });
@@ -328,9 +339,9 @@ export function buildPalette(input: PaletteInput): Palette {
     background,
     backgroundGrid,
     foreground,
-    mutedForeground,
+    mutedForeground: muted,
     panel,
-    panelSolid,
+    panelSolid: panel,
     panelHover,
     input: inputField,
     control,

@@ -204,6 +204,8 @@
   "theme.preset_solarized_desc": "Solarized dual-mode — carefully balanced light & dark.",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Monokai vivid — high-saturation, energetic coding.",
+  "theme.preset_violet": "Violet",
+  "theme.preset_violet_desc": "Violet with cool neutral greys — from the custom palette.",
   "settings.title": "Settings",
   "settings.heading": "Application Settings",
   "settings.description": "Manage interface preferences, theme, and chat defaults in one place.",

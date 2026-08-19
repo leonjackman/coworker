@@ -198,6 +198,8 @@
   "theme.preset_solarized_desc": "Solarized デュアルモード — 明暗のバランスを丁寧に調整。",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Monokai 鶏やか — 高彩度でエネルギックなコーディング。",
+  "theme.preset_violet": "バイオレット",
+  "theme.preset_violet_desc": "クールなニュートラルグレーとバイオレット — カスタムパレット由来。",
   "settings.title": "設定",
   "settings.heading": "アプリケーション設定",
   "settings.description": "インターフェースの環境、テーマ、チャットデフォルトを一箇所で管理。",

@@ -198,6 +198,8 @@
   "theme.preset_solarized_desc": "Solarized de doble modo — claro y oscuro cuidadosamente equilibrados.",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Monokai vívido — alta saturación, coding energético.",
+  "theme.preset_violet": "Violeta",
+  "theme.preset_violet_desc": "Violeta con grises neutros fríos — de la paleta personalizada.",
   "settings.title": "Configuración",
   "settings.heading": "Configuración de la aplicación",
   "settings.description": "Gestiona las preferencias de la interfaz, el tema y los valores predeterminados del chat en un solo lugar.",

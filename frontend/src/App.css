@@ -58,7 +58,7 @@
   --card-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
+  --secondary: oklch(94.688% 0.00105 11.528);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -479,8 +479,10 @@ body.sidebar-resizing {
   transition: color 150ms ease, background 150ms ease;
 }
 
-/* Hover = neutral lift; Active = accent-soft chip (与设计稿 .cw-session.on 一致，
-   让"被选中"读起来是品牌色系而非中性灰，保留侧栏的视觉层级) */
+/* Hover = neutral lift; Active = solid accent fill with engine-guaranteed
+   contrast text (white on mid accents; graphite's inverted accent flips to
+   dark-on-light). Uses --accent-foreground (solidFillForeground), NOT the
+   soft-chip foreground, so selected items always read clearly. */
 .sidebar-nav-item:hover,
 .sidebar-session:hover,
 .sidebar-project__title:hover {
@@ -490,8 +492,8 @@ body.sidebar-resizing {
 
 .sidebar-nav-item--active,
 .sidebar-session--active {
-  color: var(--accent-soft-foreground);
-  background: var(--accent-soft);
+  color: var(--accent-foreground);
+  background: var(--accent);
   font-weight: 650;
 }
 
@@ -2479,8 +2481,6 @@ body.bottom-panel-resizing {
   gap: 10px;
   border: 0;
   border-radius: 8px;
-  padding: 0 10px;
-  color: var(--muted-foreground);
   background: transparent;
   cursor: pointer;
   font-size: 14px;
@@ -2490,12 +2490,10 @@ body.bottom-panel-resizing {
 
 .sidebar-session__inner:hover {
   color: var(--foreground);
-  background: var(--material-control);
 }
 
 .sidebar-session--active .sidebar-session__inner {
   color: var(--foreground);
-  background: var(--material-control);
 }
 
 .sidebar-session__title {

@@ -226,6 +226,8 @@
   "theme.preset_solarized_desc": "Solarized 雙模式，明暗平衡悉心調校。",
   "theme.preset_monokai": "Monokai",
   "theme.preset_monokai_desc": "Monokai 高飽和，鮮明有活力嘅編碼風。",
+  "theme.preset_violet": "紫羅蘭",
+  "theme.preset_violet_desc": "紫色主調 + 冷灰中性色，源自設計稿自訂主題。",
   "settings.title": "設定",
   "settings.heading": "應用程式設定",
   "settings.description": "喺同一個地方管理介面偏好、主題同聊天預設。",
