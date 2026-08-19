@@ -845,5 +845,7 @@
   "context_menu.paste": "Paste",
   "context_menu.select_all": "Select All",
   "context_menu.delete": "Delete",
-  "context_menu.clear": "Clear"
+  "context_menu.clear": "Clear",
+  "settings.sound_enabled": "Sound effects",
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
 }

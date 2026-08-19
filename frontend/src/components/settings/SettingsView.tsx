@@ -4,6 +4,7 @@ import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
 import type { Autonomy, MemorySettings, MemorySettingsPatch } from '../../types';
 import type { UpdateCenter } from '../../lib/useUpdateCenter';
+import { useSound } from '../sound-provider';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
 import { SettingsList } from './SettingsList';
@@ -50,6 +51,7 @@ export function SettingsView({
   onClose,
 }: SettingsViewProps) {
   const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit'>('main');
+  const { enabled: soundEnabled, toggleEnabled: toggleSound } = useSound();
 
   async function selectLanguage(language: string) {
     const allowed = ['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
@@ -214,6 +216,18 @@ export function SettingsView({
                   { value: 'false', label: t('memory.disabled') },
                 ],
                 onChange: (value) => onMemorySettingsChange({ auto_extract: value === 'true' }),
+              },
+              {
+                id: 'sound_enabled',
+                type: 'toggle',
+                label: t('settings.sound_enabled'),
+                description: t('settings.sound_enabled_desc'),
+                value: soundEnabled ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => toggleSound(),
               },
             ],
           },

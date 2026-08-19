@@ -845,5 +845,7 @@
   "context_menu.paste": "붙여넣기",
   "context_menu.select_all": "전체 선택",
   "context_menu.delete": "삭제",
-  "context_menu.clear": "지우기"
+  "context_menu.clear": "지우기",
+  "settings.sound_enabled": "Sound effects",
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
 }

@@ -845,5 +845,7 @@
   "context_menu.paste": "粘贴",
   "context_menu.select_all": "全选",
   "context_menu.delete": "删除",
-  "context_menu.clear": "清空"
+  "context_menu.clear": "清空",
+  "settings.sound_enabled": "提示音效",
+  "settings.sound_enabled_desc": "在聊天事件（回复完成、错误、审批请求）时播放音效。"
 }

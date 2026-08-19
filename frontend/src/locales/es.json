@@ -845,5 +845,7 @@
   "context_menu.paste": "Pegar",
   "context_menu.select_all": "Seleccionar todo",
   "context_menu.delete": "Eliminar",
-  "context_menu.clear": "Vaciar"
+  "context_menu.clear": "Vaciar",
+  "settings.sound_enabled": "Sound effects",
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
 }

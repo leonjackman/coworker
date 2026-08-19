@@ -845,5 +845,7 @@
   "context_menu.paste": "Coller",
   "context_menu.select_all": "Tout sélectionner",
   "context_menu.delete": "Supprimer",
-  "context_menu.clear": "Effacer"
+  "context_menu.clear": "Effacer",
+  "settings.sound_enabled": "Sound effects",
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
 }

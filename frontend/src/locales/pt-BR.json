@@ -845,5 +845,7 @@
   "context_menu.paste": "Colar",
   "context_menu.select_all": "Selecionar tudo",
   "context_menu.delete": "Excluir",
-  "context_menu.clear": "Limpar"
+  "context_menu.clear": "Limpar",
+  "settings.sound_enabled": "Sound effects",
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
 }

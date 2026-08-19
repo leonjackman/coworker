@@ -845,5 +845,7 @@
   "context_menu.paste": "Вставить",
   "context_menu.select_all": "Выбрать все",
   "context_menu.delete": "Удалить",
-  "context_menu.clear": "Очистить"
+  "context_menu.clear": "Очистить",
+  "settings.sound_enabled": "Sound effects",
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
 }

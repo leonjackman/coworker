@@ -23,6 +23,7 @@ import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
 import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
+import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
 import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
 import './App.css';
@@ -234,6 +235,7 @@ function App() {
   // useLanguage() 订阅语言变化以触发重渲染（返回值不直接使用）。
   useLanguage();
   const updateCenter = useUpdateCenter();
+  const { playSound } = useSound();
   const [themeSettings, setThemeSettingsState] = useState<ThemeSettings>(() => getThemeSettings());
   const [activeView, setActiveView] = useState<AppView>('chat');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1072,6 +1074,7 @@ function App() {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
         const pending = pendingRequestFromEvent(event, sessionIdValue, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
+        playSound('attention');
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -1121,6 +1124,7 @@ function App() {
           ),
         );
         setTodos([]);
+        playSound('reply_done');
       } else if (event.type === 'goal_start') {
         inGoal = true;
         if (goalMatchesView) {
@@ -1189,6 +1193,7 @@ function App() {
               : item,
           ),
         );
+        playSound(failed ? 'reply_error' : 'reply_done');
       } else if (event.type === 'goal_paused') {
         if (goalMatchesView) {
           setGoal((current) => ({ ...current, paused: true, running: false }));
@@ -1202,6 +1207,7 @@ function App() {
               : item,
           ),
         );
+        playSound('attention');
       } else if (event.type === 'error') {
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
@@ -1338,6 +1344,7 @@ function App() {
               : item,
           ),
         );
+        playSound('reply_error');
       }
     } finally {
       // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
@@ -1665,6 +1672,7 @@ function App() {
               : item,
           ),
         );
+        playSound('reply_error');
       }
     };
     try {
@@ -1688,6 +1696,7 @@ function App() {
               : item,
           ),
         );
+        playSound('reply_error');
       }
     } finally {
       if (streamControllersRef.current[streamKey(currentSessionId)] === controller) {
@@ -1861,6 +1870,7 @@ function App() {
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
+        playSound('attention');
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -1878,6 +1888,7 @@ function App() {
           ),
         );
         setTodos([]);
+        playSound('reply_done');
       } else if (event.type === 'stage') {
         // P1 补充 stage 处理（编辑/重生成路径）
         setMessages((current) =>
@@ -1896,6 +1907,7 @@ function App() {
               : item,
           ),
         );
+        playSound('reply_error');
       }
     };
     try {
@@ -1913,6 +1925,7 @@ function App() {
               : item,
           ),
         );
+        playSound('reply_error');
       }
     } finally {
       if (streamControllersRef.current[streamKey(currentSessionId)] === controller) {
@@ -2003,6 +2016,7 @@ function App() {
         ...current.filter((item) => item.approval_id !== request.approval_id),
         ...chained.map((event): PendingRequest => pendingRequestFromEvent(event, request.session_id, targetMessageId)),
       ]);
+      if (chained.length > 0) playSound('attention');
       if (response.resumed === false && !response.resume_id) {
         return;
       }
@@ -2057,6 +2071,7 @@ function App() {
             }
             resumeParts = settleRunningTools(resumeParts);
             applyResume('done');
+            playSound('reply_done');
           } else if (event.type === 'delta') {
             resumeContent += event.content;
             const last = resumeParts[resumeParts.length - 1];
@@ -2115,6 +2130,7 @@ function App() {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
               return [...current, pendingRequestFromEvent(event, resumeSessionId, targetMessageId)];
             });
+            playSound('attention');
             resumeParts = settleRunningTools(resumeParts);
             setMessages((current) =>
               current.map((item) =>
@@ -2123,15 +2139,16 @@ function App() {
                   : item,
               ),
             );
-          } else if (event.type === 'error') {
-            resumeParts = settleRunningTools(resumeParts);
-            setMessages((current) =>
-              current.map((item) =>
-                item.id === targetMessageId
-                  ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
-                  : item,
-              ),
-            );
+      } else if (event.type === 'error') {
+        resumeParts = settleRunningTools(resumeParts);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === targetMessageId
+              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
+              : item,
+          ),
+        );
+        playSound('reply_error');
           }
         },
         resumeController.signal,
@@ -2796,9 +2813,11 @@ function App() {
         return next;
       });
       setTodos([]);
+      playSound(failed ? 'reply_error' : 'reply_done');
     } else if (event.type === 'goal_paused') {
       setGoal((current) => ({ ...current, paused: true, running: false }));
       setTodos([]);
+      playSound('attention');
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
     }
@@ -2837,10 +2856,12 @@ function App() {
           ...current,
           createMessage('assistant', content, { status: event.stalled ? 'error' : 'done' }),
         ]);
+        playSound(event.stalled ? 'reply_error' : 'reply_done');
       }
     } else if (event.type === 'goal_paused') {
       setGoal((current) => ({ ...current, paused: true, running: false }));
       setTodos([]);
+      playSound('attention');
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
     } else if (event.type === 'delta') {
