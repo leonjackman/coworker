@@ -1,4 +1,4 @@
-import { BrainCircuit, Check, ChevronDown, Loader2, Network, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, Check, ChevronDown, Loader2, Network, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { providerTemplate, PROVIDER_TEMPLATE_ORDER, ProviderIcon } from '../lib/provider-registry';
 import { t, translateError } from '../lib/i18n';
@@ -331,7 +331,10 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                   <RefreshCw size={14} className={discoveringCtx ? 'animate-spin' : ''} />
                 </Button>
               </div>
-              {ctxSource && <small>{t(`providers.context_source_${ctxSource}`)}</small>}
+              {ctxSource && ctxSource === 'unreachable' && (
+                <small className="provider-ctx-error" role="alert">{t('providers.context_unreachable')}</small>
+              )}
+              {ctxSource && ctxSource !== 'unreachable' && <small>{t(`providers.context_source_${ctxSource}`)}</small>}
               {form.provider_type === 'ollama' && <small>{t('providers.ollama_ctx_hint')}</small>}
             </label>
 
@@ -493,6 +496,13 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                   <div className="provider-card__model">
                     <span>{t('providers.model')}: </span>
                     <Badge>{provider.model}</Badge>
+                  </div>
+                )}
+
+                {provider.context_error && (
+                  <div className="provider-card__warning" role="alert">
+                    <AlertTriangle size={13} />
+                    <span>{provider.context_error}</span>
                   </div>
                 )}
 

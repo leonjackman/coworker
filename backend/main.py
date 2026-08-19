@@ -834,11 +834,11 @@ async def health():
     }
 
 @app.get("/config", response_model=RuntimeConfigResponse)
-async def runtime_config():
+def runtime_config():
     return RuntimeConfigResponse(**config_controller.runtime_config())
 
 @app.patch("/config", response_model=RuntimeConfigResponse)
-async def update_runtime_config(request: RuntimeConfigUpdate):
+def update_runtime_config(request: RuntimeConfigUpdate):
     try:
         return RuntimeConfigResponse(**config_controller.update_runtime_config(request.model_dump()))
     except KeyError as exc:
@@ -3694,11 +3694,11 @@ async def stream_approval_events(resume_id: str):
     )
 
 @app.get("/providers")
-async def list_providers():
+def list_providers():
     return provider_manager.public_config()
 
 @app.post("/providers")
-async def create_provider(request: ProviderCreate):
+def create_provider(request: ProviderCreate):
     try:
         provider = provider_manager.add_provider(
             name=request.name,
@@ -3713,7 +3713,7 @@ async def create_provider(request: ProviderCreate):
     return {"status": "ok", "provider": provider}
 
 @app.put("/providers/default")
-async def set_default_provider(request: DefaultProviderPayload):
+def set_default_provider(request: DefaultProviderPayload):
     try:
         config = config_controller.update_runtime_config({
             "selected_provider_id": request.provider_id,
@@ -3724,7 +3724,7 @@ async def set_default_provider(request: DefaultProviderPayload):
     return {"status": "ok", "config": config}
 
 @app.put("/providers/{provider_id}")
-async def update_provider(provider_id: str, request: ProviderUpdate):
+def update_provider(provider_id: str, request: ProviderUpdate):
     try:
         provider = provider_manager.update_provider(
             provider_id,
@@ -3740,7 +3740,7 @@ async def update_provider(provider_id: str, request: ProviderUpdate):
     return {"status": "ok", "provider": provider}
 
 @app.post("/providers/{provider_id}/discover-context")
-async def discover_provider_context(provider_id: str):
+def discover_provider_context(provider_id: str):
     """Probe the provider's local server for its actual context window (tokens).
 
     For cloud providers the known-model table already covers most cases, so a
@@ -3751,9 +3751,9 @@ async def discover_provider_context(provider_id: str):
         provider = provider_manager.require_provider(config, provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    window = provider_manager.fetch_context_window(provider)
+    window, error = provider_manager._fetch_context_window_full(provider)
     if not window or window <= 0:
-        raise HTTPException(status_code=404, detail="could not discover context window from this provider")
+        raise HTTPException(status_code=404, detail=error or "could not discover context window from this provider")
     try:
         provider_manager.update_provider(provider_id, context_window=window)
     except ValueError as exc:
@@ -3761,7 +3761,7 @@ async def discover_provider_context(provider_id: str):
     return {"status": "ok", "provider": provider_manager.public_provider(provider_manager.require_provider(provider_manager.load(), provider_id))}
 
 @app.delete("/providers/{provider_id}")
-async def delete_provider(provider_id: str):
+def delete_provider(provider_id: str):
     try:
         provider_manager.delete_provider(provider_id)
     except ValueError as exc:
@@ -3769,7 +3769,7 @@ async def delete_provider(provider_id: str):
     return {"status": "ok"}
 
 @app.post("/providers/test")
-async def test_provider(request: ProviderTestPayload):
+def test_provider(request: ProviderTestPayload):
     try:
         result = provider_manager.test_provider_connection(request.base_url, request.api_key, request.model)
     except ValueError as exc:
@@ -3777,7 +3777,7 @@ async def test_provider(request: ProviderTestPayload):
     return {"status": "ok", "result": result}
 
 @app.post("/providers/fetch-models")
-async def fetch_provider_models(request: ProviderFetchModelsPayload):
+def fetch_provider_models(request: ProviderFetchModelsPayload):
     try:
         models = provider_manager.fetch_models(request.base_url, request.api_key, request.provider_type)
     except Exception as exc:

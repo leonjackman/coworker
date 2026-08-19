@@ -150,6 +150,8 @@ class OrgStore:
     def load(self, memory_dir: str) -> Org:
         """Load the org manifest, falling back to a default org on absence/corruption."""
         path = self.org_path(memory_dir)
+        if not path.exists():
+            return default_org()
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             org = Org.from_dict(payload)

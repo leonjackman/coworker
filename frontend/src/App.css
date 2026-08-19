@@ -2971,6 +2971,17 @@ body.bottom-panel-resizing {
   box-shadow: none;
 }
 
+.composer__model-warning {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  margin-top: 4px;
+  color: var(--warning, #d99100);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .composer__attachments {
   display: flex;
   flex-wrap: wrap;
@@ -3699,6 +3710,23 @@ body.bottom-panel-resizing {
 
 .provider-test-result--error {
   color: #c95343;
+}
+
+.provider-card__warning,
+.provider-ctx-error {
+  color: var(--warning, #d99100);
+}
+
+.provider-card__warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.provider-ctx-error {
+  display: block;
 }
 
 .provider-delete-confirm {

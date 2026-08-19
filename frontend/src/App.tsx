@@ -2741,6 +2741,7 @@ function App() {
     id: provider.id,
     label: provider.model,
     provider: provider.name,
+    contextError: provider.context_error,
   }));
   const showRuntimeNotice = activeView === 'chat' && (runtimeStatus !== 'ready' || !runtimeConfig);
   const titlebarSessionTitle = currentSessionTitle(messages, sessions, sessionId);

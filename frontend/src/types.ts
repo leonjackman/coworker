@@ -326,6 +326,7 @@ export interface ProviderEntry {
   enabled: boolean;
   context_window?: number;
   context_source?: string;
+  context_error?: string;
   created_at: string;
   updated_at: string;
 }

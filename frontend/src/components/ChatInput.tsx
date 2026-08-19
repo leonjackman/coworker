@@ -51,6 +51,7 @@ export interface ModelOption {
   id: string;
   label: string;
   provider?: string;
+  contextError?: string;
 }
 
 export interface WorkspaceOption {
@@ -249,6 +250,8 @@ export function ChatInput({
     if (addErrorTimer.current) window.clearTimeout(addErrorTimer.current);
     addErrorTimer.current = window.setTimeout(() => setAddError(null), 4000);
   };
+
+  const currentModelError = modelOptions.find((option) => option.id === selectedModel)?.contextError;
 
   // 拖拽上传：只有真正携带文件时才激活高亮，避免文字拖拽被误拦截
   const dragCounter = useRef(0);
@@ -998,6 +1001,12 @@ export function ChatInput({
                         {modelOptions.map((model) => (<SelectItem key={model.id} value={model.id}>{model.provider? `${model.provider} · ${model.label}`: model.label}</SelectItem>))}
                       </SelectContent>
                     </Select>
+                    {currentModelError && (
+                      <span className="composer__model-warning" role="alert">
+                        <AlertTriangle size={13} />
+                        {t('chat.model_unreachable')}: {currentModelError}
+                      </span>
+                    )}
                   </div>
 
                   <Tooltip content={t(workMode === "plan" ? "chat.work_plan_tip" : "chat.work_build_tip")}>

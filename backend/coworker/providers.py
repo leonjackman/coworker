@@ -13,6 +13,17 @@ from .atomicio import atomic_write_text
 
 CONFIG_VERSION = 1
 
+# TTL for context-window discovery results. Unreachable local servers (e.g. a
+# switched-off LAN vLLM box) are expensive to probe, so we never re-probe more
+# often than this even while the UI polls /config every few seconds.
+_CTX_DISCOVERY_TTL_SECONDS = 60.0
+# Timeout (seconds) for a single discovery probe. Short enough that a cold
+# /config still answers promptly when local servers are down.
+_CTX_DISCOVERY_TIMEOUT_SECONDS = 3.0
+
+# Last discovery outcome per provider key: ``(monotonic_ts, window, error)``.
+_CTX_DISCOVERY_CACHE: dict[str, tuple[float, int, str | None]] = {}
+
 
 @dataclass
 class ProviderEntry:
@@ -468,18 +479,29 @@ class ProviderManager:
 
         Priority: user override > known-model table > local-server discovery >
         default. Returns ``(window, source)`` where source is one of
-        ``"user"``, ``"table"``, ``"discovered"``, ``"default"``.
+        ``"user"``, ``"table"``, ``"discovered"``, ``"unreachable"``,
+        ``"default"``.
         """
+        window, source, _ = ProviderManager._resolve_context_window_full(provider)
+        return window, source
+
+    @staticmethod
+    def _resolve_context_window_full(provider: ProviderEntry) -> tuple[int, str, str | None]:
+        """Like :meth:`resolve_context_window` but also reports why discovery
+        failed (``error``) so the UI can tell the user their local server is
+        unreachable instead of silently falling back."""
         if provider.context_window and provider.context_window > 0:
-            return provider.context_window, "user"
+            return provider.context_window, "user", None
         from_table = ProviderManager.table_context_window(provider.model)
         if from_table:
-            return from_table, "table"
+            return from_table, "table", None
         if provider.provider_type in {"ollama", "llamacpp", "llmstudio", "lmstudio", "vllm"} or ProviderManager._is_local(provider):
-            discovered = ProviderManager.fetch_context_window(provider)
+            discovered, error = ProviderManager._discover_context_window_cached(provider)
             if discovered and discovered > 0:
-                return discovered, "discovered"
-        return DEFAULT_CONTEXT_WINDOW, "default"
+                return discovered, "discovered", None
+            if error:
+                return DEFAULT_CONTEXT_WINDOW, "unreachable", error
+        return DEFAULT_CONTEXT_WINDOW, "default", None
 
     @staticmethod
     def _is_local(provider: ProviderEntry) -> bool:
@@ -494,6 +516,21 @@ class ProviderManager:
             return False
 
     @staticmethod
+    def _discover_context_window_cached(provider: ProviderEntry) -> tuple[int, str | None]:
+        """Discovery with a short TTL cache so polling /config cannot hammer a
+        downed local server (each probe can take seconds)."""
+        key = f"{provider.provider_type}|{(provider.base_url or '').rstrip('/')}|{provider.model}"
+        entry = _CTX_DISCOVERY_CACHE.get(key)
+        if entry is not None:
+            ts, window, error = entry
+            if time.monotonic() - ts < _CTX_DISCOVERY_TTL_SECONDS:
+                return window, error
+            _CTX_DISCOVERY_CACHE.pop(key, None)
+        window, error = ProviderManager._fetch_context_window_full(provider)
+        _CTX_DISCOVERY_CACHE[key] = (time.monotonic(), window, error)
+        return window, error
+
+    @staticmethod
     def fetch_context_window(provider: ProviderEntry) -> int:
         """Best-effort discovery of the context window from a local server.
 
@@ -504,12 +541,22 @@ class ProviderManager:
 
         Returns 0 when the value cannot be determined (caller falls back).
         """
+        window, _ = ProviderManager._fetch_context_window_full(provider)
+        return window
+
+    @staticmethod
+    def _fetch_context_window_full(provider: ProviderEntry) -> tuple[int, str | None]:
+        """Returns ``(window, error)``; ``error`` is human-readable when the
+        probe failed (server unreachable/refused/timeout), else ``None``."""
         base = (provider.base_url or "").rstrip("/")
         if not base:
-            return 0
+            return 0, None
         try:
             if provider.provider_type == "ollama":
-                return ProviderManager._fetch_ollama_ctx(base, provider.model)
+                window, error = ProviderManager._fetch_ollama_ctx(base, provider.model)
+                if window and window > 0:
+                    return window, None
+                return 0, error
             if provider.provider_type in {"llamacpp", "llmstudio", "lmstudio"}:
                 props = ProviderManager._http_get(f"{base}/props")
                 if props:
@@ -519,9 +566,8 @@ class ProviderManager:
                         or props.get("n_ctx")
                     )
                     if isinstance(n_ctx, int) and n_ctx > 0:
-                        return n_ctx
-                return 0
-            # Generic OpenAI-compatible: try /v1/models extended fields.
+                        return n_ctx, None
+                return 0, None
             url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
             payload = ProviderManager._http_get(url, provider)
             if isinstance(payload, dict):
@@ -531,31 +577,44 @@ class ProviderManager:
                     for key in ("max_model_len", "context_window", "context_length"):
                         value = item.get(key)
                         if isinstance(value, int) and value > 0:
-                            return value
-        except Exception:  # noqa: BLE001 - discovery is best-effort
-            return 0
-        return 0
+                            return value, None
+        except Exception as exc:  # noqa: BLE001 - discovery is best-effort
+            return 0, ProviderManager._probe_error_message(provider, exc)
+        return 0, None
 
     @staticmethod
-    def _fetch_ollama_ctx(base: str, model: str) -> int:
+    def _probe_error_message(provider: ProviderEntry, exc: Exception) -> str:
+        endpoint = provider.base_url or ""
+        try:
+            parsed = urllib.parse.urlparse(endpoint)
+            if parsed.hostname:
+                port = parsed.port
+                endpoint = f"{parsed.hostname}{':' + str(port) if port else ''}"
+        except (ValueError, TypeError):
+            pass
+        reason = "timeout" if isinstance(exc, TimeoutError) else str(exc)
+        return f"LLM服务不可达 {endpoint}（{reason}）"
+
+    @staticmethod
+    def _fetch_ollama_ctx(base: str, model: str) -> tuple[int, str | None]:
         try:
             payload = json.dumps({"model": model or ""}).encode()
             request = urllib.request.Request(f"{base}/api/show", data=payload, headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(request, timeout=8) as response:
+            with urllib.request.urlopen(request, timeout=_CTX_DISCOVERY_TIMEOUT_SECONDS) as response:
                 data = json.loads(response.read().decode())
             model_info = data.get("model_info") or {}
             for key, value in model_info.items():
                 if isinstance(key, str) and key.endswith(".context_length") and isinstance(value, int) and value > 0:
-                    return value
+                    return value, None
             params = data.get("parameters") or ""
             import re
 
             match = re.search(r"num_ctx\s+(\d+)", str(params))
             if match:
-                return int(match.group(1))
-        except Exception:  # noqa: BLE001
-            return 0
-        return 0
+                return int(match.group(1)), None
+        except Exception as exc:  # noqa: BLE001
+            return 0, str(exc)
+        return 0, None
 
     @staticmethod
     def _http_get(url: str, provider: ProviderEntry | None = None) -> dict | None:
@@ -563,7 +622,7 @@ class ProviderManager:
         if provider and provider.api_key:
             headers["Authorization"] = f"Bearer {provider.api_key}"
         request = urllib.request.Request(url, headers=headers, method="GET")
-        with urllib.request.urlopen(request, timeout=8) as response:
+        with urllib.request.urlopen(request, timeout=_CTX_DISCOVERY_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode())
 
     @staticmethod
@@ -601,7 +660,7 @@ class ProviderManager:
 
     @staticmethod
     def public_provider(provider: ProviderEntry) -> dict[str, Any]:
-        window, source = ProviderManager.resolve_context_window(provider)
+        window, source, error = ProviderManager._resolve_context_window_full(provider)
         return {
             "id": provider.id,
             "name": provider.name,
@@ -613,6 +672,7 @@ class ProviderManager:
             "enabled": provider.enabled,
             "context_window": window,
             "context_source": source,
+            "context_error": error,
             "created_at": provider.created_at,
             "updated_at": provider.updated_at,
         }
