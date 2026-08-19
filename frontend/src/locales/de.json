@@ -830,6 +830,7 @@
   "titlebar.context_trim_hint": "Nahe der Grenze werden alte Nachrichten automatisch gekürzt, um Platz für Antworten zu lassen",
   "titlebar.context_badge": "Gekürzt",
   "titlebar.context_compressed": "Der Verlauf wurde gekürzt",
+  "titlebar.context_compressing": "Kontext wird komprimiert…",
   "chat.idle_warning": "Der Stream ist seit über 4 Minuten inaktiv — Verbindung wird in {seconds}s getrennt. Bleiben Sie auf dieser Seite, um weiter zu warten.",
   "settings.logging": "Laufzeitprotokolle",
   "settings.log_level": "Protokolldetails",

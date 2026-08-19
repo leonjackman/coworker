@@ -63,7 +63,8 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
   const tooltip = [
     t('titlebar.context_usage', { used: formatK(used), window: formatK(windowTok), pct }),
     t('titlebar.context_trim_hint'),
-    ...(usage.compacted ? [t('titlebar.context_compressed')] : []),
+    ...(usage.compressed ? [t('titlebar.context_compressing')] : []),
+    ...(usage.compactCount > 0 || usage.compacted ? [t('titlebar.context_compressed')] : []),
     ...(usage.windowWarning ? [usage.windowWarning] : []),
   ].join(' · ');
 
@@ -80,7 +81,12 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
             ⚠
           </span>
         )}
-        {usage.compacted && (
+        {usage.compressed && (
+          <span className="context-budget-badge context-budget-badge--compressing" title={t('titlebar.context_compressing')}>
+            {t('titlebar.context_compressing')}
+          </span>
+        )}
+        {(usage.compactCount > 0 || usage.compacted) && (
           <span className="context-budget-badge" title={t('titlebar.context_compressed')}>
             {t('titlebar.context_badge')}
           </span>

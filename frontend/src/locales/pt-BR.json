@@ -830,6 +830,7 @@
   "titlebar.context_trim_hint": "Mensagens antigas são condensadas automaticamente perto do limite para deixar espaço para respostas",
   "titlebar.context_badge": "Condensado",
   "titlebar.context_compressed": "O histórico foi condensado",
+  "titlebar.context_compressing": "Comprimindo contexto…",
   "chat.idle_warning": "O stream está inativo há mais de 4 minutos — desconexão em {seconds}s. Permaneça nesta página para continuar aguardando.",
   "settings.logging": "Registro de execução",
   "settings.log_level": "Nível de registro",

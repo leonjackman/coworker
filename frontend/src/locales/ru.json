@@ -830,6 +830,7 @@
   "titlebar.context_trim_hint": "Старые сообщения автоматически сокращаются при приближении к пределу, чтобы оставалось место для ответов",
   "titlebar.context_badge": "Сокращено",
   "titlebar.context_compressed": "История была сокращена",
+  "titlebar.context_compressing": "Сжатие контекста…",
   "chat.idle_warning": "Поток бездействия более 4 минут — отключение через {seconds}с. Останьтесь на этой странице, чтобы продолжить ожидание.",
   "settings.logging": "Журнал выполнения",
   "settings.log_level": "Уровень журнала",

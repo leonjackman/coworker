@@ -51,6 +51,7 @@
   "titlebar.context_trim_hint": "接近上限時會自動精簡舊內容，為回覆留出空間",
   "titlebar.context_badge": "已精簡",
   "titlebar.context_compressed": "已精簡歷史內容",
+  "titlebar.context_compressing": "正在壓縮上下文…",
   "sidebar.primary_nav": "主要導覽",
   "sidebar.collapse": "收合側邊欄",
   "sidebar.expand": "展開側邊欄",

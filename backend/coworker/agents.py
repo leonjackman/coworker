@@ -32,9 +32,12 @@ def _llm_stream_chunk_timeout() -> float:
 from typing import Annotated, Any, Literal
 from typing_extensions import NotRequired
 
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ContextEditingMiddleware
+from langchain.agents.middleware.context_editing import ClearToolUsesEdit
+from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import AgentState, Runtime
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages.utils import count_tokens_approximately, get_buffer_string
 from pydantic import BaseModel, Field
 
 from .checkpoints import CheckpointManager
@@ -106,6 +109,9 @@ class CoworkerAgentState(AgentState[Any]):
     # rebuilt every turn; the checkpoint persists this so the "已精简" badge is
     # cumulative across turns — see B6.
     context_compact_count: NotRequired[Annotated[int, operator.add]]
+    # Last compaction summary body (state-persisted so the streaming runtime can
+    # strip a model echo of the injected summary from a LATER turn's reply).
+    context_summary: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -1854,7 +1860,7 @@ class NormalizeMessagesMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any])
 
 
 # ---------------------------------------------------------------------------
-# ContextWindowMiddleware – bounds the model context for very long sessions.
+# CoworkerSummarizationMiddleware – bounds the model context for long sessions.
 # ---------------------------------------------------------------------------
 
 # Rolling char budget for the message list fed to the model on each call. Oldest
@@ -2023,23 +2029,183 @@ def _truncate_message(msg: Any, budget: int) -> Any:
     return msg
 
 
-class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
-    """Trim the model-bound message list to the runtime context budget.
+def _summary_ok(text: str) -> bool:
+    """Reject degenerate summaries before they are injected into the context.
 
-    Long sessions otherwise replay the entire history on every model call (and
-    grow the checkpoint), eventually exceeding the provider's context window and
-    failing the turn with a 400. Dropping the OLDEST messages (keeping the first
-    system message + the most recent exchanges) is a safe rolling window.
+    Guards against the observed failure mode where the summarizer was fed a
+    numeric transcript (character counts) and "summarized" it into a wall of
+    numbers. A real summary must contain substantive language.
+    """
+    if not text:
+        return False
+    t = text.strip()
+    if len(t) < 20:
+        return False
+    if "error generating summary" in t.lower():
+        return False
+    letters = sum(1 for ch in t if ch.isalpha())
+    return letters >= max(10, int(len(t) * 0.2))
 
-    The budget is derived at runtime from the provider's model context window
-    (see :func:`context_budget_chars`). The trim must be expressed with
-    ``RemoveMessage``: the ``messages`` state channel uses the ``add_messages``
-    reducer, so merely returning a shorter list merges by message id and does NOT
-    delete the trimmed messages. Tool messages are also kept paired with their
-    triggering AIMessage so the provider never sees an orphaned ToolMessage.
+
+# Structured compaction prompt (SESSION INTENT / SUMMARY / ARTIFACTS / NEXT STEPS
+# skeleton — same sections LangChain's SummarizationMiddleware uses, localized to
+# the session language). The ``<messages>`` marker + ``{messages}`` placeholder
+# are part of the framework contract (get_buffer_string feeds the transcript).
+COMPACTION_PROMPTS: dict[str, str] = {
+    "zh": (
+        "你的任务是从下面的会话历史中提炼出最关键的信息，生成一份紧凑的摘要，"
+        "用它替换掉这段旧历史，以便在有限上下文窗口内继续当前任务。\n\n"
+        "只保留对继续当前目标仍然重要的内容，不要重复已经完成的操作。"
+        "请按以下小节组织摘要，每一节都填入相关信息；若无相关内容请写「无」：\n\n"
+        "## 会话意图\n"
+        "用户的总体目标/诉求是什么？本次会话要完成什么任务？"
+        "（简洁但完整到足以理解整个会话的目的）\n\n"
+        "## 摘要\n"
+        "记录对话中最重要的上下文：关键结论、已做的决策及其理由、"
+        "讨论过的被否决方案及否决原因。\n\n"
+        "## 产物\n"
+        "本次会话创建/修改/访问了哪些文件或资源？对文件修改，列出具体路径并简述改动。"
+        "此节用于防止产物信息静默丢失。\n\n"
+        "## 后续步骤\n"
+        "要达成会话意图还需要完成哪些具体任务？下一步应该做什么？\n\n"
+        "只输出提取出的上下文本身，不要输出任何额外说明或前后缀文本。\n\n"
+        "<messages>\n需要总结的消息：\n{messages}\n</messages>"
+    ),
+    "en": (
+        "Your task is to extract the most important information from the "
+        "conversation history below and produce a compact summary that replaces "
+        "it, so work can continue within the context window.\n\n"
+        "Keep only what still matters for the current goal; do not repeat work "
+        "already completed. Structure the summary with the following sections — "
+        "populate each with relevant info or write 'None':\n\n"
+        "## SESSION INTENT\n"
+        "What is the user's overall goal or request? What task is this session "
+        "trying to accomplish? (Concise but complete enough to understand the "
+        "purpose of the whole session.)\n\n"
+        "## SUMMARY\n"
+        "Record the most important context: key conclusions, decisions made and "
+        "their rationale, rejected options and why they were not pursued.\n\n"
+        "## ARTIFACTS\n"
+        "What files or resources were created/modified/accessed in this session? "
+        "For file changes, list the specific paths and briefly describe the "
+        "changes. This prevents silent loss of artifact information.\n\n"
+        "## NEXT STEPS\n"
+        "What specific tasks remain to achieve the session intent? What should "
+        "be done next?\n\n"
+        "Respond ONLY with the extracted context, with no extra text before or "
+        "after it.\n\n"
+        "<messages>\nMessages to summarize:\n{messages}\n</messages>"
+    ),
+}
+
+
+def _compaction_summary_prefix(language: Language) -> str:
+    return "先前对话摘要：" if language == "zh" else "[Earlier conversation summary] "
+
+
+_COMPACTION_FLUSH: dict[str, str] = {
+    "zh": (
+        "注意：为保持上下文紧凑，这段对话中最早的部分已被压缩成上面的摘要。"
+        "如果其中仍有对未来会话重要的持久事实，请现在通过记忆工具将其保存。"
+    ),
+    "en": (
+        "Note: the oldest part of this conversation was summarized above to keep "
+        "the context compact. If any durable fact in it still matters for future "
+        "sessions, persist it via the memory tool now."
+    ),
+}
+
+
+def _summarizer_candidates(data_dir: Path | None, primary_llm: Any) -> list[Any]:
+    """Ordered compaction-model candidates: user default model first, then other
+    configured providers, then the primary (per-turn) model.
+
+    The summarizer tries each candidate in turn until one produces a valid
+    summary (fallback-until-success), so a broken default model never blocks
+    compaction. Falls back to just the primary model with no config present.
+    """
+    candidates: list[Any] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _push(llm: Any) -> None:
+        key = (getattr(llm, "model_name", "") or "", getattr(llm, "base_url", "") or "")
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(llm)
+
+    if data_dir is not None:
+        try:
+            from .providers import ProviderManager
+
+            pm = ProviderManager(data_dir / "providers.json", data_dir)
+            config = pm.load()
+            default = pm.default_provider()
+            ordered: list[Any] = []
+            if default is not None:
+                ordered.append(default)
+            for p in config.providers:
+                if p.enabled and (default is None or p.id != default.id):
+                    ordered.append(p)
+            for p in ordered:
+                try:
+                    _push(
+                        ReasonPreservingChatOpenAI.create(
+                            model=p.model,
+                            temperature=0,
+                            api_key=p.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
+                            base_url=OpenAICompatibleStreamRuntime._openai_compatible_base_url(p),
+                        )
+                    )
+                except Exception:  # noqa: BLE001 - one bad provider must not kill the chain
+                    continue
+        except Exception:  # noqa: BLE001 - config resolution is best-effort
+            pass
+    if not candidates and primary_llm is not None:
+        _push(primary_llm)
+    return candidates
+
+
+def _strip_compaction_echo(content: str, summary: str) -> str:
+    """Remove a model's verbatim echo of the injected compaction summary.
+
+    Local models sometimes "continue" the injected summary HumanMessage as part
+    of their answer (the observed failure mode). The summary body is exact, so a
+    targeted replacement cleans the persisted/displayed reply without touching
+    legitimate content.
+    """
+    if not content or not summary:
+        return content
+    s = summary.strip()
+    if len(s) < 20:
+        return content
+    if s in content:
+        return content.replace(s, "").strip()
+    return content
+
+
+class CoworkerSummarizationMiddleware(SummarizationMiddleware):
+    """Framework-backed context compaction with Coworker-specific behavior.
+
+    Subclasses LangChain's :class:`SummarizationMiddleware` to inherit the proven
+    mechanics — token/cutoff selection with AI/Tool pair protection, structured
+    summary prompt, and HumanMessage summary injection (provider-safe: never a
+    system message mid-list, which vLLM/Qwen rejects) — while preserving
+    Coworker's product behavior:
+
+    * CJK-aware token counting (``_estimate_tokens``), not the ASCII-only
+      ``count_tokens_approximately`` default.
+    * ``context_usage`` SSE telemetry on every model call.
+    * Mutable per-turn budget (the overflow-retry path halves it).
+    * Cheap layer first: stale tool results are cleared (micro-compact) before
+      resorting to a model summary.
+    * Summary quality validation + fallback to the plain rolling ``_trim``.
+    * Dedup so the same segment is never summarized twice (loop guard).
+    * Summarizer model fallback chain (user default model first, then other
+      configured models) instead of a single fixed LLM.
     """
 
-    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None, context_window_tokens: int = 0, context_window_source: str = "default", context_window_warning: str | None = None):
+    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None, summarizer_candidates: list[Any] | None = None, language: Language = "zh", context_window_tokens: int = 0, context_window_source: str = "default", context_window_warning: str | None = None, tool_edit: Any | None = None):
         self.configured_budget = max(20_000, int(budget_chars or DEFAULT_CONTEXT_WINDOW_CHARS))
         # Mutable per-turn budget (the overflow retry path halves this). The UI
         # always reads ``configured_budget`` so the meter never jumps on a retry
@@ -2050,10 +2216,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         self.budget_tokens = context_budget_tokens(
             context_window_tokens if context_window_tokens and context_window_tokens > 0 else 128_000
         )
-        # Optional model used for summary compaction. When set, over-budget turns
-        # summarize the OLDEST segment instead of dropping it entirely; when unset
-        # (or on summarization failure) the plain rolling trim is used.
-        self.llm = llm
+        self.language = language if language in ("zh", "en") else "zh"
         # Real model context window (tokens) + how it was resolved, surfaced to the
         # UI so the meter shows usage against the ACTUAL window (not just the 75%
         # safety budget) and explains the source — B2/B8.
@@ -2063,6 +2226,84 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         # or server-reported cap). Surfaced to the UI via context_usage.
         self.context_window_warning = context_window_warning
         self._summarized_segments: set[str] = set()
+        # Cheap layer: ClearToolUsesEdit (Anthropic-style context editing) used
+        # BOTH by this middleware (prune-aware trigger, CJK-counted) and by the
+        # mounted ContextEditingMiddleware (transient per-call slimming).
+        self.tool_edit = tool_edit
+        # Summary-model fallback chain: user default model first, then other
+        # configured models, then the primary (per-turn) model.
+        self.llm = llm
+        candidates = list(summarizer_candidates or ())
+        if not candidates and llm is not None:
+            candidates.append(llm)
+        self.summarizer_candidates = candidates
+        self.last_summary = ""
+        if candidates:
+            super().__init__(
+                model=candidates[0],
+                trigger=("tokens", 1),
+                keep=("tokens", 1),
+                token_counter=self._cjk_token_counter,
+                summary_prompt=COMPACTION_PROMPTS.get(self.language, COMPACTION_PROMPTS["en"]),
+                trim_tokens_to_summarize=4000,
+            )
+        else:
+            # No model available at all: the middleware becomes trim-only.
+            AgentMiddleware.__init__(self)
+            self.model = None
+            self.trigger = None
+            self.keep = ("tokens", 1)
+            self._trigger_clauses: list[Any] = []
+            self._trigger_conditions: list[Any] = []
+            self.token_counter = self._cjk_token_counter
+            self._partial_token_counter = self._cjk_token_counter
+            self.summary_prompt = COMPACTION_PROMPTS.get(self.language, COMPACTION_PROMPTS["en"])
+            self.trim_tokens_to_summarize = 4000
+
+    @staticmethod
+    def _cjk_token_counter(messages: Iterable[Any]) -> int:
+        """CJK-aware batch token counter used by trim/cutoff logic."""
+        return sum(_msg_tokens(m) for m in messages)
+
+    def _pruned_messages(self, messages: list[Any]) -> list[Any]:
+        """Apply the cheap tool-result clear on a copy (CJK-aware decision)."""
+        if self.tool_edit is None:
+            return messages
+        import copy
+
+        try:
+            pruned = copy.deepcopy(list(messages))
+            self.tool_edit.apply(pruned, count_tokens=count_tokens_approximately)
+            return pruned
+        except Exception:  # noqa: BLE001 - pruning is best-effort
+            logger.warning("tool-result pruning failed", exc_info=True)
+            return messages
+
+    def _determine_cutoff_index(self, messages: list[Any]) -> int:
+        """Token-based cutoff with AI/Tool pairing protection (framework core).
+
+        ``keep_recent`` is recomputed from the (mutable) per-turn budget so the
+        overflow-retry path that halves the budget also tightens the cutoff.
+        """
+        keep_recent = max(2_000, int(self.budget_tokens * KEEP_RECENT_FACTOR))
+        self.keep = ("tokens", keep_recent)
+        return super()._determine_cutoff_index(messages)
+
+    def _build_new_messages(self, summary: str) -> list[Any]:
+        """Inject the summary as a HumanMessage (provider-safe, echo-strippable)."""
+        return [
+            HumanMessage(
+                content=f"{_compaction_summary_prefix(self.language)}{summary}",
+                additional_kwargs={"lc_source": "summarization"},
+            )
+        ]
+
+    def _flush_reminder(self) -> Any:
+        """Memory-flush reminder — HumanMessage (never a mid-list system message)."""
+        return HumanMessage(
+            content=_COMPACTION_FLUSH.get(self.language, _COMPACTION_FLUSH["en"]),
+            id="__compaction_flush__",
+        )
 
     def _trim(self, state: CoworkerAgentState) -> list[Any] | None:
         from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
@@ -2120,10 +2361,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         # so it accumulates across turns — see B6.
         return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept], "context_compact_count": 1}
 
-    def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
-        return self._trim(state)
-
-    async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+    def _emit_context_usage(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> None:
         # Surface live context-budget usage to the client so the topbar can show
         # how close the conversation is to the compaction/trim threshold. Emitted
         # on every model call via the LangGraph "custom" stream channel; the
@@ -2135,14 +2373,13 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             window_tokens = self.context_window_tokens or round(
                 self.configured_budget / (CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN)
             )
-            budget_tokens = self.budget_tokens
             runtime.stream_writer(
                 {
                     "type": "context_usage",
                     "used_chars": total,
                     "budget_chars": self.configured_budget,
                     "used_tokens": used_tokens,
-                    "budget_tokens": budget_tokens,
+                    "budget_tokens": self.budget_tokens,
                     "window_tokens": window_tokens,
                     # Per-turn signal: is the resident set over the active budget
                     # (i.e. will this call trim/compact)? Distinct from `compacted`,
@@ -2157,125 +2394,152 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             )
         except Exception:  # noqa: BLE001 - telemetry must never break a turn
             logger.debug("context_usage emit skipped", exc_info=True)
-        # Summary compaction: when the LLM is available and we are over budget,
-        # summarize the OLDEST segment (keeping the recent tail intact) instead of
-        # dropping it. Falls back to the plain rolling trim on any failure.
-        if self.llm is not None:
-            try:
-                compacted = await self._compact(state)
-                if compacted is not None:
-                    return compacted
-            except Exception:  # noqa: BLE001 - compaction must never break a turn
-                logger.warning("context compaction failed; falling back to trim", exc_info=True)
-        return self._trim(state)
 
-    async def _compact(self, state: CoworkerAgentState) -> dict[str, Any] | None:
-        """Replace the oldest over-budget segment with a model-generated summary.
+    def _select_compact_plan(self, messages: list[Any]) -> tuple[str, Any, Any] | None:
+        """Choose a compaction action: prune tool results, or summarize a segment.
 
-        Keeps the first system message and the ``keep_recent`` tail untouched;
-        the middle (oldest) messages are summarized into a single system message
-        carrying the key facts (paths, commands, ports, decisions). Never raises:
-        any failure returns ``None`` so the caller falls back to rolling trim.
+        Returns ``("prune", pruned_messages, None)`` when clearing stale tool
+        results alone fits the budget (cheap layer first — Anthropic micro-compact
+        semantics), ``("summarize", to_summarize, preserved)`` when a model
+        summary is required, or ``None`` when nothing needs to happen.
         """
+        if sum(_msg_tokens(m) for m in messages) <= self.budget_tokens:
+            return None
+        working = messages
+        if self.tool_edit is not None:
+            working = self._pruned_messages(messages)
+            if sum(_msg_tokens(m) for m in working) <= self.budget_tokens:
+                return ("prune", working, None)
+        cutoff = self._determine_cutoff_index(working)
+        if cutoff <= 0:
+            return None
+        to_summarize, preserved = self._partition_messages(working, cutoff)
+        if len(to_summarize) < 2:
+            return None
+        return ("summarize", to_summarize, preserved)
+
+    def _finish_compact(self, to_summarize: list[Any], preserved: list[Any], summary: str) -> dict[str, Any] | None:
+        """Assemble the compacted state from a valid summary (never raises)."""
         from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
 
-        from langchain_core.messages import SystemMessage
-
-        messages = state.get("messages", [])
-        if len(messages) < 4:
+        if not summary or not _summary_ok(summary):
             return None
-        total = sum(_msg_tokens(m) for m in messages)
-        if total <= self.budget_tokens:
-            return None
-
-        keep_recent = max(2_000, int(self.budget_tokens * KEEP_RECENT_FACTOR))
-        recent: list[Any] = []
-        recent_budget = keep_recent
-        for msg in reversed(messages[1:]):
-            tokens = _msg_tokens(msg)
-            if recent_budget - tokens < 0 and recent:
-                break
-            recent.append(msg)
-            recent_budget -= tokens
-        recent.reverse()
-        if len(recent) >= len(messages) - 1:
-            return None
-
-        # The oldest segment to summarize = everything between the first message
-        # (system) and the recent tail.
-        old_count = len(messages) - 1 - len(recent)
-        if old_count < 2:
-            return None
-
-        old_messages = messages[1 : 1 + old_count]
-        fingerprint = "|".join(getattr(m, "id", "") or "" for m in old_messages)
+        fingerprint = "|".join(getattr(m, "id", "") or "" for m in to_summarize)
         if fingerprint in self._summarized_segments:
             # Already summarized this exact segment on a prior turn: do not loop.
             return None
         self._summarized_segments.add(fingerprint)
         if len(self._summarized_segments) > 64:
             self._summarized_segments.clear()
-
-        summary = await self._summarize_segment(old_messages)
-        if not summary:
-            return None
-
-        kept = [messages[0], SystemMessage(content=f"[Earlier conversation summary] {summary}", id="__compaction__"), *recent]
+        self.last_summary = summary
+        kept = [*self._build_new_messages(summary), *preserved]
         # Memory-flush reminder: tell the model the oldest history was compacted
         # and it should persist any still-relevant facts into long-term memory so
         # they survive beyond this session (ties into the auto-memory pipeline).
-        kept.append(
-            SystemMessage(
-                content=(
-                    "Note: the oldest part of this conversation was summarized "
-                    "above to keep the context compact. If any durable fact in it "
-                    "still matters for future sessions, persist it via the memory "
-                    "tool now."
-                ),
-                id="__compaction_flush__",
-            )
-        )
-        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept], "context_compact_count": 1}
+        kept.append(self._flush_reminder())
+        return {
+            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept],
+            "context_compact_count": 1,
+            "context_summary": summary,
+        }
 
-    async def _summarize_segment(self, messages: list[Any]) -> str:
-        """Ask the model to condense the oldest messages into a concise summary."""
-        from langchain_core.messages import SystemMessage, HumanMessage
+    def _compact_sync(self, state: CoworkerAgentState) -> dict[str, Any] | None:
+        messages = state.get("messages", [])
+        if len(messages) < 4:
+            return None
+        plan = self._select_compact_plan(messages)
+        if plan is None:
+            return None
+        kind, a, b = plan
+        if kind == "prune":
+            from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
 
-        transcript = []
-        for msg in messages:
-            role = getattr(msg, "type", "")
-            text = _msg_chars(msg)
-            if text <= 0:
-                continue
-            role_label = {"human": "user", "ai": "assistant", "tool": "tool", "system": "system"}.get(role, role)
-            transcript.append(f"{role_label}: {text}")
-        transcript_text = "\n".join(transcript)
-        if not transcript_text.strip():
-            return ""
-        # Cap the transcript fed to the summarizer so a pathological segment
-        # cannot blow up the compaction call itself.
-        if len(transcript_text) > 40_000:
-            transcript_text = transcript_text[-40_000:]
-        system = SystemMessage(
-            content=(
-                "You are summarizing the OLDEST part of a working session so the "
-                "agent can continue with a compact context. Preserve every durable "
-                "fact that still matters: file paths, command lines, ports, IDs, "
-                "user preferences, decisions and their rationale. Drop transient "
-                "noise. Return ONLY a dense factual summary, ~150-250 words, no "
-                "preamble."
-            )
-        )
+            return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
+        return self._finish_compact(a, b, self._create_summary(a))
+
+    async def _compact_async(self, state: CoworkerAgentState) -> dict[str, Any] | None:
+        messages = state.get("messages", [])
+        if len(messages) < 4:
+            return None
+        plan = self._select_compact_plan(messages)
+        if plan is None:
+            return None
+        kind, a, b = plan
+        if kind == "prune":
+            from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
+
+            return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
+        summary = await self._acreate_summary(a)
+        return self._finish_compact(a, b, summary)
+
+    def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        self.last_summary = str(state.get("context_summary", "") or "")
+        if not self.summarizer_candidates:
+            return self._trim(state)
         try:
-            response = await self.llm.ainvoke([system, HumanMessage(content=transcript_text)])
-            text = str(getattr(response, "content", "") or response or "")
-            text = text.strip()
-            if len(text) > 2500:
-                text = text[:2500]
-            return text
-        except Exception:  # noqa: BLE001 - summarization is best-effort
-            logger.warning("context summarization failed", exc_info=True)
+            compacted = self._compact_sync(state)
+            if compacted is not None:
+                return compacted
+        except Exception:  # noqa: BLE001 - compaction must never break a turn
+            logger.warning("context compaction failed; falling back to trim", exc_info=True)
+        return self._trim(state)
+
+    async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        self.last_summary = str(state.get("context_summary", "") or "")
+        self._emit_context_usage(state, runtime)
+        if not self.summarizer_candidates:
+            return self._trim(state)
+        try:
+            compacted = await self._compact_async(state)
+            if compacted is not None:
+                return compacted
+        except Exception:  # noqa: BLE001 - compaction must never break a turn
+            logger.warning("context compaction failed; falling back to trim", exc_info=True)
+        return self._trim(state)
+
+    def _create_summary(self, messages_to_summarize: list[Any]) -> str:
+        """Synchronous summarizer with the fallback model chain."""
+        if not messages_to_summarize:
             return ""
+        trimmed = self._trim_messages_for_summary(messages_to_summarize)
+        if not trimmed:
+            return ""
+        formatted = get_buffer_string(trimmed, format="xml")
+        for model in self.summarizer_candidates:
+            try:
+                response = model.invoke(
+                    self.summary_prompt.format(messages=formatted).rstrip(),
+                    config={"metadata": {"lc_source": "summarization"}},
+                )
+                text = str(getattr(response, "content", "") or response or "").strip()
+                if _summary_ok(text):
+                    return text
+                logger.warning("summarizer output rejected (degenerate): %.120s", text)
+            except Exception as exc:  # noqa: BLE001 - try the next candidate
+                logger.warning("summarizer %s failed; trying next: %s", getattr(model, "model_name", "?"), str(exc)[:200])
+        return ""
+
+    async def _acreate_summary(self, messages_to_summarize: list[Any]) -> str:
+        """Async summarizer with the fallback model chain."""
+        if not messages_to_summarize:
+            return ""
+        trimmed = self._trim_messages_for_summary(messages_to_summarize)
+        if not trimmed:
+            return ""
+        formatted = get_buffer_string(trimmed, format="xml")
+        for model in self.summarizer_candidates:
+            try:
+                response = await model.ainvoke(
+                    self.summary_prompt.format(messages=formatted).rstrip(),
+                    config={"metadata": {"lc_source": "summarization"}},
+                )
+                text = str(getattr(response, "content", "") or response or "").strip()
+                if _summary_ok(text):
+                    return text
+                logger.warning("summarizer output rejected (degenerate): %.120s", text)
+            except Exception as exc:  # noqa: BLE001 - try the next candidate
+                logger.warning("summarizer %s failed; trying next: %s", getattr(model, "model_name", "?"), str(exc)[:200])
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -2813,8 +3077,25 @@ def build_coworker_agent_graph(
     )
 
     phase_gate = PhaseToolGateMiddleware()
-    context_middleware = ContextWindowMiddleware(
-        context_budget, llm=llm, context_window_tokens=context_window_tokens, context_window_source=context_window_source, context_window_warning=context_window_warning
+    # Cheap per-call layer: clear stale tool results (Anthropic-style context
+    # editing) so the model never pays for long-dead tool output. Transient —
+    # the UI/session history is untouched (two-layer storage). The SAME edit
+    # instance also feeds the summarization middleware's prune-aware trigger.
+    tool_edit = ClearToolUsesEdit(
+        trigger=int(context_budget_tokens(context_window_tokens or 128_000) * 0.75),
+        keep=3,
+        placeholder="[cleared]",
+        exclude_tools=("write_todos", "finalize_goal", "memory", "memory_read", "ask_user"),
+    )
+    context_middleware = CoworkerSummarizationMiddleware(
+        context_budget,
+        llm=llm,
+        summarizer_candidates=_summarizer_candidates(data_dir, llm),
+        language=language,
+        context_window_tokens=context_window_tokens,
+        context_window_source=context_window_source,
+        context_window_warning=context_window_warning,
+        tool_edit=tool_edit,
     )
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
@@ -2827,6 +3108,7 @@ def build_coworker_agent_graph(
         # breaks its work into a `write_todos` checklist and keeps it updated as
         # it completes each step. Read-only-safe (writes graph state only).
         TodoListMiddleware(),
+        ContextEditingMiddleware(edits=[tool_edit]),
     ]
     if goal_mode:
         # Register the goal-completion tool in the graph's tool registry so the
@@ -3099,6 +3381,10 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
         messages = result.get("messages", []) if isinstance(result, dict) else []
         content = coerce_message_content(messages[-1]) if messages else ""
+        # Drop any verbatim echo of the injected compaction summary.
+        _mw = getattr(graph, "_cw_context_middleware", None)
+        if _mw is not None:
+            content = _strip_compaction_echo(content, getattr(_mw, "last_summary", "") or "")
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(content)})
         return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
 
@@ -3414,6 +3700,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         final_content = "".join(content_parts)
         final_content = _strip_plan_leak(final_content, parts)
+        # Local models sometimes "continue" the injected compaction summary into
+        # their reply; drop any verbatim echo before persisting/displaying.
+        _mw = getattr(graph, "_cw_context_middleware", None)
+        if _mw is not None:
+            final_content = _strip_compaction_echo(final_content, getattr(_mw, "last_summary", "") or "")
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content)})
         merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
@@ -3936,6 +4227,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         final_content = "".join(content_parts)
         final_content = _strip_plan_leak(final_content, parts)
+        # Drop any verbatim echo of the injected compaction summary.
+        _mw = getattr(graph, "_cw_context_middleware", None)
+        if _mw is not None:
+            final_content = _strip_compaction_echo(final_content, getattr(_mw, "last_summary", "") or "")
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts))}

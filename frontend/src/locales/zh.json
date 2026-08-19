@@ -51,6 +51,7 @@
   "titlebar.context_trim_hint": "接近上限时会自动精简旧内容，为回复留出空间",
   "titlebar.context_badge": "已精简",
   "titlebar.context_compressed": "已精简历史内容",
+  "titlebar.context_compressing": "正在压缩上下文…",
   "sidebar.primary_nav": "主导航",
   "sidebar.collapse": "收起侧边栏",
   "sidebar.expand": "展开侧边栏",

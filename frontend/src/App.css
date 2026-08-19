@@ -1129,6 +1129,18 @@ body.sidebar-resizing {
   border-color: color-mix(in srgb, #f04438 45%, var(--material-border));
 }
 
+.context-budget-badge--compressing {
+  color: #2f6ea3;
+  background: color-mix(in srgb, #2f9ee0 18%, var(--background));
+  border-color: color-mix(in srgb, #2f9ee0 45%, var(--material-border));
+  animation: context-badge-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes context-badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
 
 .titlebar-pending {
   -webkit-app-region: no-drag;

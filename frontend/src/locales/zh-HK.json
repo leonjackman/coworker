@@ -830,6 +830,7 @@
   "titlebar.context_trim_hint": "接近上限時會自動精簡舊內容，為回覆留出空間",
   "titlebar.context_badge": "已精簡",
   "titlebar.context_compressed": "已精簡歷史內容",
+  "titlebar.context_compressing": "正在壓縮上下文…",
   "chat.idle_warning": "串流已經空喺 4 分鐘以上 — {seconds} 秒後會斷開。留喺呢頁繼續等啦。",
   "settings.logging": "運行時日誌",
   "settings.log_level": "日誌級別",

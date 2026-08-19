@@ -830,6 +830,7 @@
   "titlebar.context_trim_hint": "上限に近づくと古いメッセージを自動で整理し、返信のスペースを確保します",
   "titlebar.context_badge": "整理済み",
   "titlebar.context_compressed": "過去の内容は整理済みです",
+  "titlebar.context_compressing": "コンテキストを圧縮中…",
   "chat.idle_warning": "ストリームが 4 分以上アイドル状態です — {seconds} 秒後に切断されます。待機し続けるにはこのページにとどまってください。",
   "settings.logging": "ランタイムログ",
   "settings.log_level": "ログレベル",

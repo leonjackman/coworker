@@ -701,6 +701,8 @@ export interface ContextUsage {
   windowTokens: number;
   /** Whether any compression (trim or summarize) has happened this session. */
   compacted: boolean;
+  /** Cumulative number of compressions this session (persisted in state). */
+  compactCount: number;
   /** How the window was resolved: user | table | discovered | default. */
   windowSource: string;
   /** Human-readable warning about the window (unverified oversized override, server cap). */

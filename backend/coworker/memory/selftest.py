@@ -596,6 +596,121 @@ def main() -> int:
             discovered = ProviderManager.fetch_context_window(ollama)
         check("ollama fetch parses model_info", discovered == 40960, str(discovered))
 
+        # --- context compaction: framework-backed middleware regression checks ----
+        # Guards the observed failure where _summarize_segment fed the model a
+        # transcript of character counts, producing a garbage "numerical exchanges"
+        # summary that was injected into the conversation and echoed by the model.
+        from coworker.agents import (
+            COMPACTION_PROMPTS,
+            CoworkerSummarizationMiddleware,
+            _compaction_summary_prefix,
+            _strip_compaction_echo,
+            _summary_ok,
+        )
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+        from langgraph.graph.message import RemoveMessage
+
+        check("summary prompt has messages slot", "{messages}" in COMPACTION_PROMPTS["zh"] and "{messages}" in COMPACTION_PROMPTS["en"], "")
+        check("summary prefix localized", _compaction_summary_prefix("zh").startswith("先前对话摘要"), _compaction_summary_prefix("zh"))
+        check("summary ok accepts real text", _summary_ok("用户想加自动化测试，涉及 /src/main.py 与 x.yaml，决策是改用 pnpm"), "")
+        check("summary ok rejects numeric garbage", not _summary_ok("4 3 12 55 24 66 236 183 38 2453 375 120 234 102 107"), "numeric transcript must be rejected")
+        check("summary ok rejects empty", not _summary_ok(""), "")
+        check("echo strip removes summary", _strip_compaction_echo("好的。\n\n用户想加自动化测试，涉及 /src/main.py 与 x.yaml。\n\n继续吗？", "用户想加自动化测试，涉及 /src/main.py 与 x.yaml") == "好的。\n\n。\n\n继续吗？", "")
+        check("echo strip keeps normal text", _strip_compaction_echo("正常回复文本", "另一个不相关的长摘要文本内容用于测试") == "正常回复文本", "")
+
+        class _FakeCompModel:
+            model_name = "fake"
+            base_url = "http://fake"
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def invoke(self, messages, **kwargs):
+                return type("R", (), {"content": self._payload})()
+
+            async def ainvoke(self, messages, **kwargs):
+                return self.invoke(messages, **kwargs)
+
+        class _FakeCompRuntime:
+            def __init__(self):
+                self.events = []
+
+            def stream_writer(self, event):
+                self.events.append(event)
+
+        def _over_budget_state():
+            msgs = [SystemMessage(content="sys", id="s0")]
+            for i in range(10):
+                msgs.append(HumanMessage(content="用户消息" * 5 + str(i), id=f"u{i}"))
+                msgs.append(AIMessage(content="助手回复" * 5, id=f"a{i}"))
+                msgs.append(ToolMessage(content="x" * 5000, tool_call_id=f"tc{i}", id=f"t{i}"))
+            return {"messages": msgs, "context_compact_count": 0}
+
+        async def _compact_checks():
+            good_summary = "会话意图：完成自动化测试改造，涉及 /src/main.py 与配置 x.yaml，决策是改用 pnpm"
+            mw = CoworkerSummarizationMiddleware(
+                budget_chars=1000, llm=_FakeCompModel(good_summary), language="zh", context_window_tokens=1000,
+            )
+            rt = _FakeCompRuntime()
+            result = await mw.abefore_model(_over_budget_state(), rt)
+            check("compaction returns update", result is not None, str(result)[:120] if result else "")
+            if result:
+                kept = [m for m in result["messages"] if not isinstance(m, RemoveMessage)]
+                check("summary injected as HumanMessage", bool(kept) and kept[0].type == "human", str([getattr(m, "type", "?") for m in kept][:3]))
+                check("summary localized prefix", bool(kept) and str(kept[0].content).startswith("先前对话摘要："), str(kept[0].content)[:40] if kept else "")
+                check("flush reminder is HumanMessage", bool(kept) and kept[-1].type == "human" and getattr(kept[-1], "id", "") == "__compaction_flush__", "")
+                check("compact count incremented", result.get("context_compact_count") == 1, str(result.get("context_compact_count")))
+                check("context_summary persisted", result.get("context_summary") == good_summary, str(result.get("context_summary")))
+                check("context_usage telemetry emitted", any(e.get("type") == "context_usage" for e in rt.events), "")
+            # Degenerate (numeric) summary must fall back to trim — never injected.
+            mw_bad = CoworkerSummarizationMiddleware(
+                budget_chars=1000, llm=_FakeCompModel("4 3 12 55 24 66 236 183 38 2453 375"), language="zh", context_window_tokens=1000,
+            )
+            result_bad = await mw_bad.abefore_model(_over_budget_state(), _FakeCompRuntime())
+            check("degenerate summary falls back to trim", result_bad is not None and not result_bad.get("context_summary"), str(result_bad))
+            # Fallback chain: first candidate fails, second succeeds.
+            class _FailingModel:
+                model_name = "failing"
+                base_url = "http://f"
+
+                def invoke(self, messages, **kwargs):
+                    raise RuntimeError("boom")
+
+                async def ainvoke(self, messages, **kwargs):
+                    raise RuntimeError("boom")
+
+            mw_chain = CoworkerSummarizationMiddleware(
+                budget_chars=1000, llm=_FailingModel(), summarizer_candidates=[_FailingModel(), _FakeCompModel(good_summary)],
+                language="zh", context_window_tokens=1000,
+            )
+            result_chain = await mw_chain.abefore_model(_over_budget_state(), _FakeCompRuntime())
+            check("summarizer fallback chain succeeds", bool(result_chain and result_chain.get("context_summary")), str(result_chain))
+            # Cheap layer first: clearing stale tool results alone fits the budget
+            # -> micro-compact, no model summary invoked, counter still increments.
+            from langchain.agents.middleware.context_editing import ClearToolUsesEdit
+
+            edit = ClearToolUsesEdit(trigger=100, keep=2, placeholder="[cleared]")
+            mw_prune = CoworkerSummarizationMiddleware(
+                budget_chars=1000, llm=_FakeCompModel(good_summary), language="zh", context_window_tokens=1000, tool_edit=edit,
+            )
+            msgs_prune = [SystemMessage(content="sys", id="s0")]
+            for i in range(10):
+                msgs_prune.append(HumanMessage(content="用户消息" * 5 + str(i), id=f"u{i}"))
+                msgs_prune.append(AIMessage(content="", tool_calls=[{"id": f"tc{i}", "name": "read_file", "args": {"p": "x"}}], id=f"a{i}"))
+                msgs_prune.append(ToolMessage(content="x" * 3000, tool_call_id=f"tc{i}", id=f"t{i}"))
+            result_prune = await mw_prune.abefore_model({"messages": msgs_prune, "context_compact_count": 0}, _FakeCompRuntime())
+            if result_prune:
+                tool_kept = [m for m in result_prune["messages"] if isinstance(m, ToolMessage)]
+                check(
+                    "prune layer clears stale tool results (micro-compact)",
+                    bool(tool_kept) and all(m.content == "[cleared]" for m in tool_kept[:-2]),
+                    str([str(m.content)[:12] for m in tool_kept]),
+                )
+                check("prune layer does not inject summary", not result_prune.get("context_summary"), "")
+                check("prune layer increments compact count", result_prune.get("context_compact_count") == 1, str(result_prune.get("context_compact_count")))
+
+        asyncio.run(_compact_checks())
+
     # --- SSE infrastructure: ApprovalEventBus non-blocking publish + unsubscribe drain ---
     async def _sse_async_checks() -> None:
         import main as _m

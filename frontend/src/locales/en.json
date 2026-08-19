@@ -51,6 +51,7 @@
   "titlebar.context_trim_hint": "Old messages are auto-condensed near the limit to leave room for replies",
   "titlebar.context_badge": "Condensed",
   "titlebar.context_compressed": "History has been condensed",
+  "titlebar.context_compressing": "Compressing context…",
   "sidebar.primary_nav": "Primary navigation",
   "sidebar.collapse": "Collapse sidebar",
   "sidebar.expand": "Expand sidebar",

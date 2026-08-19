@@ -830,6 +830,7 @@
   "titlebar.context_trim_hint": "한도에 가까워지면 이전 메시지를 자동으로 정리하여 답변 공간을 확보합니다",
   "titlebar.context_badge": "정리됨",
   "titlebar.context_compressed": "이전 내용이 정리되었습니다",
+  "titlebar.context_compressing": "컨텍스트 압축 중…",
   "chat.idle_warning": "스트림이 4분 이상 대기 중 — {seconds}초 후 연결이 끊어집니다. 계속 기다리려면 이 페이지에 머무르세요.",
   "settings.logging": "런타임 로그",
   "settings.log_level": "로그 수준",
