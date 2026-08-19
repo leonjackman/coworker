@@ -33,16 +33,22 @@
 
 | 功能 | 说明 |
 | --- | --- |
-| 🗨️ **流式对话** | Agent 实时响应代码问题 |
-| 🔌 **多模型支持** | OpenAI、Ollama 及任意 OpenAI 兼容 API |
-| 🎯 **目标模式** | 多轮自主执行，支持暂停和恢复 |
-| 🧠 **长程记忆** | 项目级和用户级记忆库，LLM 自动提取建议 |
-| 🔒 **人机协作审查** | 命令执行、文件修改、MCP 调用需确认 |
-| 🔄 **MCP 集成** | Model Context Protocol 支持（自动发现、持久会话） |
-| 📦 **技能系统** | SKILL.md 标准技能，支持市场浏览与安装 |
-| 📓 **变更追踪** | 每次文件修改记录完整审计信息，支持历史回滚 |
-| 🌎 **国际化** | 支持 11 种语言 — 英文、中文、日文、韩文、法文、德文、西班牙文、葡萄牙文、俄文等 |
-| 🎨 **主题** | 明暗模式，自定义强调色 |
+| 🗨️ **流式对话** | 基于 SSE 的实时 Agent 响应，支持心跳保活与多会话并行流式输出 |
+| 🔌 **多模型支持** | OpenAI、Ollama 及任意 OpenAI 兼容 API，支持上下文窗口在线探测 |
+| 🎯 **目标模式** | 多轮自主执行，支持暂停、恢复、编辑、停止、轮次上限与待办追踪 |
+| 🧠 **长程记忆** | 按 Agent / 项目隔离的 Markdown 记忆库，LLM 自动提取，支持 zip 导入导出 |
+| 👥 **多 Agent 团队** ⚠️ | 创建团队与部门，Agent 之间可互相委派任务。**实验性能力** — 见下方说明 |
+| 🔒 **人机协作审查** | 命令执行、文件修改、MCP 调用需确认，支持 supervised / guarded / autonomous 三级自主度 |
+| 🔄 **MCP 集成** | Model Context Protocol 支持 — stdio / HTTP / SSE / WebSocket、OAuth 2.1 + PKCE、模板发现、持久会话 |
+| 📦 **技能系统** | SKILL.md 标准技能，支持市场浏览与一键安装（SkillHub · ClawHub） |
+| 📓 **变更追踪** | 每次文件修改记录 before/after 差异；编辑 / 重新生成 / 撤销可恢复到任意历史状态 |
+| 🖥️ **内置终端** | 底部面板内置交互式 PTY 终端，并实时展示工具审计日志 |
+| 🔎 **审计与追踪** | 工具审计日志与 Agent 追踪记录，支持导出、清空与保留上限配置 |
+| ✏️ **消息编辑** | 可编辑或重新生成任意用户消息，下游代码改动自动回滚且可恢复 |
+| 🌎 **国际化** | 支持 11 种语言 — 英文、中文（简 / 繁）、日文、韩文、法文、德文、西班牙文、葡萄牙文、俄文 |
+| 🎨 **主题** | 明暗 / 跟随系统模式，自定义强调色 |
+
+> ⚠️ **多 Agent（实验性）** — 多 Agent 团队、部门与任务委派属于实验性能力，仍在积极开发中：功能尚未完善，行为可能随版本变化，且项目模式创建后不可更改。日常使用建议采用单 Agent 模式。
 
 ---
 
@@ -156,11 +162,11 @@ NODE_ENV=development npx electron . --no-sandbox
 | 层级 | 技术 |
 | --- | --- |
 | **桌面端** | Electron 43 · contextBridge · 系统托盘 · electron-updater |
-| **前端** | React 19 · Vite 8 · Zustand · assistant-ui · Tailwind · Shiki |
-| **后端** | Python 3 · FastAPI · Uvicorn · Pydantic · SQLite |
+| **前端** | React 19 · Vite 8 · Zustand · xterm.js · Tailwind · Shiki |
+| **后端** | Python 3 · FastAPI · Uvicorn · Pydantic · SQLite · LangGraph |
 | **Agent 运行时** | LangChain · LangGraph · HumanInTheLoopMiddleware |
 | **模型支持** | OpenAI 兼容 API · Ollama · 自定义基础 URL |
-| **可扩展性** | MCP 服务器 · SKILL.md 技能 · 技能市场 |
+| **可扩展性** | MCP 服务器 · SKILL.md 技能 · SkillHub / ClawHub 技能市场 |
 | **国际化** | en · zh · zh-TW · zh-HK · ja · ko · fr · de · es · pt-BR · ru |
 
 ---

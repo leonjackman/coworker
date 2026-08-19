@@ -34,16 +34,22 @@
 
 | Feature | Description |
 | --- | --- |
-| 🗨️ **Streaming Chat** | Real-time agent responses via SSE |
-| 🔌 **Multi-Provider** | OpenAI, Ollama, and any OpenAI-compatible API |
-| 🎯 **Goal Mode** | Multi-turn autonomous sessions with pause and resume |
-| 🧠 **Long-Term Memory** | Project and user scopes with LLM auto-extract proposals |
-| 🔒 **Human-In-The-Loop** | Approves commands, file writes, MCP tools before they run |
-| 🔄 **MCP Integration** | Model Context Protocol with auto-discovery and persistent sessions |
-| 📦 **Skills** | SKILL.md-based skills with marketplace browsing |
-| 📓 **Change Tracking** | Every file change logged with rollback to any past state |
-| 🌎 **i18n** | 11 languages — English, Chinese, Japanese, Korean, French, German, Spanish, Portuguese, Russian, and more |
-| 🎨 **Theme** | Dark / light with custom accent colors |
+| 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
+| 🔌 **Multi-Provider** | OpenAI, Ollama, and any OpenAI-compatible API, with live context-window discovery |
+| 🎯 **Goal Mode** | Multi-turn autonomous sessions — pause, resume, edit, stop, round caps, and to-do tracking |
+| 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract and zip export / import |
+| 👥 **Multi-Agent Teams** ⚠️ | Create teams & departments and let agents delegate tasks to each other. **Experimental** — see note below |
+| 🔒 **Human-In-The-Loop** | Approves commands, file writes, and MCP tools before they run — with supervised / guarded / autonomous levels |
+| 🔄 **MCP Integration** | Model Context Protocol — stdio / HTTP / SSE / WebSocket transports, OAuth 2.1 + PKCE, template discovery, persistent sessions |
+| 📦 **Skills** | SKILL.md-based skills with marketplace browsing and one-click install (SkillHub · ClawHub) |
+| 📓 **Change Tracking** | Every file change logged with before/after diffs; edit / regenerate / redo restores any past state |
+| 🖥️ **Integrated Terminal** | Interactive PTY shell in the bottom panel, plus a live tool-audit feed |
+| 🔎 **Audit & Traces** | Tool-audit log and agent traces with export, clear, and retention caps |
+| ✏️ **Message Editing** | Edit or regenerate any user message — downstream code changes are rolled back and can be restored |
+| 🌎 **i18n** | 11 languages — English, Chinese (Simplified / Traditional), Japanese, Korean, French, German, Spanish, Portuguese, Russian |
+| 🎨 **Theme** | Dark / light / system with custom accent colors |
+
+> ⚠️ **Multi-Agent (Experimental)** — Multi-agent teams, departments, and delegation are an experimental capability still under active development: the feature set is not yet complete, behavior may change, and the project mode is immutable after creation. Prefer single-agent mode for daily work.
 
 ---
 
@@ -157,11 +163,11 @@ NODE_ENV=development npx electron . --no-sandbox
 | Layer | Technologies |
 | --- | --- |
 | **Desktop** | Electron 43 · contextBridge · tray · electron-updater |
-| **Frontend** | React 19 · Vite 8 · Zustand · assistant-ui · Tailwind · Shiki |
-| **Backend** | Python 3 · FastAPI · Uvicorn · Pydantic · SQLite |
+| **Frontend** | React 19 · Vite 8 · Zustand · xterm.js · Tailwind · Shiki |
+| **Backend** | Python 3 · FastAPI · Uvicorn · Pydantic · SQLite · LangGraph |
 | **Agent** | LangChain · LangGraph · HumanInTheLoopMiddleware |
 | **Models** | OpenAI-compatible APIs · Ollama · custom base URLs |
-| **Extensibility** | MCP servers · SKILL.md skills · Skill marketplace |
+| **Extensibility** | MCP servers · SKILL.md skills · SkillHub / ClawHub marketplaces |
 | **i18n** | en · zh · zh-TW · zh-HK · ja · ko · fr · de · es · pt-BR · ru |
 
 ---
