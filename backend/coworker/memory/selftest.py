@@ -602,7 +602,10 @@ def main() -> int:
         # summary that was injected into the conversation and echoed by the model.
         from coworker.agents import (
             COMPACTION_PROMPTS,
+            KEEP_RECENT_TOKENS,
             CoworkerSummarizationMiddleware,
+            _anchored_summary_prompt,
+            _cap_summary,
             _compaction_summary_prefix,
             _strip_compaction_echo,
             _summary_ok,
@@ -708,6 +711,80 @@ def main() -> int:
                 )
                 check("prune layer does not inject summary", not result_prune.get("context_summary"), "")
                 check("prune layer increments compact count", result_prune.get("context_compact_count") == 1, str(result_prune.get("context_compact_count")))
+
+            # --- opencode-aligned compaction behavior ---
+            # Fixed keep window (8k), independent of the budget (old behavior was
+            # budget×0.6 which left the resident set near the ceiling).
+            check("keep window fixed (opencode-aligned)", KEEP_RECENT_TOKENS == 8_000, str(KEEP_RECENT_TOKENS))
+            msgs_fixed = [SystemMessage(content="sys", id="s0")]
+            for i in range(4):
+                msgs_fixed.append(HumanMessage(content="用户消息" * 5 + str(i), id=f"k{i}"))
+                msgs_fixed.append(AIMessage(content="助手回复" * 5, id=f"ka{i}"))
+            mw_fixed = CoworkerSummarizationMiddleware(
+                budget_chars=1000, llm=_FakeCompModel(good_summary), language="zh", context_window_tokens=10_000_000,
+            )
+            mw_fixed._determine_cutoff_index(msgs_fixed)
+            check("fixed keep window not budget-scaled", mw_fixed.keep == ("tokens", KEEP_RECENT_TOKENS), str(mw_fixed.keep))
+
+            # Anchored preamble: present with a previous summary, absent without.
+            anchored_prompt = _anchored_summary_prompt(COMPACTION_PROMPTS["zh"], "上一版摘要")
+            check("anchored preamble includes previous summary", "上一版摘要" in anchored_prompt and "<previous-summary>" in anchored_prompt, "")
+            check("anchored preamble skipped when empty", _anchored_summary_prompt(COMPACTION_PROMPTS["zh"], "") == COMPACTION_PROMPTS["zh"], "")
+
+            # Summary cap: oversized output trimmed to <= SUMMARY_OUTPUT_TOKENS.
+            long_summary = "长摘要" * 50_000
+            capped = _cap_summary(long_summary)
+            from coworker.agents import _estimate_tokens
+            check("summary capped to budget", _estimate_tokens(capped) <= 4_096, f"{_estimate_tokens(capped)} tokens")
+            check("cap keeps short summaries intact", _cap_summary(good_summary) == good_summary, "")
+            check("capped summary has truncation marker", capped.endswith("to fit context]"), capped[-40:])
+
+            # Recording fake model so we can assert the anchored summary was
+            # threaded through to the summarizer on a follow-up compaction.
+            class _RecordingCompModel(_FakeCompModel):
+                def __init__(self, payload):
+                    super().__init__(payload)
+                    self.last_prompt = ""
+
+                def invoke(self, messages, **kwargs):
+                    self.last_prompt = str(messages)
+                    return super().invoke(messages, **kwargs)
+
+                async def ainvoke(self, messages, **kwargs):
+                    self.last_prompt = str(messages)
+                    return super().invoke(messages, **kwargs)
+
+            recording = _RecordingCompModel("会话意图：更新后的摘要，涉及 src/main.py 与 x.yaml 的新决策")
+            mw_rec = CoworkerSummarizationMiddleware(
+                budget_chars=1000, llm=recording, language="zh", context_window_tokens=1000,
+            )
+            rec_state = _over_budget_state()
+            rec_state["context_summary"] = "上一版摘要内容"
+            rec_result = await mw_rec.abefore_model(rec_state, _FakeCompRuntime())
+            check("anchored summary threaded to model", rec_result and rec_result.get("context_summary"), str(rec_result))
+            check("summarizer received anchored preamble", bool(recording.last_prompt) and "上一版摘要内容" in recording.last_prompt, recording.last_prompt[:80])
+            if rec_result:
+                check("fingerprints persisted in state", "context_summarized_fingerprints" in rec_result, str(list(rec_result.keys())))
+                fps = rec_result.get("context_summarized_fingerprints") or []
+                check("fingerprint non-empty after compact", bool(fps), str(fps)[:80])
+                # Cross-turn dedup: rerun over the SAME history with the persisted
+                # fingerprints -> the same segment is not summarized again.
+                rec_state2 = dict(_over_budget_state())
+                rec_state2["context_summary"] = rec_result.get("context_summary")
+                rec_state2["context_summarized_fingerprints"] = fps
+                mw_rec2 = CoworkerSummarizationMiddleware(
+                    budget_chars=1000, llm=_RecordingCompModel(good_summary), language="zh", context_window_tokens=1000,
+                )
+                rec_result2 = await mw_rec2.abefore_model(rec_state2, _FakeCompRuntime())
+                check("dedup: same segment not re-summarized", not (rec_result2 or {}).get("context_summary"), str(rec_result2))
+
+            # Tool-output truncation in summary serialization.
+            msgs_ser = [SystemMessage(content="sys", id="s0"), HumanMessage(content="hi", id="u0")]
+            msgs_ser.append(AIMessage(content="", tool_calls=[{"id": "tc0", "name": "read_file", "args": {}}], id="a0"))
+            msgs_ser.append(ToolMessage(content="z" * 20_000, tool_call_id="tc0", id="t0"))
+            ser = mw_fixed._serialize_for_summary(msgs_ser)
+            check("tool output truncated for summary", "z" * 2_000 + "\n[truncated]" in ser, f"len={len(ser)}")
+            check("truncated tool text not full-length", "z" * 19_000 not in ser, "")
 
         asyncio.run(_compact_checks())
 

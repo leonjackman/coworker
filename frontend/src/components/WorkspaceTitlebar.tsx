@@ -54,14 +54,14 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
   // Prefer the backend's token estimates (they count tool I/O and are CJK-aware);
   // fall back to char-based values for older backends — B3/B4.
   const used = usage.usedTokens ?? Math.round(usage.usedChars / CHARS_PER_TOKEN);
-  // When compaction has been triggered, the active budget may have been halved.
-  // Use activeBudgetTokens (if provided by the backend) so the bar reflects the
-  // real budget ceiling; otherwise fall back to the model's full context window.
+  // Bar is measured against the model's REAL context window (e.g. 256k), NOT the
+  // safety budget / compaction threshold (window × 0.75 ≈ 197k). The backend
+  // emits windowTokens; activeBudgetTokens/budgetTokens are only fallbacks for
+  // older backends that never send the true window. Trimming still kicks in at
+  // 75% of the window internally — this just shows where you are in the window.
   const rawActive: number | undefined = usage.activeBudgetTokens;
   const activeTok = (rawActive != null && rawActive > 0) ? rawActive : undefined;
-  const windowTok = activeTok ?? usage.windowTokens ?? usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
-  // Bar is measured against the model's REAL window so the meter reflects true
-  // context fullness; trimming kicks in at 75% (the safety budget) — see B2.
+  const windowTok = usage.windowTokens ?? activeTok ?? usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
   const pct = windowTok > 0 ? Math.min(100, Math.round((used / windowTok) * 100)) : 0;
   const color = pct < 70 ? STATUS_COLORS.green : pct < 90 ? STATUS_COLORS.amber : STATUS_COLORS.red;
   const formatK = (n: number) => (n >= 1_000 ? `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);

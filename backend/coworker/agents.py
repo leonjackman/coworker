@@ -112,6 +112,10 @@ class CoworkerAgentState(AgentState[Any]):
     # Last compaction summary body (state-persisted so the streaming runtime can
     # strip a model echo of the injected summary from a LATER turn's reply).
     context_summary: NotRequired[str]
+    # Fingerprints of segments already summarized, persisted in state so the
+    # loop guard survives middleware rebuilds across turns (the middleware is
+    # rebuilt every turn; a per-instance set would reset the guard each turn).
+    context_summarized_fingerprints: NotRequired[list[str]]
 
 
 @dataclass(frozen=True)
@@ -1869,7 +1873,22 @@ class NormalizeMessagesMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any])
 # what gets replayed into the checkpoint.
 CONTEXT_SAFETY_FACTOR = 0.75
 CHARS_PER_TOKEN = 3.5
-KEEP_RECENT_FACTOR = 0.6
+# Compaction keeps a FIXED small recent-window of raw messages (opencode-aligned;
+# opencode uses DEFAULT_KEEP_TOKENS=8000). The compacted resident set is then
+# roughly ``recent + summary`` instead of the old ``budget × 0.6`` (≈118k for a
+# 256k window) which left the conversation near the ceiling after every compact.
+KEEP_RECENT_TOKENS = 8_000
+# Summary output cap (opencode SUMMARY_OUTPUT_TOKENS=4096): the compacted summary
+# must stay small so repeated anchored compactions do not bloat the resident set.
+SUMMARY_OUTPUT_TOKENS = 4_096
+# Serialized summarizer input budget. Tool results are truncated to
+# TOOL_OUTPUT_MAX_CHARS before formatting; if the serialized head still exceeds
+# this, the oldest messages are dropped until it fits (opencode feeds the full
+# head subject to the summarizer's own context window).
+SUMMARY_INPUT_MAX_TOKENS = 32_000
+# Tool output truncation length when serializing messages for the summary
+# (opencode TOOL_OUTPUT_MAX_CHARS=2000).
+TOOL_OUTPUT_MAX_CHARS = 2_000
 # Conservative chars/token used when TRUNCATING an oversized message to fit a
 # token budget. CJK is ~1.6 chars/token (0.6 tokens/char); truncating to
 # ``budget * 1.5`` chars keeps the result under ``budget`` tokens for pure CJK
@@ -2100,6 +2119,63 @@ def _compaction_summary_prefix(language: Language) -> str:
     return "先前对话摘要：" if language == "zh" else "[Earlier conversation summary] "
 
 
+# Anchored-update preamble prepended to the compaction prompt when a previous
+# summary exists. Instructs the model to UPDATE (not rewrite) so repeated
+# compactions stay small instead of re-summarizing overlapping history (mirrors
+# opencode's buildPrompt "Update the anchored summary below ...").
+_ANCHORED_PREAMBLES: dict[str, str] = {
+    "zh": (
+        "以下是本会话上一次压缩时生成的摘要。请基于它更新这份摘要："
+        "保留仍然成立的内容，删除已过时的内容，并把下面新对话中出现的新的关键信息并入其中。"
+        "保持整体紧凑，不要重复摘要中已有的内容。\n\n"
+        "<previous-summary>\n{previous_summary}\n</previous-summary>\n\n"
+    ),
+    "en": (
+        "Update the anchored summary below using the conversation history that "
+        "follows. Preserve still-true details, remove stale details, and merge "
+        "in the new facts. Keep it terse; do not repeat what is already in the "
+        "anchored summary.\n\n"
+        "<previous-summary>\n{previous_summary}\n</previous-summary>\n\n"
+    ),
+}
+
+
+def _anchored_summary_prompt(base_prompt: str, previous_summary: str) -> str:
+    """Return the compaction prompt, prefixed with the anchored-update
+    instructions when a previous summary exists."""
+    if not previous_summary or not previous_summary.strip():
+        return base_prompt
+    preamble = _ANCHORED_PREAMBLES.get(
+        "zh" if "会话意图" in base_prompt else "en",
+        _ANCHORED_PREAMBLES["en"],
+    )
+    return preamble.format(previous_summary=previous_summary.strip()) + base_prompt
+
+
+def _cap_summary(text: str) -> str:
+    """Hard-cap a summary to ``SUMMARY_OUTPUT_TOKENS`` (CJK-aware) so a
+    degenerate long output can never bloat the compacted resident set.
+
+    Guarantees the cap even when the summarizer model ignores ``max_tokens``.
+    """
+    if not text:
+        return text
+    if _estimate_tokens(text) <= SUMMARY_OUTPUT_TOKENS:
+        return text
+    marker = "\n[summary truncated by Coworker to fit context]"
+    budget = max(1, SUMMARY_OUTPUT_TOKENS - _estimate_tokens(marker))
+    # Trim trailing characters until the estimate fits. CJK is dense (~0.6
+    # tokens/char), so walk in small steps to avoid over-trimming.
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if _estimate_tokens(text[:mid]) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low].rstrip() + marker
+
+
 _COMPACTION_FLUSH: dict[str, str] = {
     "zh": (
         "注意：为保持上下文紧凑，这段对话中最早的部分已被压缩成上面的摘要。"
@@ -2279,10 +2355,13 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
     def _determine_cutoff_index(self, messages: list[Any]) -> int:
         """Token-based cutoff with AI/Tool pairing protection (framework core).
 
-        ``keep_recent`` is recomputed from the (mutable) per-turn budget so the
-        overflow-retry path that halves the budget also tightens the cutoff.
+        ``keep_recent`` is a fixed small window (``KEEP_RECENT_TOKENS``, aligned
+        with opencode) instead of a fraction of the budget — so after a compact
+        the resident set is ``recent + summary`` (~12k), not near the budget
+        ceiling. The overflow-retry path that halves the budget keeps this fixed
+        too (the summary is already small); trimming still honors the budget.
         """
-        keep_recent = max(2_000, int(self.budget_tokens * KEEP_RECENT_FACTOR))
+        keep_recent = max(2_000, KEEP_RECENT_TOKENS)
         self.keep = ("tokens", keep_recent)
         return super()._determine_cutoff_index(messages)
 
@@ -2439,6 +2518,9 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept],
             "context_compact_count": 1,
             "context_summary": summary,
+            # Persist the (capped) fingerprint set so the dedup loop guard
+            # survives middleware rebuilds across turns.
+            "context_summarized_fingerprints": sorted(self._summarized_segments)[-64:],
         }
 
     def _compact_sync(self, state: CoworkerAgentState) -> dict[str, Any] | None:
@@ -2453,7 +2535,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
 
             return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
-        return self._finish_compact(a, b, self._create_summary(a))
+        return self._finish_compact(a, b, self._create_summary(a, previous_summary=self.last_summary))
 
     async def _compact_async(self, state: CoworkerAgentState) -> dict[str, Any] | None:
         messages = state.get("messages", [])
@@ -2467,11 +2549,12 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
 
             return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
-        summary = await self._acreate_summary(a)
+        summary = await self._acreate_summary(a, previous_summary=self.last_summary)
         return self._finish_compact(a, b, summary)
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         self.last_summary = str(state.get("context_summary", "") or "")
+        self._summarized_segments = set(state.get("context_summarized_fingerprints") or [])
         if not self.summarizer_candidates:
             return self._trim(state)
         try:
@@ -2484,6 +2567,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
 
     async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         self.last_summary = str(state.get("context_summary", "") or "")
+        self._summarized_segments = set(state.get("context_summarized_fingerprints") or [])
         self._emit_context_usage(state, runtime)
         if not self.summarizer_candidates:
             return self._trim(state)
@@ -2495,21 +2579,66 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             logger.warning("context compaction failed; falling back to trim", exc_info=True)
         return self._trim(state)
 
-    def _create_summary(self, messages_to_summarize: list[Any]) -> str:
-        """Synchronous summarizer with the fallback model chain."""
+    def _serialize_for_summary(self, messages: list[Any]) -> str:
+        """Serialize messages for the summarizer: tool results truncated, input
+        bounded to ``SUMMARY_INPUT_MAX_TOKENS`` (oldest dropped until it fits).
+
+        Mirrors opencode's ``select``: the whole segment is visible to the
+        summarizer (subject to a token budget) instead of only the last few
+        thousand tokens, so first-time summaries are complete. Tool outputs are
+        truncated to ``TOOL_OUTPUT_MAX_CHARS`` before formatting because they
+        dominate the transcript and rarely carry summary-worthy prose.
+        """
+        if not messages:
+            return ""
+        import copy
+
+        serialized = copy.deepcopy(list(messages))
+        for msg in serialized:
+            if getattr(msg, "type", "") != "tool":
+                continue
+            try:
+                content = msg.content
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(content, str) and len(content) > TOOL_OUTPUT_MAX_CHARS:
+                msg.content = content[:TOOL_OUTPUT_MAX_CHARS] + "\n[truncated]"
+        formatted = get_buffer_string(serialized, format="xml")
+        if _estimate_tokens(formatted) <= SUMMARY_INPUT_MAX_TOKENS:
+            return formatted
+        # Drop the oldest messages until the serialized head fits. Pairing is
+        # irrelevant here (plain text summarization input, not a provider call).
+        for drop in range(1, len(serialized)):
+            candidate = get_buffer_string(serialized[drop:], format="xml")
+            if _estimate_tokens(candidate) <= SUMMARY_INPUT_MAX_TOKENS or drop == len(serialized) - 1:
+                return candidate
+        return formatted
+
+    def _create_summary(self, messages_to_summarize: list[Any], previous_summary: str = "") -> str:
+        """Synchronous summarizer with the fallback model chain (anchored)."""
         if not messages_to_summarize:
             return ""
-        trimmed = self._trim_messages_for_summary(messages_to_summarize)
-        if not trimmed:
+        formatted = self._serialize_for_summary(messages_to_summarize)
+        if not formatted:
             return ""
-        formatted = get_buffer_string(trimmed, format="xml")
+        prompt = _anchored_summary_prompt(self.summary_prompt, previous_summary).format(messages=formatted).rstrip()
         for model in self.summarizer_candidates:
             try:
-                response = model.invoke(
-                    self.summary_prompt.format(messages=formatted).rstrip(),
-                    config={"metadata": {"lc_source": "summarization"}},
-                )
+                try:
+                    response = model.invoke(
+                        prompt,
+                        config={"metadata": {"lc_source": "summarization"}},
+                        max_tokens=SUMMARY_OUTPUT_TOKENS,
+                    )
+                except TypeError:
+                    # Model does not accept max_tokens as a generation kwarg;
+                    # _cap_summary still enforces the output budget.
+                    response = model.invoke(
+                        prompt,
+                        config={"metadata": {"lc_source": "summarization"}},
+                    )
                 text = str(getattr(response, "content", "") or response or "").strip()
+                text = _cap_summary(text)
                 if _summary_ok(text):
                     return text
                 logger.warning("summarizer output rejected (degenerate): %.120s", text)
@@ -2517,21 +2646,29 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
                 logger.warning("summarizer %s failed; trying next: %s", getattr(model, "model_name", "?"), str(exc)[:200])
         return ""
 
-    async def _acreate_summary(self, messages_to_summarize: list[Any]) -> str:
-        """Async summarizer with the fallback model chain."""
+    async def _acreate_summary(self, messages_to_summarize: list[Any], previous_summary: str = "") -> str:
+        """Async summarizer with the fallback model chain (anchored)."""
         if not messages_to_summarize:
             return ""
-        trimmed = self._trim_messages_for_summary(messages_to_summarize)
-        if not trimmed:
+        formatted = self._serialize_for_summary(messages_to_summarize)
+        if not formatted:
             return ""
-        formatted = get_buffer_string(trimmed, format="xml")
+        prompt = _anchored_summary_prompt(self.summary_prompt, previous_summary).format(messages=formatted).rstrip()
         for model in self.summarizer_candidates:
             try:
-                response = await model.ainvoke(
-                    self.summary_prompt.format(messages=formatted).rstrip(),
-                    config={"metadata": {"lc_source": "summarization"}},
-                )
+                try:
+                    response = await model.ainvoke(
+                        prompt,
+                        config={"metadata": {"lc_source": "summarization"}},
+                        max_tokens=SUMMARY_OUTPUT_TOKENS,
+                    )
+                except TypeError:
+                    response = await model.ainvoke(
+                        prompt,
+                        config={"metadata": {"lc_source": "summarization"}},
+                    )
                 text = str(getattr(response, "content", "") or response or "").strip()
+                text = _cap_summary(text)
                 if _summary_ok(text):
                     return text
                 logger.warning("summarizer output rejected (degenerate): %.120s", text)
