@@ -685,6 +685,65 @@ def main() -> int:
             check("MEMORY.md injected", "MEMORY.md" in names, str(names))
             check("DREAMS.md not injected", "DREAMS.md" not in names, str(names))
 
+        # --- governance: write_auto_facts is FIFO-capped ------------------------
+        with tempfile.TemporaryDirectory() as cap_tmp:
+            cap_root = Path(cap_tmp) / "memory"
+            cap_mgr = MemoryManager(
+                Path(cap_tmp),
+                memory_dir=cap_root,
+                config=MemoryConfig(enabled=True, auto_extract=True, inject_char_limit=100),
+            )
+            cap_view = cap_mgr.for_project("20260812100000", DEFAULT_AGENT)
+            cap_view.write_auto_facts(["旧条目A" + "x" * 40, "旧条目B" + "y" * 40, "新条目C" + "z" * 40])
+            cap_raw = cap_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/BASE/MEMORY.md")
+            check("write_auto_facts keeps newest", "新条目C" in cap_raw, cap_raw)
+            check("write_auto_facts drops oldest", "旧条目A" not in cap_raw, cap_raw)
+            check("write_auto_facts bounded", len(cap_raw) <= 200, f"len={len(cap_raw)}")
+            cap_view.write_auto_facts(["新条目C" + "z" * 40])  # exact duplicate skipped
+            cap_raw2 = cap_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/BASE/MEMORY.md")
+            check("write_auto_facts dedupes", cap_raw2.count("新条目C") == 1, cap_raw2)
+
+        # --- governance: DREAMS.md monthly archive ------------------------------
+        with tempfile.TemporaryDirectory() as ar_tmp:
+            ar_root = Path(ar_tmp) / "memory"
+            ar_mgr = MemoryManager(Path(ar_tmp), memory_dir=ar_root)
+            ar_view = ar_mgr.for_project("20260812100000", DEFAULT_AGENT)
+            import datetime as _dt
+
+            _today = _dt.date.today()
+            cur_day = _today.strftime("%Y-%m-%d")
+            prev_day = _today.replace(day=1) - _dt.timedelta(days=1)
+            prev_month = prev_day.strftime("%Y-%m")
+            ar_view.store.write_file(
+                f"20260812100000/{DEFAULT_AGENT}/BASE/DREAMS.md",
+                f"# Dream Diary\n\n## {cur_day} 22:00 · consolidated · new 1\n- 当月事实\n\n"
+                f"## {prev_day.strftime('%Y-%m-%d')} 21:00 · consolidated · new 2\n- 旧月事实一\n- 旧月事实二\n",
+            )
+            ar_view._rollup_archives()
+            diary_after = ar_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/BASE/DREAMS.md")
+            check("diary keeps current month", "当月事实" in diary_after and "旧月事实一" not in diary_after, diary_after)
+            check("diary keeps single header", diary_after.count("# Dream Diary") == 1, diary_after)
+            arch_d = ar_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/ARCHIVE/DREAMS-{prev_month}.md")
+            check("diary archived old month", "旧月事实一" in arch_d and "旧月事实二" in arch_d, arch_d)
+
+        # --- governance: SESSIONS monthly archive -------------------------------
+        with tempfile.TemporaryDirectory() as ss_tmp:
+            ss_root = Path(ss_tmp) / "memory"
+            ss_mgr = MemoryManager(Path(ss_tmp), memory_dir=ss_root)
+            ss_view = ss_mgr.for_project("20260812100000", DEFAULT_AGENT)
+            _today2 = _dt.date.today()
+            cur_day2 = _today2.strftime("%Y-%m-%d")
+            prev_day2 = _today2.replace(day=1) - _dt.timedelta(days=1)
+            prev_month2 = prev_day2.strftime("%Y-%m")
+            ss_view.store.write_file(f"20260812100000/{DEFAULT_AGENT}/SESSIONS/{prev_day2.strftime('%Y-%m-%d')}.md", "- 旧月会话\n")
+            ss_view.store.write_file(f"20260812100000/{DEFAULT_AGENT}/SESSIONS/{cur_day2}.md", "- 当月会话\n")
+            ss_view._rollup_archives()
+            arch_s = ss_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/ARCHIVE/SESSIONS-{prev_month2}.md")
+            check("sessions archived old month", "旧月会话" in arch_s, arch_s)
+            sess_dir = ss_root / "20260812100000" / DEFAULT_AGENT / "SESSIONS"
+            check("sessions old file removed", not (sess_dir / f"{prev_day2.strftime('%Y-%m-%d')}.md").exists(), str(sorted(p.name for p in sess_dir.iterdir())))
+            check("sessions current kept", (sess_dir / f"{cur_day2}.md").exists(), str(sorted(p.name for p in sess_dir.iterdir())))
+
         # --- context budget: table resolution + conversion ----------------------
         from coworker.agents import _estimate_tokens, _message_text, _msg_chars, context_budget_chars, is_context_overflow_error
         from coworker.providers import DEFAULT_CONTEXT_WINDOW, MODEL_CONTEXT_TABLE, ProviderEntry, ProviderManager

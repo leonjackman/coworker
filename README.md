@@ -194,6 +194,21 @@ Auto-extract uses the provider configured under memory settings
 by `COWORKER_MEMORY_ENABLED` and `COWORKER_MEMORY_AUTO_EXTRACT` (both default
 on).
 
+### How it stays bounded
+
+Memory files are governed lazily (at write time, no background job):
+
+- **`MEMORY.md` / `USER.md`** — consolidation keeps the file under the injection
+  budget (default 4000 chars); the append-only fallback is FIFO-capped at the
+  same budget (oldest entries are dropped first, the newest fact is never lost).
+- **`DREAMS.md`** — only the current month's entries stay in the live file;
+  older months are moved to `ARCHIVE/DREAMS-YYYY-MM.md`.
+- **`SESSIONS/<date>.md`** — day files older than the current month are merged
+  into `ARCHIVE/SESSIONS-YYYY-MM.md` and removed.
+
+Archives live under `<agent>/ARCHIVE/` — they are not injected into the prompt
+and stay readable on demand via `memory_read`.
+
 ### How to verify
 
 1. In a chat, state a durable fact, e.g. "I prefer replies in Chinese" or

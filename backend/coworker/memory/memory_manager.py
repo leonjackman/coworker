@@ -504,30 +504,148 @@ class MemoryManager:
                 existing = ""
             content = (existing.rstrip() + "\n\n" + entry + "\n") if existing.strip() else f"# Dream Diary\n\n{entry}\n"
             self.store.write_file(target, content)
+            self._rollup_archives()
         except Exception:  # noqa: BLE001 - diary must never break chat
             logger.warning("dream diary write failed for %s", session_id, exc_info=True)
 
+    def _rollup_archives(self) -> None:
+        """Move older-month records out of the live files into ``ARCHIVE/``.
+
+        Governs two growth points (project-scoped only):
+
+        - ``BASE/DREAMS.md``: entries whose ``## YYYY-MM-DD`` stamp is older
+          than the current month move to ``ARCHIVE/DREAMS-YYYY-MM.md``; the
+          live diary keeps only the current month.
+        - ``SESSIONS/YYYY-MM-DD.md``: day files older than the current month
+          merge into ``ARCHIVE/SESSIONS-YYYY-MM.md`` and are deleted.
+
+        Lazy + best-effort: runs at write time (no scheduler), never raises.
+        Archive files live outside ``BASE/`` / ``SESSIONS/`` so the scanner
+        neither injects them nor surfaces them in the memory tree; they stay
+        readable on demand via ``memory_read``.
+        """
+        if not self.bound_project:
+            return
+        import datetime
+        import re
+
+        from .memory_file import render_blocks, split_blocks
+
+        date_re = re.compile(r"^##\s+(\d{4}-\d{2})-\d{2}")
+        today = datetime.date.today()
+        current_month = today.strftime("%Y-%m")
+        archive_dir = f"{self.bound_project}/{self.bound_agent}/ARCHIVE"
+
+        def _append_archive(name: str, blocks: list[str]) -> None:
+            rel = f"{archive_dir}/{name}"
+            try:
+                existing = self.store.read_file(rel).content or ""
+            except Exception:  # noqa: BLE001
+                existing = ""
+            known = {b for b in split_blocks(existing)}
+            merged = list(known)
+            for block in blocks:
+                if block not in known:
+                    merged.append(block)
+                    known.add(block)
+            try:
+                self.store.write_file(rel, render_blocks(merged))
+            except Exception:  # noqa: BLE001 - best-effort
+                logger.warning("memory archive write failed for %s", rel, exc_info=True)
+
+        try:
+            # -- DREAMS.md rollup --------------------------------------------
+            diary_rel = f"{self.bound_project}/{self.bound_agent}/BASE/DREAMS.md"
+            try:
+                diary_raw = self.store.read_file(diary_rel).content or ""
+            except Exception:  # noqa: BLE001
+                diary_raw = ""
+            current: list[str] = []
+            stale: dict[str, list[str]] = {}
+            for block in split_blocks(diary_raw):
+                # Only single-hash document headings are structural (rewritten
+                # fresh below); ## dated entries are content, not headings.
+                if re.match(r"^#(?:[^#]|$)", block.strip()):
+                    continue
+                match = date_re.match(block)
+                month = match.group(1) if match else current_month
+                if month == current_month:
+                    current.append(block)
+                else:
+                    stale.setdefault(month, []).append(block)
+            for month, blocks in stale.items():
+                _append_archive(f"DREAMS-{month}.md", blocks)
+            if stale:
+                body = current if current else ["（当月无 dream 记录）"]
+                self.store.write_file(diary_rel, render_blocks(["# Dream Diary", *body]))
+
+            # -- SESSIONS/<date>.md rollup -----------------------------------
+            sessions_dir = f"{self.bound_project}/{self.bound_agent}/SESSIONS"
+            sessions_path = self.store._resolve(sessions_dir)
+            if sessions_path.is_dir():
+                day_re = re.compile(r"^(\d{4}-\d{2})-\d{2}\.md$")
+                for entry in sorted(sessions_path.iterdir()):
+                    if not entry.is_file():
+                        continue
+                    m = day_re.match(entry.name)
+                    if not m:
+                        continue
+                    month = m.group(1)
+                    if month >= current_month:
+                        continue
+                    try:
+                        content = entry.read_text(encoding="utf-8", errors="replace") or ""
+                    except OSError:
+                        continue
+                    _append_archive(f"SESSIONS-{month}.md", split_blocks(content))
+                    try:
+                        entry.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        except Exception as exc:  # noqa: BLE001 - rollup must never break the dream
+            logger.warning("memory archive rollup failed for %s: %s", self.bound_project, exc)
+
     def write_auto_facts(self, candidates: list[str]) -> int:
-        """Persist extracted facts directly into long-term memory.
+        """Persist extracted facts directly into long-term memory, bounded.
 
         Project-scoped extraction targets the current agent's ``MEMORY.md``;
         global extraction (no bound project) targets the system ``USER.md``.
-        Exact-duplicate entries are skipped. Never raises — each write is
-        guarded so a single bad candidate cannot abort the batch.
+        Exact-duplicate entries are skipped. The file is FIFO-capped at
+        ``inject_char_limit`` characters: if the new facts would push it over
+        the budget, the OLDEST entries are dropped first (newest facts always
+        win, the newest entry is never evicted). This keeps the append-only
+        fallback bounded even when a consolidation rewrite is rejected. Never
+        raises — each write is guarded so a single bad candidate cannot abort.
         """
+        from .memory_file import render_blocks, split_blocks
+
         store = self.store
         if self.bound_project:
             target = f"{self.bound_project}/{self.bound_agent}/BASE/MEMORY.md"
         else:
             target = "USER.md"
+        limit = self.config.inject_char_limit
         added = 0
         for text in candidates:
             text = (text or "").strip()
             if not text:
                 continue
             try:
-                store.add_block(target, text)
+                existing = store.read_file(target).content or ""
+            except Exception:  # noqa: BLE001
+                existing = ""
+            blocks = split_blocks(existing)
+            if any(b == text for b in blocks):
+                continue
+            blocks.append(text)
+            total = sum(len(b) for b in blocks)
+            # Drop oldest entries (front) until the file fits the budget; the
+            # newest entry is never evicted.
+            while len(blocks) > 1 and total > limit:
+                total -= len(blocks.pop(0))
+            try:
+                store.write_file(target, render_blocks(blocks))
                 added += 1
-            except Exception:  # noqa: BLE001 - skip duplicates/edge failures
+            except Exception:  # noqa: BLE001 - skip edge failures
                 continue
         return added

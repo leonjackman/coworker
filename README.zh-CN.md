@@ -191,6 +191,20 @@ memory/
 Provider），由 `COWORKER_MEMORY_ENABLED` 和 `COWORKER_MEMORY_AUTO_EXTRACT`
 控制（默认都开启）。
 
+### 如何保持文件有界
+
+记忆文件全部"写时治理"（随 dream 懒执行，无后台任务）：
+
+- **`MEMORY.md` / `USER.md`**：合并把文件控制在注入预算内（默认 4000
+  字符）；append-only 回退路径同样按该预算做 FIFO 裁剪（先丢最旧，最新
+  事实永不丢失）。
+- **`DREAMS.md`**：活文件只保留当月条目，旧月移到
+  `ARCHIVE/DREAMS-YYYY-MM.md`。
+- **`SESSIONS/<日期>.md`**：早于当月的日期文件合并进
+  `ARCHIVE/SESSIONS-YYYY-MM.md` 后删除。
+
+归档统一放 `<agent>/ARCHIVE/`——不注入提示词，仍可经 `memory_read` 按需读取。
+
 ### 如何验证
 
 1. 在对话中说出明确持久事实，如"我偏好中文回复""本项目后端端口是 9527"。
