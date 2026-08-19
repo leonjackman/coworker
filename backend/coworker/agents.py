@@ -1,5 +1,6 @@
 import asyncio
 import json
+import operator
 import os
 import re
 import sqlite3
@@ -27,7 +28,7 @@ def _llm_stream_chunk_timeout() -> float:
         return 300.0
 
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from typing_extensions import NotRequired
 
 from langchain.agents.middleware import AgentMiddleware
@@ -99,6 +100,11 @@ class CoworkerAgentState(AgentState[Any]):
     goal_done: NotRequired[bool]
     goal_nudge: NotRequired[str]
     todos: NotRequired[list[Any]]
+    # Cumulative count of context compressions (trim or summarize) for this
+    # session. Lives in state (not on the middleware) because the middleware is
+    # rebuilt every turn; the checkpoint persists this so the "已精简" badge is
+    # cumulative across turns — see B6.
+    context_compact_count: NotRequired[Annotated[int, operator.add]]
 
 
 @dataclass(frozen=True)
@@ -2022,9 +2028,6 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         # safety budget) and explains the source — B2/B8.
         self.context_window_tokens = context_window_tokens
         self.context_window_source = context_window_source
-        # Cumulative compressions (trim or summarize) this session, so the UI can
-        # show a persistent "已压缩" badge — B6.
-        self.compact_count = 0
         self._summarized_segments: set[str] = set()
 
     def _trim(self, state: CoworkerAgentState) -> list[Any] | None:
@@ -2075,8 +2078,10 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         kept = head + kept_tail
         if len(kept) == len(messages):
             return None
-        self.compact_count += 1
-        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}
+        # Increment the session-level compaction counter. The counter lives in
+        # checkpointed state (not on this middleware, which is rebuilt every turn)
+        # so it accumulates across turns — see B6.
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept], "context_compact_count": 1}
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         return self._trim(state)
@@ -2104,9 +2109,11 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                     "window_tokens": window_tokens,
                     # Per-turn signal: is the resident set over the active budget
                     # (i.e. will this call trim/compact)? Distinct from `compacted`,
-                    # which is the cumulative "has compression ever happened" flag — B6.
+                    # which is the cumulative "has compression ever happened" flag
+                    # (counted in checkpointed state, persists across turns) — B6.
                     "compressed": total > self.budget_chars,
-                    "compacted": self.compact_count > 0,
+                    "compacted": state.get("context_compact_count", 0) > 0,
+                    "compact_count": state.get("context_compact_count", 0),
                     "window_source": self.context_window_source,
                 }
             )
@@ -2190,8 +2197,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 id="__compaction_flush__",
             )
         )
-        self.compact_count += 1
-        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept], "context_compact_count": 1}
 
     async def _summarize_segment(self, messages: list[Any]) -> str:
         """Ask the model to condense the oldest messages into a concise summary."""

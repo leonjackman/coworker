@@ -815,7 +815,9 @@ function App() {
       // it (including while on the hero/draft, where no goal card should exist).
       // Message events (delta/tool/plan/done) are always processed.
       if (event.type === 'context_usage') {
-        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+        if (!event.session_id || event.session_id === sessionIdRef.current) {
+          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+        }
         return;
       }
       const goalMatchesView = !event.session_id || event.session_id === sessionIdRef.current;
@@ -1424,7 +1426,9 @@ function App() {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
-        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+        if (!event.session_id || event.session_id === sessionIdRef.current) {
+          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+        }
         return;
       }
       if (event.type === 'revert_summary') {
@@ -1644,7 +1648,9 @@ function App() {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
-        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+        if (!event.session_id || event.session_id === sessionIdRef.current) {
+          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+        }
         return;
       }
       if (event.type === 'revert_summary') {
@@ -1924,7 +1930,9 @@ function App() {
           // P1 陈旧请求守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
           if (isStreamStale(resumeSessionId, resumeRequestSeq)) return;
           if (event.type === 'context_usage') {
-            setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+            if (!event.session_id || event.session_id === sessionIdRef.current) {
+              setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+            }
             return;
           }
           if (event.type === 'done') {
@@ -2743,6 +2751,7 @@ function App() {
     if (!provider) return;
     const previous = selectedModel;
     setSelectedModel(provider.id);
+    setContextUsage(null); // 切换模型/服务商后清掉旧的预算显示，避免残留上一个模型的窗口（例如 DeepSeek 1000k）
     try {
       const config = await chatService.updateRuntimeConfig({
         selected_provider_id: provider.id,

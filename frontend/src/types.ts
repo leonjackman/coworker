@@ -677,7 +677,7 @@ export interface PendingRequest {
     | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string }
     | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string }
     | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string }
-    | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; used_tokens: number; budget_tokens: number; window_tokens: number; compacted: boolean; window_source: string; session_id?: string }
+    | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; used_tokens: number; budget_tokens: number; window_tokens: number; compacted: boolean; compact_count: number; window_source: string; session_id?: string }
     | { type: 'idle_warning'; seconds_idle: number; session_id?: string }
     | {
         type: 'revert_summary';
