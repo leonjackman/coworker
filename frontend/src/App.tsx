@@ -94,6 +94,52 @@ function upsertToolPart(parts: MessagePart[], id: string, name: string, input: s
   return next;
 }
 
+/**
+ * Reconcile a stream's terminal state against the backend's committed truth.
+ *
+ * The backend persists the assistant message (with the client-supplied
+ * `assistant_message_id`) in its `done` handler BEFORE writing the `done` SSE
+ * frame. That means by the time a stream settles, a completed reply is already
+ * durable server-side regardless of whether the client ever received `done`.
+ *
+ * If the `done` frame is dropped somewhere in the untracked
+ * SSE → Electron IPC → renderer hop, the old fallback marked the still-running
+ * bubble `interrupted` (orange) even though the backend fully replied. This
+ * helper re-fetches the session and, when the message id is present, adopts the
+ * backend's committed content — turning the dropped-terminal case into a
+ * successful commit (blue → done) instead of a false orange bar.
+ *
+ * Returns null when the backend has no record for this message id (genuinely
+ * interrupted / aborted before commit / backend unreachable).
+ */
+async function findCommittedAssistantMessage(
+  sessionId: string | undefined,
+  assistantMessageId: string,
+  timeoutMs = 3000,
+): Promise<{ content: string; parts: MessagePart[] } | null> {
+  if (!sessionId) return null;
+  try {
+    const response = await Promise.race([
+      chatService.getSession(sessionId),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('reconcile timeout')), timeoutMs),
+      ),
+    ]);
+    const committed = (response.session.messages ?? []).find(
+      (record) => record.role === 'assistant' && record.id === assistantMessageId,
+    );
+    if (committed) {
+      return {
+        content: committed.content ?? '',
+        parts: (committed.parts as MessagePart[] | undefined) ?? [],
+      };
+    }
+  } catch {
+    // Backend unreachable / reconcile timeout — caller falls back to "interrupted".
+  }
+  return null;
+}
+
 type ApprovalStreamEvent = Extract<
   StreamEvent,
   { type: 'approval_required' } | { type: 'question_required' }
@@ -338,6 +384,67 @@ function App() {
     delete activeAssistantMessageIdsRef.current[key];
     delete streamStartAtsRef.current[key];
   };
+
+  // Terminal-state settle for an assistant message after a stream ends.
+  // Guards on `status === 'running'` so a done/error/stopped set by event
+  // handlers (or by stopMessage) is never overwritten. When the `done` frame
+  // was dropped, reconcile against the backend's committed message instead of
+  // blindly showing an orange "interrupted" bar — the backend persists the
+  // assistant message BEFORE writing `done`, so a present message id means the
+  // reply actually succeeded and must be adopted as `done`.
+  const settleAssistantMessage = async (opts: {
+    sessionId: string | undefined;
+    assistantMessageId: string;
+    streamedContent: string;
+    receivedDone: boolean;
+    extraParts?: MessagePart[];
+  }) => {
+    const { sessionId: sid, assistantMessageId: mid, streamedContent: fallback, receivedDone, extraParts } = opts;
+    // exactOptionalPropertyTypes: never assign `parts: undefined` to ChatMessage.
+    const partsField = (item: ChatMessage, parts: MessagePart[]) => {
+      const next = parts.length > 0 ? parts : item.parts;
+      return next !== undefined ? { parts: next } : {};
+    };
+    if (receivedDone) {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === mid && item.status === 'running'
+            ? {
+                ...item,
+                content: fallback || item.content,
+                status: 'done',
+                ...(extraParts ? partsField(item, mergeMessageParts(item.parts || [], extraParts)) : {}),
+                streamEndAt: Date.now(),
+              }
+            : item,
+        ),
+      );
+      return;
+    }
+    const committed = await findCommittedAssistantMessage(sid, mid);
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === mid && item.status === 'running'
+          ? committed
+            ? {
+                ...item,
+                content: committed.content || fallback || item.content,
+                status: 'done',
+                ...partsField(item, committed.parts),
+                streamEndAt: Date.now(),
+              }
+            : {
+                ...item,
+                content: fallback || t('chat.stream_interrupted'),
+                status: 'interrupted',
+                ...(extraParts ? partsField(item, mergeMessageParts(item.parts || [], extraParts)) : {}),
+                streamEndAt: Date.now(),
+              }
+          : item,
+      ),
+    );
+  };
+
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
   const goalStreamIdRef = useRef<string | undefined>(undefined);
@@ -1236,22 +1343,18 @@ function App() {
       // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
       // 按消息 id 收尾（每个流持有独立 id），因此切走会话后后台流结束时也会被正确收尾，
       // 侧栏 running 指示随之清除；不会误伤其它流的消息。
-      // 若流结束却从未收到 done/goal_done（断线、后端重启），标记为 interrupted
-      // 而非 done —— 半截回复不能被伪装成「已完成」。
+      // 若流结束却从未收到 done/goal_done（断线、后端重启、终态事件在
+      // SSE→IPC→renderer 链路丢失），先与后端已落库的消息对账：后端在写出 done
+      // 帧之前就已持久化 assistant 消息，若该消息 id 已存在则回复其实成功了，
+      // 采纳后端内容并标记 done；只有后端也无记录时才算 interrupted。
       // Guard against batched updates: only transition if the message is still
       // running (not already marked done/error by event handlers above).
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantMessageId && item.status === 'running'
-            ? {
-                ...item,
-                content: streamedContent || (receivedDone ? item.content : t('chat.stream_interrupted')),
-                status: receivedDone ? 'done' : 'interrupted',
-                streamEndAt: Date.now(),
-              }
-            : item,
-        ),
-      );
+      void settleAssistantMessage({
+        sessionId: sessionIdRef.current || requestSessionId,
+        assistantMessageId,
+        streamedContent,
+        receivedDone,
+      });
       if (streamControllersRef.current[streamKey(requestSessionId)] === controller) {
         delete streamControllersRef.current[streamKey(requestSessionId)];
         delete activeAssistantMessageIdsRef.current[streamKey(requestSessionId)];
@@ -1593,16 +1696,15 @@ function App() {
         delete streamStartAtsRef.current[streamKey(currentSessionId)];
       }
       // Safety net: ensure the assistant message leaves the "running" state
-      // even if the terminal event was dropped by the backend. A stream that
-      // ended without a done event is interrupted, not "done" (half a reply
-      // must not masquerade as complete).
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: streamedContent || (receivedDone ? item.content : t('chat.stream_interrupted')), status: receivedDone ? 'done' : 'interrupted', streamEndAt: Date.now() }
-            : item,
-        ),
-      );
+      // even if the terminal event was dropped. Reconcile against the backend's
+      // committed message first: a present id means the reply succeeded and
+      // must be adopted as `done`; only a genuine miss becomes `interrupted`.
+      void settleAssistantMessage({
+        sessionId: currentSessionId,
+        assistantMessageId,
+        streamedContent,
+        receivedDone,
+      });
       requestSeqRef.current += 1;
       bumpSessionSeq(currentSessionId);
     }
@@ -1819,16 +1921,15 @@ function App() {
         delete streamStartAtsRef.current[streamKey(currentSessionId)];
       }
       // Safety net: ensure the assistant message leaves the "running" state
-      // even if the terminal event was dropped by the backend. A stream that
-      // ended without a done event is interrupted, not "done" (half a reply
-      // must not masquerade as complete).
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: streamedContent || (receivedDone ? item.content : t('chat.stream_interrupted')), status: receivedDone ? 'done' : 'interrupted', streamEndAt: Date.now() }
-            : item,
-        ),
-      );
+      // even if the terminal event was dropped. Reconcile against the backend's
+      // committed message first: a present id means the reply succeeded and
+      // must be adopted as `done`; only a genuine miss becomes `interrupted`.
+      void settleAssistantMessage({
+        sessionId: currentSessionId,
+        assistantMessageId,
+        streamedContent,
+        receivedDone,
+      });
       requestSeqRef.current += 1;
       bumpSessionSeq(currentSessionId);
     }
@@ -2046,16 +2147,18 @@ function App() {
         delete activeAssistantMessageIdsRef.current[streamKey(resumeSessionId)];
         delete streamStartAtsRef.current[streamKey(resumeSessionId)];
       }
-      // 断线兜底：resume 流结束却没收到 done，把目标消息从 running 收尾为
-      // interrupted，避免 spinner 永久挂起。
+      // 断线兜底：resume 流结束却没收到 done，先与后端已落库消息对账再收尾——
+      // 后端已在 done 帧写出前持久化 assistant 消息，若该 id 已存在则采纳为
+      // done，避免「后端已回复完却显示橙条 interrupted」；只有后端也无记录时
+      // 才标记 interrupted，避免 spinner 永久挂起。
       if (!resumeDone) {
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === targetMessageId && item.status === 'running'
-              ? { ...item, content: resumeContent || t('chat.stream_interrupted'), status: 'interrupted' as const, parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
-              : item,
-          ),
-        );
+        void settleAssistantMessage({
+          sessionId: resumeSessionId,
+          assistantMessageId: targetMessageId,
+          streamedContent: resumeContent,
+          receivedDone: false,
+          extraParts: resumeParts,
+        });
       }
     }
   };

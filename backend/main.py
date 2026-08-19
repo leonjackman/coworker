@@ -1752,8 +1752,19 @@ async def chat_stream(request: ChatStreamRequest):
             yield f"data: {json.dumps({'type': 'error', 'session_id': session_id, 'error': cached_block}, ensure_ascii=False)}\n\n"
             return
 
-        def _persist_assistant(content, mode, provider, model, parts):
+        _USE_CLIENT_MESSAGE_ID = object()
+
+        def _persist_assistant(content, mode, provider, model, parts, message_id=_USE_CLIENT_MESSAGE_ID):
+            # By default the client-supplied id is used so a completed turn's
+            # persisted message reconciles 1:1 with the frontend bubble. Error /
+            # disconnect partials pass `message_id=None` so they get a freshly
+            # generated id: they must NEVER be adopted as a successful commit by
+            # the frontend's stream-settle reconciliation (which matches on the
+            # exact `assistant_message_id`).
             try:
+                resolved_id = (
+                    (request.assistant_message_id or None) if message_id is _USE_CLIENT_MESSAGE_ID else message_id
+                )
                 session = session_store.append_message(
                     session_id,
                     role="assistant",
@@ -1764,7 +1775,7 @@ async def chat_stream(request: ChatStreamRequest):
                     work_mode=work_mode,
                     autonomy=autonomy,
                     parts=parts or [],
-                    message_id=request.assistant_message_id or None,
+                    message_id=resolved_id,
                 )
                 last = session.messages[-1] if session.messages else None
                 if last is not None:
@@ -1931,7 +1942,12 @@ async def chat_stream(request: ChatStreamRequest):
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
             nonlocal terminal_sent
             if accumulated_content and not terminal_sent:
-                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+                # Persist the partial reply with a GENERATED id (not the
+                # client-supplied one) so the frontend's stream-settle
+                # reconciliation can never adopt a half reply as a successful
+                # commit. The persist still binds this turn's tool changes to a
+                # message for rollback (see assign_message in _persist_assistant).
+                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [], message_id=None)
             elif not terminal_sent:
                 # The stream was cut before any text was emitted (client
                 # disconnected mid-tool / mid-thought). Persist a short
@@ -1940,8 +1956,9 @@ async def chat_stream(request: ChatStreamRequest):
                 # (e.g. a team member creation that already took effect) is
                 # invisible to the user after refresh. _persist_assistant is
                 # fully guarded and can never raise, so this path cannot drop
-                # the terminal error event either.
-                _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [])
+                # the terminal error event either. Generated id: never adopt as
+                # a successful commit.
+                _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [], message_id=None)
             if in_goal_flag:
                 _goal_active_streams.pop(f"chat-goal:{session_id}", None)
                 if not any(v == session_id for v in _goal_active_streams.values()):
@@ -2959,7 +2976,10 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                     model=model,
                     work_mode=work_mode,
                     autonomy=autonomy,
-                    message_id=request.assistant_message_id or None,
+                    # Generated id (not the client-supplied one): a partial reply
+                    # persisted on error must never be adopted as a successful
+                    # commit by the frontend's stream-settle reconciliation.
+                    message_id=None,
                     parts=[],
                 )
                 last = session.messages[-1] if session.messages else None
@@ -3115,7 +3135,10 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                     model=model,
                     work_mode=work_mode,
                     autonomy=autonomy,
-                    message_id=request.assistant_message_id or None,
+                    # Generated id (not the client-supplied one): a partial reply
+                    # persisted on error must never be adopted as a successful
+                    # commit by the frontend's stream-settle reconciliation.
+                    message_id=None,
                     parts=[],
                 )
                 last = session.messages[-1] if session.messages else None

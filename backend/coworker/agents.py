@@ -2202,8 +2202,8 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
       configured models) instead of a single fixed LLM.
     """
 
-    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None, summarizer_candidates: list[Any] | None = None, language: Language = "zh", context_window_tokens: int = 0, context_window_source: str = "default", context_window_warning: str | None = None, tool_edit: Any | None = None):
-        self.configured_budget = max(20_000, int(budget_chars or DEFAULT_CONTEXT_WINDOW_CHARS))
+    def __init__(self, budget_chars: int | None = None, llm: Any | None = None, summarizer_candidates: list[Any] | None = None, language: Language = "zh", context_window_tokens: int = 0, context_window_source: str = "default", context_window_warning: str | None = None, tool_edit: Any | None = None):
+        self.configured_budget = max(20_000, int(budget_chars or context_budget_chars(128_000)))
         # Mutable per-turn budget (the overflow retry path halves this). The UI
         # always reads ``configured_budget`` so the meter never jumps on a retry
         # — see B9.
@@ -3032,7 +3032,7 @@ def build_coworker_agent_graph(
     skill_manager: Any | None = None,
     memory_manager: Any | None = None,
     workspace: Any | None = None,  # NEW: for external write HITL bridge
-    context_budget: int = DEFAULT_CONTEXT_WINDOW_CHARS,
+    context_budget: int | None = None,
     context_window_tokens: int = 0,
     context_window_source: str = "default",
     context_window_warning: str | None = None,
@@ -3683,17 +3683,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         await self._force_compact(graph, inputs, config)
                         continue
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
-                    # Push an explicit error event to the SSE stream BEFORE re-raising,
-                    # so the frontend receives a proper `error` event instead of only
-                    # detecting the dropped connection as "interrupted". Enrich with
-                    # provider/model/base_url so a stall error is directly attributable.
-                    yield {
-                        "type": "error",
-                        "error": str(exc)[:400],
-                        "provider": self.provider_name,
-                        "model": self.model_name,
-                        "base_url": getattr(getattr(self, "llm", None), "base_url", "") or "",
-                    }
+                    # Do NOT yield an error event here before raising: every consumer
+                    # of this stream wraps it in `_sse_events`, whose producer already
+                    # turns a raise into exactly one terminal `error` event (via the
+                    # `on_error` callback, enriched with session_id/provider/model/
+                    # base_url). Yielding a second error here produces a double error
+                    # event on the wire (one as a normal event, one as the terminal
+                    # error), which the frontend state machine treats as two
+                    # conflicting terminal states. Just record the trace and re-raise.
                     raise
 
         final_content = "".join(content_parts)

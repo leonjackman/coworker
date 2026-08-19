@@ -945,6 +945,20 @@ function openSseStream({
 
   return new Promise((resolve, reject) => {
     let req;
+    let terminalForwarded = false;
+    // Terminal event types for the renderer's stream state machine. A stream
+    // that ends without one of these (or `stream_end` for approval streams)
+    // must be surfaced as a terminal error instead of silently leaving the
+    // renderer guessing between "interrupted" and a successful commit.
+    const TERMINAL_TYPES = new Set(['done', 'error', 'goal_done', 'goal_paused', 'stream_end']);
+
+    function forwardEvent(parsed) {
+      if (parsed && parsed.type && TERMINAL_TYPES.has(parsed.type)) {
+        terminalForwarded = true;
+      }
+      if (sender) sender.send(eventName, { requestId, event: parsed });
+    }
+
     if (method === 'POST' || method === 'PUT') {
       const body = JSON.stringify(payload);
       httpOptions.headers['Content-Length'] = Buffer.byteLength(body);
@@ -989,7 +1003,7 @@ function openSseStream({
             console.warn('[Electron] skipped malformed SSE frame:', raw?.slice(0, 200));
             continue;
           }
-          if (sender) sender.send(eventName, { requestId, event: parsed });
+          forwardEvent(parsed);
         }
       }
 
@@ -1004,7 +1018,7 @@ function openSseStream({
             const parsed = JSON.parse(buffer);
             if (parsed && parsed.detail) detail = parsed.detail;
           } catch { /* not JSON, keep status-based */ }
-          if (sender) sender.send(eventName, { requestId, event: { type: 'error', error: detail } });
+          forwardEvent({ type: 'error', error: detail });
         } else if (buffer) {
           // Forward any remaining (trailing partial) buffer using multi-line rule
           const dataLines = buffer.split('\n').filter(l => l.startsWith('data:'));
@@ -1012,12 +1026,21 @@ function openSseStream({
             const raw = dataLines.map(l => l.slice(5).trim()).join('\n');
             if (raw) {
               try {
-                if (sender) sender.send(eventName, { requestId, event: JSON.parse(raw) });
+                forwardEvent(JSON.parse(raw));
               } catch {
                 // ignore trailing partial frame
               }
             }
           }
+        } else if (!terminalForwarded) {
+          // 2xx response ended cleanly but no terminal SSE event (done/error/
+          // stream_end) was ever forwarded — the terminal frame was dropped in
+          // transport. Do NOT synthesize an `error` here: the renderer's
+          // stream settle now reconciles against the backend's committed
+          // message (a present assistant_message_id means the reply succeeded
+          // and is adopted as `done`), so an injected error would only mask a
+          // successful commit. Log for diagnostics instead.
+          console.warn(`[Electron] stream ended without a terminal event (requestId=${requestId} path=${path})`);
         }
         activeStreams.delete(requestId);
         resolve({ status: 'ok' });
@@ -1026,10 +1049,9 @@ function openSseStream({
 
     function handleError(e) {
       if (idleTimer) clearInterval(idleTimer);
+      terminalForwarded = true;
       activeStreams.delete(requestId);
-      if (sender) {
-        sender.send(eventName, { requestId, event: { type: 'error', error: `Failed to connect to backend: ${e.message}` } });
-      }
+      forwardEvent({ type: 'error', error: `Failed to connect to backend: ${e.message}` });
       resolve({ status: 'error' });
     }
 
