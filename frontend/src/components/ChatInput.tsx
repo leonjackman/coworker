@@ -873,6 +873,13 @@ export function ChatInput({
                 {activeWorkspace.path}
               </span>
             )}
+        </div>
+      )}
+
+        {currentModelError && (
+          <div className="composer__warning-banner" role="alert">
+            <AlertTriangle size={14} />
+            <span>{t('chat.model_unreachable')}: {currentModelError}</span>
           </div>
         )}
 
@@ -1001,12 +1008,6 @@ export function ChatInput({
                         {modelOptions.map((model) => (<SelectItem key={model.id} value={model.id}>{model.provider? `${model.provider} · ${model.label}`: model.label}</SelectItem>))}
                       </SelectContent>
                     </Select>
-                    {currentModelError && (
-                      <span className="composer__model-warning" role="alert">
-                        <AlertTriangle size={13} />
-                        {t('chat.model_unreachable')}: {currentModelError}
-                      </span>
-                    )}
                   </div>
 
                   <Tooltip content={t(workMode === "plan" ? "chat.work_plan_tip" : "chat.work_build_tip")}>

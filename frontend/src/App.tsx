@@ -816,7 +816,7 @@ function App() {
       // Message events (delta/tool/plan/done) are always processed.
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
-          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source, ...(event.window_warning ? { windowWarning: event.window_warning } : {}) });
         }
         return;
       }
@@ -1427,7 +1427,7 @@ function App() {
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
-          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source, ...(event.window_warning ? { windowWarning: event.window_warning } : {}) });
         }
         return;
       }
@@ -1569,6 +1569,7 @@ function App() {
         workMode,
         autonomy,
         revertCode,
+        assistantMessageId,
       });
       await refreshSessions();
       await refreshProjects();
@@ -1612,7 +1613,17 @@ function App() {
     // 触发这次重新生成的用户消息（重生成的回滚结果挂到它上面，展示「恢复」按钮）。
     const thisSessionNow = messages.filter((m) => !m.sessionId || m.sessionId === currentSessionId);
     const idxNow = thisSessionNow.findIndex((m) => m.id === messageId);
-    const triggerUserMessageId = idxNow > 0 ? thisSessionNow[idxNow - 1]?.id : undefined;
+    // 重新生成的目标是触发它的 user 消息：向后端回溯最近一条 user 消息 id
+    //（与后端 /regenerate 的 walk-back 逻辑一致）。user 消息 id 必然持久存在，
+    // 即使上次重跑流失败（如 provider 503）未持久化 assistant，也不会 404。
+    let triggerUserMessageId: string | undefined;
+    for (let i = idxNow - 1; i >= 0; i -= 1) {
+      const candidate = thisSessionNow[i];
+      if (candidate?.role === 'user') {
+        triggerUserMessageId = candidate.id;
+        break;
+      }
+    }
     bumpSessionSeq(currentSessionId);
     const myRequestSeq = getSessionSeq(currentSessionId);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1649,7 +1660,7 @@ function App() {
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
-          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+          setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source, ...(event.window_warning ? { windowWarning: event.window_warning } : {}) });
         }
         return;
       }
@@ -1785,7 +1796,7 @@ function App() {
       }
     };
     try {
-      await chatService.streamRegenerateMessage(currentSessionId, messageId, handleEvent, controller.signal);
+      await chatService.streamRegenerateMessage(currentSessionId, triggerUserMessageId || messageId, handleEvent, controller.signal, { assistantMessageId });
       await refreshSessions();
       await refreshProjects();
       setChangesRefreshKey((value) => value + 1);
@@ -1931,7 +1942,7 @@ function App() {
           if (isStreamStale(resumeSessionId, resumeRequestSeq)) return;
           if (event.type === 'context_usage') {
             if (!event.session_id || event.session_id === sessionIdRef.current) {
-              setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
+              setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source, ...(event.window_warning ? { windowWarning: event.window_warning } : {}) });
             }
             return;
           }

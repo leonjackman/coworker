@@ -403,12 +403,12 @@ async def _sse_events(
     """
     queue: asyncio.Queue = asyncio.Queue()
     _SENTINEL = object()
-    _IDLE_WARN_THRESHOLD = 240.0  # 4 min — push idle-warning at 80% of 5 min
-    _idle_warning_emitted = False
+    _IDLE_WARN_INTERVAL = 240.0  # re-warn every 4 min of provider silence
     _last_activity_ts = _get_monotonic()  # start from stream init, not 0
+    _last_idle_warning_ts: float | None = None
 
     async def _producer():
-        nonlocal _last_activity_ts, _idle_warning_emitted
+        nonlocal _last_activity_ts
         try:
             async for event in stream_iter:
                 _last_activity_ts = _get_monotonic()
@@ -444,10 +444,15 @@ async def _sse_events(
                 # accounting starts at stream init (`_last_activity_ts` is
                 # monotonic from the start), so no 0-sentinel guard needed.
                 elapsed = _get_monotonic() - _last_activity_ts
-                if elapsed >= _IDLE_WARN_THRESHOLD and not _idle_warning_emitted:
-                    # Push an idle-warning event so the frontend can show
-                    # a countdown before the client's idle timeout fires.
-                    _idle_warning_emitted = True
+                # Repeatedly push idle-warning so the frontend's idle watchdog
+                # keeps being reset while the provider is legitimately slow
+                # (long thinking / large prefill). Without recurrence the client
+                # would abort before a long per-provider stream timeout fires.
+                if elapsed >= _IDLE_WARN_INTERVAL and (
+                    _last_idle_warning_ts is None
+                    or _get_monotonic() - _last_idle_warning_ts >= _IDLE_WARN_INTERVAL
+                ):
+                    _last_idle_warning_ts = _get_monotonic()
                     yield "event", {"type": "idle_warning", "seconds_idle": int(elapsed)}
                 yield "heartbeat", None
                 continue
@@ -1691,6 +1696,7 @@ async def chat_stream(request: ChatStreamRequest):
 
     async def event_stream():
         terminal_sent = False
+        error_emitted = False
         accumulated_content = ""
         goal_parts_accum: list[dict[str, Any]] = []
         stream_iter: Any
@@ -1731,7 +1737,7 @@ async def chat_stream(request: ChatStreamRequest):
                 logger.exception("Failed to persist assistant message for session %s", session_id)
 
         def _handle_event(event):
-            nonlocal terminal_sent, accumulated_content
+            nonlocal terminal_sent, accumulated_content, error_emitted
             etype = event.get("type", "")
             if etype == "delta" and event.get("content"):
                 accumulated_content += event.get("content", "")
@@ -1786,7 +1792,15 @@ async def chat_stream(request: ChatStreamRequest):
                     pass
                 terminal_sent = True
             elif etype == "error":
-                terminal_sent = True
+                # The runtime yields an explicit error event BEFORE re-raising so
+                # the SSE layer can turn it into a proper terminal `error` event.
+                # Do NOT mark terminal_sent here: no assistant message has been
+                # persisted for this turn, and _on_error must still persist the
+                # partial reply (or the "interrupted" marker) when the generator
+                # raises — otherwise a stalled/errored run leaves NO assistant
+                # message in the session (looks like the agent never answered).
+                # error_emitted only suppresses _on_end's synthetic `done`.
+                error_emitted = True
 
         if in_goal_flag:
             goal_text = str(request.goal_text or request.message or "")
@@ -1860,7 +1874,7 @@ async def chat_stream(request: ChatStreamRequest):
             _handle_event(event)
 
         def _on_end():
-            if not terminal_sent:
+            if not terminal_sent and not error_emitted:
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
@@ -1899,7 +1913,14 @@ async def chat_stream(request: ChatStreamRequest):
             except Exception:  # noqa: BLE001 - never break the terminal event
                 logger.warning("update_modes failed in _on_error for session %s", session_id, exc_info=True)
             terminal_sent = True
-            return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
+            return {
+                "type": "error",
+                "session_id": session_id,
+                "error": str(exc)[:400],
+                "provider": getattr(runtime, "provider_name", "") or "",
+                "model": getattr(runtime, "model_name", "") or "",
+                "base_url": getattr(getattr(runtime, "llm", None), "base_url", "") or "",
+            }
 
         # Snapshot the workspace BEFORE the turn runs so editing this user
         # message later can restore the files that turn changed (git-backed,
@@ -2548,10 +2569,12 @@ class EditMessageRequest(BaseModel):
     autonomy: Optional[str] = None
     language: Language = "zh"
     revert_code: bool = True
+    assistant_message_id: str = ""
 
 
 class RegenerateRequest(BaseModel):
     language: Language = "zh"
+    assistant_message_id: str = ""
 
 
 class EditBeginRequest(BaseModel):
@@ -2892,6 +2915,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                     model=model,
                     work_mode=work_mode,
                     autonomy=autonomy,
+                    message_id=request.assistant_message_id or None,
                     parts=[],
                 )
                 last = session.messages[-1] if session.messages else None
@@ -2917,6 +2941,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                         model=event.get("model") or model,
                         work_mode=work_mode,
                         autonomy=autonomy,
+                        message_id=request.assistant_message_id or None,
                         parts=event.get("parts") or [],
                     )
                     last = session.messages[-1] if session.messages else None
@@ -3046,6 +3071,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                     model=model,
                     work_mode=work_mode,
                     autonomy=autonomy,
+                    message_id=request.assistant_message_id or None,
                     parts=[],
                 )
                 last = session.messages[-1] if session.messages else None
@@ -3071,6 +3097,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                         model=event.get("model") or model,
                         work_mode=work_mode,
                         autonomy=autonomy,
+                        message_id=request.assistant_message_id or None,
                         parts=event.get("parts") or [],
                     )
                     last = session.messages[-1] if session.messages else None

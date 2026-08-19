@@ -24,6 +24,12 @@ _CTX_DISCOVERY_TIMEOUT_SECONDS = 3.0
 # Last discovery outcome per provider key: ``(monotonic_ts, window, error)``.
 _CTX_DISCOVERY_CACHE: dict[str, tuple[float, int, str | None]] = {}
 
+# A user-configured context window above this many tokens is only trusted when
+# the server reports at least that much via live discovery. Untrusted oversized
+# windows can push prompts past a server's real max_model_len (vLLM hangs
+# silently instead of erroring), so they surface a warning in the provider card.
+_UNVERIFIED_CONTEXT_WINDOW_WARN = 131_072  # 128k
+
 
 @dataclass
 class ProviderEntry:
@@ -183,7 +189,11 @@ class ProviderConfig:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "ProviderConfig":
-        providers = [ProviderEntry(**item) for item in payload.get("providers", [])]
+        # Filter to known dataclass fields so configs written by newer/older
+        # builds with extra keys (e.g. a removed `stream_chunk_timeout`) still
+        # load instead of raising TypeError on **item.
+        _known = ProviderEntry.__dataclass_fields__
+        providers = [ProviderEntry(**{k: v for k, v in item.items() if k in _known}) for item in payload.get("providers", [])]
         config = cls(
             version=int(payload.get("version", CONFIG_VERSION)),
             providers=providers,
@@ -492,20 +502,38 @@ class ProviderManager:
         failed (``error``) so the UI can tell the user their local server is
         unreachable instead of silently falling back."""
         model = (model or provider.model or "").strip()
+        # Probe the server FIRST (cached, 60s TTL) so a stale or over-sized
+        # stored window can never exceed the server's real max_model_len —
+        # oversized prompts make some servers (e.g. vLLM) hang silently instead
+        # of returning a context-length error.
+        discovered = 0
+        discovered_error: str | None = None
+        try:
+            discovered, discovered_error = ProviderManager._discover_context_window_cached(provider, model)
+        except Exception:  # noqa: BLE001 - discovery is best-effort
+            discovered, discovered_error = 0, None
         if provider.context_window and provider.context_window > 0:
-            return provider.context_window, "user", None
+            effective = provider.context_window
+            note: str | None = None
+            if discovered and discovered > 0:
+                if discovered < effective:
+                    effective = discovered
+                    note = (
+                        f"服务端实际 max_model_len={discovered}，上下文窗口已按 {discovered} 计算"
+                    )
+            elif effective > _UNVERIFIED_CONTEXT_WINDOW_WARN:
+                note = (
+                    f"上下文窗口 {effective} 未经服务端验证且偏大。若出现卡死或流式超时，"
+                    "请在下方把“上下文窗口”调小（例如 128000），并点“重新探测”验证。"
+                )
+            return effective, "user", note
         from_table = ProviderManager.table_context_window(model)
         if from_table:
             return from_table, "table", None
-        # Live discovery for ANY OpenAI-compatible endpoint (vLLM, llama.cpp,
-        # LocalAI, … expose max_model_len in /v1/models). Cloud providers that
-        # don't surface it simply fall through to the default instead of being
-        # silently assumed 128k. See B5.
-        discovered, error = ProviderManager._discover_context_window_cached(provider, model)
         if discovered and discovered > 0:
             return discovered, "discovered", None
-        if ProviderManager._is_local(provider) and error:
-            return DEFAULT_CONTEXT_WINDOW, "unreachable", error
+        if ProviderManager._is_local(provider) and discovered_error:
+            return DEFAULT_CONTEXT_WINDOW, "unreachable", discovered_error
         return DEFAULT_CONTEXT_WINDOW, "default", None
 
     @staticmethod

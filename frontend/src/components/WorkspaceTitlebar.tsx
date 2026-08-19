@@ -64,6 +64,7 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
     t('titlebar.context_usage', { used: formatK(used), window: formatK(windowTok), pct }),
     t('titlebar.context_trim_hint'),
     ...(usage.compacted ? [t('titlebar.context_compressed')] : []),
+    ...(usage.windowWarning ? [usage.windowWarning] : []),
   ].join(' · ');
 
   return (
@@ -74,6 +75,11 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
           <div className="context-budget-bar__fill" style={{ width: `${pct}%` }} />
         </div>
         <span className="context-budget-text">{formatK(used)} / {formatK(windowTok)}</span>
+        {usage.windowWarning && (
+          <span className="context-budget-badge context-budget-badge--warn" title={usage.windowWarning}>
+            ⚠
+          </span>
+        )}
         {usage.compacted && (
           <span className="context-budget-badge" title={t('titlebar.context_compressed')}>
             {t('titlebar.context_badge')}

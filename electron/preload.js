@@ -78,13 +78,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('edit-message-begin', { session_id: sessionId, message_id: messageId, revert_code: revertCode }),
   editMessageCancel: (sessionId, messageId) =>
     ipcRenderer.invoke('edit-message-cancel', { session_id: sessionId, message_id: messageId }),
-  streamRegenerateMessage: (requestId, sessionId, messageId, onEvent, language) => {
+  streamRegenerateMessage: (requestId, sessionId, messageId, onEvent, language, assistantMessageId) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;
       onEvent(data.event);
     };
     ipcRenderer.on('chat-stream-event', listener);
-    return ipcRenderer.invoke('start-regenerate-stream', { requestId, session_id: sessionId, message_id: messageId, language: language || 'zh' }).finally(() => {
+    return ipcRenderer.invoke('start-regenerate-stream', { requestId, session_id: sessionId, message_id: messageId, language: language || 'zh', assistant_message_id: assistantMessageId || '' }).finally(() => {
       ipcRenderer.removeListener('chat-stream-event', listener);
     });
   },
@@ -94,7 +94,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       onEvent(data.event);
     };
     ipcRenderer.on('chat-stream-event', listener);
-    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content, work_mode: options?.work_mode, autonomy: options?.autonomy, revert_code: options?.revert_code, language: language || 'zh' }).finally(() => {
+    return ipcRenderer.invoke('start-edit-stream', { requestId, session_id: sessionId, message_id: messageId, content, work_mode: options?.work_mode, autonomy: options?.autonomy, revert_code: options?.revert_code, assistant_message_id: options?.assistant_message_id || '', language: language || 'zh' }).finally(() => {
       ipcRenderer.removeListener('chat-stream-event', listener);
     });
   },

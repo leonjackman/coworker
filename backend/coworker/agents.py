@@ -17,15 +17,16 @@ logger = get_logger(__name__)
 
 
 def _llm_stream_chunk_timeout() -> float:
-    """Timeout (seconds) for how long the LLM stream may pause between chunks.
+    """Global timeout (seconds) for how long the LLM stream may pause between
+    chunks.
 
     LangChain's default is 120s; slow / concurrent local providers can exceed
-    that and get their reply truncated. Configurable via env; default 300s.
+    that and get their reply truncated. Configurable via env; default 600s.
     """
     try:
-        return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "300.0"))
+        return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "600.0"))
     except (TypeError, ValueError):
-        return 300.0
+        return 600.0
 
 
 from typing import Annotated, Any, Literal
@@ -1879,6 +1880,18 @@ def context_budget_chars(context_window_tokens: int) -> int:
     return max(20_000, int(context_window_tokens * CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN))
 
 
+def context_budget_tokens(context_window_tokens: int) -> int:
+    """Token-space resident-message budget (``window × safety``).
+
+    The trim/compact meter runs in tokens (CJK-aware via :func:`_estimate_tokens`)
+    because providers count tokens, not characters — a char budget at a flat
+    chars/token ratio badly under-counts Chinese content.
+    """
+    if not context_window_tokens or context_window_tokens <= 0:
+        context_window_tokens = 128_000
+    return max(5_000, int(context_window_tokens * CONTEXT_SAFETY_FACTOR))
+
+
 # Provider "context overflow" error signatures that trigger an automatic
 # compaction + single retry (OpenClaw-style recovery).
 CONTEXT_OVERFLOW_PATTERNS = (
@@ -1901,21 +1914,23 @@ def is_context_overflow_error(exc: BaseException | None) -> bool:
     return any(pattern in text for pattern in CONTEXT_OVERFLOW_PATTERNS)
 
 
-def _runtime_context_budget(provider: Any, model_override: str | None = None) -> tuple[int, int, str]:
-    """Resolve ``(budget_chars, window_tokens, source)`` for a provider entry.
+def _runtime_context_budget(provider: Any, model_override: str | None = None) -> tuple[int, int, str, str | None]:
+    """Resolve ``(budget_chars, window_tokens, source, warning)`` for a provider.
 
     The window resolution is model-aware: ``model_override`` (the model chosen for
     this turn) takes precedence over the provider's stored default model, so
     switching models mid-conversation recomputes the budget from the new model's
     context window — see B7. ``source`` is one of user/table/discovered/default.
+    ``warning`` is a human-readable note (e.g. an untrusted oversized window or a
+    server-reported cap) surfaced to the UI, or ``None``.
     """
     try:
         from .providers import ProviderManager
 
-        window, source = ProviderManager.resolve_context_window(provider, model=model_override)
-        return context_budget_chars(window), window, source
+        window, source, warning = ProviderManager._resolve_context_window_full(provider, model=model_override)
+        return context_budget_chars(window), window, source, warning
     except Exception:  # noqa: BLE001 - a failed resolve must never break a turn
-        return DEFAULT_CONTEXT_WINDOW_CHARS, 128_000, "default"
+        return DEFAULT_CONTEXT_WINDOW_CHARS, 128_000, "default", None
 
 
 def _message_text(msg: Any) -> str:
@@ -1958,6 +1973,11 @@ def _message_text(msg: Any) -> str:
 
 def _msg_chars(msg: Any) -> int:
     return len(_message_text(msg))
+
+
+def _msg_tokens(msg: Any) -> int:
+    """CJK-aware token estimate for a message (see :func:`_estimate_tokens`)."""
+    return _estimate_tokens(_message_text(msg))
 
 
 def _estimate_tokens(text: str) -> int:
@@ -2013,12 +2033,17 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     triggering AIMessage so the provider never sees an orphaned ToolMessage.
     """
 
-    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None, context_window_tokens: int = 0, context_window_source: str = "default"):
+    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None, context_window_tokens: int = 0, context_window_source: str = "default", context_window_warning: str | None = None):
         self.configured_budget = max(20_000, int(budget_chars or DEFAULT_CONTEXT_WINDOW_CHARS))
         # Mutable per-turn budget (the overflow retry path halves this). The UI
         # always reads ``configured_budget`` so the meter never jumps on a retry
         # — see B9.
         self.budget_chars = self.configured_budget
+        # Token-space budget drives trimming/compaction (CJK-aware). Mirrors
+        # ``budget_chars`` mutations (overflow retry halves both).
+        self.budget_tokens = context_budget_tokens(
+            context_window_tokens if context_window_tokens and context_window_tokens > 0 else 128_000
+        )
         # Optional model used for summary compaction. When set, over-budget turns
         # summarize the OLDEST segment instead of dropping it entirely; when unset
         # (or on summarization failure) the plain rolling trim is used.
@@ -2028,6 +2053,9 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         # safety budget) and explains the source — B2/B8.
         self.context_window_tokens = context_window_tokens
         self.context_window_source = context_window_source
+        # Human-readable warning about the window (unverified oversized override,
+        # or server-reported cap). Surfaced to the UI via context_usage.
+        self.context_window_warning = context_window_warning
         self._summarized_segments: set[str] = set()
 
     def _trim(self, state: CoworkerAgentState) -> list[Any] | None:
@@ -2036,8 +2064,8 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         messages = state.get("messages", [])
         if not messages:
             return None
-        total = sum(_msg_chars(m) for m in messages)
-        if total <= self.budget_chars:
+        total = sum(_msg_tokens(m) for m in messages)
+        if total <= self.budget_tokens:
             return None
         # Keep the first message (system prompt) and then the most recent tail
         # (oldest-first drop). Oversized user/system content is truncated instead
@@ -2045,28 +2073,30 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         # tool/AI messages are dropped (cannot be truncated without breaking
         # tool-call pairing).
         head: list[Any] = []
-        budget = self.budget_chars
+        budget = self.budget_tokens
         for msg in messages[:1]:
-            chars = _msg_chars(msg)
-            if chars > budget:
-                msg = _truncate_message(msg, budget)
+            tokens = _msg_tokens(msg)
+            if tokens > budget:
+                # Convert the token budget to a conservative char cap (Latin
+                # chars/token ≈ 3.5; CJK is denser so this over-trims CJK — safe).
+                msg = _truncate_message(msg, max(200, int(budget * CHARS_PER_TOKEN)))
             head.append(msg)
-            budget -= _msg_chars(msg)
+            budget -= _msg_tokens(msg)
 
         kept_tail: list[Any] = []
         for msg in reversed(messages[1:]):
-            chars = _msg_chars(msg)
-            if chars >= self.budget_chars:
+            tokens = _msg_tokens(msg)
+            if tokens >= self.budget_tokens:
                 # Oversized message: truncate user/system, drop tool/AI.
                 if getattr(msg, "type", "") in ("human", "system", "user"):
-                    kept_tail.append(_truncate_message(msg, self.budget_chars))
+                    kept_tail.append(_truncate_message(msg, max(200, int(self.budget_tokens * CHARS_PER_TOKEN))))
                     budget = 0
                     break
                 continue
-            if budget - chars < 0:
+            if budget - tokens < 0:
                 break
             kept_tail.append(msg)
-            budget -= chars
+            budget -= tokens
 
         kept_tail.reverse()
         # Drop any leading ToolMessage whose triggering AIMessage landed in the
@@ -2098,7 +2128,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             window_tokens = self.context_window_tokens or round(
                 self.configured_budget / (CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN)
             )
-            budget_tokens = round(self.configured_budget / CHARS_PER_TOKEN)
+            budget_tokens = self.budget_tokens
             runtime.stream_writer(
                 {
                     "type": "context_usage",
@@ -2111,10 +2141,11 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                     # (i.e. will this call trim/compact)? Distinct from `compacted`,
                     # which is the cumulative "has compression ever happened" flag
                     # (counted in checkpointed state, persists across turns) — B6.
-                    "compressed": total > self.budget_chars,
+                    "compressed": sum(_msg_tokens(m) for m in messages) > self.budget_tokens,
                     "compacted": state.get("context_compact_count", 0) > 0,
                     "compact_count": state.get("context_compact_count", 0),
                     "window_source": self.context_window_source,
+                    "window_warning": self.context_window_warning,
                 }
             )
         except Exception:  # noqa: BLE001 - telemetry must never break a turn
@@ -2146,19 +2177,19 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         messages = state.get("messages", [])
         if len(messages) < 4:
             return None
-        total = sum(_msg_chars(m) for m in messages)
-        if total <= self.budget_chars:
+        total = sum(_msg_tokens(m) for m in messages)
+        if total <= self.budget_tokens:
             return None
 
-        keep_recent = max(8_000, int(self.budget_chars * KEEP_RECENT_FACTOR))
+        keep_recent = max(2_000, int(self.budget_tokens * KEEP_RECENT_FACTOR))
         recent: list[Any] = []
         recent_budget = keep_recent
         for msg in reversed(messages[1:]):
-            chars = _msg_chars(msg)
-            if recent_budget - chars < 0 and recent:
+            tokens = _msg_tokens(msg)
+            if recent_budget - tokens < 0 and recent:
                 break
             recent.append(msg)
-            recent_budget -= chars
+            recent_budget -= tokens
         recent.reverse()
         if len(recent) >= len(messages) - 1:
             return None
@@ -2535,6 +2566,84 @@ class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         return await handler(request.override(**self._overrides(request)))
 
 
+class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Retry a model generation call once after a stream-chunk stall.
+
+    ``langchain-openai`` aborts the stream when no chunk arrives for
+    ``stream_chunk_timeout`` (``StreamChunkTimeoutError``). A flaky / briefly
+    overloaded provider may recover immediately, so we retry the SINGLE model
+    call once before letting the error propagate to the SSE layer (which would
+    otherwise abort the whole turn). Only the model call is retried — tools are
+    never re-run, so this is safe to apply at every model step.
+    """
+
+    def __init__(self, max_retries: int = 1) -> None:
+        self.max_retries = max(1, int(max_retries))
+
+    @staticmethod
+    def _is_stall(exc: BaseException) -> bool:
+        # Match by message as well as type: the exception class name/symbol can
+        # shift between langchain-openai releases; the message is stable.
+        if "stream_chunk_timeout" in str(exc) or "No streaming chunk received" in str(exc):
+            return True
+        try:
+            from langchain_openai.chat_models._client_utils import StreamChunkTimeoutError
+        except Exception:  # noqa: BLE001 - version drift must not crash a turn
+            return False
+        return isinstance(exc, StreamChunkTimeoutError)
+
+    @staticmethod
+    def _prompt_tokens(request: Any) -> int:
+        """CJK-aware token estimate of the prompt this model call will send.
+
+        Diagnostic only: lets a stall be attributed to an over-sized prompt
+        (which some servers, e.g. vLLM, hang on silently instead of erroring).
+        """
+        messages = list(getattr(request, "messages", None) or [])
+        system_message = getattr(request, "system_message", None)
+        if system_message is not None:
+            messages = [system_message, *messages]
+        return sum(_msg_tokens(m) for m in messages)
+
+    @staticmethod
+    def _model_name(request: Any) -> str:
+        model = getattr(request, "model", None)
+        if model is not None:
+            name = getattr(model, "model_name", None) or getattr(model, "name", None)
+            if name:
+                return str(name)
+        return "?"
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        attempt = 0
+        while True:
+            try:
+                return await handler(request)
+            except Exception as exc:  # noqa: BLE001 - retry only genuine stalls
+                if not self._is_stall(exc):
+                    raise
+                attempt += 1
+                prompt_tokens = self._prompt_tokens(request)
+                model = self._model_name(request)
+                if attempt > self.max_retries:
+                    logger.error(
+                        "model stream stalled repeatedly (chunk timeout); giving up "
+                        "(model=%s, prompt_tokens≈%s): %s",
+                        model,
+                        prompt_tokens,
+                        str(exc)[:400],
+                    )
+                    raise
+                logger.warning(
+                    "model stream stalled (chunk timeout); retrying call %d/%d "
+                    "(model=%s, prompt_tokens≈%s)",
+                    attempt,
+                    self.max_retries,
+                    model,
+                    prompt_tokens,
+                )
+
+
 class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     """Stop models from blindly repeating the same failing tool call.
 
@@ -2657,6 +2766,7 @@ def build_coworker_agent_graph(
     context_budget: int = DEFAULT_CONTEXT_WINDOW_CHARS,
     context_window_tokens: int = 0,
     context_window_source: str = "default",
+    context_window_warning: str | None = None,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -2697,10 +2807,11 @@ def build_coworker_agent_graph(
 
     phase_gate = PhaseToolGateMiddleware()
     context_middleware = ContextWindowMiddleware(
-        context_budget, llm=llm, context_window_tokens=context_window_tokens, context_window_source=context_window_source
+        context_budget, llm=llm, context_window_tokens=context_window_tokens, context_window_source=context_window_source, context_window_warning=context_window_warning
     )
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
+        StallRetryMiddleware(),
         context_middleware,
         ToolCallCleanerMiddleware(),
         phase_gate,
@@ -2820,7 +2931,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.memory_manager = memory_manager
         self.project_store = project_store
         self.project_id = project_id or ""
-        self.context_budget_chars, self.context_window_tokens, self.context_window_source = _runtime_context_budget(provider, model_override)
+        self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning = _runtime_context_budget(provider, model_override)
         self.agent = agent or DEFAULT_AGENT_NAME
 
     def _resolve_project_dir(self) -> str:
@@ -2950,6 +3061,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             context_budget=self.context_budget_chars,
             context_window_tokens=self.context_window_tokens,
             context_window_source=self.context_window_source,
+            context_window_warning=self.context_window_warning,
         )
         try:
             result = graph.invoke(
@@ -3009,7 +3121,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.project_id = project_id or ""
         self.agent = agent or DEFAULT_AGENT_NAME
         self._delegation_buffer: list[dict[str, Any]] = []
-        self.context_budget_chars, self.context_window_tokens, self.context_window_source = _runtime_context_budget(provider, model_override)
+        self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning = _runtime_context_budget(provider, model_override)
 
     def _resolve_project_dir(self) -> str:
         """Resolve the project memory dir for this runtime.
@@ -3115,6 +3227,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             middleware = getattr(graph, "_cw_context_middleware", None)
             if middleware is not None and hasattr(middleware, "budget_chars"):
                 middleware.budget_chars = max(20_000, int(middleware.budget_chars * 0.5))
+            if middleware is not None and hasattr(middleware, "budget_tokens"):
+                middleware.budget_tokens = max(5_000, int(middleware.budget_tokens * 0.5))
             logger.info("forced context compaction for overflow retry (budget halved)")
         except Exception:  # noqa: BLE001 - best-effort
             logger.warning("overflow compaction failed", exc_info=True)
@@ -3191,8 +3305,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 memory_manager=memory_view,
                 workspace=self.workspace,
                 context_budget=self.context_budget_chars,
-            context_window_tokens=self.context_window_tokens,
-            context_window_source=self.context_window_source,
+                context_window_tokens=self.context_window_tokens,
+                context_window_source=self.context_window_source,
+                context_window_warning=self.context_window_warning,
             )
 
             inputs = {
@@ -3279,8 +3394,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
                     # Push an explicit error event to the SSE stream BEFORE re-raising,
                     # so the frontend receives a proper `error` event instead of only
-                    # detecting the dropped connection as "interrupted".
-                    yield {"type": "error", "error": str(exc)[:400]}
+                    # detecting the dropped connection as "interrupted". Enrich with
+                    # provider/model/base_url so a stall error is directly attributable.
+                    yield {
+                        "type": "error",
+                        "error": str(exc)[:400],
+                        "provider": self.provider_name,
+                        "model": self.model_name,
+                        "base_url": getattr(getattr(self, "llm", None), "base_url", "") or "",
+                    }
                     raise
 
         final_content = "".join(content_parts)
@@ -3743,8 +3865,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 memory_manager=memory_view,
                 workspace=self.workspace,
                 context_budget=self.context_budget_chars,
-            context_window_tokens=self.context_window_tokens,
-            context_window_source=self.context_window_source,
+                context_window_tokens=self.context_window_tokens,
+                context_window_source=self.context_window_source,
+                context_window_warning=self.context_window_warning,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of

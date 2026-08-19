@@ -1123,6 +1123,12 @@ body.sidebar-resizing {
   white-space: nowrap;
 }
 
+.context-budget-badge--warn {
+  color: #b42318;
+  background: color-mix(in srgb, #f04438 18%, var(--background));
+  border-color: color-mix(in srgb, #f04438 45%, var(--material-border));
+}
+
 
 .titlebar-pending {
   -webkit-app-region: no-drag;
@@ -2996,15 +3002,23 @@ body.bottom-panel-resizing {
   box-shadow: none;
 }
 
-.composer__model-warning {
+.composer__warning-banner {
   display: flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 260px;
-  margin-top: 4px;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 12px 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning, #d99100) 45%, var(--material-border));
+  border-radius: 8px;
   color: var(--warning, #d99100);
-  font-size: 11px;
-  line-height: 1.4;
+  background: color-mix(in srgb, var(--warning, #d99100) 10%, var(--background));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.composer__warning-banner svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
 }
 
 .composer__attachments {

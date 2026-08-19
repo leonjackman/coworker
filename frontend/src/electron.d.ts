@@ -102,14 +102,14 @@ declare global {
       redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
       editMessageBegin: (sessionId: string, messageId: string, revertCode: boolean) => Promise<EditBeginResponse>;
       editMessageCancel: (sessionId: string, messageId: string) => Promise<RedoResponse>;
-      streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback, language?: string) => Promise<void>;
+      streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback, language?: string, assistantMessageId?: string) => Promise<void>;
       streamEditMessage: (
         requestId: string,
         sessionId: string,
         messageId: string,
         content: string,
         onEvent: StreamEventCallback,
-        options?: { work_mode?: string; autonomy?: string; revert_code?: boolean },
+        options?: { work_mode?: string; autonomy?: string; revert_code?: boolean; assistant_message_id?: string },
         language?: string,
       ) => Promise<void>;
       goalStatus: (sessionId: string) => Promise<GoalStatusResponse>;

@@ -1115,15 +1115,16 @@ function startStreamingRequest(requestId, path, payload, sender, eventName = 'ch
   return openSseStream({ requestId, method: 'POST', path, payload, sender, eventName });
 }
 
-ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language }) => {
-  return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/regenerate`, { language: language || 'zh' }, event.sender);
+ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language, assistant_message_id }) => {
+  return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/regenerate`, { language: language || 'zh', ...(assistant_message_id ? { assistant_message_id } : {}) }, event.sender);
 });
 
-ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, revert_code, language }) => {
+ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, revert_code, assistant_message_id, language }) => {
   const payload = { content, language: language || 'zh' };
   if (work_mode != null) payload.work_mode = work_mode;
   if (autonomy != null) payload.autonomy = autonomy;
   if (revert_code != null) payload.revert_code = !!revert_code;
+  if (assistant_message_id) payload.assistant_message_id = assistant_message_id;
   return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/edit`, payload, event.sender);
 });
 
