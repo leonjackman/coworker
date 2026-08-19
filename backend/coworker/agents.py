@@ -3386,10 +3386,17 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         return view, getattr(view, "store", None), agent_rel
 
     def _nudge_memory(self, session_id: str) -> None:
-        """Phase 2: one call per settled turn; never blocks or raises."""
+        """Phase 2: one call per settled turn; never blocks or raises.
+
+        Uses the project-scoped memory view so that auto-extract writes to the
+        correct ``<project_dir>/<agent>/BASE/MEMORY.md`` instead of ``USER.md``.
+        """
         try:
-            if self.memory_manager is not None:
-                self.memory_manager.after_turn(session_id, workspace_root=self.workspace.root)
+            if self.memory_manager is None:
+                return
+            project_dir = self._resolve_project_dir()
+            scoped = self.memory_manager.for_project(project_dir, self.agent)
+            scoped.after_turn(session_id)
         except Exception:  # noqa: BLE001 - a memory hiccup must never break a turn
             logger.warning("memory nudge failed", exc_info=True)
 
@@ -3579,10 +3586,17 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         return view, getattr(view, "store", None), agent_rel
 
     def _nudge_memory(self, session_id: str) -> None:
-        """Phase 2: one call per settled turn; never blocks or raises."""
+        """Phase 2: one call per settled turn; never blocks or raises.
+
+        Uses the project-scoped memory view so that auto-extract writes to the
+        correct ``<project_dir>/<agent>/BASE/MEMORY.md`` instead of ``USER.md``.
+        """
         try:
-            if self.memory_manager is not None:
-                self.memory_manager.after_turn(session_id, workspace_root=self.workspace.root)
+            if self.memory_manager is None:
+                return
+            project_dir = self._resolve_project_dir()
+            scoped = self.memory_manager.for_project(project_dir, self.agent)
+            scoped.after_turn(session_id)
         except Exception:  # noqa: BLE001 - a memory hiccup must never break a turn
             logger.warning("memory nudge failed", exc_info=True)
 

@@ -40,7 +40,7 @@ class MemoryConfig:
     nudge_interval: int = 3
     extract_model: str = ""
     max_prior_loss: float = 0.25  # dream rewrite must preserve >= 75% of prior entries
-    dream_idle_seconds: int = 300  # session-end idle window before dreaming
+    dream_idle_seconds: int = 30  # session-end idle window before dreaming
 
     # Backwards-compatible alias for ``inject_char_limit`` (older call sites /
     # selftests may still read ``config.char_limit``).
@@ -216,9 +216,9 @@ class MemoryManager:
         if not self.config.enabled or not self.config.auto_extract:
             return
         with self._lock:
-            task = self._pending_dreams.pop(session_id, None)
-        if task is not None:
-            task.cancel()
+            entry = self._pending_dreams.pop(session_id, None)
+        if entry is not None:
+            entry.get("cancel", lambda: None)()
 
     def after_turn(self, session_id: str, workspace_root: Path | None = None) -> None:
         """Called once per settled turn by the agent runtimes.
@@ -227,32 +227,89 @@ class MemoryManager:
         session has been idle for ``dream_idle_seconds`` (Codex-style). It never
         blocks and never raises; an active turn cancels the pending dream via
         :meth:`note_turn_active`.
+
+        Works when called from both async (e.g. streaming path) and sync/worker
+        (e.g. ``asyncio.to_thread``) contexts.  In the async path the dream is
+        scheduled as an ``asyncio.Task`` on the current loop so it can be
+        cancelled by ``note_turn_active``.  In the sync path (no running loop)
+        we use ``threading.Timer`` + ``asyncio.run()`` so the dream still fires
+        but the worker thread is not blocked.
         """
         if not self.config.enabled or not self.config.auto_extract:
             return
+        import threading
+
+        idle = self.config.dream_idle_seconds or 5
+        cancelled = threading.Event()
+
+        def _fire_sync_dream():
+            if cancelled.is_set():
+                return
+            asyncio.run(self._dream_async(session_id))
+
+        def _cancel_flag():
+            cancelled.set()
+
+        with self._lock:
+            previous = self._pending_dreams.pop(session_id, None)
+            try:
+                import asyncio
+
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # Sync path: no event loop — schedule via thread Timer so the
+                # dream fires asynchronously without blocking the worker.
+                t = threading.Timer(idle, _fire_sync_dream)
+                t.daemon = True
+                t.start()
+                # Store cancel handle so note_turn_active can abort it.
+                self._pending_dreams[session_id] = {"cancel": _cancel_flag}
+                if previous is not None:
+                    try:
+                        if hasattr(previous, "cancel"):
+                            previous.cancel()
+                    except Exception:
+                        pass
+                logger.debug("dream scheduled (sync) for session %s in %ss", session_id, idle)
+                return
+
+            self._pending_dreams[session_id] = {"cancel": _cancel_flag}
+        if previous is not None:
+            try:
+                if hasattr(previous, "cancel"):
+                    previous.cancel()
+            except Exception:
+                pass
+        with self._lock:
+            task = loop.create_task(self._dream_later(session_id, idle, cancelled))
+            self._pending_dreams[session_id] = {"task": task, "cancel": _cancel_flag}
+        logger.debug("dream scheduled for session %s in %ss", session_id, idle)
+
+    async def _dream_later(self, session_id: str, idle: int, cancelled: Any) -> None:
+        """Wait for the idle window, then run extraction + consolidation.
+
+        ``cancelled`` is a ``threading.Event``; when set the function returns
+        immediately (mirroring what a ``CancelledError`` does).
+        """
         try:
             import asyncio
 
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.debug("dream skipped for %s: no running loop", session_id)
-            return
-        idle = max(1, self.config.dream_idle_seconds)
-        with self._lock:
-            previous = self._pending_dreams.pop(session_id, None)
-            task = loop.create_task(self._dream_later(session_id, idle))
-            self._pending_dreams[session_id] = task
-        if previous is not None:
-            previous.cancel()
-        logger.debug("dream scheduled for session %s in %ss", session_id, idle)
-
-    async def _dream_later(self, session_id: str, idle: int) -> None:
-        """Wait for the idle window, then run extraction + consolidation."""
-        try:
-            await asyncio.sleep(idle)
+            # Periodically check the cancellation flag.  ``asyncio.sleep`` can
+            # be interrupted by a ``CancelledError``, but the flag also lets
+            # ``note_turn_active`` abort it even if cancellation is missed.
+            remaining = idle
+            while remaining > 0 and not cancelled.is_set():
+                slice = min(remaining, 1.0)
+                try:
+                    await asyncio.sleep(slice)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    return
+                remaining -= slice
+            if not cancelled.is_set():
+                await self._dream_async(session_id)
         except asyncio.CancelledError:
-            return
-        await self._dream_async(session_id)
+            cancelled.set()
 
     async def _dream_async(self, session_id: str) -> None:
         """Run the full background memory pass: extract, then consolidate."""
