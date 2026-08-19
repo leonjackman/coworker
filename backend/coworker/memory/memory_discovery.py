@@ -222,7 +222,10 @@ class MemoryLibrary:
                         for core in (aview.soul, aview.agent, aview.memory):
                             if core:
                                 nodes.append(core)
-                        nodes.extend(aview.base)
+                        # Extra BASE/ files are injectable except the system's
+                        # own DREAMS.md diary (internal noise, kept visible in
+                        # the tree but never fed to the model).
+                        nodes.extend(n for n in aview.base if n.name != "DREAMS.md")
                 for tid in team_ids or []:
                     tview = next((t for t in view.teams if t.id == tid), None)
                     if tview:

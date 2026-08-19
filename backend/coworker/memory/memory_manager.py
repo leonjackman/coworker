@@ -72,6 +72,9 @@ class MemoryManager:
         # Phase 2: per-session dream state (idle timers + staged candidates).
         self._pending_dreams: dict[str, Any] = {}
         self._pending_candidates: dict[str, list[str]] = {}
+        # One session note per (session, date): tracks which day a session's
+        # SESSIONS/<date>.md has already been summarized to avoid duplicates.
+        self._session_summarized: dict[str, str] = {}
         # Injected extractor dependencies (set via configure_extractor).
         self._llm_factory: Any | None = None
         self._transcript_provider: Any | None = None
@@ -181,6 +184,7 @@ class MemoryManager:
         view.org_store = self.org_store
         view._pending_dreams = self._pending_dreams
         view._pending_candidates = self._pending_candidates
+        view._session_summarized = self._session_summarized
         view._llm_factory = self._llm_factory
         view._transcript_provider = self._transcript_provider
         view._project_dir = project_dir
@@ -317,7 +321,7 @@ class MemoryManager:
             logger.debug("dream skipped for %s: extractor not configured", session_id)
             return
         try:
-            from .auto_extract import run_auto_extract, run_consolidation
+            from .auto_extract import run_auto_extract, run_session_summary
 
             llm = self._llm_factory()
             if llm is None:
@@ -336,9 +340,22 @@ class MemoryManager:
                 agent=self.bound_agent,
             )
             added = int(result.get("added") or 0)
+            candidates = list(result.get("_candidates") or [])
             consolidated, note = await self._consolidate_now(llm, session_id)
-            self._write_dream_diary(session_id, added=added, consolidated=consolidated, note=note)
-            logger.info("dream done for %s: added=%d %s", session_id, added, note)
+            transcript = result.get("_transcript") or ""
+            summary_note = await self._write_session_summary(llm, session_id, transcript)
+            self._write_dream_diary(
+                session_id,
+                added=added,
+                consolidated=consolidated,
+                note=note,
+                candidates=candidates,
+                summary_note=summary_note,
+            )
+            logger.info(
+                "dream done for %s: added=%d transcript=%d chars %s summary=%s",
+                session_id, added, len(transcript), note, summary_note,
+            )
         except Exception as exc:  # noqa: BLE001 - defensive
             logger.warning("dream failed for %s: %s", session_id, exc)
 
@@ -399,8 +416,66 @@ class MemoryManager:
             added = self.write_auto_facts(staged)
             return False, f"write failed; append-only fallback ({added} added)"
 
-    def _write_dream_diary(self, session_id: str, added: int, consolidated: bool, note: str) -> None:
-        """Append a line to the agent's DREAMS.md review diary (best-effort)."""
+    async def _write_session_summary(
+        self, llm: Any, session_id: str, transcript: str
+    ) -> str:
+        """Append a session note to ``SESSIONS/<date>.md`` (once per session/day).
+
+        Uses the same transcript as extraction. Returns a short outcome label for
+        the dream log. Never raises — a summary hiccup must not break the dream.
+        """
+        from .auto_extract import run_session_summary
+
+        try:
+            import datetime
+
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+            if self._session_summarized.get(session_id) == today:
+                return "skip (already summarized today)"
+            if self.bound_project:
+                target = f"{self.bound_project}/{self.bound_agent}/SESSIONS/{today}.md"
+            else:
+                target = f"SESSIONS/{today}.md"
+            try:
+                existing = self.store.read_file(target).content or ""
+            except Exception:  # noqa: BLE001
+                existing = ""
+            bullets, note = await run_session_summary(
+                llm=llm,
+                transcript=transcript,
+                session_id=session_id,
+                existing=existing,
+            )
+            if not bullets:
+                return note or "no summary"
+            existing_blocks = {b.strip().lower() for b in (existing or "").split("\n") if b.strip()}
+            new_blocks = [b for b in bullets if b.lower() not in existing_blocks]
+            if not new_blocks:
+                self._session_summarized[session_id] = today
+                return "skip (summary already present)"
+            content = (existing.rstrip() + "\n\n" + "\n".join(f"- {b}" for b in new_blocks) + "\n") if existing.strip() else "\n".join(f"- {b}" for b in new_blocks) + "\n"
+            self.store.write_file(target, content)
+            self._session_summarized[session_id] = today
+            return f"wrote {len(new_blocks)} bullets"
+        except Exception as exc:  # noqa: BLE001 - summary must never break the dream
+            logger.warning("session summary write failed for %s: %s", session_id, exc)
+            return "write failed"
+
+    def _write_dream_diary(
+        self,
+        session_id: str,
+        added: int,
+        consolidated: bool,
+        note: str,
+        candidates: list[str] | None = None,
+        summary_note: str = "",
+    ) -> None:
+        """Append a human-readable entry to the agent's DREAMS.md diary.
+
+        Each entry records the dream outcome AND the actual facts that were
+        extracted (so the diary doubles as a readable "what did I learn" log).
+        Best-effort: a write hiccup must never break the dream.
+        """
         try:
             import datetime
 
@@ -410,13 +485,24 @@ class MemoryManager:
                 target = "DREAMS.md"
             stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             outcome = "consolidated" if consolidated else "appended"
-            line = f"- {stamp} · {outcome} · new {added} · {note}"
+            parts = [f"## {stamp} · {outcome} · new {added} · {note}"]
+            for cand in candidates or []:
+                cand = (cand or "").strip()
+                if cand:
+                    parts.append(f"- {cand}")
+            if summary_note:
+                if self.bound_project:
+                    day = datetime.datetime.now().strftime("%Y-%m-%d")
+                    parts.append(f"- 会话笔记 → SESSIONS/{day}.md（{summary_note}）")
+                else:
+                    parts.append(f"- 会话笔记（{summary_note}）")
+            entry = "\n".join(parts)
             existing = ""
             try:
                 existing = self.store.read_file(target).content or ""
             except Exception:  # noqa: BLE001
                 existing = ""
-            content = (existing.rstrip() + "\n" + line + "\n") if existing.strip() else f"# Dream Diary\n\n{line}\n"
+            content = (existing.rstrip() + "\n\n" + entry + "\n") if existing.strip() else f"# Dream Diary\n\n{entry}\n"
             self.store.write_file(target, content)
         except Exception:  # noqa: BLE001 - diary must never break chat
             logger.warning("dream diary write failed for %s", session_id, exc_info=True)

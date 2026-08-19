@@ -2375,6 +2375,7 @@ async def goal_resume(request: GoalResumeRequest):
     """Resume a paused goal: clear the pause flag and continue the autonomous
     goal loop from the checkpoint (round 2+), streaming progress via SSE."""
     await _guard_session_not_streaming(request.session_id)
+    memory_manager.note_turn_active(request.session_id) if request.session_id else None
     stream_id = str(uuid.uuid4())
     _goal_active_streams[stream_id] = request.session_id
     lock = _goal_locks.get(request.session_id)
@@ -3736,6 +3737,7 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
         decisions.insert(0, {"type": "_stop_turn"})
     context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
     session_id = str(context.get("session_id") or "")
+    memory_manager.note_turn_active(session_id) if session_id else None
     try:
         if not decisions:
             approval_event_bus.close(resume_id)

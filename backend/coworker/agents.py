@@ -297,10 +297,11 @@ def _resolve_memory_target(memory_rel: str, scope: str, name: str) -> tuple[bool
     """Resolve the memory file ``rel`` for the memory tool write target.
 
     Returns ``(ok, rel_or_error)``. Agent scope stays inside the current
-    agent's ``BASE/`` (``MEMORY.md`` or a named sibling file); system scope is
-    limited to the three system-default files. Everything else — project
-    ``BASE`` files, ``BASE/PROJECT``, other agents, user root files — stays
-    read-only for agents.
+    agent's ``BASE/`` (``MEMORY.md`` or a named sibling file) or its
+    ``SESSIONS/`` folder (session notes, e.g. ``SESSIONS/2026-08-19.md``);
+    system scope is limited to the three system-default files. Everything
+    else — project ``BASE`` files, ``BASE/PROJECT``, other agents, user root
+    files — stays read-only for agents.
     """
     import posixpath
 
@@ -315,6 +316,14 @@ def _resolve_memory_target(memory_rel: str, scope: str, name: str) -> tuple[bool
     base = posixpath.dirname(memory_rel)
     if not name:
         return True, memory_rel
+    if name.startswith("SESSIONS/"):
+        filename = name[len("SESSIONS/"):].strip()
+        if not filename or "/" in filename or "\\" in filename:
+            return False, "SESSIONS name must be a single file name (no nested folders)."
+        if not (filename.endswith(".md") or filename.endswith(".markdown")):
+            return False, "SESSIONS files must be Markdown (.md / .markdown)."
+        agent_dir = posixpath.dirname(base)
+        return True, f"{agent_dir}/SESSIONS/{filename}"
     if "/" in name or "\\" in name:
         return False, "Agent memory name must be a single file name (no folders)."
     if not (name.endswith(".md") or name.endswith(".markdown")):
@@ -732,7 +741,9 @@ def build_workspace_tools(
 
         Scope rules:
         - ``scope="agent"`` (default) writes to your own agent ``BASE/`` — either
-          your ``MEMORY.md`` or, via ``name``, another ``.md`` file there.
+          your ``MEMORY.md`` or, via ``name``, another ``.md`` file there. Use
+          ``name="SESSIONS/2026-08-19.md"`` to write a dated session note (the
+          system also appends automatic session notes there each day).
         - ``scope="system"`` writes to one of the system-default files only:
           ``MEMORY.md``, ``USER.md`` or ``AGENT.md`` (pass it via ``name``).
           Use this for durable global facts about the user.
@@ -3465,7 +3476,6 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         )
         self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "run"})
         turn_index = self._next_turn_index(session_id)
-        self._nudge_memory(session_id)
         memory_view, memory_store, memory_rel = self._memory
         delegator = self._build_delegator(session_id, language, work_mode, autonomy)
         graph = build_coworker_agent_graph(
@@ -3520,6 +3530,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
             approval_ids = ", ".join(str(a.get("id", "")) for a in approvals)
             content = f"Command approval required: {approval_ids}" if language == "en" else f"命令需要审批：{approval_ids}"
+            self._nudge_memory(session_id)
             return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
         messages = result.get("messages", []) if isinstance(result, dict) else []
         content = coerce_message_content(messages[-1]) if messages else ""
@@ -3528,6 +3539,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         if _mw is not None:
             content = _strip_compaction_echo(content, getattr(_mw, "last_summary", "") or "")
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(content)})
+        self._nudge_memory(session_id)
         return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
 
 
@@ -3724,7 +3736,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         else:
             prepared_messages = prepare_agent_messages(messages)
         turn_index = self._next_turn_index(session_id)
-        self._nudge_memory(session_id)
         memory_view, memory_store, memory_rel = self._memory
         delegator = self._build_delegator(session_id, language, work_mode, autonomy)
 
@@ -3854,6 +3865,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content)})
         merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
+        self._nudge_memory(session_id)
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts}
 
     async def goal_stream(
@@ -4301,7 +4313,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         )
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
-            self._nudge_memory(session_id)
             memory_view, memory_store, memory_rel = self._memory
             graph = build_coworker_agent_graph(
                 self.llm, build_workspace_tools(
@@ -4389,6 +4400,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             final_content = _strip_compaction_echo(final_content, getattr(_mw, "last_summary", "") or "")
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
         yield {"type": "stage", "name": "finalizing", "status": "done"}
+        self._nudge_memory(session_id)
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts))}
         return
 

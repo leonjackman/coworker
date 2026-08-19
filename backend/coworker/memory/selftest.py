@@ -498,6 +498,193 @@ def main() -> int:
         check("consolidation succeeds", blocks_ok is not None, note_ok)
         check("consolidation integrates candidate", any("pnpm" in b for b in blocks_ok or []), str(blocks_ok))
 
+        # Guardrail leniency: pure headings are not facts — dropping them must
+        # not count as losing memory.
+        heading_payload = '{"blocks": ["用户偏好中文", "端口 9527", "用 pnpm"]}'
+        blocks_h, note_h = asyncio.run(_run(_FakeLLM(heading_payload), "# MEMORY\n\n用户偏好中文\n\n端口 9527\n\n用 pnpm", ["偏好中文"]))
+        check("consolidation ignores headings", blocks_h is not None, note_h)
+
+        # Guardrail leniency: merging a duplicate entry into a combined block
+        # (substring containment) counts as kept, not as loss.
+        dup_prior = "项目背景：Hub 平台\n\n项目：Hub 平台，目录 /Users/x/\n\n用户偏好：中文"
+        merged_payload = '{"blocks": ["项目背景：Hub 平台，目录 /Users/x/", "用户偏好：中文"]}'
+        blocks_d, note_d = asyncio.run(_run(_FakeLLM(merged_payload), dup_prior, ["用户偏好：中文"]))
+        check("consolidation tolerates merge", blocks_d is not None, note_d)
+
+        # Guardrail leniency: a reworded entry (fuzzy match) still counts as kept.
+        reword_payload = '{"blocks": ["用户偏好中文回复，前端用 npm 构建", "端口 9527"]}'
+        blocks_r, note_r = asyncio.run(_run(_FakeLLM(reword_payload), "用户偏好中文回复，前端用 npm run build 构建。\n\n端口 9527", ["用户偏好中文回复"]))
+        check("consolidation tolerates rewording", blocks_r is not None, note_r)
+
+        # --- _recent_transcript: budget-aware tail building --------------------
+        from coworker.memory.auto_extract import _parse_candidates, _parse_consolidation, _recent_transcript
+
+        # Local models often return single-quoted (Python-style) arrays; strict
+        # json.loads would silently drop them, so parsing must tolerate both.
+        check("parser double-quoted", _parse_candidates('["a", "b"]') == ["a", "b"], str(_parse_candidates('["a", "b"]')))
+        check("parser single-quoted", _parse_candidates("['a', 'b']") == ["a", "b"], str(_parse_candidates("['a', 'b']")))
+        check("parser mixed quotes", _parse_candidates("[\"a\", 'b']") == ["a", "b"], str(_parse_candidates("[\"a\", 'b']")))
+        check("parser empty", _parse_candidates("[]") == [], str(_parse_candidates("[]")))
+        check("consolidation single-quoted", _parse_consolidation("{'blocks': ['a', 'b']}") == ["a", "b"], str(_parse_consolidation("{'blocks': ['a', 'b']}")))
+
+        small = [
+            {"role": "user", "content": "第一条"},
+            {"role": "assistant", "content": "回复一"},
+            {"role": "user", "content": "第二条"},
+        ]
+        t_small = _recent_transcript(small)
+        check("transcript keeps all small messages", "第一条" in t_small and "第二条" in t_small and "回复一" in t_small, t_small)
+        check("transcript newest last", t_small.strip().endswith("第二条"), t_small)
+        check("transcript empty input", _recent_transcript([]) == "")
+
+        # A huge newest message must be kept, clipped to the budget.
+        huge_newest = [{"role": "assistant", "content": "A" * 30_000}]
+        t_huge = _recent_transcript(huge_newest, max_chars=1000)
+        check("huge newest clipped to budget", len(t_huge) == 1000, str(len(t_huge)))
+        check("huge newest keeps tail", t_huge.endswith("A" * 200), t_huge[-50:])
+
+        # A huge older message must NOT truncate the transcript to nothing: the
+        # newest messages stay and the overflowing older one fills the remainder.
+        mixed = [
+            {"role": "user", "content": "第一条"},
+            {"role": "assistant", "content": "B" * 30_000},   # huge older reply
+            {"role": "user", "content": "最新消息"},
+        ]
+        t_mixed = _recent_transcript(mixed, max_chars=2000)
+        check("mixed keeps newest message", "最新消息" in t_mixed, t_mixed[-80:])
+        check("mixed keeps newer older reply tail", "ASSISTANT: BBB" in t_mixed, t_mixed[-80:])
+        check("mixed fills the whole budget", len(t_mixed) >= 1900, str(len(t_mixed)))
+
+        # Regression: a real workload whose replies are each ~18k chars must NOT
+        # collapse to just the newest user message (the original bug).
+        realistic = [
+            {"role": "user", "content": "早期用户消息"},
+            {"role": "assistant", "content": "C" * 18_000},
+            {"role": "user", "content": "现在的需求"},
+        ]
+        t_real = _recent_transcript(realistic)
+        check("realistic transcript uses budget", len(t_real) >= 11_000, str(len(t_real)))
+        check("realistic keeps latest user", "现在的需求" in t_real, t_real[-60:])
+
+        # --- end-to-end dream: stage -> consolidate -> MEMORY.md write ---------
+        from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
+
+        class _DispatchLLM:
+            """Returns a JSON array for extract/summary and a blocks object for
+            consolidation, selected by the system prompt it sees."""
+
+            def __init__(self):
+                self.model_name = "fake"
+                self.calls = []
+
+            async def ainvoke(self, messages):
+                text = str(messages[0].content)
+                self.calls.append(text[:60])
+                if "memory consolidator" in text:
+                    return type("R", (), {"content": '{"blocks": ["自动提取的事实一", "自动提取的事实二"]}'})()
+                if "session notetaker" in text:
+                    return type("R", (), {"content": '["本周完成了记忆功能排查", "修复了转写截断问题"]'})()
+                return type("R", (), {"content": '["自动提取的事实一", "自动提取的事实二"]'})()
+
+        with tempfile.TemporaryDirectory() as dream_tmp:
+            d_root = Path(dream_tmp) / "memory"
+            d_mgr = MemoryManager(
+                Path(dream_tmp),
+                memory_dir=d_root,
+                config=MemoryConfig(enabled=True, auto_extract=True),
+            )
+            d_view = d_mgr.for_project("20260812100000", DEFAULT_AGENT)
+            d_llm = _DispatchLLM()
+
+            async def _run_extract():
+                from coworker.memory.auto_extract import run_auto_extract
+
+                return await run_auto_extract(
+                    llm=d_llm,
+                    messages=[{"role": "user", "content": "第一条"}, {"role": "assistant", "content": "第二条"}],
+                    session_id="dream-s1",
+                    provider_name="fake",
+                    model_name="fake",
+                    write_facts=lambda cands: d_view._stage_candidates("dream-s1", cands),
+                    project_dir=d_view.bound_project or "",
+                    agent=d_view.bound_agent,
+                )
+
+            res = asyncio.run(_run_extract())
+            check("dream extract staged candidates", int(res.get("added") or 0) == 2, str(res))
+            consolidated, note = asyncio.run(d_view._consolidate_now(d_llm, "dream-s1"))
+            check("dream consolidated", consolidated is True, note)
+            mem_raw = d_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/BASE/MEMORY.md")
+            check("dream wrote MEMORY.md", "自动提取的事实一" in mem_raw and "自动提取的事实二" in mem_raw, mem_raw)
+
+        # --- session summary -> SESSIONS/<date>.md, once per session/day -------
+        with tempfile.TemporaryDirectory() as sess_tmp:
+            s_root = Path(sess_tmp) / "memory"
+            s_mgr = MemoryManager(
+                Path(sess_tmp),
+                memory_dir=s_root,
+                config=MemoryConfig(enabled=True, auto_extract=True),
+            )
+            s_view = s_mgr.for_project("20260812100000", DEFAULT_AGENT)
+            s_llm = _DispatchLLM()
+            note1 = asyncio.run(
+                s_view._write_session_summary(s_llm, "sess-1", "用户要求排查记忆功能，并修复了截断问题")
+            )
+            check("session summary wrote bullets", note1 == "wrote 2 bullets", note1)
+            import datetime as _dt
+
+            sess_rel = f"20260812100000/{DEFAULT_AGENT}/SESSIONS/{_dt.datetime.now().strftime('%Y-%m-%d')}.md"
+            sess_raw = s_view.store.read_raw(sess_rel)
+            check("SESSIONS file created", "记忆功能排查" in sess_raw, sess_raw)
+            note2 = asyncio.run(
+                s_view._write_session_summary(s_llm, "sess-1", "更多内容")
+            )
+            check("session summary deduped", note2 == "skip (already summarized today)", note2)
+
+        # --- memory tool SESSIONS target resolution -----------------------------
+        from coworker.agents import _resolve_memory_target
+
+        base_rel = f"20260812100000/{DEFAULT_AGENT}/BASE/MEMORY.md"
+        ok_sess, rel_sess = _resolve_memory_target(base_rel, "agent", "SESSIONS/2026-08-19.md")
+        check("SESSIONS target resolves", ok_sess and rel_sess == f"20260812100000/{DEFAULT_AGENT}/SESSIONS/2026-08-19.md", rel_sess)
+        ok_bad, msg_bad = _resolve_memory_target(base_rel, "agent", "SESSIONS/a/b.md")
+        check("SESSIONS nested rejected", not ok_bad, msg_bad)
+        ok_plain, rel_plain = _resolve_memory_target(base_rel, "agent", "RULES.md")
+        check("BASE sibling still resolves", ok_plain and rel_plain.endswith("/BASE/RULES.md"), rel_plain)
+
+        # --- DREAMS.md diary carries the actual extracted facts ------------------
+        with tempfile.TemporaryDirectory() as diary_tmp:
+            dr_root = Path(diary_tmp) / "memory"
+            dr_mgr = MemoryManager(Path(diary_tmp), memory_dir=dr_root)
+            dr_view = dr_mgr.for_project("20260812100000", DEFAULT_AGENT)
+            dr_view._write_dream_diary(
+                "sess-9",
+                added=2,
+                consolidated=True,
+                note="consolidated 10 -> 7 blocks",
+                candidates=["project is an event platform named hpcpgo", "方向是游戏化"],
+                summary_note="wrote 3 bullets",
+            )
+            diary_raw = dr_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/BASE/DREAMS.md")
+            check("diary has heading", "## " in diary_raw, diary_raw)
+            check("diary has facts", "project is an event platform named hpcpgo" in diary_raw and "方向是游戏化" in diary_raw, diary_raw)
+            check("diary has outcome", "consolidated" in diary_raw and "new 2" in diary_raw, diary_raw)
+            check("diary references session note", "SESSIONS/" in diary_raw, diary_raw)
+
+        # --- DREAMS.md excluded from injection ----------------------------------
+        with tempfile.TemporaryDirectory() as inj_tmp:
+            i_root = Path(inj_tmp) / "memory"
+            i_mgr = MemoryManager(Path(inj_tmp), memory_dir=i_root)
+            i_mgr.registry.ensure_project("20260812100000")
+            i_agent = i_mgr.registry.ensure_agent(i_root / "20260812100000", DEFAULT_AGENT)
+            i_mgr.store.write_file(f"20260812100000/{DEFAULT_AGENT}/BASE/MEMORY.md", "真实记忆\n")
+            i_mgr.store.write_file(f"20260812100000/{DEFAULT_AGENT}/BASE/DREAMS.md", "- x · appended\n")
+            library = i_mgr.scanner.scan()
+            injected = library.injected(project_dir="20260812100000", agent=DEFAULT_AGENT)
+            names = [n.name for n in injected]
+            check("MEMORY.md injected", "MEMORY.md" in names, str(names))
+            check("DREAMS.md not injected", "DREAMS.md" not in names, str(names))
+
         # --- context budget: table resolution + conversion ----------------------
         from coworker.agents import _estimate_tokens, _message_text, _msg_chars, context_budget_chars, is_context_overflow_error
         from coworker.providers import DEFAULT_CONTEXT_WINDOW, MODEL_CONTEXT_TABLE, ProviderEntry, ProviderManager

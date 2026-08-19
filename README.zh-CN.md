@@ -157,6 +157,59 @@ NODE_ENV=development npx electron . --no-sandbox
 
 ---
 
+## 长程记忆（Long-Term Memory）
+
+Coworker 在 `~/Library/Application Support/Coworker/memory/`（macOS；目录跟随
+`COWORKER_DATA_DIR`）维护按 Agent、按项目隔离的 Markdown 记忆库，全部是普通
+可编辑 Markdown 文件。
+
+```
+memory/
+├── MEMORY.md · USER.md · AGENT.md      # 系统级事实（用户维护）
+└── <项目>/                             # 每个项目一个时间戳命名目录
+    ├── BASE/                           # 用户维护的项目事实
+    └── <agent>/
+        ├── BASE/                       # SOUL · AGENT · MEMORY.md（agent 事实）
+        │   └── DREAMS.md               # 自动提取的复盘日记
+        └── SESSIONS/<日期>.md          # 每日会话笔记（自动 + 手动）
+```
+
+### 工作方式
+
+- **读取（注入）**：每轮对话把相关记忆文件注入系统提示词（上限
+  `memory.char_limit`，默认 2000 字符）。额外文件与会话笔记通过 `memory_read`
+  工具按需读取。
+- **手动写入**：agent 通过 `memory` 工具把持久事实写入自己的
+  `BASE/MEMORY.md`（或主题文件 / `SESSIONS/<日期>.md`），自动去重，受控模式
+  需审批。
+- **自动提取（dream）**：每轮结束约 30 秒后，后台任务用 LLM 审查最近对话：
+  1. 提取持久事实并合并进 agent 的 `MEMORY.md`；
+  2. 向 `SESSIONS/<日期>.md` 追加一条简短会话笔记（每天一次）；
+  3. 在 `DREAMS.md` 记一行（如 `consolidated · new 3`）。
+
+自动提取使用记忆设置里配置的模型（`memory_extract_model`，为空时回退默认
+Provider），由 `COWORKER_MEMORY_ENABLED` 和 `COWORKER_MEMORY_AUTO_EXTRACT`
+控制（默认都开启）。
+
+### 如何验证
+
+1. 在对话中说出明确持久事实，如"我偏好中文回复""本项目后端端口是 9527"。
+2. 停止对话等约 30 秒。
+3. 查看 `memory/<项目>/default_agent/BASE/`：
+   - `MEMORY.md` 出现新条目；
+   - `DREAMS.md` 显示 `new N · consolidated`（而不是 `new 0`）；
+   - `SESSIONS/<今天日期>.md` 生成会话笔记。
+4. 想看过程：以 `COWORKER_LOG_LEVEL=DEBUG` 重启，在 `app.log` 中搜索
+   `dream done ... added=N transcript=… chars`。
+
+运行记忆自检：
+
+```
+cd backend && ./venv/bin/python coworker/memory/selftest.py
+```
+
+---
+
 ## 技术栈
 
 | 层级 | 技术 |

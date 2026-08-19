@@ -158,6 +158,62 @@ NODE_ENV=development npx electron . --no-sandbox
 
 ---
 
+## Long-Term Memory
+
+Coworker keeps a per-agent, per-project Markdown memory library at
+`~/Library/Application Support/Coworker/memory/` (macOS; the data dir follows
+`COWORKER_DATA_DIR`). All files are plain, human-editable Markdown.
+
+```
+memory/
+├── MEMORY.md · USER.md · AGENT.md      # system-level facts (user-maintained)
+└── <project>/                          # one timestamp-named dir per project
+    ├── BASE/                           # user-maintained project facts
+    └── <agent>/
+        ├── BASE/                       # SOUL · AGENT · MEMORY.md (agent facts)
+        │   └── DREAMS.md               # auto-extraction review diary
+        └── SESSIONS/<date>.md          # per-day session notes (auto + manual)
+```
+
+### How it works
+
+- **Injection (read)** — each turn the relevant memory files are injected into
+  the system prompt (bounded by `memory.char_limit`, default 2000 chars).
+  Extra files and session notes are read on demand with the `memory_read` tool.
+- **Manual write** — the agent uses the `memory` tool to write durable facts to
+  its own `BASE/MEMORY.md` (or a topic file / `SESSIONS/<date>.md`), deduplicated
+  and approval-gated in supervised mode.
+- **Auto-extract (dream)** — roughly 30 s after a turn settles, a background
+  pass reviews the recent transcript with an LLM and:
+  1. extracts durable facts and consolidates them into the agent's `MEMORY.md`;
+  2. appends a short session note to `SESSIONS/<date>.md` (once per day);
+  3. logs a line in `DREAMS.md` (e.g. `consolidated · new 3`).
+
+Auto-extract uses the provider configured under memory settings
+(`memory_extract_model`; falls back to the default provider). It is controlled
+by `COWORKER_MEMORY_ENABLED` and `COWORKER_MEMORY_AUTO_EXTRACT` (both default
+on).
+
+### How to verify
+
+1. In a chat, state a durable fact, e.g. "I prefer replies in Chinese" or
+   "this project's backend binds port 9527".
+2. Stop chatting and wait ~30 s.
+3. Check `memory/<project>/default_agent/BASE/`:
+   - `MEMORY.md` gains a new entry;
+   - `DREAMS.md` shows `new N · consolidated` (not `new 0`);
+   - `SESSIONS/<today>.md` contains a session note.
+4. For detail, restart with `COWORKER_LOG_LEVEL=DEBUG` and watch `app.log` for
+   `dream done ... added=N transcript=… chars`.
+
+Run the memory self-checks with:
+
+```
+cd backend && ./venv/bin/python coworker/memory/selftest.py
+```
+
+---
+
 ## Technology Stack
 
 | Layer | Technologies |

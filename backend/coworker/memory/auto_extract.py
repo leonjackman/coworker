@@ -81,12 +81,22 @@ Transcript:
 def _recent_transcript(messages: list[dict[str, Any]], max_chars: int = 12_000) -> str:
     """Join the tail of messages into one concise transcript for extraction.
 
-    Always keeps the newest message even when it alone exceeds the budget — an
-    oversized tail line must never produce an empty transcript (which would
-    silently skip extraction).
+    Newest messages first, filling the whole ``max_chars`` budget. Two hard
+    guarantees:
+
+    - The newest message is ALWAYS kept; if it alone exceeds the budget its
+      head is clipped (the tail survives).
+    - Older messages are included until the budget is exhausted; the oldest
+      overflowing message is clipped from the front so the remaining budget is
+      used instead of being discarded.
+
+    Without these guarantees, a real workload whose assistant replies are each
+    several thousand characters collapses the transcript to just the newest
+    user message (a few dozen chars) — and the extractor then correctly finds
+    nothing worth remembering.
     """
     lines: list[str] = []
-    total = 0
+    used = 0
     for msg in reversed(messages):
         if not isinstance(msg, dict):
             continue
@@ -94,18 +104,40 @@ def _recent_transcript(messages: list[dict[str, Any]], max_chars: int = 12_000) 
         content = str(msg.get("content") or "")
         if not content:
             continue
-        prefix = "USER" if role == "user" else "ASSISTANT"
-        line = f"{prefix}: {content}"
-        if lines and total + len(line) > max_chars:
+        prefix = "USER: " if role == "user" else "ASSISTANT: "
+        line = f"{prefix}{content}"
+        if not lines:
+            # Newest message: always keep, clip the head if oversized.
+            kept = line if len(line) <= max_chars else line[-max_chars:]
+            lines.append(kept)
+            used = len(kept)
+            continue
+        remaining = max_chars - used
+        if remaining <= 0:
             break
-        lines.append(line)
-        total += len(line)
+        if len(line) <= remaining:
+            lines.append(line)
+            used += len(line)
+            continue
+        # This (older) message overflows the remaining budget: fill it with the
+        # message's tail, clipped from the front, then stop.
+        if remaining > len(prefix):
+            body = line[len(prefix):]
+            lines.append(f"{prefix}{body[-(remaining - len(prefix)):]}")
+        elif remaining > 0:
+            lines.append(line[-remaining:])
+        break
     lines.reverse()
     return "\n".join(lines)
 
 
 def _parse_candidates(text: str) -> list[str]:
-    """Best-effort parse of the model's JSON-array response."""
+    """Best-effort parse of the model's JSON-array response.
+
+    Real local models (e.g. qwen3.x on vLLM) sometimes answer with a
+    Python-style single-quoted list ``['a', 'b']``, which strict ``json.loads``
+    rejects. We try strict JSON first, then a single-quote-tolerant pass.
+    """
     text = text.strip()
     candidates: list[str] = []
     try:
@@ -116,13 +148,28 @@ def _parse_candidates(text: str) -> list[str]:
         # Fall back: scan for a JSON array in the response.
         start, end = text.find("["), text.rfind("]")
         if start != -1 and end > start:
-            try:
-                parsed = json.loads(text[start : end + 1])
-                if isinstance(parsed, list):
-                    candidates = [str(x) for x in parsed if isinstance(x, str)]
-            except json.JSONDecodeError:
-                pass
+            candidates = _parse_array_slice(text[start : end + 1])
+    if not candidates:
+        # Final fallback: tolerate single-quoted arrays (Python repr style).
+        candidates = _parse_array_slice(text)
     return candidates
+
+
+def _parse_array_slice(text: str) -> list[str]:
+    """Parse a JSON/Python array slice, accepting both quote styles."""
+    from ast import literal_eval
+
+    parsed: Any = None
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        try:
+            parsed = literal_eval(text)
+        except (ValueError, SyntaxError):
+            return []
+    if isinstance(parsed, list):
+        return [str(x) for x in parsed if isinstance(x, str)]
+    return []
 
 
 async def run_auto_extract(
@@ -146,7 +193,7 @@ async def run_auto_extract(
     transcript = _recent_transcript(messages)
     if not transcript:
         logger.debug("auto-extract: no transcript to review for %s", session_id)
-        return {"added": 0, "error": None}
+        return {"added": 0, "error": None, "_transcript": "", "_candidates": []}
     try:
         from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -167,12 +214,12 @@ async def run_auto_extract(
         candidates = _parse_candidates(str(text))
     except Exception as exc:  # noqa: BLE001 - auto-extract must never break chat
         logger.warning("auto-extract failed for %s: %s", session_id, exc)
-        return {"added": 0, "error": str(exc)[:200]}
+        return {"added": 0, "error": str(exc)[:200], "_transcript": transcript, "_candidates": []}
 
     added = write_facts(candidates)
     if added:
         logger.info("auto-extract wrote %d memories for %s", added, session_id)
-    return {"added": added, "error": None}
+    return {"added": added, "error": None, "_transcript": transcript, "_candidates": candidates}
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +258,8 @@ def _parse_consolidation(text: str) -> list[str] | None:
     """Best-effort parse of the consolidation response.
 
     Returns ``None`` when the output is not a usable JSON object (caller falls
-    back to append-only). Expects ``{"blocks": [ ... ]}``.
+    back to append-only). Expects ``{"blocks": [ ... ]}``, with single-quoted
+    lists tolerated for local models.
     """
     text = (text or "").strip()
     candidates: list[str] | None = None
@@ -224,12 +272,9 @@ def _parse_consolidation(text: str) -> list[str] | None:
     except json.JSONDecodeError:
         start, end = text.find("["), text.rfind("]")
         if start != -1 and end > start:
-            try:
-                parsed = json.loads(text[start : end + 1])
-                if isinstance(parsed, list):
-                    candidates = [str(b).strip() for b in parsed if str(b).strip()]
-            except json.JSONDecodeError:
-                pass
+            parsed = _parse_array_slice(text[start : end + 1])
+            if parsed:
+                candidates = [str(b).strip() for b in parsed if str(b).strip()]
     return candidates
 
 
@@ -279,14 +324,21 @@ async def run_consolidation(
         return None, "consolidation produced no blocks"
 
     # Guardrail 1: must not drop more than max_prior_loss of prior entries.
-    prior_keys = {b.lower() for b in prior}
-    if prior_keys:
-        kept = sum(1 for b in new_blocks if b.lower() in prior_keys)
-        prior_fraction = kept / len(prior_keys)
-        if prior_fraction < 1 - max_prior_loss:
+    # Pure Markdown headings are structure, not facts — the model may drop or
+    # restructure them freely, so they are excluded from the reference set.
+    # Text matching is a fast path; when a rewrite paraphrases / translates /
+    # merges facts (so no block textually resembles the original) we ask the
+    # model itself to confirm semantic preservation before accepting.
+    prior_facts = [b for b in prior if not _is_heading_block(b)]
+    if prior_facts:
+        missing = [i for i, p in enumerate(prior_facts) if not _is_covered_by(p, new_blocks)]
+        if missing:
+            missing = await _verify_preservation(llm, prior_facts, new_blocks)
+        loss = len(missing) / len(prior_facts)
+        if loss > max_prior_loss:
             return None, (
-                f"guardrail: rewrite keeps only {prior_fraction:.0%} of prior "
-                f"entries (need >= {1 - max_prior_loss:.0%})"
+                f"guardrail: rewrite loses {loss:.0%} of prior entries "
+                f"(need >= {1 - max_prior_loss:.0%})"
             )
 
     # Guardrail 2: new version must fit the read-side injection budget.
@@ -295,4 +347,169 @@ async def run_consolidation(
         return None, f"guardrail: consolidated memory too large ({total} chars)"
 
     return new_blocks, f"consolidated {len(prior)} -> {len(new_blocks)} blocks"
+
+
+async def _verify_preservation(
+    llm: Any, prior_facts: list[str], new_blocks: list[str]
+) -> list[int]:
+    """Ask the model which prior entries lose their meaning in the rewrite.
+
+    Returns the 0-based indices of ``prior_facts`` whose meaning is COMPLETELY
+    absent from ``new_blocks``. Paraphrase, translation and merging all count
+    as preserved — naive text similarity cannot detect those. Never raises:
+    an unusable answer degrades conservatively to "all prior entries at risk"
+    so the caller rejects the rewrite and falls back to append-only (safe).
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    numbered = "\n".join(f"{i}. {f}" for i, f in enumerate(prior_facts))
+    blocks_text = "\n".join(f"- {b}" for b in new_blocks)
+    system = (
+        "You are a memory consistency checker. Below are the OLD long-term "
+        "memory entries (numbered) and the NEW consolidated blocks produced by "
+        "another model.\n\n"
+        "For each OLD entry, decide whether its MEANING is preserved somewhere "
+        "in the NEW blocks. Paraphrasing, translating into another language, or "
+        "merging into a combined entry all count as preserved.\n\n"
+        "Respond with ONLY a JSON array of the 0-based indices of OLD entries "
+        "whose meaning is COMPLETELY absent from the NEW blocks. If every OLD "
+        "entry is preserved, respond with the literal JSON []."
+    )
+    human = f"OLD entries:\n{numbered}\n\nNEW blocks:\n{blocks_text}"
+    try:
+        response = await llm.ainvoke(
+            [SystemMessage(content=system), HumanMessage(content=human)]
+        )
+        text = str(getattr(response, "content", "") or response or "")
+    except Exception:  # noqa: BLE001 - a check failure must not break the dream
+        return list(range(len(prior_facts)))
+    parsed = _parse_index_array(text)
+    if parsed is None:
+        return list(range(len(prior_facts)))
+    return [i for i in parsed if isinstance(i, int) and 0 <= i < len(prior_facts)]
+
+
+def _parse_index_array(text: str) -> list[int] | None:
+    """Parse a JSON/Python array of integers; ``None`` when not an array.
+
+    ``None`` (not ``[]``) signals "cannot confirm" so callers can degrade to a
+    conservative action. A genuine empty ``[]`` is preserved.
+    """
+    from ast import literal_eval
+
+    text = text.strip()
+    if not text:
+        return None
+    parsed: Any = None
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        try:
+            parsed = literal_eval(text)
+        except (ValueError, SyntaxError):
+            start, end = text.find("["), text.rfind("]")
+            if start != -1 and end > start:
+                try:
+                    parsed = json.loads(text[start : end + 1])
+                except (json.JSONDecodeError, ValueError):
+                    try:
+                        parsed = literal_eval(text[start : end + 1])
+                    except (ValueError, SyntaxError):
+                        return None
+            else:
+                return None
+    if isinstance(parsed, list):
+        return [x for x in parsed if isinstance(x, int)]
+    return None
+
+
+def _is_heading_block(block: str) -> bool:
+    """True for a pure Markdown heading (single line starting with ``#``)."""
+    text = block.strip()
+    return bool(text) and "\n" not in text and text.startswith("#")
+
+
+def _is_covered_by(prior: str, new_blocks: list[str], similarity: float = 0.6) -> bool:
+    """True if ``prior`` survives in any ``new_blocks`` entry.
+
+    Matching is lenient: exact equality, substring containment (either
+    direction — covers merges of duplicate entries), or fuzzy similarity above
+    ``similarity`` (covers rewording).
+    """
+    import difflib
+
+    p = prior.lower()
+    for block in new_blocks:
+        b = block.lower()
+        if p == b or (p and (p in b or b in p)):
+            return True
+        if p and difflib.SequenceMatcher(None, p, b).ratio() >= similarity:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Session summary (per-session notes in SESSIONS/<date>.md)
+# ---------------------------------------------------------------------------
+
+SESSION_SUMMARY_PROMPT = """You are the session notetaker for a coding assistant
+called Coworker. Below is a transcript of the most recent conversation.
+
+Write a concise session note (3-6 short bullet points) capturing what happened:
+- What the user asked for and what was done / decided
+- Any concrete outcome (features built, files touched, errors fixed, refactors)
+- Any in-progress work or open threads the next session should pick up
+
+Keep each bullet to ONE line (~120 chars max), factual and self-contained. Do
+NOT include raw error logs, full file paths lists, or secrets. If the transcript
+has nothing substantive, respond with the literal JSON [].
+
+Respond with ONLY a JSON array of strings, e.g.
+["用户要求全局排查记忆功能", "修复了自动记忆提取的转写截断问题"].
+
+Transcript:
+{transcript}
+"""
+
+
+def _parse_summary(text: str) -> list[str]:
+    """Best-effort parse of the session-summary JSON-array response."""
+    return _parse_candidates(text)
+
+
+async def run_session_summary(
+    *,
+    llm: Any,
+    transcript: str,
+    session_id: str,
+    existing: str = "",
+) -> tuple[list[str] | None, str]:
+    """Produce a session note from ``transcript``.
+
+    Returns ``(bullets, note)``. ``bullets`` is ``None`` when the model call
+    failed or produced nothing usable (caller should skip the write). Existing
+    notes in the target file are passed back so the caller can dedupe.
+    Never raises: failures degrade to ``(None, note)``.
+    """
+    if not transcript:
+        return None, "no transcript to summarize"
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        response = await llm.ainvoke(
+            [
+                SystemMessage(content=SESSION_SUMMARY_PROMPT.format(transcript=transcript)),
+                HumanMessage(
+                    content="Review the transcript and return the JSON array of "
+                    "session-note bullets."
+                ),
+            ]
+        )
+        text = str(getattr(response, "content", "") or response or "")
+    except Exception as exc:  # noqa: BLE001 - summary must never break the dream
+        return None, f"model error: {str(exc)[:120]}"
+    bullets = [b.strip() for b in _parse_summary(text) if b and b.strip()]
+    if not bullets:
+        return None, "summary produced no bullets"
+    return bullets, f"{len(bullets)} bullets"
 
