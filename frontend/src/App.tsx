@@ -174,6 +174,7 @@ function App() {
   const goalDraftRef = useRef('');
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
+  const [runtimeError, setRuntimeError] = useState<string>('');
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -538,6 +539,7 @@ function App() {
         console.error('Failed to load runtime config:', error);
         if (!mounted) return;
         setRuntimeStatus('error');
+        setRuntimeError(translateError(error));
         attempt += 1;
         const delay = Math.min(1500 * 2 ** (attempt - 1), 8000);
         retryTimer = setTimeout(bootstrap, delay);
@@ -2929,8 +2931,15 @@ function App() {
                         {runtimeStatus === 'connecting' ? t('runtime.connecting_label') : t('runtime.error_label')}
                       </p>
                       <h2>{runtimeStatus === 'connecting' ? t('runtime.connecting_title') : t('runtime.error_title')}</h2>
-                      <p>{runtimeStatus === 'connecting' ? t('runtime.connecting_body') : t('runtime.error_body')}</p>
-                      {runtimeStatus === 'error' && <p className="runtime-notice__retry">{t('runtime.retrying')}</p>}
+                      {runtimeStatus === 'connecting' ? (
+                        <p>{t('runtime.connecting_body')}</p>
+                      ) : (
+                        <>
+                          <p>{t('runtime.error_body')}</p>
+                          {runtimeError && <p className="runtime-notice__reason">{t('runtime.error_reason', { reason: runtimeError })}</p>}
+                          <p className="runtime-notice__retry">{t('runtime.retrying')}</p>
+                        </>
+                      )}
                     </section>
                   )}
                   {showFirstRunStart ? (

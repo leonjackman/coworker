@@ -80,6 +80,7 @@ export function translateError(error: unknown): string {
   if (message.includes('Electron API is unavailable')) return t('error.electron_api_unavailable');
 
   // Agent execution errors (now pushed as explicit error events from backend).
+  if (message.includes('Backend request timed out')) return t('error.connection_refused');
   if (message.includes('context overflow')) return t('error.context_overflow');
   if (message.includes('TimeoutError') || message.includes('timed out')) return t('error.agent_timeout');
   if (message.includes('CancelledError') || message.includes('cancelled')) return t('error.agent_cancelled');

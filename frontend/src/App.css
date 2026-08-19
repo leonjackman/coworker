@@ -1844,6 +1844,17 @@ body.bottom-panel-resizing {
   font-size: 13px !important;
 }
 
+.runtime-notice__reason {
+  margin-top: 8px !important;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, #c95343 34%, var(--material-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, #c95343 8%, transparent);
+  color: var(--foreground) !important;
+  font-size: 13px !important;
+  overflow-wrap: anywhere;
+}
+
 .runtime-notice__retry::before {
   content: "";
   width: 9px;
