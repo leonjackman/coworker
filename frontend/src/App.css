@@ -1109,6 +1109,20 @@ body.sidebar-resizing {
   font-size: 11px;
 }
 
+.context-budget-badge {
+  -webkit-app-region: no-drag;
+  margin-left: 2px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #8a5a00;
+  background: color-mix(in srgb, #e0a93b 22%, var(--background));
+  border: 1px solid color-mix(in srgb, #e0a93b 45%, var(--material-border));
+  white-space: nowrap;
+}
+
 
 .titlebar-pending {
   -webkit-app-region: no-drag;

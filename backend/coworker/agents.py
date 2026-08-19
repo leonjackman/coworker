@@ -1895,31 +1895,77 @@ def is_context_overflow_error(exc: BaseException | None) -> bool:
     return any(pattern in text for pattern in CONTEXT_OVERFLOW_PATTERNS)
 
 
-def _runtime_context_budget(provider: Any, model_override: str | None = None) -> int:
-    """Resolve the runtime context budget (chars) from a provider entry.
+def _runtime_context_budget(provider: Any, model_override: str | None = None) -> tuple[int, int, str]:
+    """Resolve ``(budget_chars, window_tokens, source)`` for a provider entry.
 
-    Uses the provider's context window resolution (user override > table >
-    local discovery > default) and converts it to a character budget.
+    The window resolution is model-aware: ``model_override`` (the model chosen for
+    this turn) takes precedence over the provider's stored default model, so
+    switching models mid-conversation recomputes the budget from the new model's
+    context window — see B7. ``source`` is one of user/table/discovered/default.
     """
     try:
         from .providers import ProviderManager
 
-        window, _ = ProviderManager.resolve_context_window(provider)
-        return context_budget_chars(window)
+        window, source = ProviderManager.resolve_context_window(provider, model=model_override)
+        return context_budget_chars(window), window, source
     except Exception:  # noqa: BLE001 - a failed resolve must never break a turn
-        return DEFAULT_CONTEXT_WINDOW_CHARS
+        return DEFAULT_CONTEXT_WINDOW_CHARS, 128_000, "default"
 
 
-def _msg_chars(msg: Any) -> int:
+def _message_text(msg: Any) -> str:
+    """Extract all textual content from a message (incl. tool calls/results).
+
+    Used for BOTH the character-based trim budget and the token estimate, so the
+    context-budget meter and the actual trimming agree on message "size". Tool
+    calls / tool results previously counted as zero chars and could silently push
+    a tool-heavy turn past the window — see B3.
+    """
     try:
         content = msg.content
     except Exception:  # noqa: BLE001
-        return 0
+        content = None
+    chunks: list[str] = []
     if isinstance(content, str):
-        return len(content)
-    if isinstance(content, list):
-        return sum(len(part.get("text") or "") for part in content if isinstance(part, dict) and part.get("type") == "text")
-    return 0
+        chunks.append(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    chunks.append(part.get("text") or "")
+                else:
+                    # tool_use / tool_result / function blocks etc.
+                    chunks.append(str(part.get("input") or part.get("content") or part.get("text") or ""))
+    # AI message tool calls (OpenAI-style: name + args).
+    tool_calls = getattr(msg, "tool_calls", None)
+    if tool_calls:
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                chunks.append(str(tc.get("name") or ""))
+                chunks.append(str(tc.get("args") or ""))
+            else:
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    chunks.append(str(getattr(fn, "name", "") or ""))
+                    chunks.append(str(getattr(fn, "arguments", "") or ""))
+    return "".join(chunks)
+
+
+def _msg_chars(msg: Any) -> int:
+    return len(_message_text(msg))
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token count: ~4 chars/token for Latin, ~1.6 chars/token for CJK.
+
+    A flat 3.5 chars/token (CHARS_PER_TOKEN) over-estimates tokens for Chinese
+    and under-states real context usage — see B4. Blending the two scripts keeps
+    the displayed budget closer to what the provider actually counts.
+    """
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    other = len(text) - cjk
+    return max(1, round(other / 4 + cjk * 0.6))
 
 
 def _truncate_message(msg: Any, budget: int) -> Any:
@@ -1961,12 +2007,24 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     triggering AIMessage so the provider never sees an orphaned ToolMessage.
     """
 
-    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None):
-        self.budget_chars = max(20_000, int(budget_chars or DEFAULT_CONTEXT_WINDOW_CHARS))
+    def __init__(self, budget_chars: int = DEFAULT_CONTEXT_WINDOW_CHARS, llm: Any | None = None, context_window_tokens: int = 0, context_window_source: str = "default"):
+        self.configured_budget = max(20_000, int(budget_chars or DEFAULT_CONTEXT_WINDOW_CHARS))
+        # Mutable per-turn budget (the overflow retry path halves this). The UI
+        # always reads ``configured_budget`` so the meter never jumps on a retry
+        # — see B9.
+        self.budget_chars = self.configured_budget
         # Optional model used for summary compaction. When set, over-budget turns
         # summarize the OLDEST segment instead of dropping it entirely; when unset
         # (or on summarization failure) the plain rolling trim is used.
         self.llm = llm
+        # Real model context window (tokens) + how it was resolved, surfaced to the
+        # UI so the meter shows usage against the ACTUAL window (not just the 75%
+        # safety budget) and explains the source — B2/B8.
+        self.context_window_tokens = context_window_tokens
+        self.context_window_source = context_window_source
+        # Cumulative compressions (trim or summarize) this session, so the UI can
+        # show a persistent "已压缩" badge — B6.
+        self.compact_count = 0
         self._summarized_segments: set[str] = set()
 
     def _trim(self, state: CoworkerAgentState) -> list[Any] | None:
@@ -2017,6 +2075,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         kept = head + kept_tail
         if len(kept) == len(messages):
             return None
+        self.compact_count += 1
         return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
@@ -2030,12 +2089,25 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         try:
             messages = state.get("messages", [])
             total = sum(_msg_chars(m) for m in messages)
+            used_tokens = sum(_estimate_tokens(_message_text(m)) for m in messages)
+            window_tokens = self.context_window_tokens or round(
+                self.configured_budget / (CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN)
+            )
+            budget_tokens = round(self.configured_budget / CHARS_PER_TOKEN)
             runtime.stream_writer(
                 {
                     "type": "context_usage",
                     "used_chars": total,
-                    "budget_chars": self.budget_chars,
+                    "budget_chars": self.configured_budget,
+                    "used_tokens": used_tokens,
+                    "budget_tokens": budget_tokens,
+                    "window_tokens": window_tokens,
+                    # Per-turn signal: is the resident set over the active budget
+                    # (i.e. will this call trim/compact)? Distinct from `compacted`,
+                    # which is the cumulative "has compression ever happened" flag — B6.
                     "compressed": total > self.budget_chars,
+                    "compacted": self.compact_count > 0,
+                    "window_source": self.context_window_source,
                 }
             )
         except Exception:  # noqa: BLE001 - telemetry must never break a turn
@@ -2118,6 +2190,7 @@ class ContextWindowMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 id="__compaction_flush__",
             )
         )
+        self.compact_count += 1
         return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept]}
 
     async def _summarize_segment(self, messages: list[Any]) -> str:
@@ -2576,6 +2649,8 @@ def build_coworker_agent_graph(
     memory_manager: Any | None = None,
     workspace: Any | None = None,  # NEW: for external write HITL bridge
     context_budget: int = DEFAULT_CONTEXT_WINDOW_CHARS,
+    context_window_tokens: int = 0,
+    context_window_source: str = "default",
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -2615,7 +2690,9 @@ def build_coworker_agent_graph(
     )
 
     phase_gate = PhaseToolGateMiddleware()
-    context_middleware = ContextWindowMiddleware(context_budget, llm=llm)
+    context_middleware = ContextWindowMiddleware(
+        context_budget, llm=llm, context_window_tokens=context_window_tokens, context_window_source=context_window_source
+    )
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
         context_middleware,
@@ -2737,7 +2814,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.memory_manager = memory_manager
         self.project_store = project_store
         self.project_id = project_id or ""
-        self.context_budget_chars = _runtime_context_budget(provider, model_override)
+        self.context_budget_chars, self.context_window_tokens, self.context_window_source = _runtime_context_budget(provider, model_override)
         self.agent = agent or DEFAULT_AGENT_NAME
 
     def _resolve_project_dir(self) -> str:
@@ -2865,6 +2942,8 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             memory_manager=memory_view,
             workspace=self.workspace,
             context_budget=self.context_budget_chars,
+            context_window_tokens=self.context_window_tokens,
+            context_window_source=self.context_window_source,
         )
         try:
             result = graph.invoke(
@@ -2924,7 +3003,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.project_id = project_id or ""
         self.agent = agent or DEFAULT_AGENT_NAME
         self._delegation_buffer: list[dict[str, Any]] = []
-        self.context_budget_chars = _runtime_context_budget(provider, model_override)
+        self.context_budget_chars, self.context_window_tokens, self.context_window_source = _runtime_context_budget(provider, model_override)
 
     def _resolve_project_dir(self) -> str:
         """Resolve the project memory dir for this runtime.
@@ -3106,6 +3185,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 memory_manager=memory_view,
                 workspace=self.workspace,
                 context_budget=self.context_budget_chars,
+            context_window_tokens=self.context_window_tokens,
+            context_window_source=self.context_window_source,
             )
 
             inputs = {
@@ -3656,6 +3737,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 memory_manager=memory_view,
                 workspace=self.workspace,
                 context_budget=self.context_budget_chars,
+            context_window_tokens=self.context_window_tokens,
+            context_window_source=self.context_window_source,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of

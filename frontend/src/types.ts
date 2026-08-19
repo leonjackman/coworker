@@ -677,7 +677,7 @@ export interface PendingRequest {
     | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string }
     | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string }
     | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string }
-    | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; session_id?: string }
+    | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; used_tokens: number; budget_tokens: number; window_tokens: number; compacted: boolean; window_source: string; session_id?: string }
     | { type: 'idle_warning'; seconds_idle: number; session_id?: string }
     | {
         type: 'revert_summary';
@@ -693,6 +693,16 @@ export interface ContextUsage {
   usedChars: number;
   budgetChars: number;
   compressed: boolean;
+  /** Token estimate of the resident message set (better than chars; counts tool I/O). */
+  usedTokens: number;
+  /** Safety budget in tokens (= window × 0.75); the bar fills against this. */
+  budgetTokens: number;
+  /** The model's REAL context window in tokens (what usage % is measured against). */
+  windowTokens: number;
+  /** Whether any compression (trim or summarize) has happened this session. */
+  compacted: boolean;
+  /** How the window was resolved: user | table | discovered | default. */
+  windowSource: string;
 }
 
 export interface GoalTodo {

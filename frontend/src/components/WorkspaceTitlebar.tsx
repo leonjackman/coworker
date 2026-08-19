@@ -50,22 +50,36 @@ const STATUS_COLORS = {
 } as const;
 
 function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
-  const pct = usage.budgetChars > 0 ? Math.round((usage.usedChars / usage.budgetChars) * 100) : 0;
+  const CHARS_PER_TOKEN = 3.5;
+  // Prefer the backend's token estimates (they count tool I/O and are CJK-aware);
+  // fall back to char-based values for older backends — B3/B4.
+  const used = usage.usedTokens ?? Math.round(usage.usedChars / CHARS_PER_TOKEN);
+  const windowTok = usage.windowTokens ?? usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
+  const budget = usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
+  // Bar is measured against the model's REAL window so the meter reflects true
+  // context fullness; trimming kicks in at 75% (the safety budget) — see B2.
+  const pct = windowTok > 0 ? Math.min(100, Math.round((used / windowTok) * 100)) : 0;
   const color = pct < 70 ? STATUS_COLORS.green : pct < 90 ? STATUS_COLORS.amber : STATUS_COLORS.red;
-  // Convert chars → tokens (÷3.5 is the same ratio used by context_budget_chars)
-  const charsPerToken = 3.5;
-  const usedTokens = Math.round(usage.usedChars / charsPerToken);
-  const budgetTokens = Math.round(usage.budgetChars / charsPerToken);
   const formatK = (n: number) => (n >= 1_000 ? `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
+  const sourceHint =
+    usage.windowSource === "user" ? "（Provider 手动设置）"
+    : usage.windowSource === "table" ? "（模型表）"
+    : usage.windowSource === "discovered" ? "（自动探测）"
+    : "（默认 128k）";
+  const tooltip =
+    `${t('titlebar.context')} · ${formatK(used)} / ${formatK(windowTok)} tokens（${pct}% 窗口）` +
+    ` · 安全预算 ${formatK(budget)} · 来源${sourceHint}` +
+    (usage.compacted ? " · 已压缩" : "");
 
   return (
-    <Tooltip content={`${t('titlebar.context')} · ${formatK(usedTokens)} / ${formatK(budgetTokens)} tokens · ${pct}%`}>
+    <Tooltip content={tooltip}>
       <div className="workspace-titlebar__context-budget">
         <Layers size={12} className="context-budget-icon" />
         <div className="context-budget-bar" style={{ '--ctx-color': color } as React.CSSProperties}>
-          <div className="context-budget-bar__fill" style={{ width: `${Math.min(pct, 100)}%` }} />
+          <div className="context-budget-bar__fill" style={{ width: `${pct}%` }} />
         </div>
-        <span className="context-budget-text">{formatK(usedTokens)} / {formatK(budgetTokens)}</span>
+        <span className="context-budget-text">{formatK(used)} / {formatK(windowTok)}</span>
+        {usage.compacted && <span className="context-budget-badge" title="会话历史已被压缩">已压缩</span>}
       </div>
     </Tooltip>
   );

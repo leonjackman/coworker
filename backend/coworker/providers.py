@@ -474,33 +474,38 @@ class ProviderManager:
         return 0
 
     @staticmethod
-    def resolve_context_window(provider: ProviderEntry) -> tuple[int, str]:
+    def resolve_context_window(provider: ProviderEntry, model: str | None = None) -> tuple[int, str]:
         """Resolve the effective context window (tokens) for a provider.
 
-        Priority: user override > known-model table > local-server discovery >
-        default. Returns ``(window, source)`` where source is one of
-        ``"user"``, ``"table"``, ``"discovered"``, ``"unreachable"``,
-        ``"default"``.
+        Priority: user override > known-model table > server discovery > default.
+        ``model`` (when given) overrides ``provider.model`` so a per-turn model
+        switch recomputes the window from the chosen model — see B7. Returns
+        ``(window, source)`` where source is one of ``"user"``, ``"table"``,
+        ``"discovered"``, ``"unreachable"``, ``"default"``.
         """
-        window, source, _ = ProviderManager._resolve_context_window_full(provider)
+        window, source, _ = ProviderManager._resolve_context_window_full(provider, model=model)
         return window, source
 
     @staticmethod
-    def _resolve_context_window_full(provider: ProviderEntry) -> tuple[int, str, str | None]:
+    def _resolve_context_window_full(provider: ProviderEntry, model: str | None = None) -> tuple[int, str, str | None]:
         """Like :meth:`resolve_context_window` but also reports why discovery
         failed (``error``) so the UI can tell the user their local server is
         unreachable instead of silently falling back."""
+        model = (model or provider.model or "").strip()
         if provider.context_window and provider.context_window > 0:
             return provider.context_window, "user", None
-        from_table = ProviderManager.table_context_window(provider.model)
+        from_table = ProviderManager.table_context_window(model)
         if from_table:
             return from_table, "table", None
-        if provider.provider_type in {"ollama", "llamacpp", "llmstudio", "lmstudio", "vllm"} or ProviderManager._is_local(provider):
-            discovered, error = ProviderManager._discover_context_window_cached(provider)
-            if discovered and discovered > 0:
-                return discovered, "discovered", None
-            if error:
-                return DEFAULT_CONTEXT_WINDOW, "unreachable", error
+        # Live discovery for ANY OpenAI-compatible endpoint (vLLM, llama.cpp,
+        # LocalAI, … expose max_model_len in /v1/models). Cloud providers that
+        # don't surface it simply fall through to the default instead of being
+        # silently assumed 128k. See B5.
+        discovered, error = ProviderManager._discover_context_window_cached(provider, model)
+        if discovered and discovered > 0:
+            return discovered, "discovered", None
+        if ProviderManager._is_local(provider) and error:
+            return DEFAULT_CONTEXT_WINDOW, "unreachable", error
         return DEFAULT_CONTEXT_WINDOW, "default", None
 
     @staticmethod
@@ -516,17 +521,18 @@ class ProviderManager:
             return False
 
     @staticmethod
-    def _discover_context_window_cached(provider: ProviderEntry) -> tuple[int, str | None]:
+    def _discover_context_window_cached(provider: ProviderEntry, model: str | None = None) -> tuple[int, str | None]:
         """Discovery with a short TTL cache so polling /config cannot hammer a
-        downed local server (each probe can take seconds)."""
-        key = f"{provider.provider_type}|{(provider.base_url or '').rstrip('/')}|{provider.model}"
+        downed server (each probe can take seconds)."""
+        model = (model or provider.model or "").strip()
+        key = f"{provider.provider_type}|{(provider.base_url or '').rstrip('/')}|{model}"
         entry = _CTX_DISCOVERY_CACHE.get(key)
         if entry is not None:
             ts, window, error = entry
             if time.monotonic() - ts < _CTX_DISCOVERY_TTL_SECONDS:
                 return window, error
             _CTX_DISCOVERY_CACHE.pop(key, None)
-        window, error = ProviderManager._fetch_context_window_full(provider)
+        window, error = ProviderManager._fetch_context_window_full(provider, model)
         _CTX_DISCOVERY_CACHE[key] = (time.monotonic(), window, error)
         return window, error
 
@@ -563,7 +569,7 @@ class ProviderManager:
         return window
 
     @staticmethod
-    def _fetch_context_window_full(provider: ProviderEntry) -> tuple[int, str | None]:
+    def _fetch_context_window_full(provider: ProviderEntry, model: str | None = None) -> tuple[int, str | None]:
         """Returns ``(window, error)``; ``error`` is human-readable when the
         probe failed (server unreachable/refused/timeout), else ``None``."""
         base = (provider.base_url or "").rstrip("/")
@@ -571,7 +577,7 @@ class ProviderManager:
             return 0, None
         try:
             if provider.provider_type == "ollama":
-                window, error = ProviderManager._fetch_ollama_ctx(base, provider.model)
+                window, error = ProviderManager._fetch_ollama_ctx(base, model)
                 if window and window > 0:
                     return window, None
                 return 0, error
@@ -590,7 +596,7 @@ class ProviderManager:
             payload = ProviderManager._http_get(url, provider)
             if isinstance(payload, dict):
                 for item in payload.get("data", []):
-                    if item.get("id") != provider.model:
+                    if model and item.get("id") != model:
                         continue
                     for key in ("max_model_len", "context_window", "context_length"):
                         value = item.get(key)

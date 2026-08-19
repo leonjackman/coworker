@@ -499,7 +499,7 @@ def main() -> int:
         check("consolidation integrates candidate", any("pnpm" in b for b in blocks_ok or []), str(blocks_ok))
 
         # --- context budget: table resolution + conversion ----------------------
-        from coworker.agents import context_budget_chars, is_context_overflow_error
+        from coworker.agents import _estimate_tokens, _message_text, _msg_chars, context_budget_chars, is_context_overflow_error
         from coworker.providers import DEFAULT_CONTEXT_WINDOW, MODEL_CONTEXT_TABLE, ProviderEntry, ProviderManager
 
         gpt = ProviderEntry(id="p1", name="gpt", provider_type="custom", base_url="http://localhost:9000", model="gpt-4o")
@@ -516,7 +516,10 @@ def main() -> int:
         check("table prefers qwen3:4b variant", win_q == 262_144, f"{win_q}/{src_q}")
         unknown = ProviderEntry(id="p5", name="u", provider_type="custom", base_url="http://localhost:9000", model="weird-model-x")
         win_u, src_u = ProviderManager.resolve_context_window(unknown)
-        check("unknown model falls back to default", win_u == DEFAULT_CONTEXT_WINDOW and src_u == "default", f"{win_u}/{src_u}")
+        # Window must always fall back to 128k. The source label is either
+        # "default" (probe returned nothing) or "unreachable" (nothing is
+        # listening on the local base_url) — both mean a safe 128k fallback.
+        check("unknown model falls back to default", win_u == DEFAULT_CONTEXT_WINDOW and src_u in ("default", "unreachable"), f"{win_u}/{src_u}")
         overridden = ProviderEntry(id="p6", name="o", provider_type="custom", base_url="http://localhost:9000", model="gpt-4o", context_window=9999)
         win_o, src_o = ProviderManager.resolve_context_window(overridden)
         check("user override wins", win_o == 9999 and src_o == "user", f"{win_o}/{src_o}")
@@ -524,6 +527,27 @@ def main() -> int:
         check("budget 128k -> 336000", context_budget_chars(128_000) == 336_000, str(context_budget_chars(128_000)))
         check("budget floors at 20k", context_budget_chars(1) == 20_000, str(context_budget_chars(1)))
         check("budget default when 0", context_budget_chars(0) == 336_000, str(context_budget_chars(0)))
+
+        # B3: message size counts tool results & tool calls (not just text)
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        m_tool = ToolMessage(content="cat /etc/os-release", tool_call_id="tc1")
+        m_ai = AIMessage(content="", tool_calls=[{"id": "c1", "name": "read_file", "args": {"path": "a.py"}}])
+        check("msg chars counts tool results", _msg_chars(m_tool) == len("cat /etc/os-release"), str(_msg_chars(m_tool)))
+        check("msg chars counts tool calls", _msg_chars(m_ai) == len("read_file{'path': 'a.py'}"), str(_msg_chars(m_ai)))
+
+        # B4: CJK-aware token estimate (denser than the flat 3.5 chars/token)
+        cjk = "这是一个用于验证的非常长的中文句子" * 20
+        check(
+            "token estimate CJK denser than 3.5",
+            _estimate_tokens(cjk) > 0 and len(cjk) / _estimate_tokens(cjk) < 3.5,
+            f"{len(cjk)} chars -> {_estimate_tokens(cjk)} tok",
+        )
+
+        # B7: per-turn model override recomputes the window from THAT model
+        p_ovr = ProviderEntry(id="p7", name="ovr", provider_type="custom", base_url="http://localhost:9000", model="gpt-4o")
+        win_ovr, src_ovr = ProviderManager.resolve_context_window(p_ovr, model="claude-sonnet-4")
+        check("model override recomputes window", win_ovr == 1_000_000 and src_ovr == "table", f"{win_ovr}/{src_ovr}")
 
         # expanded context table (50+ mainstream models)
         def _win(model: str) -> int:

@@ -815,7 +815,7 @@ function App() {
       // it (including while on the hero/draft, where no goal card should exist).
       // Message events (delta/tool/plan/done) are always processed.
       if (event.type === 'context_usage') {
-        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
         return;
       }
       const goalMatchesView = !event.session_id || event.session_id === sessionIdRef.current;
@@ -1424,7 +1424,7 @@ function App() {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
-        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
         return;
       }
       if (event.type === 'revert_summary') {
@@ -1644,7 +1644,7 @@ function App() {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       if (event.type === 'context_usage') {
-        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+        setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
         return;
       }
       if (event.type === 'revert_summary') {
@@ -1924,7 +1924,7 @@ function App() {
           // P1 陈旧请求守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
           if (isStreamStale(resumeSessionId, resumeRequestSeq)) return;
           if (event.type === 'context_usage') {
-            setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed });
+            setContextUsage({ usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, windowSource: event.window_source });
             return;
           }
           if (event.type === 'done') {
@@ -2055,6 +2055,7 @@ function App() {
     setPendingRequests([]);
     setSessionId(undefined);
     sessionIdRef.current = undefined;
+    setContextUsage(null); // 新会话不残留上一会话的上下文预算（B10）
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
     const project = projects.find((p) => p.id === projectId);
@@ -2197,6 +2198,7 @@ function App() {
       );
       setSessionId(sessionIdToOpen);
       sessionIdRef.current = sessionIdToOpen;
+      setContextUsage(null); // 打开会话时不残留上一会话的上下文预算（B10）
       pendingProjectIdRef.current = undefined;
       setPendingRequests((current) => current.filter((item) => item.session_id !== sessionIdToOpen));
       void restorePendingForSession(sessionIdToOpen);
@@ -2282,6 +2284,7 @@ function App() {
       if (sessionIdRef.current === sessionIdToDelete) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
+        setContextUsage(null); // 删除当前会话后清掉残留预算（B10）
         setInput('');
         setAttachments([]);
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
@@ -2348,6 +2351,7 @@ function App() {
       if (sessionsInProject.some(s => s.id === sessionIdRef.current)) {
         setSessionId(undefined);
         sessionIdRef.current = undefined;
+        setContextUsage(null); // 删除项目后清掉残留预算（B10）
         setInput('');
         setAttachments([]);
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
@@ -2756,7 +2760,7 @@ function App() {
     id: provider.id,
     label: provider.model,
     provider: provider.name,
-    contextError: provider.context_error,
+    ...(provider.context_error ? { contextError: provider.context_error } : {}),
   }));
   const showRuntimeNotice = activeView === 'chat' && (runtimeStatus !== 'ready' || !runtimeConfig);
   const titlebarSessionTitle = currentSessionTitle(messages, sessions, sessionId);
