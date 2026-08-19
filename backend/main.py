@@ -1856,20 +1856,26 @@ async def chat_stream(request: ChatStreamRequest):
             except KeyError:
                 pass
             cancel_event = asyncio.Event()
+            # Register the cancel event BEFORE building the runtime so that
+            # _on_error / finally can always clean it up if setup fails.
             _goal_cancel_events[session_id] = cancel_event
-            runtime = await _build_stream_runtime(
-                request.mode, request.provider_id, request.model,
-                resolved_workspace, referenced_ids, agent, request.project_id,
-            )
             try:
-                stream_id = session_store.require(session_id).goal_stream_id or ""
-            except KeyError:
-                stream_id = ""
-            stream_iter = runtime.goal_stream(
-                messages, session_id, request.language, work_mode, autonomy,
-                goal_text=goal_text, goal_continue_first=False,
-                _cancel_event=cancel_event, goal_stream_id=stream_id,
-            )
+                runtime = await _build_stream_runtime(
+                    request.mode, request.provider_id, request.model,
+                    resolved_workspace, referenced_ids, agent, request.project_id,
+                )
+                try:
+                    stream_id = session_store.require(session_id).goal_stream_id or ""
+                except KeyError:
+                    stream_id = ""
+                stream_iter = runtime.goal_stream(
+                    messages, session_id, request.language, work_mode, autonomy,
+                    goal_text=goal_text, goal_continue_first=False,
+                    _cancel_event=cancel_event, goal_stream_id=stream_id,
+                )
+            except Exception:  # noqa: BLE001 - clean up cancel event on setup failure
+                _goal_cancel_events.pop(session_id, None)
+                raise
         else:
             runtime = await _build_stream_runtime(
                 request.mode, request.provider_id, request.model,

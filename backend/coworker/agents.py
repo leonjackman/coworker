@@ -1867,9 +1867,6 @@ class NormalizeMessagesMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any])
 # messages are dropped first (the first system message is always kept). The
 # checkpoint still holds full history; this only bounds what the model sees and
 # what gets replayed into the checkpoint.
-# Default budget when a provider's context window cannot be resolved. Derived
-# from the default context window (128k tokens) with the safety factor applied.
-DEFAULT_CONTEXT_WINDOW_CHARS = 128_000
 CONTEXT_SAFETY_FACTOR = 0.75
 CHARS_PER_TOKEN = 3.5
 KEEP_RECENT_FACTOR = 0.6
@@ -1942,7 +1939,7 @@ def _runtime_context_budget(provider: Any, model_override: str | None = None) ->
         window, source, warning = ProviderManager._resolve_context_window_full(provider, model=model_override)
         return context_budget_chars(window), window, source, warning
     except Exception:  # noqa: BLE001 - a failed resolve must never break a turn
-        return DEFAULT_CONTEXT_WINDOW_CHARS, 128_000, "default", None
+        return context_budget_chars(128_000), 128_000, "default", None
 
 
 def _message_text(msg: Any) -> str:
@@ -2380,6 +2377,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
                     "budget_chars": self.configured_budget,
                     "used_tokens": used_tokens,
                     "budget_tokens": self.budget_tokens,
+                    "active_budget_tokens": self.budget_tokens,
                     "window_tokens": window_tokens,
                     # Per-turn signal: is the resident set over the active budget
                     # (i.e. will this call trim/compact)? Distinct from `compacted`,
@@ -3909,12 +3907,17 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                     last_todos = event.get("todos") or []
                                 elif etype == "tool_start":
                                     round_had_tools = True
+                                # Respect user pause/stop cancel during force loop so
+                                # the user does not have to wait for the full stream to
+                                # finish before seeing their action take effect.
+                                if _cancel_event.is_set():
+                                    raise asyncio.CancelledError("user cancelled during force loop")
                                 yield event
-                    except asyncio.TimeoutError:
-                        yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
-                        return
-                    except asyncio.CancelledError:
-                        yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
+                    except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
+                        if isinstance(exc, asyncio.TimeoutError):
+                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
+                        else:
+                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
                         return
                     # Check again after the forced continuation.
                     if last_checkpoint is not None:
@@ -3943,27 +3946,32 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                     # Force retry continues the existing thread (see above).
                                     [],
                                     # A goal is an autonomous "do the work" loop: always run in
-                        # the execute phase so write/run tools are available,
-                        # regardless of the session's plan/build toggle.
-                        session_id, language, "build", autonomy, rerun=False,
-                                    goal_mode=True, goal_text=goal_text,
-                                    goal_continue=True,
-                                    _nudge=nudge,
-                                    _cancel_event=_cancel_event,
-                                ):
-                                    etype = event.get("type", "")
-                                    if etype == "goal_checkpoint":
-                                        last_checkpoint = event
-                                    elif etype == "todos":
-                                        last_todos = event.get("todos") or []
-                                    elif etype == "tool_start":
-                                        round_had_tools = True
-                                    yield event
-                        except asyncio.CancelledError:
-                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
-                            return
-                        except asyncio.TimeoutError:
-                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
+                         # the execute phase so write/run tools are available,
+                         # regardless of the session's plan/build toggle.
+                         session_id, language, "build", autonomy, rerun=False,
+                                     goal_mode=True, goal_text=goal_text,
+                                     goal_continue=True,
+                                     _nudge=nudge,
+                                     _cancel_event=_cancel_event,
+                                 ):
+                                     etype = event.get("type", "")
+                                     if etype == "goal_checkpoint":
+                                         last_checkpoint = event
+                                     elif etype == "todos":
+                                         last_todos = event.get("todos") or []
+                                     elif etype == "tool_start":
+                                         round_had_tools = True
+                                     # Respect user pause/stop cancel during force loop so
+                                     # the user does not have to wait for the full stream to
+                                     # finish before seeing their action take effect.
+                                     if _cancel_event.is_set():
+                                         raise asyncio.CancelledError("user cancelled during force loop")
+                                     yield event
+                        except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
+                            if isinstance(exc, asyncio.TimeoutError):
+                                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
+                            else:
+                                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
                             return
                     if last_checkpoint is not None:
                         continue
