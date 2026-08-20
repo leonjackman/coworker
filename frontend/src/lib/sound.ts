@@ -18,9 +18,9 @@
  *   assets/sound/attention.mp3     → attention
  */
 
-import doneMp3 from '../../assets/sound/done.mp3?url';
-import errorMp3 from '../../assets/sound/error.mp3?url';
-import attentionMp3 from '../../assets/sound/attention.mp3?url';
+import doneMp3 from '../../../assets/sound/done.mp3?url';
+import errorMp3 from '../../../assets/sound/error.mp3?url';
+import attentionMp3 from '../../../assets/sound/attention.mp3?url';
 
 type SoundEvent = 'reply_done' | 'reply_error' | 'attention';
 

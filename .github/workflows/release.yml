@@ -16,6 +16,7 @@ jobs:
   build-mac:
     name: macOS (arm64)
     runs-on: macos-latest
+    timeout-minutes: 90
     env:
       TEAM_ID: K4B9JCX83M
       APP_VERSION: ${{ github.ref_name }}
@@ -104,6 +105,7 @@ jobs:
   build-win:
     name: Windows (x64)
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -152,6 +154,7 @@ jobs:
   build-linux-x64:
     name: Linux (x64)
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -165,8 +168,15 @@ jobs:
           python-version: '3.11'
 
       - name: Install Linux deps
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
+          # GitHub-hosted runners use the Azure Ubuntu mirror, which can be
+          # unreachable and hang for hours. Prefer archive.ubuntu.com and cap
+          # each apt-get update attempt so the job fails fast instead of stalling.
+          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.sources \
+            /etc/apt/apt-mirrors.txt 2>/dev/null || true
+          timeout 300 sudo apt-get update || { echo 'apt-get update failed once, retrying'; timeout 300 sudo apt-get update; }
           sudo apt-get install -y libarchive-tools appstream libgl1 libwebp-dev libglib2.0-dev libdbus-1-dev rpm fakeroot
 
       - name: Install dependencies
@@ -205,6 +215,7 @@ jobs:
   build-linux-arm64:
     name: Linux (arm64)
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -218,8 +229,15 @@ jobs:
           python-version: '3.11'
 
       - name: Install Linux deps
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
+          # GitHub-hosted runners use the Azure Ubuntu mirror, which can be
+          # unreachable and hang for hours. Prefer archive.ubuntu.com and cap
+          # each apt-get update attempt so the job fails fast instead of stalling.
+          sudo sed -i 's#azure\.archive\.ubuntu\.com#archive.ubuntu.com#g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.sources \
+            /etc/apt/apt-mirrors.txt 2>/dev/null || true
+          timeout 300 sudo apt-get update || { echo 'apt-get update failed once, retrying'; timeout 300 sudo apt-get update; }
           sudo apt-get install -y libarchive-tools appstream libgl1 libwebp-dev libfuse2t64 libglib2.0-dev libdbus-1-dev rpm fakeroot
 
       - name: Install dependencies
