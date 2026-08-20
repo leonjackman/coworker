@@ -388,6 +388,7 @@
   "message.copy": "복사",
   "message.edit": "편집",
   "message.edit_cancel": "취소",
+  "message.scrollToBottom": "맨 아래로 스크롤",
   "edit.revert_conflicts": "편집 시 {reverted}개 파일 변경을 되돌림；{conflicts}개는 다른 세션/수동 편집과 충돌하여 건너뜀.",
   "edit.redo_conflicts": "{restored}개 변경 복원；{conflicts}개 파일은 수동 편집되어 건너뜀.",
   "edit.redo_failed": "파일 변경 복원 실패",

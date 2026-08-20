@@ -417,6 +417,7 @@
   "message.edit": "Bearbeiten",
   "message.regenerate": "Neu generieren",
   "message.redo": "{count} rückgängig gemachte Dateiänderung(en) wiederherstellen",
+  "message.scrollToBottom": "Nach unten scrollen",
   "message.edit_placeholder": "Diese Nachricht bearbeiten…",
   "message.edit_save": "Speichern & neu generieren",
   "message.edit_cancel": "Abbrechen",

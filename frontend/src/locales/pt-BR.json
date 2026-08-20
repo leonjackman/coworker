@@ -416,6 +416,7 @@
   "message.edit": "Editar",
   "message.regenerate": "Regenerar",
   "message.redo": "Restaurar {count} alteração(ões) de arquivo revertidas",
+  "message.scrollToBottom": "Rolar para baixo",
   "message.edit_placeholder": "Editar esta mensagem…",
   "message.edit_save": "Salvar e regenerar",
   "message.edit_cancel": "Cancelar",

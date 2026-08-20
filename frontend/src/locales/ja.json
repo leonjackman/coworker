@@ -416,6 +416,7 @@
   "message.edit": "編集",
   "message.regenerate": "再生成",
   "message.redo": "{count} 件の元に戻したファイル変更を復元",
+  "message.scrollToBottom": "最下部へスクロール",
   "message.edit_placeholder": "このメッセージを編集…",
   "message.edit_save": "保存＆再生成",
   "message.edit_cancel": "キャンセル",

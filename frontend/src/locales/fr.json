@@ -436,6 +436,7 @@
   "message.edit": "Modifier",
   "message.regenerate": "Regénérer",
   "message.redo": "Restaurer {count} modification(s) de fichier annulée(s)",
+  "message.scrollToBottom": "Défiler vers le bas",
   "message.edit_placeholder": "Modifier ce message…",
   "message.edit_save": "Enregistrer & regénérer",
   "message.edit_cancel": "Annuler",

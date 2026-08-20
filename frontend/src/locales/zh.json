@@ -463,6 +463,7 @@
   "message.edit": "编辑",
   "message.regenerate": "重新生成",
   "message.redo": "恢复 {count} 处被回滚的文件改动",
+  "message.scrollToBottom": "回到底部",
   "message.edit_placeholder": "修改这条消息…",
   "message.edit_save": "保存并重新生成",
   "message.edit_cancel": "取消",

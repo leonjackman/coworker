@@ -1,5 +1,5 @@
-import { Bot, CheckIcon, Hammer, ListChecks, Paperclip, Shield, ShieldCheck, Users } from 'lucide-react';
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Bot, CheckIcon, ChevronDown, Hammer, ListChecks, Paperclip, Shield, ShieldCheck, Users } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart, PartDelegate, PartFileChange } from '../types';
 import { ScrollArea } from './ui/scroll-area';
@@ -429,6 +429,7 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
   const stickToBottomRef = useRef(true);
   const lastUserMessageIdRef = useRef<string | undefined>(undefined);
   const lastCountRef = useRef(0);
+  const [isNearBottom, setIsNearBottom] = useState(true);
 
   const scrollToBottom = (behavior: ScrollBehavior = 'auto') => {
     const viewport = viewportRef.current;
@@ -441,7 +442,13 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
     if (!viewport) return;
     const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= STICK_THRESHOLD;
+    setIsNearBottom(distanceFromBottom <= STICK_THRESHOLD);
   };
+
+  const handleScrollToBottom = useCallback(() => {
+    scrollToBottom('smooth');
+    setIsNearBottom(false);
+  }, [scrollToBottom]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -491,6 +498,16 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
           ),
         )}
       </section>
+
+      {!isNearBottom && (
+        <button
+          className="scroll-to-bottom-btn"
+          onClick={handleScrollToBottom}
+          aria-label={t('message.scrollToBottom')}
+        >
+          <ChevronDown size={20} />
+        </button>
+      )}
     </ScrollArea>
   );
 }

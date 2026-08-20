@@ -416,6 +416,7 @@
   "message.edit": "Редактировать",
   "message.regenerate": "Перегенерировать",
   "message.redo": "Восстановить {count} откачённых изменений файлов",
+  "message.scrollToBottom": "Прокрутить вниз",
   "message.edit_placeholder": "Редактировать это сообщение…",
   "message.edit_save": "Сохранить и перегенерировать",
   "message.edit_cancel": "Отмена",

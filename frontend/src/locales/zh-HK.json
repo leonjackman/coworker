@@ -429,6 +429,7 @@
   "message.edit": "編輯",
   "message.regenerate": "重新生成",
   "message.redo": "還原 {count} 處被回滾嘅檔案改動",
+  "message.scrollToBottom": "捲動到底部",
   "message.edit_placeholder": "編輯呢條訊息…",
   "message.edit_save": "儲存並重新生成",
   "message.edit_cancel": "取消",

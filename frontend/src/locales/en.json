@@ -423,6 +423,7 @@
   "message.edit": "Edit",
   "message.regenerate": "Regenerate",
   "message.redo": "Restore {count} reverted file change(s)",
+  "message.scrollToBottom": "Scroll to bottom",
   "message.edit_placeholder": "Edit this message…",
   "message.edit_save": "Save & regenerate",
   "message.edit_cancel": "Cancel",

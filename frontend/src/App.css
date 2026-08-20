@@ -2005,6 +2005,39 @@ body.bottom-panel-resizing {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 22px;
+  position: relative;
+}
+
+.scroll-to-bottom-btn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 24px;
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  border: none;
+  background: var(--panel-solid);
+  border: 1px solid var(--material-border);
+  color: var(--muted-foreground);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.2s, transform 0.2s;
+  opacity: 0.85;
+  z-index: 2;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.scroll-to-bottom-btn:hover {
+  background: var(--panel-hover);
+  color: var(--foreground);
+  opacity: 1;
+}
+
+.scroll-to-bottom-btn:active {
+  transform: translateX(-50%) scale(0.93);
 }
 
 .stream-row {
