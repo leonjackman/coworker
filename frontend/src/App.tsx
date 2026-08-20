@@ -3177,15 +3177,15 @@ function App() {
                           </button>
                         </div>
                       )}
-                      {currentSessionPending.length > 0 || webSetupHint ? (
+                      {webSetupHint && (
+                        <WebSetupHintBar
+                          status={webSetupHint}
+                          onConfigure={() => openSettingsPage('web')}
+                          onDismiss={() => setWebHintDismissed(true)}
+                        />
+                      )}
+                      {currentSessionPending.length > 0 ? (
                         <div className="workspace-dock-area">
-                          {webSetupHint && (
-                            <WebSetupHintBar
-                              status={webSetupHint}
-                              onConfigure={() => openSettingsPage('web')}
-                              onDismiss={() => setWebHintDismissed(true)}
-                            />
-                          )}
                           <PendingDocks
                             requests={currentSessionPending}
                             onResolve={async (request, decision) => {

@@ -4305,7 +4305,11 @@ body.bottom-panel-resizing {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  box-sizing: border-box;
+  width: var(--bottom-card-width);
+  max-width: 100%;
+  min-width: 0;
+  margin: 8px auto 5px;
   padding: 8px 12px;
   border: 1px solid var(--material-border);
   border-radius: var(--radius-md, 12px);
