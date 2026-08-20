@@ -3101,11 +3101,11 @@ function App() {
     tryNav();
   };
 
-  // Ensure a browser tab exists in the right panel; when a URL is given, open
-  // the right panel and navigate that tab to it. Used both by the agent
-  // auto-open hook and by future UI entry points.
+  // Ensure a browser tab exists (kept alive even while the right panel is
+  // collapsed). When a URL is given, navigate that tab to it. Does NOT auto-open
+  // the panel — the titlebar indicator lights instead; the user opens the panel
+  // and sees the already-running browser.
   const ensureBrowserTab = (url?: string) => {
-    openRightPanel();
     setRightTabs((prev) => {
       const existing = prev.find((tab) => tab.kind === 'browser');
       if (existing) {
@@ -3282,6 +3282,7 @@ function App() {
         projectName={titlebarProjectName}
         sidebarCollapsed={isNarrowViewport ? !mobileSidebarOpen : sidebarCollapsed}
         rightSidebarOpen={rightSidebarOpen}
+        browserActive={browserAgentActive}
         bottomPanelOpen={bottomPanelOpen}
         changesPanelOpen={changesPanelOpen}
         canEditSession={Boolean(sessionId)}
@@ -3511,29 +3512,28 @@ function App() {
                 />
               )}
             </section>
-            {rightSidebarOpen && (
-              <RightPanel
-                tabs={rightTabs}
-                activeTabId={activeRightTabId}
-                onSelect={(id) => setActiveRightTabId(id)}
-                onClose={closeRightTab}
-                onAdd={() => addRightTab('browser')}
-                onBrowserHandle={handleBrowserHandle}
-                onBrowserTitle={handleBrowserTitle}
-                onOpenNewTab={(url) => {
-                  if (url) addRightTab('browser', { url });
-                }}
-                onAddCapture={(attachments) => {
-                  if (attachments.length) setAttachments((prev) => [...prev, ...attachments]);
-                }}
-                agentActive={browserAgentActive}
-                agentClick={browserAgentClick}
-                onResizeStart={() => setInspectorResizing(true)}
-                onResizeEnd={() => setInspectorResizing(false)}
-                onResizeWidth={(width) => setInspectorWidth(width)}
-                maxWidth={rightPanelMax}
-              />
-            )}
+            <RightPanel
+              hidden={!rightSidebarOpen}
+              tabs={rightTabs}
+              activeTabId={activeRightTabId}
+              onSelect={(id) => setActiveRightTabId(id)}
+              onClose={closeRightTab}
+              onAdd={() => addRightTab('browser')}
+              onBrowserHandle={handleBrowserHandle}
+              onBrowserTitle={handleBrowserTitle}
+              onOpenNewTab={(url) => {
+                if (url) addRightTab('browser', { url });
+              }}
+              onAddCapture={(attachments) => {
+                if (attachments.length) setAttachments((prev) => [...prev, ...attachments]);
+              }}
+              agentActive={browserAgentActive}
+              agentClick={browserAgentClick}
+              onResizeStart={() => setInspectorResizing(true)}
+              onResizeEnd={() => setInspectorResizing(false)}
+              onResizeWidth={(width) => setInspectorWidth(width)}
+              maxWidth={rightPanelMax}
+            />
             {changesPanelOpen && (
               <ChangesPanel
                 open={changesPanelOpen}

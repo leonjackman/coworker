@@ -39,6 +39,7 @@
   "titlebar.sidebar_show": "显示左侧栏",
   "titlebar.sidebar_hide": "隐藏左侧栏",
   "titlebar.right_sidebar_show": "显示右侧栏",
+  "titlebar.right_sidebar_agent_active": "Agent 正在浏览器中操作",
   "titlebar.right_sidebar_hide": "隐藏右侧栏",
   "titlebar.bottom_show": "显示底部面板",
   "titlebar.bottom_hide": "隐藏底部面板",

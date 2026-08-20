@@ -806,7 +806,9 @@ class BrowserController {
     // Never let embedded pages open uncontrolled windows/popups — open them in
     // the same embedded view instead.
     wc.setWindowOpenHandler(({ url }) => {
-      if (/^https?:\/\//i.test(url) && this.guests.has(wc.id)) {
+      // New-window requests open in the same embedded view; allow the navigable
+      // schemes (http(s), file://, data:, about:) — everything else is denied.
+      if (/^(https?|file|data|about):/i.test(url) && this.guests.has(wc.id)) {
         wc.loadURL(url);
       }
       return { action: 'deny' };
@@ -818,7 +820,11 @@ class BrowserController {
       } catch {
         parsed = null;
       }
-      if (parsed && !/^https?:$/.test(parsed.protocol)) {
+      // Fail-closed navigation guard. Allowed: http(s), file:// (local project
+      // HTML), data: (inline HTML/preview) and about:blank. Anything else
+      // (javascript:, chrome:, devtools:, mailto:, tel:, ftp:, ws:, blob:...)
+      // is blocked.
+      if (parsed && !/^(https?|file|data|about):$/.test(parsed.protocol)) {
         event.preventDefault();
       }
     });
@@ -923,7 +929,9 @@ class BrowserController {
     await this._waitForGuest();
     const g = this.guest;
     if (!g) throw new Error('browser_not_attached');
-    const normalized = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    // Pass through the navigable schemes (http(s), file:// for local HTML,
+    // data: for inline previews, about:blank); otherwise default to https.
+    const normalized = /^(https?|file|data|about):/i.test(url) ? url : `https://${url}`;
     g.loadURL(normalized).catch(() => {});
     await this._waitForLoad();
     return this.getState();

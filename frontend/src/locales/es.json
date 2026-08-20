@@ -37,6 +37,7 @@
   "titlebar.sidebar_show": "Mostrar barra lateral izquierda",
   "titlebar.sidebar_hide": "Ocultar barra lateral izquierda",
   "titlebar.right_sidebar_show": "Mostrar barra lateral derecha",
+  "titlebar.right_sidebar_agent_active": "El agente está operando el navegador",
   "titlebar.right_sidebar_hide": "Ocultar barra lateral derecha",
   "titlebar.bottom_show": "Mostrar panel inferior",
   "titlebar.bottom_hide": "Ocultar panel inferior",

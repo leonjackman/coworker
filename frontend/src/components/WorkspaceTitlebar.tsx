@@ -30,6 +30,7 @@ interface WorkspaceTitlebarProps {
   projectName: string;
   sidebarCollapsed: boolean;
   rightSidebarOpen: boolean;
+  browserActive?: boolean;
   bottomPanelOpen: boolean;
   changesPanelOpen: boolean;
   canEditSession: boolean;
@@ -110,6 +111,7 @@ export function WorkspaceTitlebar({
   projectName,
   sidebarCollapsed,
   rightSidebarOpen,
+  browserActive,
   bottomPanelOpen,
   changesPanelOpen,
   canEditSession,
@@ -217,7 +219,7 @@ export function WorkspaceTitlebar({
             <PanelBottom size={16} />
           </Button>
         </Tooltip>
-        <Tooltip content={rightSidebarOpen ? t('titlebar.right_sidebar_hide') : t('titlebar.right_sidebar_show')}>
+        <Tooltip content={rightSidebarOpen ? t('titlebar.right_sidebar_hide') : browserActive ? t('titlebar.right_sidebar_agent_active') : t('titlebar.right_sidebar_show')}>
           <Button
             type="button"
             variant="icon"
@@ -228,6 +230,7 @@ export function WorkspaceTitlebar({
             aria-pressed={rightSidebarOpen}
           >
             {rightSidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+            {browserActive && !rightSidebarOpen && <span className="workspace-titlebar__browser-dot" aria-hidden="true" />}
           </Button>
         </Tooltip>
       </div>

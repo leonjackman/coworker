@@ -39,6 +39,7 @@
   "titlebar.sidebar_show": "Show left sidebar",
   "titlebar.sidebar_hide": "Hide left sidebar",
   "titlebar.right_sidebar_show": "Show right sidebar",
+  "titlebar.right_sidebar_agent_active": "Agent is operating the browser",
   "titlebar.right_sidebar_hide": "Hide right sidebar",
   "titlebar.bottom_show": "Show bottom panel",
   "titlebar.bottom_hide": "Hide bottom panel",

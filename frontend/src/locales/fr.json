@@ -75,6 +75,7 @@
   "titlebar.sidebar_show": "Afficher la barre latérale gauche",
   "titlebar.sidebar_hide": "Masquer la barre latérale gauche",
   "titlebar.right_sidebar_show": "Afficher la barre latérale droite",
+  "titlebar.right_sidebar_agent_active": "L’agent utilise le navigateur",
   "titlebar.right_sidebar_hide": "Masquer la barre latérale droite",
   "titlebar.bottom_show": "Afficher le panneau inférieur",
   "titlebar.bottom_hide": "Masquer le panneau inférieur",

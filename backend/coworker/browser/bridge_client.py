@@ -198,10 +198,14 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
             "in the right-side browser panel. Preferred workflow: navigate -> snapshot "
             "(a numbered list of interactive elements with their on-screen center "
             "coordinates) -> click a numbered element / type -> snapshot again. Take a "
-            "screenshot only when a page's visual state matters (images, layout). To "
-            "read page text use get_text or a targeted evaluate (title + specific "
-            "selectors) — never dump whole-page innerText, which can overflow the "
-            "model's context window."
+            "screenshot only when a page's visual state matters (images, layout). "
+            "file:// URLs open local HTML directly; data:text/html,... renders an "
+            "inline HTML preview. For a local project, start a local HTTP server "
+            "yourself with run_command (e.g. `python3 -m http.server 8000` in the "
+            "project dir) then navigate to http://localhost:8000. To read page "
+            "text use get_text or a targeted evaluate (title + specific selectors) — "
+            "never dump whole-page innerText, which can overflow the model's context "
+            "window."
         )
     return (
         "The built-in browser is DISABLED — you have no browser tool. It is only available "

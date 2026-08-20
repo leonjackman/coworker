@@ -1090,12 +1090,39 @@ body.sidebar-resizing {
 
 .workspace-titlebar__button {
   -webkit-app-region: no-drag;
+  position: relative;
   border-radius: 7px;
 }
 
 .workspace-titlebar__button--active {
   color: var(--foreground) !important;
   background: var(--material-control) !important;
+}
+
+/* Blue pulsing dot on the right-sidebar toggle: the agent is operating the
+   embedded browser while the panel is collapsed. Click to see it live. */
+.workspace-titlebar__browser-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3b82f6;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6);
+  animation: cw-titlebar-dot-pulse 1.4s ease-out infinite;
+}
+
+@keyframes cw-titlebar-dot-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(59, 130, 246, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
 }
 
 .workspace-titlebar__context-budget {
@@ -1616,6 +1643,13 @@ body.changes-panel-resizing {
   border-left: 1px solid var(--material-border);
   background: var(--material-panel-solid);
   backdrop-filter: var(--material-blur);
+}
+
+/* Collapsed state: the panel stays mounted (the embedded browser keeps running
+   in the background) but is hidden — display:none keeps the <webview> guest
+   alive, so opening it later shows the already-running page. */
+.right-panel--hidden {
+  display: none;
 }
 
 .right-panel__resizer {

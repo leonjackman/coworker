@@ -37,6 +37,7 @@
   "titlebar.sidebar_show": "左サイドバーを表示",
   "titlebar.sidebar_hide": "左サイドバーを隠す",
   "titlebar.right_sidebar_show": "右サイドバーを表示",
+  "titlebar.right_sidebar_agent_active": "エージェントがブラウザを操作中",
   "titlebar.right_sidebar_hide": "右サイドバーを隠す",
   "titlebar.bottom_show": "下パネルを表示",
   "titlebar.bottom_hide": "下パネルを隠す",

@@ -37,6 +37,7 @@
   "titlebar.sidebar_show": "Linke Seitenleiste anzeigen",
   "titlebar.sidebar_hide": "Linke Seitenleiste ausblenden",
   "titlebar.right_sidebar_show": "Rechte Seitenleiste anzeigen",
+  "titlebar.right_sidebar_agent_active": "Agent bedient den Browser",
   "titlebar.right_sidebar_hide": "Rechte Seitenleiste ausblenden",
   "titlebar.bottom_show": "Unterleiste anzeigen",
   "titlebar.bottom_hide": "Unterleiste ausblenden",

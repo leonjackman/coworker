@@ -37,6 +37,7 @@
   "titlebar.sidebar_show": "Показать левую боковую панель",
   "titlebar.sidebar_hide": "Скрыть левую боковую панель",
   "titlebar.right_sidebar_show": "Показать правую боковую панель",
+  "titlebar.right_sidebar_agent_active": "Агент работает в браузере",
   "titlebar.right_sidebar_hide": "Скрыть правую боковую панель",
   "titlebar.bottom_show": "Показать нижнюю панель",
   "titlebar.bottom_hide": "Скрыть нижнюю панель",

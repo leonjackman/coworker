@@ -761,6 +761,7 @@
   "titlebar.rename_session": "세션 이름 변경",
   "titlebar.right_sidebar_hide": "오른쪽 사이드바 숨기기",
   "titlebar.right_sidebar_show": "오른쪽 사이드바 표시",
+  "titlebar.right_sidebar_agent_active": "에이전트가 브라우저를 조작 중",
   "titlebar.session_actions": "세션 작업",
   "titlebar.sidebar_hide": "왼쪽 사이드바 숨기기",
   "titlebar.sidebar_show": "왼쪽 사이드바 표시",

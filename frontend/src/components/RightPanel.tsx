@@ -5,6 +5,7 @@ import { usePanelResize } from '../lib/usePanelResize';
 import { BrowserView, type BrowserViewHandle } from './BrowserView';
 
 interface RightPanelProps {
+  hidden?: boolean;
   tabs: RightPanelTab[];
   activeTabId: string;
   onSelect: (id: string) => void;
@@ -36,6 +37,7 @@ function tabTitle(tab: RightPanelTab): string {
 }
 
 export function RightPanel({
+  hidden,
   tabs,
   activeTabId,
   onSelect,
@@ -63,7 +65,7 @@ export function RightPanel({
   });
 
   return (
-    <aside className="right-panel">
+    <aside className={`right-panel ${hidden ? 'right-panel--hidden' : ''}`}>
       <div
         className="right-panel__resizer"
         role="separator"

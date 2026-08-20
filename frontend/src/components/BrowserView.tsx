@@ -63,7 +63,9 @@ interface BrowserViewProps {
 function normalizeUrl(input: string): string {
   const trimmed = (input || '').trim();
   if (!trimmed) return 'about:blank';
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  // Pass through navigable schemes: http(s), file:// (local HTML), data:
+  // (inline HTML/preview) and about:blank. Anything else defaults to https.
+  if (/^(https?|file|data|about):/i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
 }
 
@@ -170,7 +172,7 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     const onDomReady = () => {
       if (!activeRef.current) return;
       try {
-        wv.focus();
+        if (wv.getBoundingClientRect().width > 0) wv.focus();
         const id = wv.getWebContentsId();
         window.electronAPI?.browserSetActiveTab(id);
       } catch {
@@ -222,7 +224,10 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     const wv = webviewRef.current;
     if (!wv) return;
     try {
-      wv.focus();
+      // Only focus when the view is actually visible (the panel can stay
+      // mounted-but-hidden so the browser keeps running in the background;
+      // focusing a hidden webview would steal the user's keyboard input).
+      if (wv.getBoundingClientRect().width > 0) wv.focus();
       const id = wv.getWebContentsId();
       window.electronAPI?.browserSetActiveTab(id);
     } catch {
