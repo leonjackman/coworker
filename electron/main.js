@@ -45,6 +45,7 @@ const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage,
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
 const { CancellationToken } = require('builder-util-runtime');
@@ -338,13 +339,18 @@ function startAutoUpdateTimer() {
   }, UPDATE_CHECK_INTERVAL_MS);
 }
 
-// Disable GPU to avoid IMKCFRunLoopWakeUpReliable crash on macOS
-app.commandLine.appendSwitch('ignore-gpu-blocklist');
-app.commandLine.appendSwitch('disable-software-rasterizer');
-app.commandLine.appendSwitch('disable-gpu');
-app.commandLine.appendSwitch('disable-gpu-compositing');
-app.commandLine.appendSwitch('disable-gpu-vsync');
-app.commandLine.appendSwitch('disable-features', 'InputMethodServiceOverlay');
+// Disable GPU to avoid IMKCFRunLoopWakeUpReliable crash on macOS. The crash is
+// macOS-specific (Apple Input Method Kit / GPU compositing conflict), so the
+// switches are gated to darwin — Windows/Linux keep hardware acceleration,
+// which the embedded browser needs for smooth video/canvas rendering.
+if (process.platform === 'darwin') {
+  app.commandLine.appendSwitch('ignore-gpu-blocklist');
+  app.commandLine.appendSwitch('disable-software-rasterizer');
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+  app.commandLine.appendSwitch('disable-gpu-vsync');
+  app.commandLine.appendSwitch('disable-features', 'InputMethodServiceOverlay');
+}
 
 // Opt-in only: both of these weaken security and must never ship enabled.
 if (process.env.COWORKER_INSECURE_TLS === '1') {
@@ -618,6 +624,9 @@ function createWindow() {
       enableRemoteModule: false,
       sandbox: true,
       nodeIntegration: false,
+      // Embedded browser: the frontend renders a real Chromium view via the
+      // <webview> tag (partitioned, no nodeIntegration, no preload on the guest).
+      webviewTag: true,
     },
   });
 
@@ -659,6 +668,13 @@ function createWindow() {
       reason: details.reason,
       exitCode: details.exitCode,
     });
+  });
+
+  // Embedded browser: track every <webview> guest that attaches so the agent
+  // can drive it over CDP (loopback bridge) while the user watches it live.
+  mainWindow.webContents.on('did-attach-webview', (event, guest) => {
+    if (!browserController) browserController = new BrowserController();
+    browserController.register(guest);
   });
 
   mainWindow.on('close', (event) => {
@@ -707,6 +723,345 @@ function createWindow() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Built-in browser (embedded <webview>)
+// ---------------------------------------------------------------------------
+// The browser guest is an Electron <webview> rendered by the frontend. The user
+// drives it manually through the webview's DOM API; the AI agent drives it from
+// the Python backend through a loopback HTTP bridge that issues CDP commands to
+// the guest webContents. Both target the SAME guest, so agent actions are
+// visible live in the panel.
+
+let browserController = null;
+
+class BrowserController {
+  constructor() {
+    this.guests = new Map(); // webContentsId -> webContents
+    this.activeGuestId = null;
+  }
+
+  register(guest) {
+    this.guests.set(guest.id, guest);
+    if (this.activeGuestId === null || !this.guests.has(this.activeGuestId)) {
+      this.activeGuestId = guest.id;
+    }
+    this._setupGuestGuards(guest);
+    this._attachDebugger(guest);
+    guest.once('destroyed', () => {
+      this.guests.delete(guest.id);
+      if (this.activeGuestId === guest.id) {
+        this.activeGuestId = this.guests.size ? this.guests.keys().next().value : null;
+      }
+    });
+    console.log('[browser] registered guest webContents', guest.id);
+  }
+
+  setActive(webContentsId) {
+    if (this.guests.has(webContentsId)) {
+      this.activeGuestId = webContentsId;
+    }
+  }
+
+  _setupGuestGuards(wc) {
+    // Never let embedded pages open uncontrolled windows/popups — open them in
+    // the same embedded view instead.
+    wc.setWindowOpenHandler(({ url }) => {
+      if (/^https?:\/\//i.test(url) && this.guests.has(wc.id)) {
+        wc.loadURL(url);
+      }
+      return { action: 'deny' };
+    });
+    wc.on('will-navigate', (event, url) => {
+      let parsed = null;
+      try {
+        parsed = new URL(url);
+      } catch {
+        parsed = null;
+      }
+      if (parsed && !/^https?:$/.test(parsed.protocol)) {
+        event.preventDefault();
+      }
+    });
+  }
+
+  _attachDebugger(wc) {
+    try {
+      wc.debugger.attach('1.3');
+      console.log('[browser] CDP attached to guest', wc.id);
+    } catch (e) {
+      console.warn('[browser] CDP attach failed for guest', wc.id, e.message);
+    }
+  }
+
+  get guest() {
+    const wc = this.activeGuestId != null ? this.guests.get(this.activeGuestId) : null;
+    return wc && !wc.isDestroyed() ? wc : null;
+  }
+
+  get attached() {
+    const g = this.guest;
+    return Boolean(g && g.debugger.isAttached());
+  }
+
+  async _cmd(method, params = {}) {
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    if (!g.debugger.isAttached()) this._attachDebugger(g);
+    if (!g.debugger.isAttached()) throw new Error('browser_not_attached');
+    return await g.debugger.sendCommand(method, params);
+  }
+
+  async _eval(expression) {
+    const res = await this._cmd('Runtime.evaluate', { expression, returnByValue: true });
+    if (res.exceptionDetails) {
+      throw new Error((res.exceptionDetails.exception && res.exceptionDetails.exception.description) || res.exceptionDetails.text || 'evaluation failed');
+    }
+    return res.result && res.result.value;
+  }
+
+  async _waitForLoad(timeoutMs = 15000) {
+    const g = this.guest;
+    if (!g) return;
+    const done = new Promise((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      g.once('did-finish-load', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      g.once('did-fail-load', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    await done;
+  }
+
+  // The agent can call the bridge a moment before the frontend mounts the
+  // <webview> (auto-open race). Wait briefly for a guest to attach.
+  async _waitForGuest(timeoutMs = 3000) {
+    const started = Date.now();
+    while (!this.guest) {
+      if (Date.now() - started > timeoutMs) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  async navigate(url) {
+    await this._waitForGuest();
+    const normalized = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    await this._cmd('Page.enable');
+    await this._cmd('Page.navigate', { url: normalized });
+    await this._waitForLoad();
+    return this.getState();
+  }
+
+  async reload() {
+    await this._waitForGuest();
+    await this._cmd('Page.enable');
+    await this._cmd('Page.reload', { ignoreCache: false });
+    await this._waitForLoad();
+    return this.getState();
+  }
+
+  async back() {
+    await this._waitForGuest();
+    const g = this.guest;
+    if (g && g.canGoBack()) {
+      g.goBack();
+      await this._waitForLoad();
+    }
+    return this.getState();
+  }
+
+  async forward() {
+    await this._waitForGuest();
+    const g = this.guest;
+    if (g && g.canGoForward()) {
+      g.goForward();
+      await this._waitForLoad();
+    }
+    return this.getState();
+  }
+
+  async getState() {
+    const g = this.guest;
+    if (!g) return { url: '', title: '', canGoBack: false, canGoForward: false, loading: false };
+    let url = g.getURL() || '';
+    let title = '';
+    try {
+      const evaluated = await this._eval('document.title');
+      title = typeof evaluated === 'string' ? evaluated : '';
+    } catch {
+      title = '';
+    }
+    return {
+      url,
+      title,
+      canGoBack: g.canGoBack(),
+      canGoForward: g.canGoForward(),
+      loading: g.isLoading(),
+    };
+  }
+
+  async screenshot() {
+    const res = await this._cmd('Page.captureScreenshot', { format: 'png', fromSurface: true });
+    return `data:image/png;base64,${res.data}`;
+  }
+
+  async click(x, y) {
+    await this._cmd('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await this._cmd('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    return { ok: true };
+  }
+
+  async type(text) {
+    await this._cmd('Input.insertText', { text });
+    return { ok: true };
+  }
+
+  async press(key) {
+    const keyMap = {
+      Enter: 'Enter', Backspace: 'Backspace', Tab: 'Tab', Escape: 'Escape',
+      ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+      Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', Delete: 'Delete',
+    };
+    const mapped = keyMap[key] || key;
+    await this._cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: mapped });
+    await this._cmd('Input.dispatchKeyEvent', { type: 'keyUp', key: mapped });
+    return { ok: true };
+  }
+
+  async scroll(dx, dy) {
+    await this._eval(`window.scrollBy(${Number(dx) || 0}, ${Number(dy) || 0})`);
+    return { ok: true };
+  }
+
+  async evaluate(expression) {
+    return this._eval(String(expression));
+  }
+}
+
+// ── Loopback HTTP bridge (Python agent -> Electron main) ──────────────────
+// Binds 127.0.0.1 with a random port + bearer token. The token is registered
+// with the Python backend (POST /api/browser/bridge) at startup so only the
+// Coworker backend can drive the embedded browser.
+
+let browserBridgeServer = null;
+let browserBridgeToken = null;
+
+async function handleBridgeRequest(method, url, payload) {
+  if (!browserController) throw new Error('browser_not_attached');
+  const pathname = (url || '').split('?')[0];
+
+  if (method === 'GET' && pathname === '/state') {
+    return browserController.getState();
+  }
+  if (method !== 'POST') throw new Error('method_not_allowed');
+
+  switch (pathname) {
+    case '/navigate':
+      return browserController.navigate(payload.url);
+    case '/reload':
+      return browserController.reload();
+    case '/back':
+      return browserController.back();
+    case '/forward':
+      return browserController.forward();
+    case '/screenshot':
+      return { image: await browserController.screenshot() };
+    case '/evaluate':
+      return { result: await browserController.evaluate(payload.expression) };
+    case '/act':
+      switch (payload.type) {
+        case 'click':
+          return browserController.click(payload.x, payload.y);
+        case 'type':
+          return browserController.type(payload.text);
+        case 'press':
+          return browserController.press(payload.key);
+        case 'scroll':
+          return browserController.scroll(payload.dx, payload.dy);
+        default:
+          throw new Error('unknown_act_type');
+      }
+    default:
+      throw new Error('not_found');
+  }
+}
+
+function startBrowserBridge() {
+  if (browserBridgeServer) return browserBridgeServer;
+
+  browserBridgeToken = crypto.randomBytes(32).toString('hex');
+
+  const server = http.createServer((req, res) => {
+    const respond = (status, body) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    const auth = req.headers.authorization || '';
+    if (auth !== `Bearer ${browserBridgeToken}`) {
+      respond(401, { error: 'unauthorized' });
+      return;
+    }
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', async () => {
+      let payload = {};
+      if (raw) {
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          respond(400, { error: 'bad_json' });
+          return;
+        }
+      }
+      try {
+        const result = await handleBridgeRequest(req.method, req.url || '/', payload);
+        respond(200, result);
+      } catch (e) {
+        respond(e.message === 'browser_not_attached' ? 503 : 500, { error: e.message });
+      }
+    });
+  });
+
+  server.on('error', (e) => {
+    console.error('[browser] bridge server error:', e.message);
+  });
+
+  server.listen(0, '127.0.0.1', () => {
+    const port = server.address().port;
+    console.log('[browser] bridge listening on 127.0.0.1:', port);
+  });
+
+  browserBridgeServer = server;
+  return server;
+}
+
+async function registerBrowserBridge(server) {
+  try {
+    const port = server.address().port;
+    await requestBackend('/api/browser/bridge', 'POST', { port, token: browserBridgeToken }, 3000);
+    console.log('[browser] bridge registered with backend');
+  } catch (e) {
+    // Dev starts the backend before Electron; registration can race the first
+    // few attempts. Retry until the backend accepts it.
+    console.warn('[browser] bridge registration deferred:', e.message);
+    setTimeout(() => registerBrowserBridge(server), 2000);
+  }
+}
+
+// Renderer tells main which <webview> tab is currently active so the agent
+// drives the visible tab (BrowserView calls webview.getWebContentsId()).
+ipcMain.handle('browser:set-active-tab', (event, webContentsId) => {
+  if (browserController) {
+    browserController.setActive(Number(webContentsId));
+  }
+  return { ok: true };
+});
+
 app.whenReady().then(async () => {
   if (!IS_DEV) {
     await startBundledBackend();
@@ -719,6 +1074,11 @@ app.whenReady().then(async () => {
   createTray();
   createWindow();
   nativeTheme.on('updated', refreshBrandIcons);
+
+  // Built-in browser: start the loopback bridge and register it with the
+  // Python backend so the agent's browser tool can drive the embedded view.
+  const bridge = startBrowserBridge();
+  registerBrowserBridge(bridge);
 
   app.on('activate', () => {
     showMainWindow();

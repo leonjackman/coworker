@@ -10,6 +10,7 @@ const TOOL_LABELS: Record<string, string> = {
   ask_user: 'Ask',
   web_search: 'Web',
   web_fetch: 'Fetch',
+  browser: 'Browser',
 };
 
 export function toolLabel(name: string): string {
@@ -51,6 +52,10 @@ export function toolPreview(name: string, input: string): string {
   }
   if (name === 'web_fetch') {
     return stringify(args.url ?? '');
+  }
+  if (name === 'browser') {
+    if (args.url) return stringify(args.url);
+    return stringify(args.action ?? '');
   }
   if (name === 'read_file' || name === 'write_file' || name === 'replace_in_file' || name === 'apply_text_edits') {
     for (const key of PATH_KEYS) {

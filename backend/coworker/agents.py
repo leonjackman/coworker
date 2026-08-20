@@ -535,6 +535,7 @@ def build_workspace_tools(
     caller_agent: str = "",
     readonly: bool = False,
     web_tools: list | None = None,
+    browser_tool: Any | None = None,
 ) -> list[Any]:
     from pathlib import Path as _Path
 
@@ -928,6 +929,10 @@ def build_workspace_tools(
         # Web tools are read-only network reads, open to the main agent and all
         # sub-agents regardless of autonomy/phase (see _READ_ONLY_TOOLS).
         tools.extend(web_tools)
+    if browser_tool is not None:
+        # Embedded-browser tool (desktop only): drives the visible right-panel
+        # browser. Mounted only when the Electron bridge is registered.
+        tools.append(browser_tool)
     if memory_store is not None and memory_rel:
         tools.append(memory_read)
         if not readonly:
@@ -945,7 +950,7 @@ def build_workspace_tools(
 _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
 _EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}
@@ -3194,6 +3199,7 @@ def build_coworker_agent_graph(
     context_window_source: str = "default",
     context_window_warning: str | None = None,
     web_capability: str = "",
+    browser_capability: str = "",
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -3232,7 +3238,9 @@ def build_coworker_agent_graph(
         audit_path=(Path(data_dir) / TOOL_AUDIT_FILENAME) if data_dir is not None else None,
     )
 
-    phase_gate = PhaseToolGateMiddleware(web_capability)
+    phase_gate = PhaseToolGateMiddleware(
+        "\n\n".join(part for part in (web_capability, browser_capability) if part)
+    )
     # Cheap per-call layer: clear stale tool results (Anthropic-style context
     # editing) so the model never pays for long-dead tool output. Transient —
     # the UI/session history is untouched (two-layer storage). The SAME edit
@@ -3434,6 +3442,32 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             logger.warning("web capability line unavailable", exc_info=True)
             return ""
 
+    @property
+    def _browser_tool(self) -> Any | None:
+        """Embedded-browser tool when the desktop bridge is up, else ``None``.
+
+        Resolved lazily per turn so the tool appears the moment Electron
+        registers the bridge. A broken bridge disables the tool silently.
+        """
+        try:
+            from coworker.browser.bridge_client import resolve_browser_tool
+
+            return resolve_browser_tool(self.data_dir)
+        except Exception:  # noqa: BLE001 - a browser misconfiguration must never break a turn
+            logger.warning("browser tool disabled (config error)", exc_info=True)
+            return None
+
+    @property
+    def _browser_capability_line(self) -> str:
+        """Capability summary injected into the system prompt (2 states)."""
+        try:
+            from coworker.browser.bridge_client import browser_capability_line
+
+            return browser_capability_line(self.data_dir)
+        except Exception:  # noqa: BLE001
+            logger.warning("browser capability line unavailable", exc_info=True)
+            return ""
+
     def _nudge_memory(self, session_id: str) -> None:
         """Phase 2: one call per settled turn; never blocks or raises.
 
@@ -3527,6 +3561,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 delegator=delegator,
                 caller_agent=self.agent,
                 web_tools=self._web_tools,
+                browser_tool=self._browser_tool,
             ),
             work_mode=work_mode,
             language=language,
@@ -3543,6 +3578,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             context_window_source=self.context_window_source,
             context_window_warning=self.context_window_warning,
             web_capability=self._web_capability_line,
+            browser_capability=self._browser_capability_line,
         )
         try:
             result = graph.invoke(
@@ -3663,6 +3699,32 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             return web_capability_line(self.data_dir)
         except Exception:  # noqa: BLE001
             logger.warning("web capability line unavailable", exc_info=True)
+            return ""
+
+    @property
+    def _browser_tool(self) -> Any | None:
+        """Embedded-browser tool when the desktop bridge is up, else ``None``.
+
+        Resolved lazily per turn so the tool appears the moment Electron
+        registers the bridge. A broken bridge disables the tool silently.
+        """
+        try:
+            from coworker.browser.bridge_client import resolve_browser_tool
+
+            return resolve_browser_tool(self.data_dir)
+        except Exception:  # noqa: BLE001 - a browser misconfiguration must never break a turn
+            logger.warning("browser tool disabled (config error)", exc_info=True)
+            return None
+
+    @property
+    def _browser_capability_line(self) -> str:
+        """Capability summary injected into the system prompt (2 states)."""
+        try:
+            from coworker.browser.bridge_client import browser_capability_line
+
+            return browser_capability_line(self.data_dir)
+        except Exception:  # noqa: BLE001
+            logger.warning("browser capability line unavailable", exc_info=True)
             return ""
 
     def _nudge_memory(self, session_id: str) -> None:
@@ -3827,6 +3889,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     delegator=delegator,
                     caller_agent=self.agent,
                     web_tools=self._web_tools,
+                    browser_tool=self._browser_tool,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -3840,6 +3903,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 context_window_source=self.context_window_source,
                 context_window_warning=self.context_window_warning,
                 web_capability=self._web_capability_line,
+            browser_capability=self._browser_capability_line,
             )
 
             inputs = {
@@ -4402,6 +4466,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         memory_store=memory_store,
                         memory_rel=memory_rel,
                         web_tools=self._web_tools,
+                        browser_tool=self._browser_tool,
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -4415,6 +4480,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 context_window_source=self.context_window_source,
                 context_window_warning=self.context_window_warning,
                 web_capability=self._web_capability_line,
+            browser_capability=self._browser_capability_line,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of

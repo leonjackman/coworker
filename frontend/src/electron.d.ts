@@ -161,6 +161,7 @@ declare global {
       setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
       clearWebTavilyKey: () => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
       testWebSearch: (query?: string, apiKey?: string) => Promise<WebTestResult>;
+      browserSetActiveTab: (webContentsId: number) => Promise<{ ok: boolean }>;
       revealInFolder: (path: string) => Promise<{ status: string }>;
       installSkill: (payload: { name: string; content: string; commands?: { name: string; description: string; body: string }[] }) => Promise<{ status: string; message?: string }>;
       exportToolAudit: () => Promise<string>;

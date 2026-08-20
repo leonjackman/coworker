@@ -351,6 +351,19 @@ class Delegator:
         except Exception:  # noqa: BLE001 - delegation must never break on a web misconfig
             web_tools = []
             web_capability = ""
+        # Embedded-browser tool mirrors the web pattern: sub-agents get it only
+        # when they are not read-only (reviewers/auditors never browse).
+        browser_tool = None
+        browser_capability = ""
+        if not readonly:
+            try:
+                from coworker.browser.bridge_client import browser_capability_line, resolve_browser_tool
+
+                browser_tool = resolve_browser_tool(self.data_dir)
+                browser_capability = browser_capability_line(self.data_dir)
+            except Exception:  # noqa: BLE001 - delegation must never break on a browser misconfig
+                browser_tool = None
+                browser_capability = ""
         tools = build_workspace_tools(
             self.workspace,
             audit_context,
@@ -365,6 +378,7 @@ class Delegator:
             caller_agent=agent,
             readonly=readonly,
             web_tools=web_tools,
+            browser_tool=browser_tool,
         )
         graph = build_coworker_agent_graph(
             self.llm,
@@ -380,6 +394,7 @@ class Delegator:
             memory_manager=view,
             workspace=self.workspace,
             web_capability=web_capability,
+            browser_capability=browser_capability,
         )
         hierarchy = self._hierarchy_prompt(agent)
         messages = prepare_agent_messages(

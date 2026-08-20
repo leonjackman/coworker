@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWebTavilyKey: (apiKey) => ipcRenderer.invoke('set-web-tavily-key', apiKey),
   clearWebTavilyKey: () => ipcRenderer.invoke('clear-web-tavily-key'),
   testWebSearch: (query, apiKey) => ipcRenderer.invoke('test-web-search', { query: query || 'opencode web search', ...(apiKey ? { apiKey } : {}) }),
+  browserSetActiveTab: (webContentsId) => ipcRenderer.invoke('browser:set-active-tab', webContentsId),
   revealInFolder: (path) => ipcRenderer.invoke('reveal-in-folder', path),
   listMarketSources: () => ipcRenderer.invoke('list-market-sources'),
   listMarketCategories: (source) => ipcRenderer.invoke('list-market-categories', source),

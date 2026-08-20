@@ -1061,6 +1061,15 @@ export interface WebTestResult {
   results_count: number;
 }
 
+// ── Right-side panel (multi-tab) ────────────────────────────────────────
+export type RightPanelTabKind = 'browser' | 'inspector' | 'terminal' | 'logs';
+
+export interface RightPanelTab {
+  id: string;
+  kind: RightPanelTabKind;
+  data?: { url?: string; title?: string };
+}
+
 // ── Auto-update ─────────────────────────────────────────────────────────
 export type UpdateStateStatus =
   | 'idle'

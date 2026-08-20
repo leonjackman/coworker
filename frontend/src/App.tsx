@@ -18,7 +18,8 @@ import { OrgSettingsPage } from './components/settings/OrgSettingsPage';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
-import { WorkspaceInspector } from './components/WorkspaceInspector';
+import { RightPanel } from './components/RightPanel';
+import type { BrowserViewHandle } from './components/BrowserView';
 import { ChangesPanel } from './components/ChangesPanel';
 import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
@@ -26,7 +27,7 @@ import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -250,6 +251,9 @@ function App() {
   );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(() => [{ id: 'inspector-1', kind: 'inspector' }]);
+  const [activeRightTabId, setActiveRightTabId] = useState<string>('inspector-1');
+  const browserHandlesRef = useRef<Map<string, BrowserViewHandle>>(new Map());
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
   const [bottomPanelHeight, setBottomPanelHeight] = useState(190);
@@ -1008,6 +1012,18 @@ function App() {
         );
       } else if (event.type === 'tool_start') {
         localParts = upsertToolPart(localParts, event.id, event.name, event.input || '');
+        // Built-in browser: auto-open the right-side browser tab so the user
+        // watches the agent browse live.
+        if (event.name === 'browser') {
+          let url: string | undefined;
+          try {
+            const args = JSON.parse(event.input || '{}') as { url?: string };
+            url = typeof args?.url === 'string' && args.url ? args.url : undefined;
+          } catch {
+            url = undefined;
+          }
+          ensureBrowserTab(url);
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -3027,6 +3043,86 @@ function App() {
     ? pendingRequests.filter((item) => item.session_id === sessionId)
     : [];
 
+  // ── Right-side panel (multi-tab) ──────────────────────────────────────
+  const openRightPanel = () => setRightSidebarOpen(true);
+
+  const addRightTab = (kind: RightPanelTabKind, data?: RightPanelTab['data']) => {
+    openRightPanel();
+    const id = `${kind}-${Date.now()}`;
+    setRightTabs((prev) => {
+      const tab: RightPanelTab = data ? { id, kind, data } : { id, kind };
+      return [...prev, tab];
+    });
+    setActiveRightTabId(id);
+  };
+
+  const closeRightTab = (id: string) => {
+    browserHandlesRef.current.delete(id);
+    setRightTabs((prev) => {
+      const next = prev.filter((tab) => tab.id !== id);
+      if (next.length === 0) setRightSidebarOpen(false);
+      return next;
+    });
+    setActiveRightTabId((current) => {
+      if (current === id) {
+        const remaining = rightTabs.filter((tab) => tab.id !== id);
+        const last = remaining[remaining.length - 1];
+        return last ? last.id : '';
+      }
+      return current;
+    });
+  };
+
+  const navigateBrowserTab = (tabId: string, url: string) => {
+    let attempts = 0;
+    const tryNav = () => {
+      const handle = browserHandlesRef.current.get(tabId);
+      if (handle) {
+        handle.navigate(url);
+        return;
+      }
+      if (attempts++ < 20) setTimeout(tryNav, 50);
+    };
+    tryNav();
+  };
+
+  // Ensure a browser tab exists in the right panel; when a URL is given, open
+  // the right panel and navigate that tab to it. Used both by the agent
+  // auto-open hook and by future UI entry points.
+  const ensureBrowserTab = (url?: string) => {
+    openRightPanel();
+    setRightTabs((prev) => {
+      const existing = prev.find((tab) => tab.kind === 'browser');
+      if (existing) {
+        setActiveRightTabId(existing.id);
+        if (url) navigateBrowserTab(existing.id, url);
+        return prev;
+      }
+      const id = `browser-${Date.now()}`;
+      setActiveRightTabId(id);
+      const next: RightPanelTab[] = url
+        ? [...prev, { id, kind: 'browser', data: { url } }]
+        : [...prev, { id, kind: 'browser' }];
+      if (url) navigateBrowserTab(id, url);
+      return next;
+    });
+  };
+
+  const handleBrowserHandle = (tabId: string, handle: BrowserViewHandle | null) => {
+    if (handle) {
+      browserHandlesRef.current.set(tabId, handle);
+    } else {
+      browserHandlesRef.current.delete(tabId);
+    }
+  };
+
+  const handleBrowserTitle = (tabId: string, title: string) => {
+    if (!title) return;
+    setRightTabs((prev) =>
+      prev.map((tab) => (tab.id === tabId ? { ...tab, data: { ...(tab.data || {}), title } } : tab)),
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
     async function fetchBranch() {
@@ -3339,14 +3435,24 @@ function App() {
               )}
             </section>
             {rightSidebarOpen && (
-              <WorkspaceInspector
-                sessionTitle={titlebarSessionTitle}
-                projectName={activeProject?.name ?? t('sidebar.default_project')}
-                modelName={currentProvider?.model ?? runtimeConfig?.selected_model ?? t('chat.model_unselected')}
-                providerName={currentProvider?.name ?? runtimeConfig?.agent_provider ?? t('chat.model_unselected')}
-                autonomy={autonomy}
-                attachmentCount={attachments.length}
-                messageCount={messages.length}
+              <RightPanel
+                tabs={rightTabs}
+                activeTabId={activeRightTabId}
+                inspector={{
+                  sessionTitle: titlebarSessionTitle,
+                  projectName: activeProject?.name ?? t('sidebar.default_project'),
+                  modelName: currentProvider?.model ?? runtimeConfig?.selected_model ?? t('chat.model_unselected'),
+                  providerName: currentProvider?.name ?? runtimeConfig?.agent_provider ?? t('chat.model_unselected'),
+                  autonomy,
+                  attachmentCount: attachments.length,
+                  messageCount: messages.length,
+                }}
+                {...(currentProjectId ? { terminalProjectId: currentProjectId } : {})}
+                onSelect={(id) => setActiveRightTabId(id)}
+                onClose={closeRightTab}
+                onAdd={addRightTab}
+                onBrowserHandle={handleBrowserHandle}
+                onBrowserTitle={handleBrowserTitle}
                 onResizeStart={() => setInspectorResizing(true)}
                 onResizeEnd={() => setInspectorResizing(false)}
                 onResizeWidth={(width) => setInspectorWidth(width)}

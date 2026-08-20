@@ -2382,6 +2382,34 @@ async def test_web_search(request: WebTestRequest):
     return {"ok": True, "message": "Search succeeded", "results_count": len(result.get("results") or [])}
 
 
+class BrowserBridgeUpdate(BaseModel):
+    port: int
+    token: str
+
+
+@app.get("/api/browser/bridge")
+async def get_browser_bridge():
+    """Bridge info Electron registered for the embedded browser (may be absent)."""
+    from coworker.browser.bridge_client import read_browser_bridge
+
+    info = read_browser_bridge(settings.data_dir)
+    if info is None:
+        return {"registered": False}
+    return {"registered": True, "port": info.port, "token": info.token}
+
+
+@app.post("/api/browser/bridge")
+async def register_browser_bridge(request: BrowserBridgeUpdate):
+    """Electron main registers its loopback bridge here at startup.
+
+    Only the desktop app writes this; the bridge client only reads it back.
+    """
+    from coworker.browser.bridge_client import write_browser_bridge
+
+    write_browser_bridge(settings.data_dir, request.port, request.token)
+    return {"ok": True}
+
+
 @app.post("/goal/stop")
 async def goal_stop(request: GoalStopRequest):
     """Stop an active goal loop: set flags and trigger cancel event for immediate exit."""
