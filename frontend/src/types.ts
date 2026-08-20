@@ -1089,6 +1089,23 @@ export interface BrowserCaptureResult {
   error?: string;
 }
 
+// Right-click context-menu request forwarded from the guest webContents
+// (main process) with the authoritative cursor position in client coords.
+export interface BrowserContextMenuPayload {
+  webContentsId: number;
+  x: number;
+  y: number;
+  linkURL: string;
+  selectionText: string;
+  editFlags: {
+    canCut: boolean;
+    canCopy: boolean;
+    canPaste: boolean;
+    canSelectAll: boolean;
+    canDelete: boolean;
+  };
+}
+
 // ── Auto-update ─────────────────────────────────────────────────────────
 export type UpdateStateStatus =
   | 'idle'

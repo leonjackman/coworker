@@ -1923,6 +1923,16 @@ body.inspector-resizing .right-panel__resizer::after {
   border: none;
 }
 
+/* Click-away scrim behind the browser right-click menu: covers the whole
+   window (including the webview element) so a left click anywhere dismisses
+   the menu, matching OS behavior. */
+.browser-view__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: transparent;
+}
+
 @keyframes cw-spin {
   to {
     transform: rotate(360deg);

@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { t } from '../lib/i18n';
 import { ContextMenu, type ContextMenuItem } from './ui/context-menu';
-import type { BrowserCaptureResult, ComposerAttachment } from '../types';
+import type { BrowserCaptureResult, BrowserContextMenuPayload, ComposerAttachment } from '../types';
 
 // Minimal typing for Electron's <webview> custom element (not part of DOM lib).
 export type ElectronWebview = HTMLElement & {
@@ -46,20 +46,6 @@ export type ElectronWebview = HTMLElement & {
 export interface BrowserViewHandle {
   navigate: (url: string) => void;
   getUrl: () => string;
-}
-
-interface WebviewContextParams {
-  x: number;
-  y: number;
-  linkURL?: string;
-  selectionText?: string;
-  editFlags?: {
-    canCut?: boolean;
-    canCopy?: boolean;
-    canPaste?: boolean;
-    canSelectAll?: boolean;
-    canDelete?: boolean;
-  };
 }
 
 interface BrowserViewProps {
@@ -120,7 +106,7 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
   activeRef.current = active;
   const [address, setAddress] = useState(initialUrl || '');
   const [loading, setLoading] = useState(false);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; params: WebviewContextParams } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; params: BrowserContextMenuPayload } | null>(null);
 
   const navigate = useCallback((url: string) => {
     const wv = webviewRef.current;
@@ -180,16 +166,6 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
         // ignore
       }
     };
-    const onContextMenu = (event: Event) => {
-      const params = (event as unknown as { params?: WebviewContextParams }).params;
-      if (!params) return;
-      const rect = wv.getBoundingClientRect();
-      setContextMenu({
-        x: rect.left + (params.x || 0),
-        y: rect.top + (params.y || 0),
-        params,
-      });
-    };
 
     wv.addEventListener('did-navigate', onDidNavigate);
     wv.addEventListener('page-title-updated', onTitleUpdated);
@@ -197,7 +173,6 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     wv.addEventListener('did-stop-loading', onStopLoading);
     wv.addEventListener('new-window', onNewWindow);
     wv.addEventListener('dom-ready', onDomReady);
-    wv.addEventListener('context-menu', onContextMenu);
 
     return () => {
       wv.removeEventListener('did-navigate', onDidNavigate);
@@ -206,9 +181,28 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
       wv.removeEventListener('did-stop-loading', onStopLoading);
       wv.removeEventListener('new-window', onNewWindow);
       wv.removeEventListener('dom-ready', onDomReady);
-      wv.removeEventListener('context-menu', onContextMenu);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Right-click context menu: the main process forwards the guest's
+  // context-menu request (with the authoritative cursor position). Only the
+  // tab owning that webContents shows the menu.
+  useEffect(() => {
+    if (!window.electronAPI?.onBrowserContextMenu) return;
+    const unsubscribe = window.electronAPI.onBrowserContextMenu((payload) => {
+      const wv = webviewRef.current;
+      if (!wv) return;
+      if (activeRef.current) {
+        try {
+          if (wv.getWebContentsId() !== payload.webContentsId) return;
+        } catch {
+          return;
+        }
+      }
+      setContextMenu({ x: payload.x, y: payload.y, params: payload });
+    });
+    return unsubscribe;
   }, []);
 
   // Keep the main process targeting the visible tab for agent control.
@@ -245,8 +239,18 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
   const captureForAgent = (scope: 'element' | 'page', intent: string) => {
     if (!contextMenu) return;
     const { params } = contextMenu;
+    // params.x/y are client (window) coordinates from the main process; the
+    // capture IPC expects guest-viewport coordinates (relative to the webview).
+    const wv = webviewRef.current;
+    let x = params.x;
+    let y = params.y;
+    if (wv) {
+      const rect = wv.getBoundingClientRect();
+      x = params.x - rect.left;
+      y = params.y - rect.top;
+    }
     void window.electronAPI
-      ?.browserCaptureElement({ x: params.x, y: params.y, scope })
+      ?.browserCaptureElement({ x, y, scope })
       .then((capture) => {
         if (!capture || capture.error) {
           console.warn('[browser] capture failed:', capture?.error);
@@ -357,17 +361,29 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
           src: initialUrl || 'about:blank',
           partition: 'persist:cw-browser',
           className: 'browser-view__webview',
-          allowpopups: false,
+          // allowpopups=true lets target=_blank / window.open emit new-window;
+          // the main process's setWindowOpenHandler then denies the popup and
+          // loads the URL in the same view. With allowpopups=false those links
+          // were silently blocked on plain click (Cmd+click still worked via
+          // the new-window path) — the "some buttons need Cmd" symptom.
+          allowpopups: 'true',
         })}
       </div>
       {contextMenu && (
-        <ContextMenu
-          open
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={() => setContextMenu(null)}
-          items={buildMenuItems()}
-        />
+        <>
+          <div
+            className="browser-view__scrim"
+            onClick={() => setContextMenu(null)}
+            onContextMenu={(e) => e.preventDefault()}
+          />
+          <ContextMenu
+            open
+            x={contextMenu.x}
+            y={contextMenu.y}
+            onClose={() => setContextMenu(null)}
+            items={buildMenuItems()}
+          />
+        </>
       )}
     </div>
   );

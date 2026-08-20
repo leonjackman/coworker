@@ -147,6 +147,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   browserSetActiveTab: (webContentsId) => ipcRenderer.invoke('browser:set-active-tab', webContentsId),
   browserMenuAction: (action) => ipcRenderer.invoke('browser:menu-action', action),
   browserCaptureElement: (payload) => ipcRenderer.invoke('browser:capture-element', payload),
+  onBrowserContextMenu: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('browser:context-menu', listener);
+    return () => ipcRenderer.removeListener('browser:context-menu', listener);
+  },
   revealInFolder: (path) => ipcRenderer.invoke('reveal-in-folder', path),
   listMarketSources: () => ipcRenderer.invoke('list-market-sources'),
   listMarketCategories: (source) => ipcRenderer.invoke('list-market-categories', source),

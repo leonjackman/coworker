@@ -41,7 +41,7 @@ require('./bootstrap');
   };
 })();
 
-const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage, nativeTheme, screen, shell } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -339,17 +339,21 @@ function startAutoUpdateTimer() {
   }, UPDATE_CHECK_INTERVAL_MS);
 }
 
-// Disable GPU to avoid IMKCFRunLoopWakeUpReliable crash on macOS. The crash is
-// macOS-specific (Apple Input Method Kit / GPU compositing conflict), so the
-// switches are gated to darwin — Windows/Linux keep hardware acceleration,
-// which the embedded browser needs for smooth video/canvas rendering.
+// macOS: keep hardware acceleration so the embedded browser's compositor
+// hit-testing works (disabling GPU(-compositing) broke mouse clicks in the
+// <webview> — with GPU off every click needed Cmd+click, with GPU on plain
+// clicks work). Retain the InputMethodServiceOverlay switch as the IME crash
+// workaround. Set COWORKER_GPU_DISABLE=1 to restore the fully-disabled GPU
+// config if the IMKCFRunLoopWakeUpReliable crash appears.
 if (process.platform === 'darwin') {
-  app.commandLine.appendSwitch('ignore-gpu-blocklist');
-  app.commandLine.appendSwitch('disable-software-rasterizer');
-  app.commandLine.appendSwitch('disable-gpu');
-  app.commandLine.appendSwitch('disable-gpu-compositing');
-  app.commandLine.appendSwitch('disable-gpu-vsync');
   app.commandLine.appendSwitch('disable-features', 'InputMethodServiceOverlay');
+  if (process.env.COWORKER_GPU_DISABLE === '1') {
+    app.commandLine.appendSwitch('ignore-gpu-blocklist');
+    app.commandLine.appendSwitch('disable-software-rasterizer');
+    app.commandLine.appendSwitch('disable-gpu');
+    app.commandLine.appendSwitch('disable-gpu-compositing');
+    app.commandLine.appendSwitch('disable-gpu-vsync');
+  }
 }
 
 // Opt-in only: both of these weaken security and must never ship enabled.
@@ -754,10 +758,9 @@ class BrowserController {
       this.activeGuestId = guest.id;
     }
     this._setupGuestGuards(guest);
-    // CDP is attached lazily per bridge command (withDebugger) and detached
-    // afterwards — a persistently attached debugger disrupts the guest's own
-    // mouse input (plain clicks stopped working; only Cmd+click routed through
-    // the new-window path still navigated). Never attach here.
+    // The guest is driven through native webContents APIs (loadURL, sendInputEvent,
+    // executeJavaScript, capturePage) — never webContents.debugger, which disrupts
+    // the guest's own mouse input. Focus it if it is the active view.
     if (becameActive) {
       try {
         guest.focus();
@@ -800,14 +803,57 @@ class BrowserController {
         event.preventDefault();
       }
     });
+    // Forward the guest's context-menu request to the renderer. Coordinates
+    // come from the OS cursor position (authoritative), converted to the
+    // renderer's client space so the app menu follows the mouse exactly.
+    wc.on('context-menu', (event, params) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const client = this._contextMenuClientPosition();
+      if (process.env.COWORKER_BROWSER_DEBUG === '1') {
+        console.log(`[browser-debug] context-menu x=${params.x} y=${params.y} cursor=${JSON.stringify(client)} link=${params.linkURL || ''} sel=${(params.selectionText || '').slice(0, 30)}`);
+      }
+      mainWindow.webContents.send('browser:context-menu', {
+        webContentsId: wc.id,
+        x: client.x,
+        y: client.y,
+        linkURL: params.linkURL || '',
+        selectionText: params.selectionText || '',
+        editFlags: params.editFlags
+          ? {
+              canCut: !!params.editFlags.canCut,
+              canCopy: !!params.editFlags.canCopy,
+              canPaste: !!params.editFlags.canPaste,
+              canSelectAll: !!params.editFlags.canSelectAll,
+              canDelete: !!params.editFlags.canDelete,
+            }
+          : {},
+      });
+    });
+
+    if (process.env.COWORKER_BROWSER_DEBUG === '1') {
+      // Does the guest actually receive mouse/keyboard input? If plain clicks
+      // do NOT produce before-input-event, the embedder is swallowing them.
+      wc.on('before-input-event', (event, input) => {
+        if (['mouseDown', 'mouseUp', 'mouseMove', 'contextMenu', 'keyDown'].includes(input.type)) {
+          console.log(`[browser-debug] input type=${input.type} x=${input.x} y=${input.y} key=${input.key || ''}`);
+        }
+      });
+      wc.on('did-start-navigation', (event, url, isInPlace, isMainFrame) => {
+        console.log(`[browser-debug] nav mainFrame=${isMainFrame} url=${url}`);
+      });
+      wc.on('did-finish-load', () => {
+        console.log('[browser-debug] load done');
+      });
+    }
   }
 
-  _attachDebugger(wc) {
+  _contextMenuClientPosition() {
     try {
-      wc.debugger.attach('1.3');
-      console.log('[browser] CDP attached to guest', wc.id);
-    } catch (e) {
-      console.warn('[browser] CDP attach failed for guest', wc.id, e.message);
+      const point = screen.getCursorScreenPoint();
+      const bounds = mainWindow.getContentBounds();
+      return { x: Math.round(point.x - bounds.x), y: Math.round(point.y - bounds.y) };
+    } catch {
+      return { x: 0, y: 0 };
     }
   }
 
@@ -816,44 +862,15 @@ class BrowserController {
     return wc && !wc.isDestroyed() ? wc : null;
   }
 
-  get attached() {
-    const g = this.guest;
-    return Boolean(g && g.debugger.isAttached());
-  }
-
-  async _cmd(method, params = {}) {
-    const g = this.guest;
-    if (!g) throw new Error('browser_not_attached');
-    if (!g.debugger.isAttached()) this._attachDebugger(g);
-    if (!g.debugger.isAttached()) throw new Error('browser_not_attached');
-    return await g.debugger.sendCommand(method, params);
-  }
-
-  // Run a bridge command with the CDP debugger attached, then detach it right
-  // away so the guest is never in a debugger state during normal browsing.
-  async withDebugger(fn) {
-    const g = this.guest;
-    if (!g) throw new Error('browser_not_attached');
-    if (!g.debugger.isAttached()) this._attachDebugger(g);
-    try {
-      return await fn();
-    } finally {
-      if (g.debugger.isAttached()) {
-        try {
-          g.debugger.detach();
-        } catch {
-          // ignore — detach is best-effort
-        }
-      }
-    }
-  }
-
+  // Run JS in the guest via webContents.executeJavaScript. We deliberately do
+  // NOT use webContents.debugger: attaching a debugger to a webview guest
+  // disrupts its own mouse input (plain clicks stopped working; only Cmd+click
+  // routed through the new-window path still navigated). The native webContents
+  // API covers everything the bridge needs without touching the input pipeline.
   async _eval(expression) {
-    const res = await this._cmd('Runtime.evaluate', { expression, returnByValue: true });
-    if (res.exceptionDetails) {
-      throw new Error((res.exceptionDetails.exception && res.exceptionDetails.exception.description) || res.exceptionDetails.text || 'evaluation failed');
-    }
-    return res.result && res.result.value;
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    return await g.executeJavaScript(String(expression), true);
   }
 
   async _waitForLoad(timeoutMs = 15000) {
@@ -885,17 +902,19 @@ class BrowserController {
 
   async navigate(url) {
     await this._waitForGuest();
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
     const normalized = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-    await this._cmd('Page.enable');
-    await this._cmd('Page.navigate', { url: normalized });
+    g.loadURL(normalized).catch(() => {});
     await this._waitForLoad();
     return this.getState();
   }
 
   async reload() {
     await this._waitForGuest();
-    await this._cmd('Page.enable');
-    await this._cmd('Page.reload', { ignoreCache: false });
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    g.reload();
     await this._waitForLoad();
     return this.getState();
   }
@@ -923,17 +942,9 @@ class BrowserController {
   async getState() {
     const g = this.guest;
     if (!g) return { url: '', title: '', canGoBack: false, canGoForward: false, loading: false };
-    let url = g.getURL() || '';
-    let title = '';
-    try {
-      const evaluated = await this._eval('document.title');
-      title = typeof evaluated === 'string' ? evaluated : '';
-    } catch {
-      title = '';
-    }
     return {
-      url,
-      title,
+      url: g.getURL() || '',
+      title: g.getTitle() || '',
       canGoBack: g.canGoBack(),
       canGoForward: g.canGoForward(),
       loading: g.isLoading(),
@@ -941,35 +952,45 @@ class BrowserController {
   }
 
   async screenshot() {
-    const res = await this._cmd('Page.captureScreenshot', { format: 'png', fromSurface: true });
-    return `data:image/png;base64,${res.data}`;
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    const image = await g.capturePage();
+    return image.toDataURL();
   }
 
   async click(x, y) {
-    await this._cmd('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-    await this._cmd('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    g.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+    g.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
     return { ok: true };
   }
 
   async type(text) {
-    await this._cmd('Input.insertText', { text });
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    g.insertText(String(text));
     return { ok: true };
   }
 
   async press(key) {
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
     const keyMap = {
       Enter: 'Enter', Backspace: 'Backspace', Tab: 'Tab', Escape: 'Escape',
       ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
       Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown', Delete: 'Delete',
     };
     const mapped = keyMap[key] || key;
-    await this._cmd('Input.dispatchKeyEvent', { type: 'keyDown', key: mapped });
-    await this._cmd('Input.dispatchKeyEvent', { type: 'keyUp', key: mapped });
+    g.sendInputEvent({ type: 'keyDown', keyCode: mapped });
+    g.sendInputEvent({ type: 'keyUp', keyCode: mapped });
     return { ok: true };
   }
 
   async scroll(dx, dy) {
-    await this._eval(`window.scrollBy(${Number(dx) || 0}, ${Number(dy) || 0})`);
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    g.sendInputEvent({ type: 'mouseWheel', deltaX: Number(dx) || 0, deltaY: Number(dy) || 0 });
     return { ok: true };
   }
 
@@ -1005,84 +1026,83 @@ class BrowserController {
   }
 
   // Capture the element (or the whole page) at viewport (x, y) for the
-  // renderer's right-click menu. Runs inside withDebugger from the IPC handler.
+  // renderer's right-click menu.
   async captureAt(x, y, scope) {
     const g = this.guest;
     if (!g) throw new Error('browser_not_attached');
     const url = g.getURL() || '';
-    let title = '';
-    try {
-      const evaluated = await this._eval('document.title');
-      title = typeof evaluated === 'string' ? evaluated : '';
-    } catch {
-      title = '';
-    }
+    const title = g.getTitle() || '';
 
-    const elementExpr = `(() => {
-      const el = document.elementFromPoint(${Number(x) || 0}, ${Number(y) || 0});
-      if (!el || !el.tagName) return null;
-      const r = el.getBoundingClientRect();
-      const xpath = (() => {
-        let node = el, parts = [];
-        while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement) {
-          let idx = 1;
-          for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
-            if (sib.localName === node.localName) idx++;
-          }
-          const tag = node.localName;
-          parts.unshift(idx > 1 ? tag + '[' + idx + ']' : tag);
-          node = node.parentNode;
-        }
-        return '/html/body/' + parts.join('/');
-      })();
-      const anchor = el.closest && el.closest('a');
-      return {
-        tag: String(el.tagName).toLowerCase(),
-        id: el.id || '',
-        className: typeof el.className === 'string' ? el.className : '',
-        text: (el.textContent || '').trim().slice(0, 200),
-        href: (anchor && anchor.href) || '',
-        xpath,
-        outerHTML: (el.outerHTML || '').slice(0, 4000),
-        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
-      };
-    })()`;
-    const element = await this._eval(elementExpr);
-
-    let screenshot = null;
-    if (element) {
-      const rect = element.rect || {};
-      if (scope === 'element' && rect.width > 0 && rect.height > 0) {
-        const inViewport = rect.x >= 0 && rect.y >= 0 &&
-          rect.x < (await this._eval('window.innerWidth')) &&
-          rect.y < (await this._eval('window.innerHeight'));
-        if (inViewport) {
-          try {
-            const res = await this._cmd('Page.captureScreenshot', {
-              format: 'png',
-              fromSurface: true,
-              clip: { x: Math.max(0, rect.x), y: Math.max(0, rect.y), width: Math.max(1, rect.width), height: Math.max(1, rect.height), scale: 1 },
-            });
-            screenshot = `data:image/png;base64,${res.data}`;
-          } catch {
-            screenshot = null;
-          }
-        }
-      }
-    }
-
+    let element = null;
     let pageText = null;
+    let screenshot = null;
+
     if (scope === 'page') {
       try {
-        pageText = (await this._eval('(document.body && document.body.innerText || "").trim().slice(0, 20000)')) || '';
+        pageText = String(await this._eval('(document.body && document.body.innerText || "").trim().slice(0, 20000)')) || '';
       } catch {
         pageText = '';
       }
       try {
-        const res = await this._cmd('Page.captureScreenshot', { format: 'png', fromSurface: true });
-        screenshot = `data:image/png;base64,${res.data}`;
+        screenshot = (await g.capturePage()).toDataURL();
       } catch {
-        screenshot = screenshot || null;
+        screenshot = null;
+      }
+    } else {
+      const elementExpr = `(() => {
+        const el = document.elementFromPoint(${Number(x) || 0}, ${Number(y) || 0});
+        if (!el || !el.tagName) return null;
+        const r = el.getBoundingClientRect();
+        const xpath = (() => {
+          let node = el, parts = [];
+          while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement) {
+            let idx = 1;
+            for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
+              if (sib.localName === node.localName) idx++;
+            }
+            const tag = node.localName;
+            parts.unshift(idx > 1 ? tag + '[' + idx + ']' : tag);
+            node = node.parentNode;
+          }
+          return '/html/body/' + parts.join('/');
+        })();
+        const anchor = el.closest && el.closest('a');
+        return {
+          tag: String(el.tagName).toLowerCase(),
+          id: el.id || '',
+          className: typeof el.className === 'string' ? el.className : '',
+          text: (el.textContent || '').trim().slice(0, 200),
+          href: (anchor && anchor.href) || '',
+          xpath,
+          outerHTML: (el.outerHTML || '').slice(0, 4000),
+          rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+        };
+      })()`;
+      try {
+        element = await this._eval(elementExpr);
+      } catch {
+        element = null;
+      }
+      if (element && element.rect && element.rect.width > 0 && element.rect.height > 0) {
+        const rect = element.rect;
+        const inViewport =
+          rect.x >= 0 && rect.y >= 0 &&
+          rect.x < (await this._eval('window.innerWidth')) &&
+          rect.y < (await this._eval('window.innerHeight'));
+        if (inViewport) {
+          try {
+            screenshot = (
+              await g.capturePage({
+                x: Math.max(0, rect.x),
+                y: Math.max(0, rect.y),
+                width: Math.max(1, rect.width),
+                height: Math.max(1, rect.height),
+              })
+            ).toDataURL();
+          } catch {
+            screenshot = null;
+          }
+        }
       }
     }
 
@@ -1171,9 +1191,7 @@ function startBrowserBridge() {
       }
       try {
         if (!browserController) throw new Error('browser_not_attached');
-        const result = await browserController.withDebugger(() =>
-          handleBridgeRequest(req.method, req.url || '/', payload),
-        );
+        const result = await handleBridgeRequest(req.method, req.url || '/', payload);
         respond(200, result);
       } catch (e) {
         respond(e.message === 'browser_not_attached' ? 503 : 500, { error: e.message });
@@ -1258,15 +1276,16 @@ ipcMain.handle('browser:menu-action', (event, action) => {
 });
 
 // Right-click "ask the agent" actions: capture the element/page under the
-// cursor via CDP (element metadata + optional screenshot) and hand it back to
-// the renderer, which attaches it to the chat composer for the user to send.
+// cursor via webContents APIs (element metadata + optional screenshot) and hand
+// it back to the renderer, which attaches it to the chat composer for the user
+// to send.
 ipcMain.handle('browser:capture-element', async (event, payload) => {
   if (!browserController) return { error: 'browser_not_attached' };
   const x = Number(payload && payload.x) || 0;
   const y = Number(payload && payload.y) || 0;
   const scope = payload && payload.scope === 'page' ? 'page' : 'element';
   try {
-    return await browserController.withDebugger(() => browserController.captureAt(x, y, scope));
+    return await browserController.captureAt(x, y, scope);
   } catch (e) {
     return { error: e.message };
   }

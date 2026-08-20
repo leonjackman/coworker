@@ -57,6 +57,7 @@ import type {
   MemorySettings,
   MemorySettingsPatch,
   BrowserCaptureResult,
+  BrowserContextMenuPayload,
   UpdateStateSnapshot,
   WebSettings,
   WebConfigPatch,
@@ -165,6 +166,7 @@ declare global {
       browserSetActiveTab: (webContentsId: number) => Promise<{ ok: boolean }>;
       browserMenuAction: (action: string) => Promise<{ ok: boolean; error?: string }>;
       browserCaptureElement: (payload: { x: number; y: number; scope?: 'element' | 'page' }) => Promise<BrowserCaptureResult>;
+      onBrowserContextMenu: (callback: (payload: BrowserContextMenuPayload) => void) => () => void;
       revealInFolder: (path: string) => Promise<{ status: string }>;
       installSkill: (payload: { name: string; content: string; commands?: { name: string; description: string; body: string }[] }) => Promise<{ status: string; message?: string }>;
       exportToolAudit: () => Promise<string>;
