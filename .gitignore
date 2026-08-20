@@ -68,3 +68,5 @@ frontend/.vite/
 
 # Symlink for Vite asset access
 frontend/assets
+certifi/
+

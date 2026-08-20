@@ -62,6 +62,34 @@ from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, 
 from coworker.workspace_controller import WorkspaceController
 from coworker.logger import get_logger, get_log_level, init_logger, set_log_level as _set_log_level, truncate_log as _truncate_log
 
+# ---------------------------------------------------------------------------
+# HTTPS trust store fix for PyInstaller bundles.
+#
+# In a packaged app the embedded CPython's default CA paths point at the CI
+# build machine (e.g. /Library/Frameworks/Python.framework/.../cert.pem),
+# which does not exist on the user's machine. `ssl.create_default_context()`
+# then yields an empty trust store and EVERY https:// request fails with
+# CERTIFICATE_VERIFY_FAILED — breaking SkillHub/ClawHub (aiohttp) and all
+# https LLM providers (urllib) while plain-http still works.
+#
+# certifi's cacert.pem IS bundled with the app, so point the default context
+# at it. `setdefault` keeps any explicit `cafile`/`cadata` from callers.
+# ---------------------------------------------------------------------------
+try:
+    import ssl
+
+    import certifi
+
+    _orig_create_default_context = ssl.create_default_context
+
+    def _create_default_context_with_certifi(*args, **kwargs):
+        kwargs.setdefault("cafile", certifi.where())
+        return _orig_create_default_context(*args, **kwargs)
+
+    ssl.create_default_context = _create_default_context_with_certifi
+except Exception:  # pragma: no cover - certifi is a hard dependency
+    pass
+
 settings = load_settings()
 logger = get_logger(__name__)
 app = FastAPI()
