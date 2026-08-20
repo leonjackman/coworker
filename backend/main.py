@@ -1780,6 +1780,7 @@ async def chat_stream(request: ChatStreamRequest):
     async def event_stream():
         terminal_sent = False
         error_emitted = False
+        interrupt_emitted = False
         accumulated_content = ""
         goal_parts_accum: list[dict[str, Any]] = []
         stream_iter: Any
@@ -1831,8 +1832,14 @@ async def chat_stream(request: ChatStreamRequest):
                 logger.exception("Failed to persist assistant message for session %s", session_id)
 
         def _handle_event(event):
-            nonlocal terminal_sent, accumulated_content, error_emitted
+            nonlocal terminal_sent, accumulated_content, error_emitted, interrupt_emitted
             etype = event.get("type", "")
+            if etype in ("approval_required", "question_required"):
+                # The agent interrupted to ask the user. The turn is NOT complete:
+                # the stream must end without a synthetic `done` so the frontend
+                # keeps the message in the "waiting" state instead of showing a
+                # truncated reply as a finished bubble (fixes "回答後流式回覆提前結束").
+                interrupt_emitted = True
             if etype == "delta" and event.get("content"):
                 accumulated_content += event.get("content", "")
             if etype == "todos":
@@ -1972,13 +1979,19 @@ async def chat_stream(request: ChatStreamRequest):
             _handle_event(event)
 
         def _on_end():
-            if not terminal_sent and not error_emitted:
+            if not terminal_sent and not error_emitted and not interrupt_emitted:
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
                 except Exception:  # noqa: BLE001 - never break the terminal event
                     logger.warning("update_modes failed in _on_end for session %s", session_id, exc_info=True)
                 return {"type": "done", "session_id": session_id, "content": accumulated_content, "stream_end": True}
+            if interrupt_emitted and not terminal_sent and not error_emitted:
+                # Interrupted for an approval/question: persist the partial reply
+                # so a refresh keeps the question context, but do NOT emit a done
+                # frame — the frontend is waiting for the user's decision and must
+                # keep the message in `waiting` until the resume stream settles it.
+                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
             return None
 
         def _on_error(exc):
@@ -3094,6 +3107,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
     async def event_stream():
         accumulated_content = ""
         terminal_sent = False
+        interrupt_emitted = False
 
         # Surface the file-revert result to the UI as the first event, so the
         # client can show "reverted N file changes / restore" right away.
@@ -3128,8 +3142,13 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                 logger.exception("Failed to persist partial rerun for session %s", session_id)
 
         def _on_event(event):
-            nonlocal accumulated_content, terminal_sent
+            nonlocal accumulated_content, terminal_sent, interrupt_emitted
             event["session_id"] = session_id
+            if event.get("type") in ("approval_required", "question_required"):
+                # Agent interrupted to ask the user: the turn is NOT complete. No
+                # synthetic done will follow, so persist the partial reply on end
+                # (message_id=None) to keep the question context after a refresh.
+                interrupt_emitted = True
             if event.get("type") == "delta" and event.get("content"):
                 accumulated_content += event.get("content", "")
             if event.get("type") == "done":
@@ -3152,6 +3171,13 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                         agent_registry.change_store.assign_message(session_id, last.id)
                 except Exception:  # noqa: BLE001 - persistence must never break the terminal event
                     logger.exception("Failed to persist rerun assistant message for session %s", session_id)
+
+        def _on_end():
+            # Normal end after an interrupt (question/approval asked): no done
+            # frame was emitted — persist the partial so the turn survives refresh.
+            if interrupt_emitted and not terminal_sent:
+                _persist_partial()
+            return None
 
         def _on_error(exc):
             # Persist whatever was produced before the failure so tool-change
@@ -3179,6 +3205,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                     session_id,
                 ),
                 on_event=_on_event,
+                on_end=_on_end,
                 on_error=_on_error,
             ):
                 if kind == "heartbeat":
@@ -3253,6 +3280,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
     async def event_stream():
         accumulated_content = ""
         terminal_sent = False
+        interrupt_emitted = False
 
         # Surface the file-revert result to the UI as the first event, so the
         # client can show "reverted N file changes / restore" right away.
@@ -3287,8 +3315,13 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                 logger.exception("Failed to persist partial rerun for session %s", session_id)
 
         def _on_event(event):
-            nonlocal accumulated_content, terminal_sent
+            nonlocal accumulated_content, terminal_sent, interrupt_emitted
             event["session_id"] = session_id
+            if event.get("type") in ("approval_required", "question_required"):
+                # Agent interrupted to ask the user: the turn is NOT complete. No
+                # synthetic done will follow, so persist the partial reply on end
+                # (message_id=None) to keep the question context after a refresh.
+                interrupt_emitted = True
             if event.get("type") == "delta" and event.get("content"):
                 accumulated_content += event.get("content", "")
             if event.get("type") == "done":
@@ -3311,6 +3344,13 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                         agent_registry.change_store.assign_message(session_id, last.id)
                 except Exception:  # noqa: BLE001 - persistence must never break the terminal event
                     logger.exception("Failed to persist rerun assistant message for session %s", session_id)
+
+        def _on_end():
+            # Normal end after an interrupt (question/approval asked): no done
+            # frame was emitted — persist the partial so the turn survives refresh.
+            if interrupt_emitted and not terminal_sent:
+                _persist_partial()
+            return None
 
         def _on_error(exc):
             # Persist whatever was produced before the failure so tool-change
@@ -3338,6 +3378,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                     session_id,
                 ),
                 on_event=_on_event,
+                on_end=_on_end,
                 on_error=_on_error,
             ):
                 if kind == "heartbeat":
@@ -3777,19 +3818,31 @@ async def resolve_command_approval(request: CommandApprovalResolve):
             }
             status = "denied"
 
-        approval = command_approval_store.set_decision(request.approval_id, status, decision)
-
         interrupt_id = str(context.get("interrupt_id") or "")
-        resume_id = interrupt_id or approval.get("id", "")
-        if context.get("source") == "agent_langgraph_hitl" and interrupt_id:
-            siblings = [
+        resume_id = interrupt_id or request.approval_id
+        is_hitl_resumable = context.get("source") == "agent_langgraph_hitl" and bool(interrupt_id)
+        # 关键：必须在 set_decision 之前查询 siblings。set_decision 会把当前审批
+        # 翻成 terminal 状态，而保留策略可能在同一此 save 里将其逐出存储；若在
+        # 之后查询就会漏掉当前审批（siblings 为空 → all([])=True → 以空决策调度
+        # resume → _resume_in_background 直接关闭事件流，agent 不恢复，前端橙条）。
+        siblings = (
+            [
                 item
                 for item in command_approval_store.list()
                 if isinstance(item.get("context"), dict)
                 and str(item.get("context", {}).get("interrupt_id") or "") == interrupt_id
             ]
-            all_decided = all(item.get("decision") is not None for item in siblings)
-            if all_decided:
+            if is_hitl_resumable
+            else []
+        )
+        approval = command_approval_store.set_decision(request.approval_id, status, decision)
+        if is_hitl_resumable:
+            # 把当前审批（含刚写入的 decision）合并进 siblings，并兜底确保它在列，
+            # 避免存储剪枝或历史裁剪导致该兄弟组决策不完整。
+            siblings = [approval if item.get("id") == approval.get("id") else item for item in siblings]
+            if not any(item.get("id") == approval.get("id") for item in siblings):
+                siblings.append(approval)
+            if all(item.get("decision") is not None for item in siblings):
                 asyncio.create_task(
                     _resume_in_background(resume_id, approval, siblings)
                 )
@@ -3921,6 +3974,26 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
         for item in ordered:
             command_approval_store.mark_consumed(item.get("id", ""))
     except Exception as exc:
+        # Surface the failure on the bus AND record it in the trace log so a
+        # silently-dead resume (answer sent but agent never continues) is
+        # diagnosable from agent_trace.jsonl instead of vanishing.
+        try:
+            agent_registry.trace_store.record(
+                "agent_activity", "error",
+                {
+                    "session_id": session_id,
+                    "provider": str(context.get("provider") or ""),
+                    "provider_id": str(context.get("provider_id") or ""),
+                    "model": str(context.get("model") or ""),
+                    "language": str(context.get("language") or "zh"),
+                    "work_mode": str(context.get("work_mode") or "build"),
+                    "autonomy": str(context.get("autonomy") or "guarded"),
+                    "streaming": True,
+                },
+                {"error": str(exc)[:400], "resume_id": resume_id, "approval_id": approval.get("id", "")},
+            )
+        except Exception:  # noqa: BLE001 - a trace hiccup must never mask the resume error
+            logger.warning("failed to record resume error trace", exc_info=True)
         await approval_event_bus.publish(
             resume_id,
             {"type": "error", "session_id": session_id, "error": str(exc)[:400], "resume_id": resume_id},

@@ -95,6 +95,11 @@ def fingerprint_path_for(data_dir: Path, workspace_root: Path) -> Path:
 # never pruned, so terminal-state approvals and the rolling JSONL logs are
 # capped at the most recent N entries.
 MAX_APPROVAL_HISTORY = 100
+# 无论 active（pending/approved）数量是否已超过上限，都至少保留最近这 N 条
+# terminal（answered/denied/consumed）记录。刚被回答的审批在
+# `_resume_in_background` 消费（mark_consumed）之前必须存活：否则
+# resolve_command_approval 的 siblings 查询会读不到它，导致回答后 agent 不恢复。
+MIN_TERMINAL_HISTORY = 25
 MAX_TOOL_AUDIT_LINES = 100
 
 # Runtime-adjustable retention (Settings page overrides the default; applied on
@@ -280,7 +285,7 @@ class CommandApprovalStore:
         active = [a for a in approvals if a.get("status") in ("pending", "approved")]
         terminal = [a for a in approvals if a.get("status") not in ("pending", "approved")]
         terminal.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
-        keep_terminal = terminal[: max(0, MAX_APPROVAL_HISTORY - len(active))]
+        keep_terminal = terminal[: max(MIN_TERMINAL_HISTORY, MAX_APPROVAL_HISTORY - len(active))]
         return active + keep_terminal
 
     def save(self, approvals: list[dict[str, Any]]) -> None:

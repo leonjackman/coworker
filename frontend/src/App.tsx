@@ -2037,6 +2037,24 @@ function App() {
   const resolvePendingRequest = async (request: PendingRequest, decision: ApprovalDecisionPayload) => {
     if (resolvingRef.current) return;
     const targetMessageId = request.messageId || [...messages].reverse().find((m) => m.role === 'assistant')?.id || '';
+    // 即时回显：用户提交回答后立刻把回复贴到 ask_user 工具卡的 Question 下方，
+    // 让用户马上确认「回答已被收到」，而不是等到 resume 流重放才出现（甚至丢失）。
+    // 覆盖所有路径：单选/「其他」填空/多选/无选项自由文本。
+    const answer = decision.type === 'respond' ? decision.message || '' : '';
+    if (answer && targetMessageId) {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id !== targetMessageId
+            ? item
+            : {
+                ...item,
+                parts: (item.parts || []).map((p) =>
+                  p.type === 'tool' && p.name === 'ask_user' ? { ...p, output: answer, status: 'success' as const } : p,
+                ),
+              },
+        ),
+      );
+    }
     resolvingRef.current = true;
     setPendingRequests((current) =>
       current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
@@ -2054,9 +2072,6 @@ function App() {
         ...chained.map((event): PendingRequest => pendingRequestFromEvent(event, request.session_id, targetMessageId)),
       ]);
       if (chained.length > 0) playSound('attention');
-      if (response.resumed === false && !response.resume_id) {
-        return;
-      }
     } catch (error) {
       console.error('Failed to resolve approval:', error);
       setPendingRequests((current) =>
@@ -2067,7 +2082,30 @@ function App() {
       resolvingRef.current = false;
     }
 
-    if (!resumeId) return;
+    if (!resumeId) {
+      // 后端未调度 resume（非 langgraph 审批，或同一 interrupt 的其它 sibling 尚未决定）。
+      // 若当前没有其它待审批卡，把气泡收尾为 done，避免永久停在「等待处理中」；
+      // 否则保持 waiting，等其余提问卡回答后统一 resume。
+      const hasOtherPending = pendingRequests.some((item) => item.approval_id !== request.approval_id);
+      if (!hasOtherPending) {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === targetMessageId && (item.status === 'waiting' || item.status === 'running')
+              ? { ...item, status: 'done' as const, streamEndAt: Date.now() }
+              : item,
+          ),
+        );
+      }
+      return;
+    }
+    // 用户已作答：气泡从「等待处理中」切到「运行中」，让 UI 立即反映 agent 正在继续。
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === targetMessageId && item.status === 'waiting'
+          ? { ...item, status: 'running' as const }
+          : item,
+      ),
+    );
     // 将 resume 流的 controller 按会话登记，使会话切换能正确中断它（幽灵流修复）
     const resumeSessionId = request.session_id || sessionIdRef.current || '';
     const resumeController = new AbortController();
@@ -2140,9 +2178,23 @@ function App() {
               tp.status = event.status === 'success' ? 'success' : 'error';
               if (event.input !== undefined) tp.input = event.input;
               if (event.output) tp.output = event.output;
+            } else {
+              // Resume 只重放了 tool_end（未重放 tool_start）：工具卡存在于已有的
+              // message parts 里，这里构造一个最小 tool part，让 applyResume 的
+              // mergeMessageParts 把 output 合并进已有的卡——否则 ask_user 的回答
+              // 会在 resume 重放时被丢弃，用户看不到自己的回复。
+              const synthesized: Extract<MessagePart, { type: 'tool' }> = {
+                type: 'tool',
+                id: event.id,
+                name: event.name || '',
+                status: event.status === 'success' ? 'success' : 'error',
+                input: event.input || '',
+                ...(event.output ? { output: event.output } : {}),
+              };
+              resumeParts.push(synthesized);
             }
             // 装完即见：agent 安装技能后立刻刷新技能列表。
-            if (tp?.name === 'install_skill') void refreshSkills();
+            if ((tp?.name || event.name) === 'install_skill') void refreshSkills();
             applyResume('running');
           } else if (event.type === 'plan_start') {
             resumeParts.push({ type: 'plan', content: '' });
