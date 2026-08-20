@@ -959,6 +959,49 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   }
 });
 
+// ── Web settings IPC (Tavily) ──────────────────────────────────────────────
+ipcMain.handle('get-web-settings', async () => {
+  try {
+    return await requestBackend('/api/web/config');
+  } catch (e) {
+    return { enabled: false, provider: 'tavily', max_results: 8, search_depth: 'basic', fetch_enabled: true, api_key_configured: false, error: e.message };
+  }
+});
+
+ipcMain.handle('save-web-settings', async (event, payload) => {
+  try {
+    return await requestBackend('/api/web/config', 'POST', payload || {});
+  } catch (e) {
+    return { status: 'error', detail: e.message };
+  }
+});
+
+ipcMain.handle('set-web-tavily-key', async (event, apiKey) => {
+  try {
+    return await requestBackend('/api/web/tavily/key', 'POST', { api_key: String(apiKey || '') });
+  } catch (e) {
+    return { status: 'error', detail: e.message };
+  }
+});
+
+ipcMain.handle('clear-web-tavily-key', async () => {
+  try {
+    return await requestBackend('/api/web/tavily/key', 'DELETE');
+  } catch (e) {
+    return { status: 'error', detail: e.message };
+  }
+});
+
+ipcMain.handle('test-web-search', async (event, payload) => {
+  const query = typeof payload === 'string' ? payload : (payload && payload.query);
+  const apiKey = typeof payload === 'object' && payload ? payload.apiKey : undefined;
+  try {
+    return await requestBackend('/api/web/test', 'POST', { query: String(query || 'opencode web search'), ...(apiKey ? { api_key: apiKey } : {}) });
+  } catch (e) {
+    return { ok: false, message: e.message, results_count: 0 };
+  }
+});
+
 // ── Logging subsystem IPC ────────────────────────────────────────────────
 ipcMain.handle('get-settings-log', async () => {
   try {

@@ -1042,6 +1042,24 @@ export interface MemorySettings {
 
 export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'auto_extract'>>;
 
+// ── Web search / fetch (Tavily) ─────────────────────────────────────────
+export interface WebSettings {
+  enabled: boolean;
+  provider: string;
+  max_results: number;
+  search_depth: 'basic' | 'advanced';
+  fetch_enabled: boolean;
+  api_key_configured: boolean;
+}
+
+export type WebConfigPatch = Partial<Pick<WebSettings, 'enabled' | 'provider' | 'max_results' | 'search_depth' | 'fetch_enabled'>>;
+
+export interface WebTestResult {
+  ok: boolean;
+  message: string;
+  results_count: number;
+}
+
 // ── Auto-update ─────────────────────────────────────────────────────────
 export type UpdateStateStatus =
   | 'idle'

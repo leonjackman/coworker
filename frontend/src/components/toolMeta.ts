@@ -8,6 +8,8 @@ const TOOL_LABELS: Record<string, string> = {
   search_files: 'Search',
   run_command: 'Command',
   ask_user: 'Ask',
+  web_search: 'Web',
+  web_fetch: 'Fetch',
 };
 
 export function toolLabel(name: string): string {
@@ -43,6 +45,12 @@ export function toolPreview(name: string, input: string): string {
   }
   if (name === 'ask_user') {
     return stringify(args.question ?? '');
+  }
+  if (name === 'web_search') {
+    return stringify(args.query ?? '');
+  }
+  if (name === 'web_fetch') {
+    return stringify(args.url ?? '');
   }
   if (name === 'read_file' || name === 'write_file' || name === 'replace_in_file' || name === 'apply_text_edits') {
     for (const key of PATH_KEYS) {

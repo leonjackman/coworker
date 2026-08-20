@@ -58,6 +58,15 @@ from coworker.org import (
     OrgTeam,
 )
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
+from coworker.web import (
+    delete_tavily_key,
+    get_tavily_key,
+    read_web_block,
+    set_tavily_key,
+    tavily_key_configured,
+    tavily_search,
+    write_web_block,
+)
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
 from coworker.logger import get_logger, get_log_level, init_logger, set_log_level as _set_log_level, truncate_log as _truncate_log
@@ -2263,6 +2272,101 @@ async def set_settings(request: SettingsUpdate):
         "max_attachment_mb": max_attachment_mb,
         "revert_code": read_user_revert_code(),
     }
+
+
+class WebConfigUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = None
+    max_results: Optional[int] = None
+    search_depth: Optional[str] = None
+    fetch_enabled: Optional[bool] = None
+
+
+class TavilyKeyUpdate(BaseModel):
+    api_key: str
+
+
+class WebTestRequest(BaseModel):
+    query: str = "opencode web search"
+    max_results: Optional[int] = None
+    api_key: Optional[str] = None
+
+
+@app.get("/api/web/config")
+async def get_web_config():
+    """Non-secret web capability settings + whether a search key is configured."""
+    block = read_web_block(settings.data_dir)
+    return {
+        "enabled": bool(block.get("enabled")),
+        "provider": str(block.get("provider") or "tavily"),
+        "max_results": int(block.get("max_results") or 8),
+        "search_depth": str(block.get("search_depth") or "basic"),
+        "fetch_enabled": bool(block.get("fetch_enabled")),
+        "api_key_configured": tavily_key_configured(settings.data_dir),
+    }
+
+
+@app.post("/api/web/config")
+async def save_web_config(request: WebConfigUpdate):
+    """Persist non-secret web settings to .coworker_settings.json (merge)."""
+    patch = {
+        k: getattr(request, k)
+        for k in ("enabled", "provider", "max_results", "search_depth", "fetch_enabled")
+        if getattr(request, k) is not None
+    }
+    if not patch:
+        return await get_web_config()
+    try:
+        block = write_web_block(settings.data_dir, patch)
+    except OSError as exc:  # noqa: BLE001 - settings persistence must not fail the request
+        logger.warning("Failed to persist web settings: %s", exc)
+        block = read_web_block(settings.data_dir)
+    return {
+        "enabled": bool(block.get("enabled")),
+        "provider": str(block.get("provider") or "tavily"),
+        "max_results": int(block.get("max_results") or 8),
+        "search_depth": str(block.get("search_depth") or "basic"),
+        "fetch_enabled": bool(block.get("fetch_enabled")),
+        "api_key_configured": tavily_key_configured(settings.data_dir),
+    }
+
+
+@app.post("/api/web/tavily/key")
+async def set_web_tavily_key(request: TavilyKeyUpdate):
+    """Store the Tavily API key in the OS secret store (never returned)."""
+    api_key = (request.api_key or "").strip()
+    if not api_key:
+        return {"status": "error", "detail": "API key is empty"}
+    try:
+        set_tavily_key(settings.data_dir, api_key)
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "error", "detail": str(exc)}
+    return {"status": "ok", "api_key_configured": True}
+
+
+@app.delete("/api/web/tavily/key")
+async def clear_web_tavily_key():
+    """Remove the stored Tavily API key."""
+    delete_tavily_key(settings.data_dir)
+    return {"status": "ok", "api_key_configured": False}
+
+
+@app.post("/api/web/test")
+async def test_web_search(request: WebTestRequest):
+    """Run a single search to verify a key works (pending key preferred)."""
+    api_key = (request.api_key or "").strip() or get_tavily_key(settings.data_dir)
+    if not api_key:
+        return {"ok": False, "message": "Tavily API key is not configured", "results_count": 0}
+    block = read_web_block(settings.data_dir)
+    result = tavily_search(
+        request.query,
+        api_key,
+        max_results=request.max_results or int(block.get("max_results") or 8),
+        search_depth=str(block.get("search_depth") or "basic"),
+    )
+    if result.get("error"):
+        return {"ok": False, "message": result["error"], "results_count": 0}
+    return {"ok": True, "message": "Search succeeded", "results_count": len(result.get("results") or [])}
 
 
 @app.post("/goal/stop")

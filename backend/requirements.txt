@@ -36,6 +36,7 @@ langgraph-checkpoint-sqlite==3.1.1
 langgraph-prebuilt==1.1.0
 langgraph-sdk==0.4.2
 langsmith==0.10.15
+markdownify==1.1.0
 mcp==1.29.0
 multidict==6.7.1
 numpy==2.4.6

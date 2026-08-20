@@ -60,6 +60,9 @@ import type {
   MemoryImportApplyResponse,
   MemorySettings,
   MemorySettingsPatch,
+  WebSettings,
+  WebConfigPatch,
+  WebTestResult,
   OrgAgentPayload,
   OrgAgentUpdatePayload,
   OrgConfigPayload,
@@ -198,6 +201,11 @@ export interface ChatService {
   applyMemoryImport: (token: string, decisions: Record<string, string>) => Promise<MemoryImportApplyResponse>;
   getMemorySettings: () => Promise<MemorySettings>;
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
+  getWebSettings: () => Promise<WebSettings>;
+  saveWebSettings: (patch: WebConfigPatch) => Promise<WebSettings>;
+  setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
+  clearWebTavilyKey: () => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
+  testWebSearch: (query?: string, apiKey?: string) => Promise<WebTestResult>;
   revealInFolder: (path: string) => Promise<{ status: string }>;
   getOrg: (projectId: string) => Promise<OrgSnapshot>;
   createOrgAgent: (request: OrgAgentPayload) => Promise<OrgSnapshot>;
@@ -491,6 +499,31 @@ class ElectronChatService implements ChatService {
   async saveMemorySettings(settings: MemorySettingsPatch): Promise<MemorySettings> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.saveMemorySettings(settings);
+  }
+
+  async getWebSettings(): Promise<WebSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWebSettings();
+  }
+
+  async saveWebSettings(patch: WebConfigPatch): Promise<WebSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveWebSettings(patch);
+  }
+
+  async setWebTavilyKey(apiKey: string): Promise<{ status: string; api_key_configured?: boolean; detail?: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.setWebTavilyKey(apiKey);
+  }
+
+  async clearWebTavilyKey(): Promise<{ status: string; api_key_configured?: boolean; detail?: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.clearWebTavilyKey();
+  }
+
+  async testWebSearch(query?: string, apiKey?: string): Promise<WebTestResult> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.testWebSearch(query, apiKey);
   }
 
   async revealInFolder(path: string): Promise<{ status: string }> {
@@ -1605,6 +1638,40 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
+    });
+  }
+
+  async getWebSettings(): Promise<WebSettings> {
+    return this.request<WebSettings>('/api/web/config');
+  }
+
+  async saveWebSettings(patch: WebConfigPatch): Promise<WebSettings> {
+    return this.request<WebSettings>('/api/web/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  }
+
+  async setWebTavilyKey(apiKey: string): Promise<{ status: string; api_key_configured?: boolean; detail?: string }> {
+    return this.request<{ status: string; api_key_configured?: boolean; detail?: string }>('/api/web/tavily/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+  }
+
+  async clearWebTavilyKey(): Promise<{ status: string; api_key_configured?: boolean; detail?: string }> {
+    return this.request<{ status: string; api_key_configured?: boolean; detail?: string }>('/api/web/tavily/key', {
+      method: 'DELETE',
+    });
+  }
+
+  async testWebSearch(query?: string, apiKey?: string): Promise<WebTestResult> {
+    return this.request<WebTestResult>('/api/web/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: query || 'opencode web search', ...(apiKey ? { api_key: apiKey } : {}) }),
     });
   }
 

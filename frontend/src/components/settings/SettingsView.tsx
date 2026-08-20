@@ -1,16 +1,18 @@
 import { ArrowLeft, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
-import type { Autonomy, MemorySettings, MemorySettingsPatch } from '../../types';
+import type { Autonomy, MemorySettings, MemorySettingsPatch, WebSettings } from '../../types';
 import type { UpdateCenter } from '../../lib/useUpdateCenter';
 import { useSound } from '../sound-provider';
+import { chatService } from '../../services/chatService';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
 import { UpdatePanel } from './UpdatePanel';
+import { WebSettingsPage } from './WebSettingsPage';
 import { autonomyOptions, languageOptions, themeOptions } from './preference-options';
 
 interface SettingsViewProps {
@@ -50,8 +52,24 @@ export function SettingsView({
   onLanguageChange,
   onClose,
 }: SettingsViewProps) {
-  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit'>('main');
+  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit' | 'web'>('main');
   const { enabled: soundEnabled, toggleEnabled: toggleSound } = useSound();
+  const [webSettings, setWebSettings] = useState<WebSettings | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    chatService
+      .getWebSettings()
+      .then((settings) => {
+        if (mounted) setWebSettings(settings);
+      })
+      .catch(() => {
+        if (mounted) setWebSettings(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   async function selectLanguage(language: string) {
     const allowed = ['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
@@ -83,6 +101,18 @@ export function SettingsView({
         <ToolAuditPanel embedded />
       </WorkspacePage>
     );
+  }
+
+  if (settingsPage === 'web') {
+    const current: WebSettings = webSettings ?? {
+      enabled: false,
+      provider: 'tavily',
+      max_results: 8,
+      search_depth: 'basic',
+      fetch_enabled: true,
+      api_key_configured: false,
+    };
+    return <WebSettingsPage settings={current} onChange={setWebSettings} onBack={() => setSettingsPage('main')} />;
   }
 
   return (
@@ -174,6 +204,32 @@ export function SettingsView({
                 description: t('settings.audit_entry_desc'),
                 actionLabel: t('settings.audit_open'),
                 onAction: () => setSettingsPage('audit'),
+              },
+            ],
+          },
+          {
+            id: 'web',
+            title: t('settings.web_group'),
+            description: t('settings.web_group_desc'),
+            items: [
+              {
+                id: 'web_tavily',
+                type: 'action',
+                label: t('settings.web_entry'),
+                description: t('settings.web_entry_desc'),
+                actionLabel: t('settings.web_open'),
+                meta: (
+                  <span className={`settings-chip${webSettings?.api_key_configured ? ' settings-chip--ok' : ''}`}>
+                    {webSettings === null
+                      ? ''
+                      : webSettings.enabled
+                        ? webSettings.api_key_configured
+                          ? t('settings.web_configured')
+                          : t('settings.web_not_configured')
+                        : t('settings.web_disabled')}
+                  </span>
+                ),
+                onAction: () => setSettingsPage('web'),
               },
             ],
           },

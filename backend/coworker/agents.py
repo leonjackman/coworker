@@ -534,6 +534,7 @@ def build_workspace_tools(
     delegator: Any | None = None,
     caller_agent: str = "",
     readonly: bool = False,
+    web_tools: list | None = None,
 ) -> list[Any]:
     from pathlib import Path as _Path
 
@@ -921,8 +922,12 @@ def build_workspace_tools(
 
     tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
     if readonly:
-        # Reviewer/auditor sub-agents get no workspace mutation tools.
+        # Reviewer/auditor sub-agents get no workspace mutation tools and no
+        # web tools — keep the surface minimal.
         tools = [search_files, read_file, git_status]
+    elif web_tools:
+        # Web tools are read-only network reads available to the main agent.
+        tools.extend(web_tools)
     if memory_store is not None and memory_rel:
         tools.append(memory_read)
         if not readonly:
@@ -940,7 +945,7 @@ def build_workspace_tools(
 _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
 _EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}
@@ -3396,6 +3401,29 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
 
+    @property
+    def _web_tools(self) -> list[Any]:
+        """Web search/fetch tools when enabled and keyed, else ``[]``.
+
+        Resolved lazily per turn so settings / key changes are picked up on the
+        next run without a restart. A broken config disables web silently.
+        """
+        try:
+            if self.data_dir is None:
+                return []
+            from coworker.web import build_web_tools, get_tavily_key, load_web_config
+
+            config = load_web_config(self.data_dir)
+            if not config.enabled:
+                return []
+            key = get_tavily_key(self.data_dir)
+            if not key:
+                return []
+            return build_web_tools(config, key)
+        except Exception:  # noqa: BLE001 - a web misconfiguration must never break a turn
+            logger.warning("web tools disabled (config error)", exc_info=True)
+            return []
+
     def _nudge_memory(self, session_id: str) -> None:
         """Phase 2: one call per settled turn; never blocks or raises.
 
@@ -3488,6 +3516,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 memory_rel=memory_rel,
                 delegator=delegator,
                 caller_agent=self.agent,
+                web_tools=self._web_tools,
             ),
             work_mode=work_mode,
             language=language,
@@ -3596,6 +3625,29 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         if project_dir:
             agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
+
+    @property
+    def _web_tools(self) -> list[Any]:
+        """Web search/fetch tools when enabled and keyed, else ``[]``.
+
+        Resolved lazily per turn so settings / key changes are picked up on the
+        next run without a restart. A broken config disables web silently.
+        """
+        try:
+            if self.data_dir is None:
+                return []
+            from coworker.web import build_web_tools, get_tavily_key, load_web_config
+
+            config = load_web_config(self.data_dir)
+            if not config.enabled:
+                return []
+            key = get_tavily_key(self.data_dir)
+            if not key:
+                return []
+            return build_web_tools(config, key)
+        except Exception:  # noqa: BLE001 - a web misconfiguration must never break a turn
+            logger.warning("web tools disabled (config error)", exc_info=True)
+            return []
 
     def _nudge_memory(self, session_id: str) -> None:
         """Phase 2: one call per settled turn; never blocks or raises.
@@ -3749,6 +3801,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     memory_rel=memory_rel,
                     delegator=delegator,
                     caller_agent=self.agent,
+                    web_tools=self._web_tools,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -4321,6 +4374,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         skill_manager=self.skill_manager,
                         memory_store=memory_store,
                         memory_rel=memory_rel,
+                        web_tools=self._web_tools,
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,

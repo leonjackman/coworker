@@ -57,6 +57,9 @@ import type {
   MemorySettings,
   MemorySettingsPatch,
   UpdateStateSnapshot,
+  WebSettings,
+  WebConfigPatch,
+  WebTestResult,
 } from './types';
 
 export type StreamEventCallback = (event: StreamEvent) => void;
@@ -153,6 +156,11 @@ declare global {
       applyMemoryImport: (payload: { token: string; decisions: Record<string, string> }) => Promise<MemoryImportApplyResponse>;
       getMemorySettings: () => Promise<MemorySettings>;
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
+      getWebSettings: () => Promise<WebSettings>;
+      saveWebSettings: (payload: WebConfigPatch) => Promise<WebSettings>;
+      setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
+      clearWebTavilyKey: () => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
+      testWebSearch: (query?: string, apiKey?: string) => Promise<WebTestResult>;
       revealInFolder: (path: string) => Promise<{ status: string }>;
       installSkill: (payload: { name: string; content: string; commands?: { name: string; description: string; body: string }[] }) => Promise<{ status: string; message?: string }>;
       exportToolAudit: () => Promise<string>;
