@@ -1061,8 +1061,8 @@ export interface WebTestResult {
   results_count: number;
 }
 
-// ── Right-side panel (multi-tab) ────────────────────────────────────────
-export type RightPanelTabKind = 'browser' | 'inspector' | 'terminal' | 'logs';
+// ── Right-side panel (browser-only multi-tab) ───────────────────────────
+export type RightPanelTabKind = 'browser';
 
 export interface RightPanelTab {
   id: string;

@@ -251,8 +251,8 @@ function App() {
   );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
-  const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(() => [{ id: 'inspector-1', kind: 'inspector' }]);
-  const [activeRightTabId, setActiveRightTabId] = useState<string>('inspector-1');
+  const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(() => [{ id: 'browser-1', kind: 'browser' }]);
+  const [activeRightTabId, setActiveRightTabId] = useState<string>('browser-1');
   const browserHandlesRef = useRef<Map<string, BrowserViewHandle>>(new Map());
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
@@ -3481,19 +3481,9 @@ function App() {
               <RightPanel
                 tabs={rightTabs}
                 activeTabId={activeRightTabId}
-                inspector={{
-                  sessionTitle: titlebarSessionTitle,
-                  projectName: activeProject?.name ?? t('sidebar.default_project'),
-                  modelName: currentProvider?.model ?? runtimeConfig?.selected_model ?? t('chat.model_unselected'),
-                  providerName: currentProvider?.name ?? runtimeConfig?.agent_provider ?? t('chat.model_unselected'),
-                  autonomy,
-                  attachmentCount: attachments.length,
-                  messageCount: messages.length,
-                }}
-                {...(currentProjectId ? { terminalProjectId: currentProjectId } : {})}
                 onSelect={(id) => setActiveRightTabId(id)}
                 onClose={closeRightTab}
-                onAdd={addRightTab}
+                onAdd={() => addRightTab('browser')}
                 onBrowserHandle={handleBrowserHandle}
                 onBrowserTitle={handleBrowserTitle}
                 onOpenNewTab={(url) => {

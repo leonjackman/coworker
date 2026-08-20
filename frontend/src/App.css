@@ -1230,38 +1230,6 @@ body.sidebar-resizing {
   min-height: 0;
 }
 
-.inspector-panel {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--material-border);
-  background: var(--material-panel-solid);
-  backdrop-filter: var(--material-blur);
-}
-
-.inspector-panel__resizer {
-  position: absolute;
-  top: 0;
-  left: -3px;
-  width: 6px;
-  height: 100%;
-  cursor: col-resize;
-  touch-action: none;
-  z-index: 30;
-}
-
-.inspector-panel__resizer::after {
-  content: '';
-  position: absolute;
-  inset: 0 2px;
-  transition: background 150ms ease;
-}
-
-.inspector-panel__resizer:hover::after,
-body.inspector-resizing .inspector-panel__resizer::after {
-  background: color-mix(in srgb, var(--ring) 45%, transparent);
-}
-
 body.inspector-resizing {
   cursor: col-resize;
   user-select: none;
@@ -1638,48 +1606,6 @@ body.changes-panel-resizing {
   text-align: center;
 }
 
-.inspector-panel__header {
-  height: 42px;
-  display: flex;
-  align-items: center;
-  padding: 0 14px;
-  border-bottom: 1px solid var(--material-border);
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.inspector-panel__body {
-  display: grid;
-  gap: 8px;
-  padding: 12px;
-}
-
-.inspector-row {
-  display: grid;
-  gap: 4px;
-  border: 1px solid var(--material-border);
-  border-radius: 8px;
-  padding: 9px 10px;
-  background: var(--material-control);
-}
-
-.inspector-row span {
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 650;
-  text-transform: uppercase;
-}
-
-.inspector-row strong {
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 560;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ── Right-side panel (multi-tab) ──────────────────────────────────────── */
 .right-panel {
   position: relative;
@@ -1825,12 +1751,6 @@ body.inspector-resizing .right-panel__resizer::after {
 
 .right-panel__tabpanel--active {
   display: block;
-}
-
-.right-panel__logs-placeholder {
-  padding: 16px;
-  color: var(--muted-foreground);
-  font-size: 12px;
 }
 
 /* ── Embedded browser view ─────────────────────────────────────────────── */
@@ -5117,7 +5037,6 @@ body.bottom-panel-resizing {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .inspector-panel,
   .right-panel {
     display: none;
   }
