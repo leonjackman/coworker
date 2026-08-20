@@ -32,7 +32,11 @@ interface SettingsViewProps {
   updateCenter: UpdateCenter;
   onLanguageChange?: () => void;
   onClose: () => void;
+  initialPage?: SettingsPage;
+  onInitialPageConsumed?: () => void;
 }
+
+export type SettingsPage = 'main' | 'theme' | 'audit' | 'web';
 
 export function SettingsView({
   themeSettings,
@@ -51,10 +55,19 @@ export function SettingsView({
   updateCenter,
   onLanguageChange,
   onClose,
+  initialPage = 'main',
+  onInitialPageConsumed,
 }: SettingsViewProps) {
-  const [settingsPage, setSettingsPage] = useState<'main' | 'theme' | 'audit' | 'web'>('main');
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>(initialPage);
   const { enabled: soundEnabled, toggleEnabled: toggleSound } = useSound();
   const [webSettings, setWebSettings] = useState<WebSettings | null>(null);
+
+  useEffect(() => {
+    if (initialPage && initialPage !== 'main') {
+      onInitialPageConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let mounted = true;

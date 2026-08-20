@@ -4301,6 +4301,48 @@ body.bottom-panel-resizing {
   animation: cw-spin 0.8s linear infinite;
 }
 
+.web-setup-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius-md, 12px);
+  background: color-mix(in srgb, var(--accent) 8%, var(--material-control, #fff));
+  font-size: 12.5px;
+}
+
+.web-setup-hint__icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.web-setup-hint__text {
+  flex: 1;
+  min-width: 0;
+  color: var(--foreground);
+  line-height: 1.4;
+}
+
+.web-setup-hint__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.web-setup-hint__dismiss:hover {
+  background: var(--panel-hover, rgba(128, 128, 128, 0.12));
+  color: var(--foreground);
+}
+
 .settings-toggle [role="radio"] {
   min-width: 78px;
 }

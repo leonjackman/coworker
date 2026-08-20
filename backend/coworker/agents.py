@@ -922,11 +922,11 @@ def build_workspace_tools(
 
     tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
     if readonly:
-        # Reviewer/auditor sub-agents get no workspace mutation tools and no
-        # web tools — keep the surface minimal.
+        # Reviewer/auditor sub-agents get no workspace mutation tools.
         tools = [search_files, read_file, git_status]
-    elif web_tools:
-        # Web tools are read-only network reads available to the main agent.
+    if web_tools:
+        # Web tools are read-only network reads, open to the main agent and all
+        # sub-agents regardless of autonomy/phase (see _READ_ONLY_TOOLS).
         tools.extend(web_tools)
     if memory_store is not None and memory_rel:
         tools.append(memory_read)
@@ -2769,7 +2769,8 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     unknown tool calls without coupling this module to the MCP layer.
     """
 
-    def __init__(self, mcp_tool_names_provider: Callable[[], set[str]] | None = None):
+    def __init__(self, capabilities: str = "", mcp_tool_names_provider: Callable[[], set[str]] | None = None):
+        self.capabilities = capabilities
         self.mcp_tool_names_provider = mcp_tool_names_provider
 
     def _allowed_tools(self, state: CoworkerAgentState) -> set[str]:
@@ -2803,9 +2804,12 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         language = normalize_language(state.get("language"))
         phase = normalize_phase(state.get("phase"), state.get("work_mode"))
         autonomy = normalize_autonomy(state.get("autonomy"))
+        prompt = phase_system_prompt(language, phase, autonomy)
+        if self.capabilities:
+            prompt = f"{prompt}\n\n{self.capabilities}"
         return {
             "tools": tools,
-            "system_message": SystemMessage(phase_system_prompt(language, phase, autonomy)),
+            "system_message": SystemMessage(prompt),
         }
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
@@ -3189,6 +3193,7 @@ def build_coworker_agent_graph(
     context_window_tokens: int = 0,
     context_window_source: str = "default",
     context_window_warning: str | None = None,
+    web_capability: str = "",
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -3227,7 +3232,7 @@ def build_coworker_agent_graph(
         audit_path=(Path(data_dir) / TOOL_AUDIT_FILENAME) if data_dir is not None else None,
     )
 
-    phase_gate = PhaseToolGateMiddleware()
+    phase_gate = PhaseToolGateMiddleware(web_capability)
     # Cheap per-call layer: clear stale tool results (Anthropic-style context
     # editing) so the model never pays for long-dead tool output. Transient —
     # the UI/session history is untouched (two-layer storage). The SAME edit
@@ -3403,26 +3408,31 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
 
     @property
     def _web_tools(self) -> list[Any]:
-        """Web search/fetch tools when enabled and keyed, else ``[]``.
+        """Web search/fetch tools when enabled, else ``[]``.
 
-        Resolved lazily per turn so settings / key changes are picked up on the
-        next run without a restart. A broken config disables web silently.
+        The Tavily key is optional (``web_fetch`` is keyless; ``web_search``
+        reports the missing-key state to the model). Resolved lazily per turn
+        so settings / key changes are picked up on the next run without a
+        restart. A broken config disables web silently.
         """
         try:
-            if self.data_dir is None:
-                return []
-            from coworker.web import build_web_tools, get_tavily_key, load_web_config
+            from coworker.web import resolve_web_tools
 
-            config = load_web_config(self.data_dir)
-            if not config.enabled:
-                return []
-            key = get_tavily_key(self.data_dir)
-            if not key:
-                return []
-            return build_web_tools(config, key)
+            return resolve_web_tools(self.data_dir)
         except Exception:  # noqa: BLE001 - a web misconfiguration must never break a turn
             logger.warning("web tools disabled (config error)", exc_info=True)
             return []
+
+    @property
+    def _web_capability_line(self) -> str:
+        """Capability summary injected into the system prompt (3 states)."""
+        try:
+            from coworker.web import web_capability_line
+
+            return web_capability_line(self.data_dir)
+        except Exception:  # noqa: BLE001
+            logger.warning("web capability line unavailable", exc_info=True)
+            return ""
 
     def _nudge_memory(self, session_id: str) -> None:
         """Phase 2: one call per settled turn; never blocks or raises.
@@ -3532,6 +3542,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             context_window_tokens=self.context_window_tokens,
             context_window_source=self.context_window_source,
             context_window_warning=self.context_window_warning,
+            web_capability=self._web_capability_line,
         )
         try:
             result = graph.invoke(
@@ -3628,26 +3639,31 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
     @property
     def _web_tools(self) -> list[Any]:
-        """Web search/fetch tools when enabled and keyed, else ``[]``.
+        """Web search/fetch tools when enabled, else ``[]``.
 
-        Resolved lazily per turn so settings / key changes are picked up on the
-        next run without a restart. A broken config disables web silently.
+        The Tavily key is optional (``web_fetch`` is keyless; ``web_search``
+        reports the missing-key state to the model). Resolved lazily per turn
+        so settings / key changes are picked up on the next run without a
+        restart. A broken config disables web silently.
         """
         try:
-            if self.data_dir is None:
-                return []
-            from coworker.web import build_web_tools, get_tavily_key, load_web_config
+            from coworker.web import resolve_web_tools
 
-            config = load_web_config(self.data_dir)
-            if not config.enabled:
-                return []
-            key = get_tavily_key(self.data_dir)
-            if not key:
-                return []
-            return build_web_tools(config, key)
+            return resolve_web_tools(self.data_dir)
         except Exception:  # noqa: BLE001 - a web misconfiguration must never break a turn
             logger.warning("web tools disabled (config error)", exc_info=True)
             return []
+
+    @property
+    def _web_capability_line(self) -> str:
+        """Capability summary injected into the system prompt (3 states)."""
+        try:
+            from coworker.web import web_capability_line
+
+            return web_capability_line(self.data_dir)
+        except Exception:  # noqa: BLE001
+            logger.warning("web capability line unavailable", exc_info=True)
+            return ""
 
     def _nudge_memory(self, session_id: str) -> None:
         """Phase 2: one call per settled turn; never blocks or raises.
@@ -3781,6 +3797,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         yield {"type": "start", "session_id": session_id, "mode": self.mode, "provider": self.provider_name, "model": self.model_name}
         yield {"type": "stage", "name": "executing", "status": "running"}
 
+        try:
+            from coworker.web import web_capability_status
+
+            cap_status = web_capability_status(self.data_dir)
+        except Exception:  # noqa: BLE001 - a broken capability probe must never break a turn
+            cap_status = "ok"
+        if cap_status != "ok":
+            yield {"type": "web_setup_hint", "status": cap_status, "session_id": session_id}
+
         if goal_continue:
             # Round 2+ of a goal: continue the thread from the checkpoint without
             # adding a new user message.
@@ -3814,6 +3839,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 context_window_tokens=self.context_window_tokens,
                 context_window_source=self.context_window_source,
                 context_window_warning=self.context_window_warning,
+                web_capability=self._web_capability_line,
             )
 
             inputs = {
@@ -4283,6 +4309,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 part: dict[str, Any] = {
                     "type": "tool_end",
                     "id": tc_id,
+                    "name": msg_name,
                     "output": str(content)[:2000],
                     "status": tool_status,
                     "input": str(tool_state[tc_id].get("input") or ""),
@@ -4387,6 +4414,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 context_window_tokens=self.context_window_tokens,
                 context_window_source=self.context_window_source,
                 context_window_warning=self.context_window_warning,
+                web_capability=self._web_capability_line,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of

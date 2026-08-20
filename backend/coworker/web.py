@@ -388,7 +388,9 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
         if not key:
             return json.dumps(
                 {
-                    "error": "Tavily API key is not configured. Ask the user to set it in Settings → Web.",
+                    "error": "Tavily API key is not configured. Tell the user they must configure it "
+                    "in Settings → Web (联网设置) → Tavily API Key before web search works.",
+                    "error_code": "tavily_key_missing",
                     "answer": "",
                     "results": [],
                 },
@@ -422,3 +424,53 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
         tools.append(web_fetch)
 
     return tools
+
+
+# ── Runtime-facing helpers ────────────────────────────────────────────────
+
+def resolve_web_tools(data_dir: Path | str | None) -> list[Any]:
+    """Web tools for a runtime/sub-agent when web is enabled, else ``[]``.
+
+    The key is optional: ``web_fetch`` works without it, and ``web_search``
+    reports the missing-key state to the model (which then prompts the user to
+    configure Tavily in Settings → Web). When web is disabled no tools are
+    mounted at all — the agent still learns the state from the capability line.
+    """
+    if data_dir is None:
+        return []
+    config = load_web_config(data_dir)
+    if not config.enabled:
+        return []
+    return build_web_tools(config, get_tavily_key(data_dir))
+
+
+def web_capability_status(data_dir: Path | str | None) -> str:
+    """Current web capability: ``'disabled'`` | ``'no_key'`` | ``'ok'``."""
+    if data_dir is None:
+        return "disabled"
+    config = load_web_config(data_dir)
+    if not config.enabled:
+        return "disabled"
+    return "no_key" if not tavily_key_configured(data_dir) else "ok"
+
+
+def web_capability_line(data_dir: Path | str | None) -> str:
+    """One-line capability summary injected into the agent's system prompt."""
+    status = web_capability_status(data_dir)
+    if status == "ok":
+        return (
+            "Web access is ENABLED: use web_search for current/external information and "
+            "web_fetch to read full pages. Cite the sources you used."
+        )
+    if status == "no_key":
+        return (
+            "Web access is ENABLED but the Tavily search key is not configured. web_fetch works "
+            "without a key; web_search will fail with a 'key not configured' error. If the task "
+            "needs live search results, tell the user to configure the Tavily API key in "
+            "Settings → Web (联网设置), then retry."
+        )
+    return (
+        "Web access is DISABLED — you have no web_search/web_fetch tools. If the task needs "
+        "current or external information, tell the user they must enable 'web access' in "
+        "Settings → Web (联网设置) first. Never fabricate URLs or claim you searched."
+    )

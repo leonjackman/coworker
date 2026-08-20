@@ -629,7 +629,8 @@ export interface PendingRequest {
     | { type: 'reasoning_delta'; content: string; session_id?: string }
     | { type: 'tool_start'; id: string; name: string; input: string; session_id?: string }
     | { type: 'tool_delta'; id: string; input: string; session_id?: string }
-    | { type: 'tool_end'; id: string; output: string; status: string; duration_ms?: number; files?: PartFileChange[]; input?: string; session_id?: string }
+    | { type: 'tool_end'; id: string; name?: string; output: string; status: string; duration_ms?: number; files?: PartFileChange[]; input?: string; session_id?: string }
+    | { type: 'web_setup_hint'; status: 'disabled' | 'no_key'; session_id?: string }
     | { type: 'plan_start'; session_id?: string }
     | { type: 'plan_delta'; content: string; session_id?: string }
     | { type: 'plan_end'; content: string; session_id?: string }

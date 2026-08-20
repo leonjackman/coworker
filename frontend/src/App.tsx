@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { ChatInput, extractSessionIds, type CommandChip } from './components/ChatInput';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
+import { WebSetupHintBar } from './components/WebSetupHintBar';
 import { GoalCard } from './components/GoalCard';
 import { TodoBlock } from './components/TodoBlock';
 import { ProvidersPanel } from './components/ProvidersPanel';
@@ -12,7 +13,7 @@ import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
 import { NewChatHero } from './components/NewChatHero';
-import { SettingsView } from './components/settings/SettingsView';
+import { SettingsView, type SettingsPage } from './components/settings/SettingsView';
 import { OrgSettingsPage } from './components/settings/OrgSettingsPage';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
@@ -303,6 +304,9 @@ function App() {
   }, [workMode]);
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [webSetupHint, setWebSetupHint] = useState<'disabled' | 'no_key' | null>(null);
+  const [webHintDismissed, setWebHintDismissed] = useState(false);
+  const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPage | null>(null);
   const [references, setReferences] = useState<SessionReference[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
@@ -703,6 +707,23 @@ function App() {
     }
   };
 
+  const handleStreamWebEvents = (event: StreamEvent) => {
+    if (event.type === 'web_setup_hint') {
+      if (!webHintDismissed) setWebSetupHint(event.status);
+    } else if (event.type === 'tool_end' && event.name === 'web_search' && event.output?.includes('tavily_key_missing')) {
+      // Agent attempted a search while the key is missing — surface the hint
+      // even if a previous hint was dismissed.
+      setWebSetupHint('no_key');
+    }
+  };
+
+  const openSettingsPage = (page: SettingsPage) => {
+    setSettingsInitialPage(page);
+    setWebHintDismissed(true);
+    setWebSetupHint(null);
+    setActiveView('settings');
+  };
+
   const sendMessage = async (override?: { message: string; projectId?: string; goalMode?: boolean; goalText?: string }) => {
     // 目标编辑模式：composer 已是 contentEditable（无 textarea），草稿经
     // ChatInput 的 onChange 同步进 input state，这里直接读它更新目标卡。
@@ -932,6 +953,7 @@ function App() {
       // switch), so the background reply streams to completion instead of
       // freezing at status "running" forever.
       if (isStreamStale(requestSessionId, myRequestSeq)) return;
+      handleStreamWebEvents(event);
       // Goal-state events (goal_*, todos) must only drive the goal card of the
       // currently-viewed session; a background session's goal must not clobber
       // it (including while on the hero/draft, where no goal card should exist).
@@ -1549,6 +1571,7 @@ function App() {
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
+      handleStreamWebEvents(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
           const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) }; setContextUsage(cu2);
@@ -1783,6 +1806,7 @@ function App() {
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
+      handleStreamWebEvents(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
           const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) }; setContextUsage(cu2);
@@ -2069,6 +2093,7 @@ function App() {
         (event) => {
           // P1 陈旧请求守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
           if (isStreamStale(resumeSessionId, resumeRequestSeq)) return;
+          handleStreamWebEvents(event);
           if (event.type === 'context_usage') {
             if (!event.session_id || event.session_id === sessionIdRef.current) {
               const cu = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) };
@@ -3152,8 +3177,15 @@ function App() {
                           </button>
                         </div>
                       )}
-                      {currentSessionPending.length > 0 ? (
+                      {currentSessionPending.length > 0 || webSetupHint ? (
                         <div className="workspace-dock-area">
+                          {webSetupHint && (
+                            <WebSetupHintBar
+                              status={webSetupHint}
+                              onConfigure={() => openSettingsPage('web')}
+                              onDismiss={() => setWebHintDismissed(true)}
+                            />
+                          )}
                           <PendingDocks
                             requests={currentSessionPending}
                             onResolve={async (request, decision) => {
@@ -3249,6 +3281,8 @@ function App() {
                   modelOptions={modelOptions}
                   updateCenter={updateCenter}
                   onClose={() => setActiveView('chat')}
+                  initialPage={settingsInitialPage ?? 'main'}
+                  onInitialPageConsumed={() => setSettingsInitialPage(null)}
                 />
               )}
             </section>

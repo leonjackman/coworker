@@ -341,6 +341,16 @@ class Delegator:
             "workspace_path": str(self.workspace.root),
             "delegated_to": agent,
         }
+        web_tools: list = []
+        web_capability = ""
+        try:
+            from coworker.web import resolve_web_tools, web_capability_line
+
+            web_tools = resolve_web_tools(self.data_dir)
+            web_capability = web_capability_line(self.data_dir)
+        except Exception:  # noqa: BLE001 - delegation must never break on a web misconfig
+            web_tools = []
+            web_capability = ""
         tools = build_workspace_tools(
             self.workspace,
             audit_context,
@@ -354,6 +364,7 @@ class Delegator:
             delegator=self if allow_delegate else None,
             caller_agent=agent,
             readonly=readonly,
+            web_tools=web_tools,
         )
         graph = build_coworker_agent_graph(
             self.llm,
@@ -368,6 +379,7 @@ class Delegator:
             skill_manager=self.skill_manager,
             memory_manager=view,
             workspace=self.workspace,
+            web_capability=web_capability,
         )
         hierarchy = self._hierarchy_prompt(agent)
         messages = prepare_agent_messages(
