@@ -1834,6 +1834,14 @@ body.inspector-resizing .right-panel__resizer::after {
 }
 
 /* ── Embedded browser view ─────────────────────────────────────────────── */
+:root {
+  --browser-bg: #ffffff;
+}
+
+:root[data-theme="dark"] {
+  --browser-bg: #1b1b1e;
+}
+
 .browser-view {
   display: flex;
   flex-direction: column;
@@ -1903,7 +1911,7 @@ body.inspector-resizing .right-panel__resizer::after {
   position: relative;
   flex: 1;
   min-height: 0;
-  background: #fff;
+  background: var(--browser-bg);
 }
 
 .browser-view__webview {
@@ -5098,7 +5106,8 @@ body.bottom-panel-resizing {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .inspector-panel {
+  .inspector-panel,
+  .right-panel {
     display: none;
   }
 }

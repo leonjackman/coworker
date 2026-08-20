@@ -262,6 +262,8 @@ function App() {
   const [changesRefreshKey, setChangesRefreshKey] = useState(0);
   const [inspectorWidth, setInspectorWidth] = useState(300);
   const [inspectorResizing, setInspectorResizing] = useState(false);
+  const workspaceFrameRef = useRef<HTMLElement | null>(null);
+  const [workspaceFrameWidth, setWorkspaceFrameWidth] = useState(0);
   const [changesPanelWidth, setChangesPanelWidth] = useState(380);
   const [changesPanelResizing, setChangesPanelResizing] = useState(false);
   const [autonomy, setAutonomy] = useState<Autonomy>(() => {
@@ -3123,6 +3125,47 @@ function App() {
     );
   };
 
+  // ── Right-panel width strategy ────────────────────────────────────────
+  // The chat (main workspace) keeps a width floor; the right panel may grow
+  // arbitrarily wide as long as it never crushes the chat below that floor.
+  const CHAT_MIN_WIDTH = 420;
+  // Measure the real workspace-frame width (tracks sidebar resize/collapse,
+  // window resize, and the mobile drawer automatically).
+  useEffect(() => {
+    const node = workspaceFrameRef.current;
+    if (!node) return;
+    const update = () => setWorkspaceFrameWidth(node.getBoundingClientRect().width);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const rightPanelMax = Math.max(
+    240,
+    workspaceFrameWidth - CHAT_MIN_WIDTH - (changesPanelOpen ? changesPanelWidth : 0),
+  );
+
+  // Clamp the panel so the chat floor is always respected when the available
+  // space shrinks (narrower window, opening the changes panel, etc.).
+  useEffect(() => {
+    if (!rightSidebarOpen) return;
+    setInspectorWidth((current) => Math.min(Math.max(240, current), Math.max(240, rightPanelMax)));
+  }, [rightPanelMax, rightSidebarOpen]);
+
+  // Browser tabs open wider by default so the first view is comfortable.
+  // Keyed on the active tab id only — a manual drag on an already-active
+  // browser tab must never be overridden.
+  const inspectorWidthRef = useRef(inspectorWidth);
+  inspectorWidthRef.current = inspectorWidth;
+  useEffect(() => {
+    const activeTab = rightTabs.find((tab) => tab.id === activeRightTabId);
+    if (activeTab?.kind === 'browser' && inspectorWidthRef.current < 560) {
+      setInspectorWidth((current) => Math.min(Math.max(current, 560), Math.max(240, rightPanelMax)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRightTabId, rightTabs, rightPanelMax]);
+
   useEffect(() => {
     let cancelled = false;
     async function fetchBranch() {
@@ -3256,7 +3299,7 @@ function App() {
           {...(goal.goalText && !goal.done && sessionId ? { goalIndicatorSessionId: sessionId } : {})}
           runningSessionIds={runningSessionIds}
         />
-        <section className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
+        <section ref={workspaceFrameRef} className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
             <section className={`workspace-shell workspace-shell--${activeView}`}>
               {activeView === 'chat' ? (
@@ -3456,6 +3499,7 @@ function App() {
                 onResizeStart={() => setInspectorResizing(true)}
                 onResizeEnd={() => setInspectorResizing(false)}
                 onResizeWidth={(width) => setInspectorWidth(width)}
+                maxWidth={rightPanelMax}
               />
             )}
             {changesPanelOpen && (

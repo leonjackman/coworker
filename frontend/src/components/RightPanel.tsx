@@ -28,6 +28,7 @@ interface RightPanelProps {
   onResizeStart: () => void;
   onResizeEnd: () => void;
   onResizeWidth: (width: number) => void;
+  maxWidth?: number;
 }
 
 const KIND_LABEL: Record<RightPanelTabKind, () => string> = {
@@ -73,11 +74,12 @@ export function RightPanel({
   onResizeStart,
   onResizeEnd,
   onResizeWidth,
+  maxWidth,
 }: RightPanelProps) {
   const handleResizePointerDown = usePanelResize({
     bodyClassName: 'inspector-resizing',
     min: 240,
-    max: 640,
+    max: maxWidth ?? 640,
     direction: -1,
     onResizeStart,
     onResizeEnd,
