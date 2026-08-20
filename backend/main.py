@@ -592,11 +592,13 @@ class ProviderTestPayload(BaseModel):
     base_url: str
     api_key: str = ""
     model: str
+    provider_id: str = ""
 
 class ProviderFetchModelsPayload(BaseModel):
     base_url: str
     api_key: str = ""
     provider_type: str = "custom"
+    provider_id: str = ""
 
 class WorkspaceCommandRequest(BaseModel):
     command: str
@@ -3926,19 +3928,33 @@ def delete_provider(provider_id: str):
 
 @app.post("/providers/test")
 def test_provider(request: ProviderTestPayload):
+    api_key = _resolve_provider_secret(request) if not request.api_key and request.provider_id else request.api_key
     try:
-        result = provider_manager.test_provider_connection(request.base_url, request.api_key, request.model)
+        result = provider_manager.test_provider_connection(request.base_url, api_key, request.model)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "result": result}
 
 @app.post("/providers/fetch-models")
 def fetch_provider_models(request: ProviderFetchModelsPayload):
+    api_key = _resolve_provider_secret(request) if not request.api_key and request.provider_id else request.api_key
     try:
-        models = provider_manager.fetch_models(request.base_url, request.api_key, request.provider_type)
+        models = provider_manager.fetch_models(request.base_url, api_key, request.provider_type)
     except Exception as exc:
         return {"status": "error", "models": [], "error": str(exc)[:300]}
     return {"status": "ok", "models": models}
+
+
+def _resolve_provider_secret(request: BaseModel) -> str:
+    """Fill an empty test/fetch api_key from the Keychain-stored secret of the
+    provider being edited (key_in_secrets providers keep the JSON blank)."""
+    try:
+        config = provider_manager.load()
+        provider = provider_manager.require_provider(config, request.provider_id)
+        provider_manager._resolve_secret(provider)
+        return provider.api_key
+    except Exception:
+        return ""
 
 
 # ─────────────────────────── MCP ──────────────────────────

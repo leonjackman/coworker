@@ -108,8 +108,8 @@ export interface ChatService {
   updateProvider: (providerId: string, request: ProviderUpdatePayload) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
   setDefaultProvider: (providerId: string, model: string) => Promise<void>;
-  testProvider: (request: { base_url: string; api_key: string; model: string }) => Promise<ProviderTestResult>;
-  fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string }) => Promise<{ models: string[]; error?: string }>;
+  testProvider: (request: { base_url: string; api_key: string; model: string; provider_id?: string }) => Promise<ProviderTestResult>;
+  fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string; provider_id?: string }) => Promise<{ models: string[]; error?: string }>;
   discoverProviderContext: (providerId: string) => Promise<{ status: string; provider: ProviderEntry }>;
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;

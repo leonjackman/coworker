@@ -121,6 +121,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
         base_url: form.base_url,
         api_key: form.api_key,
         provider_type: form.provider_type,
+        provider_id: form.id ?? '',
       });
       setForm((current) => ({
         ...current,
@@ -228,6 +229,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
         base_url: form.base_url,
         api_key: form.api_key,
         model: form.model,
+        provider_id: form.id ?? '',
       });
       setTestResult(result);
     } catch (error) {
