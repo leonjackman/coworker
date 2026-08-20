@@ -423,6 +423,7 @@
   "browser.forward": "Forward",
   "browser.reload": "Reload",
   "browser.placeholder_url": "Enter a URL or search…",
+  "browser.agent_control_badge": "Agent is controlling",
   "browser.menu.cut": "Cut",
   "browser.menu.copy": "Copy",
   "browser.menu.paste": "Paste",

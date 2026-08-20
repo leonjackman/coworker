@@ -2030,17 +2030,21 @@ def _msg_tokens(msg: Any) -> int:
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token count: ~4 chars/token for Latin, ~1.6 chars/token for CJK.
+    """Rough token count: ~3.8 chars/token for Latin, ~1.6 chars/token for CJK.
 
     A flat 3.5 chars/token (CHARS_PER_TOKEN) over-estimates tokens for Chinese
     and under-states real context usage — see B4. Blending the two scripts keeps
-    the displayed budget closer to what the provider actually counts.
+    the displayed budget closer to what the provider actually counts. Latin is
+    nudged to 3.8 (not 4) because dense ASCII payloads like base64 image data /
+    JSON in tool results tokenize slightly denser than plain prose; under-counting
+    these is what let a browser-heavy session drift past the provider's real
+    window despite the 0.75 safety factor.
     """
     if not text:
         return 0
     cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
     other = len(text) - cjk
-    return max(1, round(other / 4 + cjk * 0.6))
+    return max(1, round(other / 3.8 + cjk * 0.6))
 
 
 def _truncate_message(msg: Any, budget: int) -> Any:

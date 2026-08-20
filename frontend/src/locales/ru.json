@@ -414,6 +414,7 @@
   "browser.forward": "Вперёд",
   "browser.reload": "Обновить",
   "browser.placeholder_url": "Введите URL или поисковый запрос…",
+  "browser.agent_control_badge": "Агент управляет",
   "browser.menu.cut": "Вырезать",
   "browser.menu.copy": "Копировать",
   "browser.menu.paste": "Вставить",

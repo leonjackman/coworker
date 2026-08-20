@@ -433,6 +433,7 @@
   "browser.forward": "Suivant",
   "browser.reload": "Actualiser",
   "browser.placeholder_url": "Saisissez une URL ou recherchez…",
+  "browser.agent_control_badge": "L’agent contrôle",
   "browser.menu.cut": "Couper",
   "browser.menu.copy": "Copier",
   "browser.menu.paste": "Coller",

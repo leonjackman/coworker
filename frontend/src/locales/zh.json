@@ -463,6 +463,7 @@
   "browser.forward": "前进",
   "browser.reload": "刷新",
   "browser.placeholder_url": "输入网址或搜索…",
+  "browser.agent_control_badge": "Agent 控制中",
   "browser.menu.cut": "剪切",
   "browser.menu.copy": "复制",
   "browser.menu.paste": "粘贴",

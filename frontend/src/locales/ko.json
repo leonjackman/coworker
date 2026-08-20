@@ -20,6 +20,7 @@
   "browser.forward": "앞으로",
   "browser.reload": "새로고침",
   "browser.placeholder_url": "URL 또는 검색어 입력…",
+  "browser.agent_control_badge": "에이전트가 제어 중",
   "browser.menu.cut": "잘라내기",
   "browser.menu.copy": "복사",
   "browser.menu.paste": "붙여넣기",

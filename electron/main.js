@@ -974,7 +974,22 @@ class BrowserController {
     const g = this.guest;
     if (!g) throw new Error('browser_not_attached');
     const image = await g.capturePage();
-    return image.toDataURL();
+    return this._shotDataUrl(image);
+  }
+
+  // Downscale + JPEG-encode a captured frame. A full-size PNG of a busy page is
+  // ~100-300KB of base64 (≈ 25-75k tokens in a tool result) — a huge share of
+  // the model context window per screenshot. 720px JPEG is ~3-4x smaller while
+  // staying readable for the agent's visual click workflow.
+  _shotDataUrl(image, maxWidth = 720, quality = 70) {
+    const size = image.getSize();
+    const scale = size.width > maxWidth ? maxWidth / size.width : 1;
+    let out = image;
+    if (scale < 1) {
+      out = image.resize({ width: Math.round(size.width * scale) });
+    }
+    const jpeg = out.toJPEG(quality);
+    return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
   }
 
   async click(x, y) {
@@ -1063,7 +1078,7 @@ class BrowserController {
         pageText = '';
       }
       try {
-        screenshot = (await g.capturePage()).toDataURL();
+        screenshot = this._shotDataUrl(await g.capturePage());
       } catch {
         screenshot = null;
       }
@@ -1110,14 +1125,14 @@ class BrowserController {
           rect.y < (await this._eval('window.innerHeight'));
         if (inViewport) {
           try {
-            screenshot = (
+            screenshot = this._shotDataUrl(
               await g.capturePage({
                 x: Math.max(0, rect.x),
                 y: Math.max(0, rect.y),
                 width: Math.max(1, rect.width),
                 height: Math.max(1, rect.height),
-              })
-            ).toDataURL();
+              }),
+            );
           } catch {
             screenshot = null;
           }
@@ -1126,6 +1141,57 @@ class BrowserController {
     }
 
     return { url, title, element, pageText, screenshot };
+  }
+
+  // Compact, clickable DOM snapshot for the agent (ego-browser / codex style):
+  // a numbered list of interactive elements with their viewport centers and
+  // visibility, so the model can navigate and click by reference instead of
+  // pulling a full screenshot into context on every step.
+  async snapshot(maxItems = 80) {
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    const budget = Math.max(10, Math.min(300, Number(maxItems) || 80));
+    const expr = `(() => {
+      const items = [];
+      const seen = new Set();
+      const sel = 'a[href], button, input, textarea, select, [role="button"], [role="link"], [onclick], [contenteditable], [tabindex]';
+      document.querySelectorAll(sel).forEach((el) => {
+        if (items.length >= ${budget}) return;
+        if (seen.has(el)) return;
+        seen.add(el);
+        const r = el.getBoundingClientRect();
+        if (r.width <= 1 || r.height <= 1) return;
+        const cs = getComputedStyle(el);
+        if (cs.visibility === 'hidden' || cs.display === 'none') return;
+        const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
+        const href = el.tagName === 'A' && el.href ? el.href.slice(0, 200) : '';
+        const n = items.length + 1;
+        items.push({
+          n,
+          tag: el.tagName.toLowerCase(),
+          text: text || href || '',
+          type: el.type || '',
+          name: el.name || '',
+          id: el.id || '',
+          class: typeof el.className === 'string' ? el.className.slice(0, 80) : '',
+          href,
+          center: { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) },
+          inViewport: r.x < window.innerWidth && r.y < window.innerHeight && r.x + r.width > 0 && r.y + r.height > 0,
+        });
+      });
+      return {
+        url: location.href,
+        title: document.title,
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        count: items.length,
+        items,
+      };
+    })()`;
+    try {
+      return await g.executeJavaScript(expr, true);
+    } catch {
+      return { url: g.getURL() || '', title: g.getTitle() || '', viewport: {}, count: 0, items: [] };
+    }
   }
 }
 
@@ -1159,6 +1225,8 @@ async function handleBridgeRequest(method, url, payload) {
       return { image: await browserController.screenshot() };
     case '/evaluate':
       return { result: await browserController.evaluate(payload.expression) };
+    case '/snapshot':
+      return browserController.snapshot(payload.max_items);
     case '/get_text':
       return browserController.getText(payload.max_chars);
     case '/act':

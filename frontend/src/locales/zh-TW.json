@@ -419,6 +419,7 @@
   "browser.forward": "下一頁",
   "browser.reload": "重新整理",
   "browser.placeholder_url": "輸入網址或搜尋…",
+  "browser.agent_control_badge": "Agent 控制中",
   "browser.menu.cut": "剪下",
   "browser.menu.copy": "複製",
   "browser.menu.paste": "貼上",

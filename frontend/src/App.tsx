@@ -254,6 +254,8 @@ function App() {
   const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(() => [{ id: 'browser-1', kind: 'browser' }]);
   const [activeRightTabId, setActiveRightTabId] = useState<string>('browser-1');
   const browserHandlesRef = useRef<Map<string, BrowserViewHandle>>(new Map());
+  const [browserAgentActive, setBrowserAgentActive] = useState(false);
+  const [browserAgentClick, setBrowserAgentClick] = useState<{ x: number; y: number; key: number } | null>(null);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
   const [bottomPanelView, setBottomPanelView] = useState<BottomPanelView>('terminal');
   const [bottomPanelHeight, setBottomPanelHeight] = useState(190);
@@ -953,6 +955,7 @@ function App() {
     let inGoal = false;
 
     const handleEvent = (event: StreamEvent) => {
+      trackBrowserToolEvent(event);
       // Stale guard: only superseded streams of the SAME session are ignored.
       // Events from a stream belonging to another session MUST be processed —
       // they update that session's own message by id (kept alive across a
@@ -1400,6 +1403,7 @@ function App() {
         playSound('reply_error');
       }
     } finally {
+      stopBrowserAgent();
       // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
       // 按消息 id 收尾（每个流持有独立 id），因此切走会话后后台流结束时也会被正确收尾，
       // 侧栏 running 指示随之清除；不会误伤其它流的消息。
@@ -1590,6 +1594,7 @@ function App() {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       handleStreamWebEvents(event);
+      trackBrowserToolEvent(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
           const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) }; setContextUsage(cu2);
@@ -1753,6 +1758,7 @@ function App() {
         playSound('reply_error');
       }
     } finally {
+      stopBrowserAgent();
       if (streamControllersRef.current[streamKey(currentSessionId)] === controller) {
         delete streamControllersRef.current[streamKey(currentSessionId)];
         delete activeAssistantMessageIdsRef.current[streamKey(currentSessionId)];
@@ -1825,6 +1831,7 @@ function App() {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
       handleStreamWebEvents(event);
+      trackBrowserToolEvent(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
           const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) }; setContextUsage(cu2);
@@ -1983,6 +1990,7 @@ function App() {
         playSound('reply_error');
       }
     } finally {
+      stopBrowserAgent();
       if (streamControllersRef.current[streamKey(currentSessionId)] === controller) {
         delete streamControllersRef.current[streamKey(currentSessionId)];
         delete activeAssistantMessageIdsRef.current[streamKey(currentSessionId)];
@@ -2097,6 +2105,7 @@ function App() {
       );
       return;
     } finally {
+      stopBrowserAgent();
       resolvingRef.current = false;
     }
 
@@ -2266,6 +2275,7 @@ function App() {
         console.error('Approval event stream failed:', error);
       }
     } finally {
+      stopBrowserAgent();
       // P0 并发双流修复：resume 流结束后清除该会话的 controller
       if (streamControllersRef.current[streamKey(resumeSessionId)] === resumeController) {
         delete streamControllersRef.current[streamKey(resumeSessionId)];
@@ -2824,6 +2834,7 @@ function App() {
       }
       setGoal((current) => ({ ...current, running: false }));
     } finally {
+      stopBrowserAgent();
       if (streamControllersRef.current[key] === controller) {
         delete streamControllersRef.current[key];
         delete activeAssistantMessageIdsRef.current[key];
@@ -2904,6 +2915,7 @@ function App() {
 
   const handleGoalResumeEvent = (event: StreamEvent) => {
     if (event.session_id && event.session_id !== sessionIdRef.current) return;
+    trackBrowserToolEvent(event);
     if (event.type === 'goal_start' || event.type === 'goal_round') {
       setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
     } else if (event.type === 'goal_checkpoint') {
@@ -2933,6 +2945,7 @@ function App() {
 
   const handleGoalResumeEventWithChat = (event: StreamEvent) => {
     if (event.session_id && event.session_id !== sessionIdRef.current) return;
+    trackBrowserToolEvent(event);
     if (event.type === 'goal_start' || event.type === 'goal_round') {
       if (event.session_id) goalSessionIdRef.current = event.session_id;
       setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
@@ -3124,6 +3137,27 @@ function App() {
       prev.map((tab) => (tab.id === tabId ? { ...tab, data: { ...(tab.data || {}), title } } : tab)),
     );
   };
+
+  // Drive the blue "agent is controlling the browser" overlay from the SSE
+  // stream: any browser tool_start lights it up (and records click coords for a
+  // brief target ring); the matching tool_end switches it off.
+  const trackBrowserToolEvent = (event: StreamEvent) => {
+    if (event.type === 'tool_start' && event.name === 'browser') {
+      setBrowserAgentActive(true);
+      try {
+        const args = JSON.parse(event.input || '{}') as { action?: string; x?: number; y?: number };
+        if (args?.action === 'click' && typeof args.x === 'number' && typeof args.y === 'number') {
+          setBrowserAgentClick({ x: args.x, y: args.y, key: Date.now() });
+        }
+      } catch {
+        // ignore malformed input
+      }
+    } else if (event.type === 'tool_end' && event.name === 'browser') {
+      setBrowserAgentActive(false);
+    }
+  };
+
+  const stopBrowserAgent = () => setBrowserAgentActive(false);
 
   // ── Right-panel width strategy ────────────────────────────────────────
   // The chat (main workspace) keeps a width floor; the right panel may grow
@@ -3492,6 +3526,8 @@ function App() {
                 onAddCapture={(attachments) => {
                   if (attachments.length) setAttachments((prev) => [...prev, ...attachments]);
                 }}
+                agentActive={browserAgentActive}
+                agentClick={browserAgentClick}
                 onResizeStart={() => setInspectorResizing(true)}
                 onResizeEnd={() => setInspectorResizing(false)}
                 onResizeWidth={(width) => setInspectorWidth(width)}

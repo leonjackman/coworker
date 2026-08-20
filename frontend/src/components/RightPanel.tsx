@@ -14,6 +14,8 @@ interface RightPanelProps {
   onBrowserTitle: (tabId: string, title: string) => void;
   onOpenNewTab: (url: string) => void;
   onAddCapture: (attachments: ComposerAttachment[]) => void;
+  agentActive?: boolean;
+  agentClick?: { x: number; y: number; key: number } | null;
   onResizeStart: () => void;
   onResizeEnd: () => void;
   onResizeWidth: (width: number) => void;
@@ -43,6 +45,8 @@ export function RightPanel({
   onBrowserTitle,
   onOpenNewTab,
   onAddCapture,
+  agentActive,
+  agentClick,
   onResizeStart,
   onResizeEnd,
   onResizeWidth,
@@ -125,6 +129,8 @@ export function RightPanel({
                 onUrlChange={(url) => onBrowserTitle(tab.id, '')}
                 onOpenNewTab={onOpenNewTab}
                 onAddCapture={onAddCapture}
+                agentActive={agentActive}
+                agentClick={agentClick}
               />
             </div>
           );

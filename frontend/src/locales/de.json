@@ -415,6 +415,7 @@
   "browser.forward": "Weiter",
   "browser.reload": "Neu laden",
   "browser.placeholder_url": "URL oder Suchbegriff eingeben…",
+  "browser.agent_control_badge": "Agent steuert",
   "browser.menu.cut": "Ausschneiden",
   "browser.menu.copy": "Kopieren",
   "browser.menu.paste": "Einfügen",

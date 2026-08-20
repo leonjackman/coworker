@@ -41,6 +41,13 @@ _CACHE_TTL = 5.0
 #: budget.
 BROWSER_OUTPUT_MAX_CHARS = 50_000
 
+#: Tighter cap for raw ``evaluate`` results. A single evaluate of a heavy page
+#: global (e.g. bilibili __INITIAL_STATE__) can be 200k+ chars; even truncated
+#: to 50k chars that is ~12.5k tokens per call. 20k chars (~5k tokens) is plenty
+#: for a targeted extract and keeps the context much smaller. The hard
+#: ``BROWSER_OUTPUT_MAX_CHARS`` backstop still applies on top.
+BROWSER_EVALUATE_MAX_CHARS = 20_000
+
 _TRUNCATION_NOTE = (
     "\n[content truncated by Coworker to fit context; use scroll + targeted "
     "evaluate to read more]"
@@ -166,6 +173,9 @@ class BridgeClient:
     def evaluate(self, expression: str) -> dict[str, Any]:
         return self._call("POST", "/evaluate", {"expression": expression})
 
+    def snapshot(self, max_items: int = 80) -> dict[str, Any]:
+        return self._call("POST", "/snapshot", {"max_items": int(max_items)})
+
     def get_text(self, max_chars: int = BROWSER_OUTPUT_MAX_CHARS) -> dict[str, Any]:
         return self._call("POST", "/get_text", {"max_chars": int(max_chars)})
 
@@ -184,11 +194,14 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
     if browser_capability_status(data_dir) == "ok":
         return (
             "The built-in browser is ENABLED: use the browser tool to open pages, take "
-            "screenshots, click, type and scroll. The user sees the live page in the "
-            "right-side browser panel. To read the current page's text, use the browser "
-            "tool's get_text action (a bounded, cleaned extract) or a targeted evaluate "
-            "(e.g. title + specific selectors) — never dump the whole page innerText, "
-            "which can overflow the model's context window."
+            "compact DOM snapshots, click, type and scroll. The user sees the live page "
+            "in the right-side browser panel. Preferred workflow: navigate -> snapshot "
+            "(a numbered list of interactive elements with their on-screen center "
+            "coordinates) -> click a numbered element / type -> snapshot again. Take a "
+            "screenshot only when a page's visual state matters (images, layout). To "
+            "read page text use get_text or a targeted evaluate (title + specific "
+            "selectors) — never dump whole-page innerText, which can overflow the "
+            "model's context window."
         )
     return (
         "The built-in browser is DISABLED — you have no browser tool. It is only available "
@@ -198,7 +211,7 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
 
 
 BrowserAction = Literal[
-    "navigate", "get_state", "get_text", "screenshot", "click", "type", "press",
+    "navigate", "get_state", "get_text", "snapshot", "screenshot", "click", "type", "press",
     "scroll", "back", "forward", "reload", "evaluate",
 ]
 
@@ -234,6 +247,7 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
         dx: float = Field(0, description="For 'scroll': horizontal scroll delta.")
         dy: float = Field(0, description="For 'scroll': vertical scroll delta.")
         max_chars: int = Field(BROWSER_OUTPUT_MAX_CHARS, description="For 'get_text': max characters of page text to return (default 50000).")
+        max_items: int = Field(80, description="For 'snapshot': max interactive elements to list (default 80).")
 
     client = BridgeClient(data_dir)
 
@@ -249,17 +263,21 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
         dx: float = 0,
         dy: float = 0,
         max_chars: int = BROWSER_OUTPUT_MAX_CHARS,
+        max_items: int = 80,
     ) -> str:
         """Open and drive the user's embedded browser (visible live in the right panel).
 
-        Workflow: ``navigate`` to a page, then ``screenshot`` to see it, then
-        ``click``/``type``/``press``/``scroll`` to interact, then ``screenshot``
-        again to verify. ``get_state`` returns the current URL/title. To read a
-        page's text (e.g. "read the current page"), use ``get_text`` for a
-        bounded, cleaned extract, or a *targeted* ``evaluate`` (title + specific
-        selectors, or ``document.body.innerText.slice(0, 4000)``) — never dump
-        the whole ``document.body.innerText``: content-heavy pages exceed the
-        model's context window. All tool output is truncated at ~50k chars.
+        Preferred workflow: ``navigate`` to a page, then ``snapshot`` (a numbered
+        list of interactive elements with their on-screen center coordinates),
+        then ``click``/``type``/``press``/``scroll`` to interact, then
+        ``snapshot`` again to verify. Take a ``screenshot`` only when the page's
+        visual state matters (images, layout) — every screenshot costs tokens.
+        ``get_state`` returns the current URL/title. To read a page's text, use
+        ``get_text`` (bounded, cleaned) or a *targeted* ``evaluate`` (title +
+        specific selectors, or ``document.body.innerText.slice(0, 4000)``) —
+        never dump the whole ``document.body.innerText``: content-heavy pages
+        exceed the model's context window. Tool output is truncated (~50k chars;
+        evaluate ~20k).
         """
         try:
             if action == "navigate":
@@ -268,6 +286,8 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
                 result = client.state()
             elif action == "get_text":
                 result = client.get_text(max_chars=max_chars)
+            elif action == "snapshot":
+                result = client.snapshot(max_items=max_items)
             elif action == "screenshot":
                 result = client.screenshot()
             elif action == "click":
@@ -296,8 +316,11 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
         payload = json.dumps(result, ensure_ascii=False)
         # Hard backstop: cap any single tool output so a huge page can never
         # overflow the model context window (get_text/evaluate are the usual
-        # offenders, but this guards every action).
-        if len(payload) > BROWSER_OUTPUT_MAX_CHARS:
+        # offenders, but this guards every action). evaluate gets an even tighter
+        # cap — a single raw JS extract of a heavy page global can be enormous.
+        if action == "evaluate" and len(payload) > BROWSER_EVALUATE_MAX_CHARS:
+            payload = payload[:BROWSER_EVALUATE_MAX_CHARS] + _TRUNCATION_NOTE
+        elif len(payload) > BROWSER_OUTPUT_MAX_CHARS:
             payload = payload[:BROWSER_OUTPUT_MAX_CHARS] + _TRUNCATION_NOTE
         return payload
 

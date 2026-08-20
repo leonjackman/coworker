@@ -56,6 +56,8 @@ interface BrowserViewProps {
   onHandle?: (handle: BrowserViewHandle) => void;
   onOpenNewTab?: (url: string) => void;
   onAddCapture?: (attachments: ComposerAttachment[]) => void;
+  agentActive?: boolean | undefined;
+  agentClick?: { x: number; y: number; key: number } | null | undefined;
 }
 
 function normalizeUrl(input: string): string {
@@ -98,7 +100,7 @@ function buildCaptureAttachments(capture: BrowserCaptureResult, intent: string):
 }
 
 export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(function BrowserView(
-  { initialUrl, active = true, onTitleChange, onUrlChange, onHandle, onOpenNewTab, onAddCapture },
+  { initialUrl, active = true, onTitleChange, onUrlChange, onHandle, onOpenNewTab, onAddCapture, agentActive, agentClick },
   ref,
 ) {
   const webviewRef = useRef<ElectronWebview | null>(null);
@@ -107,6 +109,15 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
   const [address, setAddress] = useState(initialUrl || '');
   const [loading, setLoading] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; params: BrowserContextMenuPayload } | null>(null);
+  const [clickShown, setClickShown] = useState<{ x: number; y: number } | null>(null);
+
+  // Briefly show a target ring at the agent's click coordinate.
+  useEffect(() => {
+    if (!agentClick) return;
+    setClickShown({ x: agentClick.x, y: agentClick.y });
+    const timer = setTimeout(() => setClickShown(null), 900);
+    return () => clearTimeout(timer);
+  }, [agentClick]);
 
   const navigate = useCallback((url: string) => {
     const wv = webviewRef.current;
@@ -368,6 +379,13 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
           // the new-window path) — the "some buttons need Cmd" symptom.
           allowpopups: 'true',
         })}
+        {active && agentActive && (
+          <>
+            <div className="browser-agent-ring" aria-hidden="true" />
+            <span className="browser-agent-badge">{t('browser.agent_control_badge')}</span>
+            {clickShown && <span className="browser-agent-click" style={{ left: clickShown.x, top: clickShown.y }} aria-hidden="true" />}
+          </>
+        )}
       </div>
       {contextMenu && (
         <>

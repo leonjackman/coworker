@@ -1853,6 +1853,75 @@ body.inspector-resizing .right-panel__resizer::after {
   background: transparent;
 }
 
+/* ── Agent is controlling the browser ──────────────────────────────────── */
+/* Blue flowing gradient ring (codex / ego-lite style): a thin border ring
+   whose gradient animates, signalling "the agent is driving this page".
+   pointer-events: none so the user can still interact. */
+.browser-agent-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 1100;
+  pointer-events: none;
+  padding: 2px;
+  background: linear-gradient(100deg, #3b82f6, #60a5fa, #8b5cf6, #38bdf8, #3b82f6);
+  background-size: 300% 100%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: cw-agent-flow 2.6s linear infinite;
+}
+
+@keyframes cw-agent-flow {
+  to {
+    background-position: 300% 0;
+  }
+}
+
+.browser-agent-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1101;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(100deg, #2563eb, #7c3aed);
+  font-size: 11px;
+  font-weight: 650;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.45);
+}
+
+.browser-agent-click {
+  position: absolute;
+  z-index: 1101;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  pointer-events: none;
+  border: 2px solid #60a5fa;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+  animation: cw-agent-ping 0.9s ease-out forwards;
+}
+
+@keyframes cw-agent-ping {
+  0% {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
 @keyframes cw-spin {
   to {
     transform: rotate(360deg);

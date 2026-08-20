@@ -414,6 +414,7 @@
   "browser.forward": "Adelante",
   "browser.reload": "Recargar",
   "browser.placeholder_url": "Introduce una URL o busca…",
+  "browser.agent_control_badge": "El agente está controlando",
   "browser.menu.cut": "Cortar",
   "browser.menu.copy": "Copiar",
   "browser.menu.paste": "Pegar",
