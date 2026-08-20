@@ -62,6 +62,9 @@ export function UpdatePanel({ center, className }: UpdatePanelProps) {
         <div className="update-panel__row">
           <RefreshCw size={15} className="update-panel__spin" />
           <span>{t('update.checking')}</span>
+          <Button variant="ghost" size="sm" onClick={() => void center.cancel()}>
+            {t('update.stop')}
+          </Button>
         </div>
       )}
 
@@ -110,6 +113,9 @@ export function UpdatePanel({ center, className }: UpdatePanelProps) {
                 {formatBytesPerSecond(state.progress.bytesPerSecond)}
               </span>
             )}
+            <Button variant="ghost" size="sm" onClick={() => void center.cancel()}>
+              {t('update.stop')}
+            </Button>
           </div>
           <div className="update-panel__bar">
             <div
@@ -140,7 +146,11 @@ export function UpdatePanel({ center, className }: UpdatePanelProps) {
       {state.state === 'error' && (
         <div className="update-panel__row update-panel__row--error">
           <XCircle size={15} />
-          <span className="update-panel__error-text">{state.errorMessage || t('update.error_unknown')}</span>
+          <span className="update-panel__error-text">
+            {state.errorCode === 'UNREACHABLE'
+              ? t('update.error_unreachable')
+              : state.errorMessage || t('update.error_unknown')}
+          </span>
           <Button variant="secondary" size="sm" onClick={() => void center.check()}>
             {t('update.retry')}
           </Button>

@@ -163,6 +163,7 @@ declare global {
       getRetentionSettings: () => Promise<{ trace_lines: number; audit_lines: number }>;
       saveRetentionSettings: (patch: { trace_lines?: number; audit_lines?: number }) => Promise<{ trace_lines: number; audit_lines: number }>;
       checkForUpdates: () => Promise<{ status: string; error?: string }>;
+      cancelUpdateCheck: () => Promise<{ status: string }>;
       getUpdateState: () => Promise<UpdateStateSnapshot>;
       setAutoUpdate: (enabled: boolean) => Promise<{ status: string; enabled: boolean }>;
       downloadUpdate: () => Promise<{ status: string; error?: string }>;

@@ -1069,6 +1069,7 @@ export interface UpdateStateSnapshot {
   releaseNotes: string | null;
   progress: UpdateDownloadProgress | null;
   errorMessage: string | null;
+  errorCode: string | null;
 }
 
 // ── Org (multi-agent team) ───────────────────────────────────────────────

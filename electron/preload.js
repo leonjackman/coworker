@@ -156,6 +156,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRetentionSettings: () => ipcRenderer.invoke('settings-retention-get'),
   saveRetentionSettings: (patch) => ipcRenderer.invoke('settings-retention-set', patch),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  cancelUpdateCheck: () => ipcRenderer.invoke('cancel-update-check'),
   getUpdateState: () => ipcRenderer.invoke('get-update-state'),
   setAutoUpdate: (enabled) => ipcRenderer.invoke('set-auto-update', enabled),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),

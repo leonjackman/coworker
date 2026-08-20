@@ -11,12 +11,14 @@ const IDLE_SNAPSHOT: UpdateStateSnapshot = {
   releaseNotes: null,
   progress: null,
   errorMessage: null,
+  errorCode: null,
 };
 
 export interface UpdateCenter {
   state: UpdateStateSnapshot;
   hasApi: boolean;
   check: () => Promise<void>;
+  cancel: () => Promise<void>;
   download: () => Promise<void>;
   install: () => Promise<void>;
   skip: () => Promise<void>;
@@ -55,6 +57,11 @@ export function useUpdateCenter(): UpdateCenter {
     await window.electronAPI!.checkForUpdates();
   }, [hasApi]);
 
+  const cancel = useCallback(async () => {
+    if (!hasApi) return;
+    await window.electronAPI!.cancelUpdateCheck();
+  }, [hasApi]);
+
   const download = useCallback(async () => {
     if (!hasApi) return;
     await window.electronAPI!.downloadUpdate();
@@ -80,5 +87,5 @@ export function useUpdateCenter(): UpdateCenter {
     await window.electronAPI!.setAutoUpdate(enabled);
   }, [hasApi]);
 
-  return { state, hasApi, check, download, install, skip, clearSkip, setAutoUpdate };
+  return { state, hasApi, check, cancel, download, install, skip, clearSkip, setAutoUpdate };
 }

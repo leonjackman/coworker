@@ -47,6 +47,7 @@ const http = require('http');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const { autoUpdater } = require('electron-updater');
+const { CancellationToken } = require('builder-util-runtime');
 
 // `app.isPackaged` is the only reliable packaged/dev signal in Electron —
 // NODE_ENV and IS_PACKAGED are not set automatically.
@@ -97,7 +98,23 @@ let updateState = {
   releaseNotes: null,
   progress: null, // { percent, bytesPerSecond, transferred, total }
   errorMessage: null,
+  errorCode: null,
 };
+
+// Classify auto-update failures so the renderer can show a clear, localized
+// message instead of a raw upstream error string.
+//
+// 'UNREACHABLE' — the update source cannot be reached at all. GitHub returns
+// 404 for every unauthenticated request against a private repo (or a repo
+// with no public release), which surfaces here as ERR_UPDATER_LATEST_VERSION_NOT_FOUND.
+function classifyUpdateError(err) {
+  const message = String(err?.message || err);
+  const code =
+    message.includes('ERR_UPDATER_LATEST_VERSION_NOT_FOUND') || message.includes('404')
+      ? 'UNREACHABLE'
+      : null;
+  return { code, message };
+}
 
 function getUpdateStateSnapshot() {
   return {
@@ -110,6 +127,7 @@ function getUpdateStateSnapshot() {
     releaseNotes: updateState.releaseNotes,
     progress: updateState.progress,
     errorMessage: updateState.errorMessage,
+    errorCode: updateState.errorCode,
   };
 }
 
@@ -130,6 +148,7 @@ function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.allowDowngrade = false;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = console;
 
   // Channel routing: prerelease builds (e.g. 1.1.0-beta.1, 1.1.0-rc.1) stay
   // on their own channel so they keep receiving matching prerelease updates
@@ -143,10 +162,12 @@ function setupAutoUpdater() {
   }
 
   autoUpdater.on('checking-for-update', () => {
-    setUpdateState({ state: 'checking', errorMessage: null });
+    if (epochGuardActive()) return;
+    setUpdateState({ state: 'checking', errorMessage: null, errorCode: null });
   });
 
   autoUpdater.on('update-available', (info) => {
+    if (epochGuardActive()) return;
     console.log('Update available:', info.version);
     const version = String(info.version || '');
     const releaseNotes = info.releaseNotes != null ? String(info.releaseNotes) : null;
@@ -158,19 +179,24 @@ function setupAutoUpdater() {
     }
     setUpdateState({ state: 'available', availableVersion: version, releaseNotes });
     if (updateSettings.autoUpdateEnabled) {
-      autoUpdater.downloadUpdate().catch((err) => {
+      autoUpdater.downloadUpdate(downloadCancellationToken ?? undefined).catch((err) => {
+        if (isCancellationError(err)) return;
         console.error('Auto-download failed:', err);
-        setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
+        if (epochGuardActive()) return;
+        const { code, message } = classifyUpdateError(err);
+        setUpdateState({ state: 'error', errorMessage: message, errorCode: code });
       });
     }
   });
 
   autoUpdater.on('update-not-available', () => {
+    if (epochGuardActive()) return;
     console.log('No update available');
-    setUpdateState({ state: 'up-to-date', availableVersion: null, releaseNotes: null, progress: null, errorMessage: null });
+    setUpdateState({ state: 'up-to-date', availableVersion: null, releaseNotes: null, progress: null, errorMessage: null, errorCode: null });
   });
 
   autoUpdater.on('download-progress', (progressObj) => {
+    if (epochGuardActive()) return;
     setUpdateState({
       state: 'downloading',
       progress: {
@@ -183,6 +209,9 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    if (epochGuardActive()) return;
+    activeCancellationTokens.clear();
+    downloadCancellationToken = null;
     console.log('Update downloaded:', info.version);
     setUpdateState({
       state: 'downloaded',
@@ -190,14 +219,20 @@ function setupAutoUpdater() {
       releaseNotes: info.releaseNotes != null ? String(info.releaseNotes) : null,
       progress: null,
       errorMessage: null,
+      errorCode: null,
     });
   });
 
   autoUpdater.on('error', (err) => {
+    if (isCancellationError(err)) return;
     console.error('Auto-update error:', err);
+    if (epochGuardActive()) return;
+    activeCancellationTokens.clear();
+    downloadCancellationToken = null;
     // A download error should not clear an already-downloaded update.
     if (updateState.state !== 'downloaded') {
-      setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
+      const { code, message } = classifyUpdateError(err);
+      setUpdateState({ state: 'error', errorMessage: message, errorCode: code });
     }
   });
 }
@@ -209,17 +244,89 @@ function stopAutoUpdateTimer() {
   }
 }
 
+// In-flight check tracking. `autoUpdater.isUpdaterActive()` is NOT a signal
+// that a check is running — it only reports whether the updater is enabled
+// at all (true in every packaged build). Track the real in-flight state here
+// so a user-triggered check is never short-circuited.
+//
+// `checkEpoch` invalidates the events of a cancelled/stale check: bump it to
+// make every `activeCheckEpoch !== checkEpoch` guard in the autoUpdater
+// handlers ignore whatever the abandoned request settles with.
+let inFlightCheck = false;
+let checkStartTime = null;
+let checkEpoch = 0;
+let activeCheckEpoch = 0;
+let downloadCancellationToken = null;
+const activeCancellationTokens = new Set();
+
+// A check that stays "active" longer than this is assumed stuck; a fresh
+// check is then allowed to replace it so user-triggered checks are never
+// silently swallowed by a hung background check.
+const UPDATE_CHECK_STALE_MS = 60 * 1000;
+
+function epochGuardActive() {
+  return activeCheckEpoch !== checkEpoch;
+}
+
+function isCancellationError(err) {
+  return err instanceof Error && (err.name === 'CancellationError' || err.message.includes('cancelled'));
+}
+
 async function checkForUpdates({ automatic = false } = {}) {
   if (IS_DEV) return { status: 'dev-mode' };
   if (automatic && !updateSettings.autoUpdateEnabled) return { status: 'disabled' };
-  if (autoUpdater.isUpdaterActive()) return { status: 'checking' };
+
+  if (inFlightCheck) {
+    const activeStale = checkStartTime != null && Date.now() - checkStartTime > UPDATE_CHECK_STALE_MS;
+    if (!automatic) {
+      // A manual click must always produce visible feedback.
+      setUpdateState({ state: 'checking', errorMessage: null, errorCode: null });
+      if (!activeStale) return { status: 'checking' };
+      console.warn('[autoUpdater] previous check is stale; starting a fresh one');
+    } else if (!activeStale) {
+      return { status: 'checking' };
+    }
+  }
+
+  inFlightCheck = true;
+  checkStartTime = Date.now();
+  activeCheckEpoch = ++checkEpoch;
+  downloadCancellationToken = new CancellationToken();
+  activeCancellationTokens.add(downloadCancellationToken);
+
   try {
+    // Token is handed to the update-available handler so a hung download can
+    // be aborted via cancel-update-check.
     await autoUpdater.checkForUpdates();
     return { status: 'ok' };
   } catch (err) {
-    setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
-    return { status: 'error', error: String(err?.message || err) };
+    if (isCancellationError(err) || epochGuardActive()) {
+      // User cancelled mid-check (or the check was invalidated); leave the UI
+      // idle instead of surfacing a stale error.
+      setUpdateState({ state: 'idle', errorMessage: null, errorCode: null, progress: null });
+      return { status: 'cancelled' };
+    }
+    const { code, message } = classifyUpdateError(err);
+    setUpdateState({ state: 'error', errorMessage: message, errorCode: code });
+    return { status: 'error', error: message };
+  } finally {
+    inFlightCheck = false;
+    checkStartTime = null;
   }
+}
+
+function cancelUpdateCheck() {
+  // Invalidate any in-flight check so its late events are ignored.
+  checkEpoch += 1;
+  for (const token of activeCancellationTokens) {
+    token.cancel();
+  }
+  activeCancellationTokens.clear();
+  downloadCancellationToken = null;
+  inFlightCheck = false;
+  checkStartTime = null;
+  setUpdateState({ state: 'idle', errorMessage: null, errorCode: null, progress: null });
+  return { status: 'ok' };
 }
 
 function startAutoUpdateTimer() {
@@ -790,15 +897,22 @@ ipcMain.handle('set-auto-update', async (event, enabled) => {
 
 ipcMain.handle('check-for-updates', () => checkForUpdates({ automatic: false }));
 
+ipcMain.handle('cancel-update-check', () => cancelUpdateCheck());
+
 ipcMain.handle('download-update', async () => {
   if (IS_DEV) return { status: 'dev-mode' };
   if (updateState.state !== 'available') return { status: 'no-update' };
   try {
-    await autoUpdater.downloadUpdate();
+    await autoUpdater.downloadUpdate(downloadCancellationToken ?? undefined);
     return { status: 'ok' };
   } catch (err) {
-    setUpdateState({ state: 'error', errorMessage: String(err?.message || err) });
-    return { status: 'error', error: String(err?.message || err) };
+    if (isCancellationError(err)) {
+      setUpdateState({ state: 'idle', errorMessage: null, errorCode: null, progress: null });
+      return { status: 'cancelled' };
+    }
+    const { code, message } = classifyUpdateError(err);
+    setUpdateState({ state: 'error', errorMessage: message, errorCode: code });
+    return { status: 'error', download: message };
   }
 });
 
@@ -815,7 +929,7 @@ ipcMain.handle('skip-version', async () => {
   if (updateState.availableVersion) {
     updateSettings = writeUpdateSettings({ skippedVersion: updateState.availableVersion });
   }
-  setUpdateState({ state: 'idle', progress: null, errorMessage: null });
+  setUpdateState({ state: 'idle', progress: null, errorMessage: null, errorCode: null });
   return { status: 'ok', skippedVersion: updateSettings.skippedVersion };
 });
 
