@@ -3496,6 +3496,12 @@ function App() {
                 onAdd={addRightTab}
                 onBrowserHandle={handleBrowserHandle}
                 onBrowserTitle={handleBrowserTitle}
+                onOpenNewTab={(url) => {
+                  if (url) addRightTab('browser', { url });
+                }}
+                onAddCapture={(attachments) => {
+                  if (attachments.length) setAttachments((prev) => [...prev, ...attachments]);
+                }}
                 onResizeStart={() => setInspectorResizing(true)}
                 onResizeEnd={() => setInspectorResizing(false)}
                 onResizeWidth={(width) => setInspectorWidth(width)}

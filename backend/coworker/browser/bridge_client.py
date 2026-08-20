@@ -33,6 +33,19 @@ _TIMEOUT = 15.0
 #: How long a bridge info discovery is cached before being re-read.
 _CACHE_TTL = 5.0
 
+#: Hard cap for any single browser tool output (chars). Content-heavy pages
+#: (e.g. bilibili) can yield 200k+ chars of innerText; one oversized tool result
+#: alone can exceed the LLM context window and 400 the request before trimming
+#: helps (trimming only compresses history, not the current turn's tool output).
+#: CJK is ~1 char/token worst case, so 50k chars stays well under a 200k+ token
+#: budget.
+BROWSER_OUTPUT_MAX_CHARS = 50_000
+
+_TRUNCATION_NOTE = (
+    "\n[content truncated by Coworker to fit context; use scroll + targeted "
+    "evaluate to read more]"
+)
+
 
 @dataclass(frozen=True)
 class BridgeInfo:
@@ -153,6 +166,9 @@ class BridgeClient:
     def evaluate(self, expression: str) -> dict[str, Any]:
         return self._call("POST", "/evaluate", {"expression": expression})
 
+    def get_text(self, max_chars: int = BROWSER_OUTPUT_MAX_CHARS) -> dict[str, Any]:
+        return self._call("POST", "/get_text", {"max_chars": int(max_chars)})
+
 
 def browser_available(data_dir: Path | str | None) -> bool:
     """True when the desktop bridge is registered and reachable."""
@@ -169,7 +185,10 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
         return (
             "The built-in browser is ENABLED: use the browser tool to open pages, take "
             "screenshots, click, type and scroll. The user sees the live page in the "
-            "right-side browser panel."
+            "right-side browser panel. To read the current page's text, use the browser "
+            "tool's get_text action (a bounded, cleaned extract) or a targeted evaluate "
+            "(e.g. title + specific selectors) — never dump the whole page innerText, "
+            "which can overflow the model's context window."
         )
     return (
         "The built-in browser is DISABLED — you have no browser tool. It is only available "
@@ -179,7 +198,7 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
 
 
 BrowserAction = Literal[
-    "navigate", "get_state", "screenshot", "click", "type", "press",
+    "navigate", "get_state", "get_text", "screenshot", "click", "type", "press",
     "scroll", "back", "forward", "reload", "evaluate",
 ]
 
@@ -214,6 +233,7 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
         expression: str = Field("", description="For 'evaluate': a JavaScript expression to run in the page.")
         dx: float = Field(0, description="For 'scroll': horizontal scroll delta.")
         dy: float = Field(0, description="For 'scroll': vertical scroll delta.")
+        max_chars: int = Field(BROWSER_OUTPUT_MAX_CHARS, description="For 'get_text': max characters of page text to return (default 50000).")
 
     client = BridgeClient(data_dir)
 
@@ -228,18 +248,26 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
         expression: str = "",
         dx: float = 0,
         dy: float = 0,
+        max_chars: int = BROWSER_OUTPUT_MAX_CHARS,
     ) -> str:
         """Open and drive the user's embedded browser (visible live in the right panel).
 
         Workflow: ``navigate`` to a page, then ``screenshot`` to see it, then
         ``click``/``type``/``press``/``scroll`` to interact, then ``screenshot``
-        again to verify. ``get_state`` returns the current URL/title.
+        again to verify. ``get_state`` returns the current URL/title. To read a
+        page's text (e.g. "read the current page"), use ``get_text`` for a
+        bounded, cleaned extract, or a *targeted* ``evaluate`` (title + specific
+        selectors, or ``document.body.innerText.slice(0, 4000)``) — never dump
+        the whole ``document.body.innerText``: content-heavy pages exceed the
+        model's context window. All tool output is truncated at ~50k chars.
         """
         try:
             if action == "navigate":
                 result = client.navigate(url)
             elif action == "get_state":
                 result = client.state()
+            elif action == "get_text":
+                result = client.get_text(max_chars=max_chars)
             elif action == "screenshot":
                 result = client.screenshot()
             elif action == "click":
@@ -265,7 +293,13 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
             return json.dumps({"error": str(exc)[:500], "error_code": "browser_error"}, ensure_ascii=False)
         if result.get("error_code"):
             return _render_error(result, action)
-        return json.dumps(result, ensure_ascii=False)
+        payload = json.dumps(result, ensure_ascii=False)
+        # Hard backstop: cap any single tool output so a huge page can never
+        # overflow the model context window (get_text/evaluate are the usual
+        # offenders, but this guards every action).
+        if len(payload) > BROWSER_OUTPUT_MAX_CHARS:
+            payload = payload[:BROWSER_OUTPUT_MAX_CHARS] + _TRUNCATION_NOTE
+        return payload
 
     return browser
 

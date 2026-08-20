@@ -734,6 +734,13 @@ function createWindow() {
 
 let browserController = null;
 
+// Hard cap for any single evaluate/get_text result (chars). A content-heavy
+// page (e.g. bilibili) can yield 200k+ chars of innerText; one oversized tool
+// result alone can exceed the LLM context window and 400 the request.
+const BROWSER_OUTPUT_MAX_CHARS = 50000;
+const BROWSER_TRUNCATION_NOTE =
+  '\n[content truncated by Coworker to fit context; use scroll + targeted evaluate to read more]';
+
 class BrowserController {
   constructor() {
     this.guests = new Map(); // webContentsId -> webContents
@@ -742,11 +749,22 @@ class BrowserController {
 
   register(guest) {
     this.guests.set(guest.id, guest);
-    if (this.activeGuestId === null || !this.guests.has(this.activeGuestId)) {
+    const becameActive = this.activeGuestId === null || !this.guests.has(this.activeGuestId);
+    if (becameActive) {
       this.activeGuestId = guest.id;
     }
     this._setupGuestGuards(guest);
-    this._attachDebugger(guest);
+    // CDP is attached lazily per bridge command (withDebugger) and detached
+    // afterwards — a persistently attached debugger disrupts the guest's own
+    // mouse input (plain clicks stopped working; only Cmd+click routed through
+    // the new-window path still navigated). Never attach here.
+    if (becameActive) {
+      try {
+        guest.focus();
+      } catch {
+        // ignore — focus is best-effort
+      }
+    }
     guest.once('destroyed', () => {
       this.guests.delete(guest.id);
       if (this.activeGuestId === guest.id) {
@@ -809,6 +827,25 @@ class BrowserController {
     if (!g.debugger.isAttached()) this._attachDebugger(g);
     if (!g.debugger.isAttached()) throw new Error('browser_not_attached');
     return await g.debugger.sendCommand(method, params);
+  }
+
+  // Run a bridge command with the CDP debugger attached, then detach it right
+  // away so the guest is never in a debugger state during normal browsing.
+  async withDebugger(fn) {
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    if (!g.debugger.isAttached()) this._attachDebugger(g);
+    try {
+      return await fn();
+    } finally {
+      if (g.debugger.isAttached()) {
+        try {
+          g.debugger.detach();
+        } catch {
+          // ignore — detach is best-effort
+        }
+      }
+    }
   }
 
   async _eval(expression) {
@@ -937,7 +974,119 @@ class BrowserController {
   }
 
   async evaluate(expression) {
-    return this._eval(String(expression));
+    return this._capResult(await this._eval(String(expression)));
+  }
+
+  _capResult(value, maxChars = BROWSER_OUTPUT_MAX_CHARS) {
+    if (typeof value === 'string' && value.length > maxChars) {
+      return value.slice(0, maxChars) + BROWSER_TRUNCATION_NOTE;
+    }
+    return value;
+  }
+
+  // Bounded, cleaned page text for the agent's "read the current page" flow.
+  // Strips chrome nodes, then caps the size so the result never overflows the
+  // LLM context window.
+  async getText(maxChars = BROWSER_OUTPUT_MAX_CHARS) {
+    const budget = Math.max(1000, Math.min(500000, Number(maxChars) || BROWSER_OUTPUT_MAX_CHARS));
+    const marker = JSON.stringify(BROWSER_TRUNCATION_NOTE);
+    const expr = `(() => {
+      const clean = document.body ? document.body.cloneNode(true) : null;
+      if (!clean) return { text: '', truncated: false };
+      clean.querySelectorAll('script,style,iframe,noscript,svg,canvas,template').forEach(n => n.remove());
+      const text = (clean.innerText || '').replace(/\\s{3,}/g, '  ').trim();
+      if (text.length <= ${budget}) return { text, truncated: false };
+      return {
+        text: text.slice(0, ${budget}) + ${marker},
+        truncated: true,
+      };
+    })()`;
+    return this._eval(expr);
+  }
+
+  // Capture the element (or the whole page) at viewport (x, y) for the
+  // renderer's right-click menu. Runs inside withDebugger from the IPC handler.
+  async captureAt(x, y, scope) {
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    const url = g.getURL() || '';
+    let title = '';
+    try {
+      const evaluated = await this._eval('document.title');
+      title = typeof evaluated === 'string' ? evaluated : '';
+    } catch {
+      title = '';
+    }
+
+    const elementExpr = `(() => {
+      const el = document.elementFromPoint(${Number(x) || 0}, ${Number(y) || 0});
+      if (!el || !el.tagName) return null;
+      const r = el.getBoundingClientRect();
+      const xpath = (() => {
+        let node = el, parts = [];
+        while (node && node.nodeType === 1 && node !== document.body && node !== document.documentElement) {
+          let idx = 1;
+          for (let sib = node.previousElementSibling; sib; sib = sib.previousElementSibling) {
+            if (sib.localName === node.localName) idx++;
+          }
+          const tag = node.localName;
+          parts.unshift(idx > 1 ? tag + '[' + idx + ']' : tag);
+          node = node.parentNode;
+        }
+        return '/html/body/' + parts.join('/');
+      })();
+      const anchor = el.closest && el.closest('a');
+      return {
+        tag: String(el.tagName).toLowerCase(),
+        id: el.id || '',
+        className: typeof el.className === 'string' ? el.className : '',
+        text: (el.textContent || '').trim().slice(0, 200),
+        href: (anchor && anchor.href) || '',
+        xpath,
+        outerHTML: (el.outerHTML || '').slice(0, 4000),
+        rect: { x: r.x, y: r.y, width: r.width, height: r.height },
+      };
+    })()`;
+    const element = await this._eval(elementExpr);
+
+    let screenshot = null;
+    if (element) {
+      const rect = element.rect || {};
+      if (scope === 'element' && rect.width > 0 && rect.height > 0) {
+        const inViewport = rect.x >= 0 && rect.y >= 0 &&
+          rect.x < (await this._eval('window.innerWidth')) &&
+          rect.y < (await this._eval('window.innerHeight'));
+        if (inViewport) {
+          try {
+            const res = await this._cmd('Page.captureScreenshot', {
+              format: 'png',
+              fromSurface: true,
+              clip: { x: Math.max(0, rect.x), y: Math.max(0, rect.y), width: Math.max(1, rect.width), height: Math.max(1, rect.height), scale: 1 },
+            });
+            screenshot = `data:image/png;base64,${res.data}`;
+          } catch {
+            screenshot = null;
+          }
+        }
+      }
+    }
+
+    let pageText = null;
+    if (scope === 'page') {
+      try {
+        pageText = (await this._eval('(document.body && document.body.innerText || "").trim().slice(0, 20000)')) || '';
+      } catch {
+        pageText = '';
+      }
+      try {
+        const res = await this._cmd('Page.captureScreenshot', { format: 'png', fromSurface: true });
+        screenshot = `data:image/png;base64,${res.data}`;
+      } catch {
+        screenshot = screenshot || null;
+      }
+    }
+
+    return { url, title, element, pageText, screenshot };
   }
 }
 
@@ -971,6 +1120,8 @@ async function handleBridgeRequest(method, url, payload) {
       return { image: await browserController.screenshot() };
     case '/evaluate':
       return { result: await browserController.evaluate(payload.expression) };
+    case '/get_text':
+      return browserController.getText(payload.max_chars);
     case '/act':
       switch (payload.type) {
         case 'click':
@@ -1019,7 +1170,10 @@ function startBrowserBridge() {
         }
       }
       try {
-        const result = await handleBridgeRequest(req.method, req.url || '/', payload);
+        if (!browserController) throw new Error('browser_not_attached');
+        const result = await browserController.withDebugger(() =>
+          handleBridgeRequest(req.method, req.url || '/', payload),
+        );
         respond(200, result);
       } catch (e) {
         respond(e.message === 'browser_not_attached' ? 503 : 500, { error: e.message });
@@ -1060,6 +1214,62 @@ ipcMain.handle('browser:set-active-tab', (event, webContentsId) => {
     browserController.setActive(Number(webContentsId));
   }
   return { ok: true };
+});
+
+// Right-click menu clipboard/navigation actions against the guest webContents
+// (the guest is a webContents, so the app's DOM-targeted clipboard IPC cannot
+// reach it — we call the webContents methods directly instead).
+ipcMain.handle('browser:menu-action', (event, action) => {
+  const g = browserController ? browserController.guest : null;
+  if (!g) return { ok: false, error: 'browser_not_attached' };
+  try {
+    switch (action) {
+      case 'copy':
+        g.copy();
+        break;
+      case 'cut':
+        g.cut();
+        break;
+      case 'paste':
+        g.paste();
+        break;
+      case 'selectAll':
+        g.selectAll();
+        break;
+      case 'delete':
+        g.delete();
+        break;
+      case 'reload':
+        g.reload();
+        break;
+      case 'back':
+        if (g.canGoBack()) g.goBack();
+        break;
+      case 'forward':
+        if (g.canGoForward()) g.goForward();
+        break;
+      default:
+        return { ok: false, error: 'unknown_action' };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Right-click "ask the agent" actions: capture the element/page under the
+// cursor via CDP (element metadata + optional screenshot) and hand it back to
+// the renderer, which attaches it to the chat composer for the user to send.
+ipcMain.handle('browser:capture-element', async (event, payload) => {
+  if (!browserController) return { error: 'browser_not_attached' };
+  const x = Number(payload && payload.x) || 0;
+  const y = Number(payload && payload.y) || 0;
+  const scope = payload && payload.scope === 'page' ? 'page' : 'element';
+  try {
+    return await browserController.withDebugger(() => browserController.captureAt(x, y, scope));
+  } catch (e) {
+    return { error: e.message };
+  }
 });
 
 app.whenReady().then(async () => {

@@ -56,6 +56,7 @@ import type {
   MemoryImportApplyResponse,
   MemorySettings,
   MemorySettingsPatch,
+  BrowserCaptureResult,
   UpdateStateSnapshot,
   WebSettings,
   WebConfigPatch,
@@ -162,6 +163,8 @@ declare global {
       clearWebTavilyKey: () => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
       testWebSearch: (query?: string, apiKey?: string) => Promise<WebTestResult>;
       browserSetActiveTab: (webContentsId: number) => Promise<{ ok: boolean }>;
+      browserMenuAction: (action: string) => Promise<{ ok: boolean; error?: string }>;
+      browserCaptureElement: (payload: { x: number; y: number; scope?: 'element' | 'page' }) => Promise<BrowserCaptureResult>;
       revealInFolder: (path: string) => Promise<{ status: string }>;
       installSkill: (payload: { name: string; content: string; commands?: { name: string; description: string; body: string }[] }) => Promise<{ status: string; message?: string }>;
       exportToolAudit: () => Promise<string>;

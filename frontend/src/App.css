@@ -1849,6 +1849,7 @@ body.inspector-resizing .right-panel__resizer::after {
   height: 100%;
   min-width: 0;
   min-height: 0;
+  -webkit-app-region: no-drag;
 }
 
 .browser-view__toolbar {

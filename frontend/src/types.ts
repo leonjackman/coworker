@@ -1070,6 +1070,25 @@ export interface RightPanelTab {
   data?: { url?: string; title?: string };
 }
 
+// Right-click capture of the embedded browser (element or whole page).
+export interface BrowserCaptureResult {
+  url: string;
+  title: string;
+  element?: {
+    tag: string;
+    id: string;
+    className: string;
+    text: string;
+    href: string;
+    xpath: string;
+    outerHTML: string;
+    rect: { x: number; y: number; width: number; height: number };
+  } | null;
+  pageText?: string;
+  screenshot?: string;
+  error?: string;
+}
+
 // ── Auto-update ─────────────────────────────────────────────────────────
 export type UpdateStateStatus =
   | 'idle'

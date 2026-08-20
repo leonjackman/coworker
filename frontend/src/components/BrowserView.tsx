@@ -8,8 +8,26 @@ import {
   useState,
   type FormEvent,
 } from 'react';
-import { ArrowLeft, ArrowRight, Loader2, RotateCw } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ClipboardPaste,
+  Copy,
+  Database,
+  ExternalLink,
+  FileText,
+  Globe,
+  Link,
+  Loader2,
+  PenLine,
+  RotateCw,
+  Scissors,
+  Sparkles,
+  Square,
+} from 'lucide-react';
 import { t } from '../lib/i18n';
+import { ContextMenu, type ContextMenuItem } from './ui/context-menu';
+import type { BrowserCaptureResult, ComposerAttachment } from '../types';
 
 // Minimal typing for Electron's <webview> custom element (not part of DOM lib).
 export type ElectronWebview = HTMLElement & {
@@ -22,11 +40,26 @@ export type ElectronWebview = HTMLElement & {
   reload: () => void;
   goBack: () => void;
   goForward: () => void;
+  focus: () => void;
 };
 
 export interface BrowserViewHandle {
   navigate: (url: string) => void;
   getUrl: () => string;
+}
+
+interface WebviewContextParams {
+  x: number;
+  y: number;
+  linkURL?: string;
+  selectionText?: string;
+  editFlags?: {
+    canCut?: boolean;
+    canCopy?: boolean;
+    canPaste?: boolean;
+    canSelectAll?: boolean;
+    canDelete?: boolean;
+  };
 }
 
 interface BrowserViewProps {
@@ -35,6 +68,8 @@ interface BrowserViewProps {
   onTitleChange?: (title: string) => void;
   onUrlChange?: (url: string) => void;
   onHandle?: (handle: BrowserViewHandle) => void;
+  onOpenNewTab?: (url: string) => void;
+  onAddCapture?: (attachments: ComposerAttachment[]) => void;
 }
 
 function normalizeUrl(input: string): string {
@@ -44,8 +79,40 @@ function normalizeUrl(input: string): string {
   return `https://${trimmed}`;
 }
 
+function buildCaptureAttachments(capture: BrowserCaptureResult, intent: string): ComposerAttachment[] {
+  const idBase = `browser-capture-${Date.now()}`;
+  const payload: Record<string, unknown> = {
+    url: capture.url,
+    title: capture.title,
+    task: intent,
+    captured_at: new Date().toISOString(),
+  };
+  if (capture.element) payload.element = capture.element;
+  if (capture.pageText) payload.page_text = capture.pageText;
+
+  const attachments: ComposerAttachment[] = [];
+  attachments.push({
+    id: `${idBase}-json`,
+    name: capture.element ? `browser-element-${capture.element.tag}.json` : 'browser-page.json',
+    size: JSON.stringify(payload).length,
+    type: 'application/json',
+    content: JSON.stringify(payload, null, 2),
+  });
+  if (capture.screenshot) {
+    attachments.push({
+      id: `${idBase}-img`,
+      name: capture.element ? 'browser-element.png' : 'browser-page.png',
+      size: Math.round(capture.screenshot.length * 0.75),
+      type: 'image/png',
+      binary: true,
+      content: capture.screenshot,
+    });
+  }
+  return attachments;
+}
+
 export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(function BrowserView(
-  { initialUrl, active = true, onTitleChange, onUrlChange, onHandle },
+  { initialUrl, active = true, onTitleChange, onUrlChange, onHandle, onOpenNewTab, onAddCapture },
   ref,
 ) {
   const webviewRef = useRef<ElectronWebview | null>(null);
@@ -53,6 +120,7 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
   activeRef.current = active;
   const [address, setAddress] = useState(initialUrl || '');
   const [loading, setLoading] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; params: WebviewContextParams } | null>(null);
 
   const navigate = useCallback((url: string) => {
     const wv = webviewRef.current;
@@ -105,11 +173,22 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     const onDomReady = () => {
       if (!activeRef.current) return;
       try {
+        wv.focus();
         const id = wv.getWebContentsId();
         window.electronAPI?.browserSetActiveTab(id);
       } catch {
         // ignore
       }
+    };
+    const onContextMenu = (event: Event) => {
+      const params = (event as unknown as { params?: WebviewContextParams }).params;
+      if (!params) return;
+      const rect = wv.getBoundingClientRect();
+      setContextMenu({
+        x: rect.left + (params.x || 0),
+        y: rect.top + (params.y || 0),
+        params,
+      });
     };
 
     wv.addEventListener('did-navigate', onDidNavigate);
@@ -118,6 +197,7 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     wv.addEventListener('did-stop-loading', onStopLoading);
     wv.addEventListener('new-window', onNewWindow);
     wv.addEventListener('dom-ready', onDomReady);
+    wv.addEventListener('context-menu', onContextMenu);
 
     return () => {
       wv.removeEventListener('did-navigate', onDidNavigate);
@@ -126,6 +206,7 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
       wv.removeEventListener('did-stop-loading', onStopLoading);
       wv.removeEventListener('new-window', onNewWindow);
       wv.removeEventListener('dom-ready', onDomReady);
+      wv.removeEventListener('context-menu', onContextMenu);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -136,6 +217,7 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     const wv = webviewRef.current;
     if (!wv) return;
     try {
+      wv.focus();
       const id = wv.getWebContentsId();
       window.electronAPI?.browserSetActiveTab(id);
     } catch {
@@ -146,6 +228,86 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     navigate(address);
+  };
+
+  const runMenuAction = (action: string) => {
+    window.electronAPI?.browserMenuAction(action).catch(() => {});
+  };
+
+  const openLinkNewTab = (url: string) => {
+    onOpenNewTab?.(url);
+  };
+
+  const copyLink = (url: string) => {
+    void window.electronAPI?.clipboardWriteText(url);
+  };
+
+  const captureForAgent = (scope: 'element' | 'page', intent: string) => {
+    if (!contextMenu) return;
+    const { params } = contextMenu;
+    void window.electronAPI
+      ?.browserCaptureElement({ x: params.x, y: params.y, scope })
+      .then((capture) => {
+        if (!capture || capture.error) {
+          console.warn('[browser] capture failed:', capture?.error);
+          return;
+        }
+        const attachments = buildCaptureAttachments(capture, intent);
+        if (attachments.length) onAddCapture?.(attachments);
+      })
+      .catch((err) => console.warn('[browser] capture error:', err));
+  };
+
+  const buildMenuItems = (): ContextMenuItem[] => {
+    const params = contextMenu?.params;
+    if (!params) return [];
+    const ef = params.editFlags;
+    const items: ContextMenuItem[] = [];
+    let clipboardShown = false;
+    let linkShown = false;
+
+    if (ef?.canCut) {
+      clipboardShown = true;
+      items.push({ id: 'cut', label: t('browser.menu.cut'), icon: <Scissors size={13} />, onSelect: () => runMenuAction('cut') });
+    }
+    if (ef?.canCopy) {
+      clipboardShown = true;
+      items.push({ id: 'copy', label: t('browser.menu.copy'), icon: <Copy size={13} />, onSelect: () => runMenuAction('copy') });
+    }
+    if (ef?.canPaste) {
+      clipboardShown = true;
+      items.push({ id: 'paste', label: t('browser.menu.paste'), icon: <ClipboardPaste size={13} />, onSelect: () => runMenuAction('paste') });
+    }
+    if (ef?.canSelectAll) {
+      clipboardShown = true;
+      items.push({ id: 'selectAll', label: t('browser.menu.select_all'), icon: <Square size={13} />, onSelect: () => runMenuAction('selectAll') });
+    }
+
+    if (params.linkURL) {
+      linkShown = true;
+      items.push({
+        id: 'openLink',
+        label: t('browser.menu.open_link_new_tab'),
+        icon: <ExternalLink size={13} />,
+        dividerBefore: clipboardShown,
+        onSelect: () => openLinkNewTab(params.linkURL as string),
+      });
+      items.push({ id: 'copyLink', label: t('browser.menu.copy_link'), icon: <Link size={13} />, onSelect: () => copyLink(params.linkURL as string) });
+    }
+
+    items.push({
+      id: 'explainElement',
+      label: t('browser.menu.agent_explain_element'),
+      icon: <Sparkles size={13} />,
+      dividerBefore: clipboardShown || linkShown,
+      onSelect: () => captureForAgent('element', t('browser.menu.agent_explain_element')),
+    });
+    items.push({ id: 'scrapeElement', label: t('browser.menu.agent_scrape_element'), icon: <Database size={13} />, onSelect: () => captureForAgent('element', t('browser.menu.agent_scrape_element')) });
+    items.push({ id: 'annotateElement', label: t('browser.menu.agent_annotate_element'), icon: <PenLine size={13} />, onSelect: () => captureForAgent('element', t('browser.menu.agent_annotate_element')) });
+    items.push({ id: 'explainPage', label: t('browser.menu.agent_explain_page'), icon: <Globe size={13} />, onSelect: () => captureForAgent('page', t('browser.menu.agent_explain_page')) });
+    items.push({ id: 'scrapePage', label: t('browser.menu.agent_scrape_page'), icon: <FileText size={13} />, onSelect: () => captureForAgent('page', t('browser.menu.agent_scrape_page')) });
+
+    return items;
   };
 
   return (
@@ -198,6 +360,15 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
           allowpopups: false,
         })}
       </div>
+      {contextMenu && (
+        <ContextMenu
+          open
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          items={buildMenuItems()}
+        />
+      )}
     </div>
   );
 });

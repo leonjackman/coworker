@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { Globe, Info, List, Plus, TerminalSquare, X } from 'lucide-react';
-import type { RightPanelTab, RightPanelTabKind } from '../types';
+import type { ComposerAttachment, RightPanelTab, RightPanelTabKind } from '../types';
 import { t } from '../lib/i18n';
 import { usePanelResize } from '../lib/usePanelResize';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -25,6 +25,8 @@ interface RightPanelProps {
   onAdd: (kind: RightPanelTabKind) => void;
   onBrowserHandle: (tabId: string, handle: BrowserViewHandle | null) => void;
   onBrowserTitle: (tabId: string, title: string) => void;
+  onOpenNewTab: (url: string) => void;
+  onAddCapture: (attachments: ComposerAttachment[]) => void;
   onResizeStart: () => void;
   onResizeEnd: () => void;
   onResizeWidth: (width: number) => void;
@@ -71,6 +73,8 @@ export function RightPanel({
   onAdd,
   onBrowserHandle,
   onBrowserTitle,
+  onOpenNewTab,
+  onAddCapture,
   onResizeStart,
   onResizeEnd,
   onResizeWidth,
@@ -165,6 +169,8 @@ export function RightPanel({
                   onHandle={(handle) => onBrowserHandle(tab.id, handle)}
                   onTitleChange={(title) => onBrowserTitle(tab.id, title)}
                   onUrlChange={(url) => onBrowserTitle(tab.id, '')}
+                  onOpenNewTab={onOpenNewTab}
+                  onAddCapture={onAddCapture}
                 />
               </div>
             );
