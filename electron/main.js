@@ -656,7 +656,17 @@ function createWindow() {
     if (!isMainFrame) {
       return;
     }
-    console.error('Frontend did-fail-load:', { errorCode, errorDescription, validatedURL });
+    // During app quit the renderer is deliberately torn down; logging to a
+    // closing stdout throws write EIO (uncaught exception at shutdown). Skip
+    // entirely while quitting, and swallow any write error as a last resort.
+    if (isQuitting) {
+      return;
+    }
+    try {
+      console.error('Frontend did-fail-load:', { errorCode, errorDescription, validatedURL });
+    } catch {
+      // stdout already closed during shutdown
+    }
     showStartupError({
       stage: 'did-fail-load',
       url: validatedURL,
@@ -666,7 +676,16 @@ function createWindow() {
   });
 
   mainWindow.webContents.on('render-process-gone', (event, details) => {
-    console.error('Renderer process exited unexpectedly:', details);
+    // Same as above: quit tears the renderer down intentionally — skip logging
+    // and startup-error UI entirely during shutdown.
+    if (isQuitting) {
+      return;
+    }
+    try {
+      console.error('Renderer process exited unexpectedly:', details);
+    } catch {
+      // stdout already closed during shutdown
+    }
     showStartupError({
       stage: 'render-process-gone',
       reason: details.reason,
