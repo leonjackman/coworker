@@ -3907,6 +3907,7 @@ def discover_provider_context(provider_id: str):
     try:
         config = provider_manager.load()
         provider = provider_manager.require_provider(config, provider_id)
+        provider_manager._resolve_secret(provider)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     window, error = provider_manager._fetch_context_window_full(provider)
