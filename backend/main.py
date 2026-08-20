@@ -74,6 +74,9 @@ from coworker.logger import get_logger, get_log_level, init_logger, set_log_leve
 #
 # certifi's cacert.pem IS bundled with the app, so point the default context
 # at it. `setdefault` keeps any explicit `cafile`/`cadata` from callers.
+# `_create_default_https_context` is a separate module-level alias used by
+# http.client/urllib (bound at ssl import time to the original function), so
+# it must be re-pointed too — otherwise aiohttp works but urllib still fails.
 # ---------------------------------------------------------------------------
 try:
     import ssl
@@ -87,6 +90,7 @@ try:
         return _orig_create_default_context(*args, **kwargs)
 
     ssl.create_default_context = _create_default_context_with_certifi
+    ssl._create_default_https_context = ssl.create_default_context
 except Exception:  # pragma: no cover - certifi is a hard dependency
     pass
 
