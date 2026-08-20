@@ -42,7 +42,7 @@
 | 🔒 **Human-In-The-Loop** | Approves commands, file writes, and MCP tools before they run — with supervised / guarded / autonomous levels |
 | 🔄 **MCP Integration** | Model Context Protocol — stdio / HTTP / SSE / WebSocket transports, OAuth 2.1 + PKCE, template discovery, persistent sessions |
 | 📦 **Skills** | SKILL.md-based skills with marketplace browsing and one-click install (SkillHub · ClawHub) |
-| 📓 **Change Tracking** | Every file change logged with before/after diffs; edit / regenerate / redo restores any past state |
+| 📓 **Change Tracking** | Every file change logged with before/after diffs; edit / regenerate / revert restores the state before changes |
 | 🖥️ **Integrated Terminal** | Interactive PTY shell in the bottom panel, plus a live tool-audit feed |
 | 🔎 **Audit & Traces** | Tool-audit log and agent traces with export, clear, and retention caps |
 | ✏️ **Message Editing** | Edit or regenerate any user message — downstream code changes are rolled back and can be restored |
@@ -183,7 +183,7 @@ memory/
 - **Manual write** — the agent uses the `memory` tool to write durable facts to
   its own `BASE/MEMORY.md` (or a topic file / `SESSIONS/<date>.md`), deduplicated
   and approval-gated in supervised mode.
-- **Auto-extract (dream)** — roughly 30 s after a turn settles, a background
+- **Auto-extract (dream)** — every N turns (controlled by `COWORKER_MEMORY_NUDGE_INTERVAL`, default 10), a background
   pass reviews the recent transcript with an LLM and:
   1. extracts durable facts and consolidates them into the agent's `MEMORY.md`;
   2. appends a short session note to `SESSIONS/<date>.md` (once per day);
@@ -213,7 +213,7 @@ and stay readable on demand via `memory_read`.
 
 1. In a chat, state a durable fact, e.g. "I prefer replies in Chinese" or
    "this project's backend binds port 9527".
-2. Stop chatting and wait ~30 s.
+2. Stop chatting for a few turns (or wait for the nudge interval).
 3. Check `memory/<project>/default_agent/BASE/`:
    - `MEMORY.md` gains a new entry;
    - `DREAMS.md` shows `new N · consolidated` (not `new 0`);

@@ -41,7 +41,7 @@
 | 🔒 **人机协作审查** | 命令执行、文件修改、MCP 调用需确认，支持 supervised / guarded / autonomous 三级自主度 |
 | 🔄 **MCP 集成** | Model Context Protocol 支持 — stdio / HTTP / SSE / WebSocket、OAuth 2.1 + PKCE、模板发现、持久会话 |
 | 📦 **技能系统** | SKILL.md 标准技能，支持市场浏览与一键安装（SkillHub · ClawHub） |
-| 📓 **变更追踪** | 每次文件修改记录 before/after 差异；编辑 / 重新生成 / 撤销可恢复到任意历史状态 |
+| 📓 **变更追踪** | 每次文件修改记录 before/after 差异；编辑 / 重新生成 / 撤销可恢复至修改前状态 |
 | 🖥️ **内置终端** | 底部面板内置交互式 PTY 终端，并实时展示工具审计日志 |
 | 🔎 **审计与追踪** | 工具审计日志与 Agent 追踪记录，支持导出、清空与保留上限配置 |
 | ✏️ **消息编辑** | 可编辑或重新生成任意用户消息，下游代码改动自动回滚且可恢复 |
@@ -182,7 +182,7 @@ memory/
 - **手动写入**：agent 通过 `memory` 工具把持久事实写入自己的
   `BASE/MEMORY.md`（或主题文件 / `SESSIONS/<日期>.md`），自动去重，受控模式
   需审批。
-- **自动提取（dream）**：每轮结束约 30 秒后，后台任务用 LLM 审查最近对话：
+- **自动提取（dream）**：每 N 轮对话后（由 `COWORKER_MEMORY_NUDGE_INTERVAL` 控制，默认 10），后台任务用 LLM 审查最近对话：
   1. 提取持久事实并合并进 agent 的 `MEMORY.md`；
   2. 向 `SESSIONS/<日期>.md` 追加一条简短会话笔记（每天一次）；
   3. 在 `DREAMS.md` 记一行（如 `consolidated · new 3`）。
@@ -208,7 +208,7 @@ Provider），由 `COWORKER_MEMORY_ENABLED` 和 `COWORKER_MEMORY_AUTO_EXTRACT`
 ### 如何验证
 
 1. 在对话中说出明确持久事实，如"我偏好中文回复""本项目后端端口是 9527"。
-2. 停止对话等约 30 秒。
+2. 停止对话，等几个轮次（或等待 nudge 间隔）。
 3. 查看 `memory/<项目>/default_agent/BASE/`：
    - `MEMORY.md` 出现新条目；
    - `DREAMS.md` 显示 `new N · consolidated`（而不是 `new 0`）；
