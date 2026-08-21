@@ -1304,7 +1304,6 @@ function App() {
               next.reason = event.reason;
               if (event.reason === 'stopped') next.stopped = true;
             }
-            if (event.verification) next.verification = event.verification;
             return next;
           });
           clearSessionTodos(event.session_id ?? requestSessionId);
@@ -2560,6 +2559,7 @@ function App() {
         goal_stopped?: boolean;
         goal_interrupted?: boolean;
         goal_phase?: 'plan' | 'execute' | 'verify';
+        goal_round?: number;
       };
       if (sessionRecord.goal_text) {
         // An interrupted goal (e.g. a crash) still has goal_text but no
@@ -2573,7 +2573,7 @@ function App() {
           paused: recoverable && !stopped,
           todos: sessionRecord.goal_todos || [],
           running: false,
-          round: 0,
+          round: sessionRecord.goal_round || 0,
           progress: '',
           ...(sessionRecord.goal_phase ? { phase: sessionRecord.goal_phase } : {}),
           stalled: stopped,

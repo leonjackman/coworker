@@ -21,6 +21,39 @@
   - 普通对话路径未改（`read_file` 返回值由裸文本改为 JSON 预览，属 goal/非 goal 共用的工具语义收口，见设计文档 §4/§8）。
   - 删除面后全量回归仍通过（后端 18 例 + tsc + build）。
 
+## 第二轮：Goal 治理层重构（2026-08-21 晚，行业对标后）
+
+**背景**：对会话语境 `42d5aa1e` 深度 debug 后确认 4 大问题——① 同文案 `achieved=false` 重复 14 轮不停（runaway）；② 不会自动拆回合，一个回合塞满全部工作；③ 流中频繁出假错误卡；④ 状态机 7 个互相重叠的 boolean 分散维护。对照行业标杆（Codex goal 扩展层 + 用量会计 / SWE-agent per-step 循环 / Cline plan-act / opencode），采用「Codex 式预算会计 + 可感知注入」方案，**不重建**。
+
+**前置（token 计量打通）**：
+- `ReasonPreservingChatOpenAI.create` 加 `stream_usage=True`（agents.py）——实测 vLLM 0.22.1 streaming 回传 usage；根因是 langchain-openai 只对默认 base_url 自动开 stream_usage，自建端点被关闭，故此前 `usage_metadata` 恒为 null。
+
+**P0-A 防 runaway**：
+- **进度指纹去重**：`achieved=false` 且 progress/verification 与上一轮相同 → `goal_repeat_count` 递增（持久化），≥3 → 终态 `no_progress`。
+- **预算会计（1,000,000 token + 30 分钟/目标）**：`goal_token_budget/goal_tokens_used/goal_time_budget_seconds/goal_time_used` 随 session 持久化；每轮从 `_stream` done 事件 `usage`（provider usage_metadata 求和）与墙钟累加；每轮把「已用/剩余/每轮建议量」注入系统提示（`goal_budget_note`，Codex continuation 同款）让模型自管理；触顶 → 先给 1 轮 wrap-up（「預算已耗盡，总结收尾」）→ 仍不 done → 终态 `budget_exhausted`。设置页可调（`.coworker_settings.json`：`goal_token_budget` / `goal_time_budget_seconds`）。
+- **execute→verify 用持久化 todos 判断**（修相位卡死）；**终态提交不再用空 todos 覆盖持久化 todos**（修 todos=[]）。
+
+**P0-B 回合自然交接（无步数上限，依决策）**：
+- 每轮 token 超预算 15% 软阈值 → 下一轮提示「完成当前 chunk 并 finalize_goal(achieved=false) 交回」（一次性注入）；短任务一轮完成、长任务自动跨回合不截断。
+
+**P1-A 流健壮性**：
+- 控制工具（finalize_goal/write_todos）空名/迟到名 chunk 产生的 stray tool_start part 在 chunk 与 ToolMessage 分支双处清理 → 不再产生 `name=""`/`status="error"` 假错误卡。
+- `goal_stream` 增加 `except Exception` → 干净终态 `stream_error`（不再把异常抛穿 SSE 挂死前端），原测试契约同步更新。
+
+**P1-B 状态机收口**：
+- 新增 `goal_status`（active/paused/stopped/done/failed/interrupted）+ `goal_stop_reason`（no_progress/budget_exhausted/...），`Session.effective_goal_status()` 对旧 boolean 兼容回填；流终态统一由 `goal_stream` 单点 commit；endpoints 只写 status；`/goal/status` 返回 status + phase + 预算剩余。
+
+**验证结果（第二轮）**：
+- `backend/tests/` 全量 27 例通过（原 18 + 治理层新增 9：指纹去重/重复重置/预算触顶 wrap-up/软交接 token 会计/持久化 todos 转 verify/todos 保留/控制工具不入卡/预算注注入/status 迁移映射）。
+- 前端 `tsc --noEmit` 与 `vite build` 通过。
+- 未动前端 UI（后话）。
+
+**第三轮收尾（2026-08-21 深夜，真机验证发现）**：
+- **`stream_usage=True` 引发 vLLM usage-only 尾 chunk（`choices: []`）崩溃**：`ReasonPreservingChatOpenAI._patched_convert` 的 `choices[0]` 直接取 `[][0]` → `list index out of range` → goal 首轮即 `stream_error` 停止（会话 `4e3a10f6`）。修复：对空 choices 加保护；回归测试 `test_usage_only_stream_chunk_does_not_crash_reasoning_patch`。修复后会话 `04146cdd` 正常跑完（done，5 bugs，301s/1800s，时间预算记账生效）。
+- **token 记账 key 名错误**：langchain-core 1.x `UsageMetadata` 用 `input_tokens/output_tokens`，而 `_stream` 累计读的是 `prompt_tokens/completion_tokens` → `goal_tokens_used` 恒为 0，token 预算静默失效（会话 `04146cdd` 实测 `goal_tokens_used=0` 但 checkpoint 有 usage）。修复：抽 `_normalize_usage()` 双 key 兼容；回归测试 `test_normalize_usage_accepts_both_key_naming`。
+- **goal_round 持久化**：GoalCard「第 x 轮」切会话不再回 0；resume 从持久化 round 续号（`test_goal_round_persisted_and_resume_continues`）。
+- 第二轮验收后全套 30 例通过 + `tsc`/`vite build` 通过。
+
 ## 目标
 
 - 建立「工具源头截断」正式机制：`git_status` 单文件 diff ≤2K / 文件数 ≤50 / 总量 ≤100K；`read_file` 复用 `read_preview` 语义（二进制检测 + 50K 上限）。

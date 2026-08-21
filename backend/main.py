@@ -1905,7 +1905,13 @@ async def chat_stream(request: ChatStreamRequest):
                     goal_todos=[], goal_stopped=False, goal_interrupted=False,
                     goal_force_count=0, goal_just_edited=False, goal_stream_id=new_stream_id,
                     goal_phase="plan",
+                    goal_round=0,
                     goal_max_rounds=read_user_goal_max_rounds(),
+                    goal_status="active", goal_stop_reason="",
+                    goal_token_budget=read_user_goal_token_budget(),
+                    goal_tokens_used=0,
+                    goal_time_budget_seconds=read_user_goal_time_budget_seconds(),
+                    goal_time_used=0.0, goal_repeat_count=0,
                 )
             except KeyError:
                 pass
@@ -2097,6 +2103,8 @@ class GoalStopRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     goal_max_rounds: int = 50
+    goal_token_budget: Optional[int] = None
+    goal_time_budget_seconds: Optional[int] = None
     max_attachment_mb: int = 25
     revert_code: Optional[bool] = None
 
@@ -2126,6 +2134,35 @@ def read_user_goal_max_rounds() -> int:
     except Exception:
         pass
     return 50
+
+
+def read_user_goal_token_budget() -> int:
+    """Read the user-level goal token budget from .coworker_settings.json.
+
+    Falls back to 1,000,000 (the product default) when the file is missing or
+    the key is absent.
+    """
+    try:
+        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
+        if "goal_token_budget" in data:
+            return max(0, int(data["goal_token_budget"]))
+    except Exception:
+        pass
+    return 1_000_000
+
+
+def read_user_goal_time_budget_seconds() -> int:
+    """Read the user-level goal time budget (seconds) from .coworker_settings.json.
+
+    Falls back to 1800 (30 minutes) when the file is missing or the key is absent.
+    """
+    try:
+        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
+        if "goal_time_budget_seconds" in data:
+            return max(0, int(data["goal_time_budget_seconds"]))
+    except Exception:
+        pass
+    return 1800
 
 
 def read_user_max_attachment_mb() -> int:
@@ -2252,9 +2289,11 @@ apply_stored_retention_settings()
 
 @app.get("/settings")
 async def get_settings():
-    """Get user-level settings (goal cap + attachment size cap + edit revert)."""
+    """Get user-level settings (goal cap/budget + attachment size cap + edit revert)."""
     return {
         "goal_max_rounds": read_user_goal_max_rounds(),
+        "goal_token_budget": read_user_goal_token_budget(),
+        "goal_time_budget_seconds": read_user_goal_time_budget_seconds(),
         "max_attachment_mb": read_user_max_attachment_mb(),
         "revert_code": read_user_revert_code(),
     }
@@ -2262,7 +2301,7 @@ async def get_settings():
 
 @app.post("/settings")
 async def set_settings(request: SettingsUpdate):
-    """Update user-level settings (goal cap + attachment size cap + edit revert)."""
+    """Update user-level settings (goal cap/budget + attachment size cap + edit revert)."""
     max_rounds = request.goal_max_rounds
     if max_rounds < 0 or max_rounds > 1000:
         max_rounds = max(0, min(1000, max_rounds))
@@ -2271,6 +2310,10 @@ async def set_settings(request: SettingsUpdate):
         # Merge so the two keys don't clobber each other across saves.
         existing: dict = _load_user_settings_file()
         existing.update({"goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb})
+        if request.goal_token_budget is not None:
+            existing["goal_token_budget"] = max(0, request.goal_token_budget)
+        if request.goal_time_budget_seconds is not None:
+            existing["goal_time_budget_seconds"] = max(0, request.goal_time_budget_seconds)
         if request.revert_code is not None:
             existing["revert_code"] = bool(request.revert_code)
         _save_user_settings_file(existing)
@@ -2278,6 +2321,8 @@ async def set_settings(request: SettingsUpdate):
         return {
             "status": "error",
             "goal_max_rounds": max_rounds,
+            "goal_token_budget": read_user_goal_token_budget(),
+            "goal_time_budget_seconds": read_user_goal_time_budget_seconds(),
             "max_attachment_mb": max_attachment_mb,
             "revert_code": read_user_revert_code(),
             "detail": str(exc),
@@ -2285,6 +2330,8 @@ async def set_settings(request: SettingsUpdate):
     return {
         "status": "ok",
         "goal_max_rounds": max_rounds,
+        "goal_token_budget": read_user_goal_token_budget(),
+        "goal_time_budget_seconds": read_user_goal_time_budget_seconds(),
         "max_attachment_mb": max_attachment_mb,
         "revert_code": read_user_revert_code(),
     }
@@ -2417,7 +2464,7 @@ async def register_browser_bridge(request: BrowserBridgeUpdate):
 async def goal_stop(request: GoalStopRequest):
     """Stop an active goal loop: set flags and trigger cancel event for immediate exit."""
     try:
-        session_store.update_goal(request.session_id, goal_stopped=True, goal_interrupted=True)
+        session_store.update_goal(request.session_id, goal_stopped=True, goal_interrupted=True, goal_status="stopped", goal_stop_reason="stopped")
         cancel = _goal_cancel_events.pop(request.session_id, None)
         if cancel:
             cancel.set()
@@ -2444,17 +2491,9 @@ async def goal_status(session_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     # Map session state to a single terminal state the frontend can branch on.
     # Previously this always returned "ok", so the frontend's done/paused
-    # reconciliation never fired.
-    if session.goal_done:
-        status = "done"
-    elif session.goal_stopped:
-        status = "stopped"
-    elif session.goal_paused or session.goal_interrupted:
-        status = "paused"
-    elif session.goal_text:
-        status = "active"
-    else:
-        status = "inactive"
+    # reconciliation never fired. Uses the consolidated status field with a
+    # legacy-boolean fallback.
+    status = session.effective_goal_status()
     return {
         "status": status,
         "session_id": session_id,
@@ -2468,6 +2507,14 @@ async def goal_status(session_id: str):
             "goal_stopped": session.goal_stopped,
             "goal_interrupted": session.goal_interrupted,
             "goal_phase": session.goal_phase,
+            "goal_round": session.goal_round,
+            "goal_status": status,
+            "goal_stop_reason": session.goal_stop_reason,
+            "goal_token_budget": session.goal_token_budget,
+            "goal_tokens_used": session.goal_tokens_used,
+            "goal_token_remaining": max(session.goal_token_budget - session.goal_tokens_used, 0),
+            "goal_time_budget_seconds": session.goal_time_budget_seconds,
+            "goal_time_used": session.goal_time_used,
         },
     }
 
@@ -2476,7 +2523,7 @@ async def goal_pause(request: GoalPauseRequest):
     try:
         # Keep the cancel handle registered so a subsequent stop can still
         # interrupt the loop — only clear it once the loop has fully ended.
-        session_store.update_goal(request.session_id, goal_paused=True)
+        session_store.update_goal(request.session_id, goal_paused=True, goal_status="paused")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"status": "ok", "session_id": request.session_id, "goal_paused": True}
@@ -2522,7 +2569,15 @@ async def goal_start(request: GoalStartRequest):
             goal_just_edited=False,
             goal_stream_id=str(uuid.uuid4()),
             goal_phase="plan",
+            goal_round=0,
             goal_max_rounds=read_user_goal_max_rounds(),
+            goal_status="active",
+            goal_stop_reason="",
+            goal_token_budget=read_user_goal_token_budget(),
+            goal_tokens_used=0,
+            goal_time_budget_seconds=read_user_goal_time_budget_seconds(),
+            goal_time_used=0.0,
+            goal_repeat_count=0,
         )
 
         return { "status": "ok", "goal_text": goal_text }
@@ -2539,6 +2594,7 @@ async def goal_delete(request: GoalPauseRequest):
             goal_text="", goal_done=False, goal_paused=False, goal_todos=[],
             goal_stopped=True, goal_interrupted=False, goal_force_count=0,
             goal_stream_id="",
+            goal_status="stopped", goal_stop_reason="deleted",
         )
         cancel = _goal_cancel_events.pop(request.session_id, None)
         if cancel:
@@ -2574,7 +2630,7 @@ async def goal_resume(request: GoalResumeRequest):
     except KeyError as exc:
         _goal_active_streams.pop(stream_id, None)
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    session_store.update_goal(request.session_id, goal_paused=False, goal_stopped=False, goal_interrupted=False, goal_stream_id=stream_id)
+    session_store.update_goal(request.session_id, goal_paused=False, goal_stopped=False, goal_interrupted=False, goal_stream_id=stream_id, goal_status="active", goal_stop_reason="")
     goal_text = session.goal_text
     # Infer the phase from the current todo list (old sessions have no stored
     # phase): unfinished todos → execute, all done but not finished → verify,

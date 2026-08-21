@@ -120,7 +120,6 @@
   "chat.goal_phase_plan": "Planejamento",
   "chat.goal_phase_execute": "Executando",
   "chat.goal_phase_verify": "Verificando",
-  "chat.goal_verification": "Verificação",
   "chat.goal_stalled_hint": "Agente travou após múltiplas tentativas. Considere pausar ou editar a meta.",
   "chat.goal_pause": "Pausar",
   "chat.goal_resume": "Continuar",

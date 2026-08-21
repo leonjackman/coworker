@@ -383,6 +383,7 @@ export interface SessionSummary {
   goal_stream_id?: string;
   goal_interrupted?: boolean;
   goal_phase?: 'plan' | 'execute' | 'verify';
+  goal_round?: number;
 }
 
 export type ProjectMode = 'single' | 'multi';
@@ -730,7 +731,6 @@ export interface GoalState {
   stalled?: boolean;
   stopped?: boolean;
   reason?: string;
-  verification?: string;
   editingDraft?: boolean;
   recentToolNames?: string[];
 }

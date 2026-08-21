@@ -59,8 +59,40 @@ class Session:
     # Plan → Execute → Verify. Owned by goal_stream; persisted so /goal/status and
     # the frontend can show the current stage. Defaults to "plan" for old sessions.
     goal_phase: str = "plan"
+    # Current goal round (persisted so switching sessions / reloading the app does
+    # not reset the goal card's "round N" to 0). 0 = not started.
+    goal_round: int = 0
+    # Lifecycle state machine (single source of truth for terminal/paused states).
+    # Values: "" (legacy, derive from the booleans) | active | paused | stopped |
+    # done | failed | interrupted. Owned by goal_stream; endpoints only set it.
+    goal_status: str = ""
+    # Why a goal terminated: no_progress | budget_exhausted | timeout |
+    # max_rounds_exceeded | stream_error | stalled | stopped | interrupted | "".
+    goal_stop_reason: str = ""
+    # Goal budget accounting (tokens + wall-clock). 0 budgets = defaults resolved
+    # at runtime (1,000,000 tokens / 30 min). tokens_used is summed from the
+    # provider's usage_metadata each round; time_used from the round wall-clock.
+    goal_token_budget: int = 0
+    goal_tokens_used: int = 0
+    goal_time_budget_seconds: int = 0
+    goal_time_used: float = 0.0
+    # Consecutive rounds with an IDENTICAL achieved=false checkpoint = no progress.
+    goal_repeat_count: int = 0
     title_auto: bool = False
     messages: list[SessionMessage] = field(default_factory=list)
+
+    def effective_goal_status(self) -> str:
+        """Resolve the lifecycle status, deriving it from the legacy booleans
+        when the field is unset (old sessions written before the status field)."""
+        if self.goal_status:
+            return self.goal_status
+        if self.goal_done:
+            return "done"
+        if self.goal_stopped:
+            return "stopped"
+        if self.goal_paused or self.goal_interrupted:
+            return "paused"
+        return "active" if self.goal_text else "inactive"
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Session":
@@ -89,6 +121,14 @@ class Session:
             goal_stream_id=str(payload.get("goal_stream_id", "")),
             goal_interrupted=bool(payload.get("goal_interrupted", False)),
             goal_phase=str(payload.get("goal_phase", "plan")),
+            goal_round=int(payload.get("goal_round", 0)),
+            goal_status=str(payload.get("goal_status", "")),
+            goal_stop_reason=str(payload.get("goal_stop_reason", "")),
+            goal_token_budget=int(payload.get("goal_token_budget", 0)),
+            goal_tokens_used=int(payload.get("goal_tokens_used", 0)),
+            goal_time_budget_seconds=int(payload.get("goal_time_budget_seconds", 0)),
+            goal_time_used=float(payload.get("goal_time_used", 0.0) or 0.0),
+            goal_repeat_count=int(payload.get("goal_repeat_count", 0)),
             title_auto=bool(payload.get("title_auto", False)),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
@@ -117,6 +157,14 @@ class Session:
             "goal_stream_id": self.goal_stream_id,
             "goal_interrupted": self.goal_interrupted,
             "goal_phase": self.goal_phase,
+            "goal_round": self.goal_round,
+            "goal_status": self.effective_goal_status(),
+            "goal_stop_reason": self.goal_stop_reason,
+            "goal_token_budget": self.goal_token_budget,
+            "goal_tokens_used": self.goal_tokens_used,
+            "goal_time_budget_seconds": self.goal_time_budget_seconds,
+            "goal_time_used": self.goal_time_used,
+            "goal_repeat_count": self.goal_repeat_count,
             "message_count": len(self.messages),
         }
 
@@ -141,6 +189,14 @@ class Session:
             "goal_stream_id": self.goal_stream_id,
             "goal_interrupted": self.goal_interrupted,
             "goal_phase": self.goal_phase,
+            "goal_round": self.goal_round,
+            "goal_status": self.effective_goal_status(),
+            "goal_stop_reason": self.goal_stop_reason,
+            "goal_token_budget": self.goal_token_budget,
+            "goal_tokens_used": self.goal_tokens_used,
+            "goal_time_budget_seconds": self.goal_time_budget_seconds,
+            "goal_time_used": self.goal_time_used,
+            "goal_repeat_count": self.goal_repeat_count,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -221,6 +277,14 @@ class SessionStore:
         goal_stream_id: str | None = None,
         goal_interrupted: bool | None = None,
         goal_phase: str | None = None,
+        goal_round: int | None = None,
+        goal_status: str | None = None,
+        goal_stop_reason: str | None = None,
+        goal_token_budget: int | None = None,
+        goal_tokens_used: int | None = None,
+        goal_time_budget_seconds: int | None = None,
+        goal_time_used: float | None = None,
+        goal_repeat_count: int | None = None,
     ) -> Session:
         session = self.require(session_id)
         if goal_text is not None:
@@ -245,6 +309,22 @@ class SessionStore:
             session.goal_interrupted = goal_interrupted
         if goal_phase is not None:
             session.goal_phase = goal_phase
+        if goal_round is not None:
+            session.goal_round = goal_round
+        if goal_status is not None:
+            session.goal_status = goal_status
+        if goal_stop_reason is not None:
+            session.goal_stop_reason = goal_stop_reason
+        if goal_token_budget is not None:
+            session.goal_token_budget = goal_token_budget
+        if goal_tokens_used is not None:
+            session.goal_tokens_used = goal_tokens_used
+        if goal_time_budget_seconds is not None:
+            session.goal_time_budget_seconds = goal_time_budget_seconds
+        if goal_time_used is not None:
+            session.goal_time_used = goal_time_used
+        if goal_repeat_count is not None:
+            session.goal_repeat_count = goal_repeat_count
         self.save(session)
         return session
 
@@ -266,6 +346,11 @@ class SessionStore:
         interrupted: bool | None = None,
         todos: list[dict[str, Any]] | None = None,
         agent_id: str = "",
+        status: str | None = None,
+        stop_reason: str | None = None,
+        tokens_used: int | None = None,
+        time_used: float | None = None,
+        repeat_count: int | None = None,
     ) -> Session:
         """Atomically commit a goal's terminal state AND its final assistant
         message in a single load→mutate→save cycle.
@@ -288,6 +373,26 @@ class SessionStore:
             session.goal_interrupted = interrupted
         if todos is not None:
             session.goal_todos = todos
+        if status is not None:
+            session.goal_status = status
+        elif done:
+            session.goal_status = "done"
+        elif paused:
+            session.goal_status = "paused"
+        elif interrupted:
+            session.goal_status = "interrupted"
+        elif stopped:
+            session.goal_status = "stopped"
+        if stop_reason is not None:
+            session.goal_stop_reason = stop_reason
+        elif done:
+            session.goal_stop_reason = ""
+        if tokens_used is not None:
+            session.goal_tokens_used = tokens_used
+        if time_used is not None:
+            session.goal_time_used = time_used
+        if repeat_count is not None:
+            session.goal_repeat_count = repeat_count
         if content:
             resolved_id = message_id or str(uuid.uuid4())
             resolved_agent = agent_id or session.agent_id

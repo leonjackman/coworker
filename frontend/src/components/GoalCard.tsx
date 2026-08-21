@@ -22,7 +22,9 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recen
             <Target size={15} />
             {goal.done ? t('chat.goal_status_done') : goal.paused ? t('chat.goal_status_paused') : goal.stalled || goal.stopped ? t('chat.goal_status_stopped') : t('chat.goal_status_active')}
           </span>
-          <span className="goal-card__round">{t('chat.goal_round', { round: goal.round })}</span>
+          {goal.round > 0 && (
+            <span className="goal-card__round">{t('chat.goal_round', { round: goal.round })}</span>
+          )}
           {goal.phase && (
             <span className={`goal-card__phase goal-card__phase--${goal.phase}`}>
               {goal.phase === 'plan' ? t('chat.goal_phase_plan') : goal.phase === 'execute' ? t('chat.goal_phase_execute') : t('chat.goal_phase_verify')}
@@ -57,12 +59,6 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recen
 
       <div className="goal-card__body">
         <p className="goal-card__text">{goal.goalText}</p>
-            {goal.verification && (
-          <div className="goal-card__verification">
-            <span className="goal-card__verification-label">{t('chat.goal_verification')}</span>
-            <span>{goal.verification}</span>
-          </div>
-        )}
         {(goal.stalled || goal.stopped) && (
           <p className="goal-card__stalled">
             {goal.stopped || goal.reason === 'stopped' ? t('chat.goal_stopped_hint') : t('chat.goal_stalled_hint')}

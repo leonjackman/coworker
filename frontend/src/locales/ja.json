@@ -120,7 +120,6 @@
   "chat.goal_phase_plan": "計画中",
   "chat.goal_phase_execute": "実行中",
   "chat.goal_phase_verify": "検証中",
-  "chat.goal_verification": "検証",
   "chat.goal_stalled_hint": "複数回の試行後、エージェントが停止しました。ゴールを一時停止または編集することを検討してください。",
   "chat.goal_pause": "一時停止",
   "chat.goal_resume": "再開",

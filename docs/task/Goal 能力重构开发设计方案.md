@@ -17,6 +17,8 @@
 
 ## 0.1 实现落地记录（2026-08-21）
 
+> **v2 治理层重构（2026-08-21 晚）**：行业对标（Codex/SWE-agent/Cline/opencode）后新增——预算会计（100 万 token + 30 分钟）+ 模型可感知注入、进度指纹去重防 runaway、token 软阈值回合交接、控制工具 parts 清理、`goal_status` 状态机收口。详见 task-list「第二轮：Goal 治理层重构」。本设计方案正文仍是 v1 阶段化设计。
+
 - 已按 task-list 全量实现并回归通过（详见 task-list「实现记录」与完成标准核对表）。
 - 实现偏差（相对本设计，均为小范围收口）：
   1. `read_preview` 默认 `max_chars` 保持 `100_000`（task-list Step 2.3 显式要求，前端文件预览路径不变），未按 §8「对齐 `READ_FILE_MAX_CHARS`」改默认值。

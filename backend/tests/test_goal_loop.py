@@ -37,6 +37,14 @@ class FakeStore:
         self.goal_paused = False
         self.goal_todos: list[dict] = []
         self.goal_phase = "plan"
+        self.goal_round = 0
+        self.goal_status = ""
+        self.goal_stop_reason = ""
+        self.goal_token_budget = 0
+        self.goal_tokens_used = 0
+        self.goal_time_budget_seconds = 0
+        self.goal_time_used = 0.0
+        self.goal_repeat_count = 0
         self.messages: list[dict] = []
         self.updates: list[dict] = []
         self.commits: list[dict] = []
@@ -54,6 +62,14 @@ class FakeStore:
             goal_paused=self.goal_paused,
             goal_todos=self.goal_todos,
             goal_phase=self.goal_phase,
+            goal_round=self.goal_round,
+            goal_status=self.goal_status,
+            goal_stop_reason=self.goal_stop_reason,
+            goal_token_budget=self.goal_token_budget,
+            goal_tokens_used=self.goal_tokens_used,
+            goal_time_budget_seconds=self.goal_time_budget_seconds,
+            goal_time_used=self.goal_time_used,
+            goal_repeat_count=self.goal_repeat_count,
         )
 
     def save(self, session):
@@ -72,6 +88,18 @@ class FakeStore:
             self.goal_todos = list(kwargs["goal_todos"])
         if "goal_phase" in kwargs:
             self.goal_phase = kwargs["goal_phase"]
+        if "goal_round" in kwargs:
+            self.goal_round = kwargs["goal_round"]
+        if "goal_status" in kwargs:
+            self.goal_status = kwargs["goal_status"]
+        if "goal_stop_reason" in kwargs:
+            self.goal_stop_reason = kwargs["goal_stop_reason"]
+        if "goal_tokens_used" in kwargs:
+            self.goal_tokens_used = kwargs["goal_tokens_used"]
+        if "goal_time_used" in kwargs:
+            self.goal_time_used = kwargs["goal_time_used"]
+        if "goal_repeat_count" in kwargs:
+            self.goal_repeat_count = kwargs["goal_repeat_count"]
         return self.require(session_id)
 
     def commit_goal_end(self, session_id, **kwargs):
@@ -86,6 +114,26 @@ class FakeStore:
             self.goal_interrupted = kwargs["interrupted"]
         if kwargs.get("todos") is not None:
             self.goal_todos = list(kwargs["todos"])
+        if kwargs.get("status") is not None:
+            self.goal_status = kwargs["status"]
+        elif kwargs.get("done"):
+            self.goal_status = "done"
+        elif kwargs.get("paused"):
+            self.goal_status = "paused"
+        elif kwargs.get("interrupted"):
+            self.goal_status = "interrupted"
+        elif kwargs.get("stopped"):
+            self.goal_status = "stopped"
+        if kwargs.get("stop_reason") is not None:
+            self.goal_stop_reason = kwargs["stop_reason"]
+        elif kwargs.get("done"):
+            self.goal_stop_reason = ""
+        if kwargs.get("tokens_used") is not None:
+            self.goal_tokens_used = kwargs["tokens_used"]
+        if kwargs.get("time_used") is not None:
+            self.goal_time_used = kwargs["time_used"]
+        if kwargs.get("repeat_count") is not None:
+            self.goal_repeat_count = kwargs["repeat_count"]
         if kwargs.get("content"):
             self.messages.append(
                 SimpleNamespace(
@@ -381,14 +429,22 @@ def test_resume_continues_round_counter():
 
 
 def test_unexpected_error_still_terminates():
+    # A stream failure (provider error / GraphRecursionError / ...) must end the
+    # goal with a CLEAN goal_done(reason="stream_error") + persisted terminal state
+    # instead of hanging the SSE stream or leaving the goal looking active.
     store = FakeStore()
     runtime = _make_runtime(
         [[{"type": "tool_start", "id": "t1", "name": "read_file", "input": ""}]],
         store=store,
         error_on=1,
     )
-    with pytest.raises(RuntimeError):
-        _run_goal(runtime)
+    events = _run_goal(runtime)
+
+    assert events[-1]["type"] == "goal_done"
+    assert events[-1].get("reason") == "stream_error"
+    assert store.goal_stopped is True
+    assert store.goal_status == "stopped"
+    assert store.goal_stop_reason == "stream_error"
 
 
 def test_already_done_is_noop():
@@ -531,3 +587,250 @@ def test_execute_stays_in_execute_while_todos_remain():
     assert {"goal_phase": "verify"} not in store.updates
     assert events[-1]["type"] == "goal_done"
     assert store.goal_done is True
+
+
+# ---------------------------------------------------------------------------
+# Governance: no-progress fingerprint, budget exhaustion, soft hand-off,
+# persisted-todos phase transition, todos preservation, control-tool cleanup.
+# ---------------------------------------------------------------------------
+
+
+def test_identical_checkpoints_terminate_as_no_progress():
+    # The 14-round runaway regression: an agent that calls finalize_goal(achieved=false)
+    # with the SAME progress/verification every round must be detected as no-progress
+    # and terminated instead of looping forever.
+    store = FakeStore()
+    identical = [
+        {"type": "goal_checkpoint", "achieved": False, "progress": "已修復 3 個 bug", "verification": ""},
+        {"type": "done", "content": "", "parts": [], "round_budget": False},
+    ]
+    runtime = _make_runtime([identical, identical, identical, identical], store=store)
+    events = _run_goal(runtime)
+
+    # Round 1 establishes the baseline; rounds 2-4 are identical → terminate.
+    assert [e.get("phase") for e in events if e["type"] == "goal_round"] == ["plan", "plan", "plan", "plan"]
+    assert events[-1]["type"] == "goal_done"
+    assert events[-1].get("reason") == "no_progress"
+    assert events[-1].get("stalled") is True
+    assert store.goal_stopped is True
+    assert store.goal_status == "stopped"
+    assert store.goal_stop_reason == "no_progress"
+    assert store.goal_repeat_count >= 3
+
+
+def test_changed_progress_resets_repeat_counter():
+    # Different progress each round is genuine progress → never trips no_progress.
+    store = FakeStore()
+    rounds = [
+        [{"type": "goal_checkpoint", "achieved": False, "progress": "step A", "verification": ""}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+        [{"type": "goal_checkpoint", "achieved": False, "progress": "step B", "verification": ""}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+        [{"type": "goal_checkpoint", "achieved": False, "progress": "step C", "verification": ""}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+        [{"type": "goal_checkpoint", "achieved": True, "progress": "done", "verification": "ok"}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+    ]
+    runtime = _make_runtime(rounds, store=store)
+    events = _run_goal(runtime)
+
+    assert events[-1]["type"] == "goal_done"
+    assert events[-1].get("reason") in (None, "")
+    assert store.goal_done is True
+    assert store.goal_status == "done"
+
+
+def test_budget_exhaustion_allows_wrap_up_then_terminates():
+    # Budget accounting: when the goal hits the token budget, one wrap-up round is
+    # allowed (with a "budget exhausted, wrap up now" prompt), then it terminates
+    # as budget_exhausted instead of looping forever.
+    store = FakeStore()
+    store.goal_token_budget = 1_000_000
+    store.goal_tokens_used = 1_000_000
+    rounds = [
+        # Round 1: the wrap-up round (not achieved → keeps going).
+        [{"type": "goal_checkpoint", "achieved": False, "progress": "wrapping up", "verification": ""}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+        # Round 2: loop top sees budget still exhausted + wrap-up already granted → terminate.
+        [{"type": "goal_checkpoint", "achieved": False, "progress": "wrapping up", "verification": ""}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+    ]
+    runtime = _make_runtime(rounds, store=store)
+    events = _run_goal(runtime)
+
+    # The first stream call carried a wrap-up budget note the model could see.
+    kw0 = runtime.stream_calls["kw"][0]
+    assert "預算已耗盡" in kw0.get("goal_budget_note", "")
+    assert events[-1]["type"] == "goal_done"
+    assert events[-1].get("reason") == "budget_exhausted"
+    assert store.goal_status == "stopped"
+    assert store.goal_stop_reason == "budget_exhausted"
+
+
+def test_round_token_usage_accounted_and_soft_handoff():
+    # Round usage is summed into the persisted goal_tokens_used, and a round that
+    # spends more than the soft threshold asks the NEXT round to hand off.
+    store = FakeStore()
+    store.goal_token_budget = 1_000_000
+    rounds = [
+        # Round 1 spends 200k tokens (soft threshold = 150k of 1M).
+        [
+            {"type": "goal_checkpoint", "achieved": False, "progress": "big chunk", "verification": ""},
+            {"type": "done", "content": "", "parts": [], "round_budget": False, "usage": {"prompt_tokens": 200_000, "completion_tokens": 0}},
+        ],
+        # Round 2: handoff hint injected; achieves.
+        [{"type": "goal_checkpoint", "achieved": True, "progress": "done", "verification": "ok"}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+    ]
+    runtime = _make_runtime(rounds, store=store)
+    events = _run_goal(runtime)
+
+    assert store.goal_tokens_used >= 200_000
+    kw1 = runtime.stream_calls["kw"][1]
+    assert "上一輪工作量較大" in kw1.get("goal_budget_note", "")
+    assert "200000" in kw1.get("goal_budget_note", "")
+    assert events[-1]["type"] == "goal_done"
+    assert store.goal_done is True
+
+
+def test_execute_transitions_to_verify_from_persisted_todos():
+    # Regression: execute phase must advance to verify from the PERSISTED todos
+    # even when the current round emits no write_todos event (the phase-stuck bug).
+    store = FakeStore()
+    store.goal_phase = "execute"
+    store.goal_todos = [{"content": "A", "status": "completed"}, {"content": "B", "status": "completed"}]
+    rounds = [
+        [{"type": "goal_checkpoint", "achieved": False, "progress": "working", "verification": ""}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+        [{"type": "goal_checkpoint", "achieved": True, "progress": "done", "verification": "ok"}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+    ]
+    runtime = _make_runtime(rounds, store=store)
+    events = _run_goal(runtime, goal_continue_first=True)
+
+    assert [e.get("phase") for e in events if e["type"] == "goal_round"] == ["execute", "verify"]
+    assert {"goal_phase": "verify"} in store.updates
+    assert events[-1]["type"] == "goal_done"
+    assert store.goal_done is True
+
+
+def test_terminal_commit_preserves_persisted_todos():
+    # A terminal commit with empty last_todos must NOT clobber the todos that
+    # earlier rounds persisted (the todos=[] bug).
+    store = FakeStore()
+    store.goal_todos = [{"content": "A", "status": "completed"}]
+    rounds = [
+        [
+            {"type": "goal_checkpoint", "achieved": True, "progress": "完成", "verification": "ok"},
+            {"type": "done", "content": "全部完成", "parts": [], "round_budget": False},
+        ],
+    ]
+    runtime = _make_runtime(rounds, store=store)
+    events = _run_goal(runtime)
+
+    assert events[-1]["type"] == "goal_done"
+    assert store.goal_done is True
+    assert store.goal_todos == [{"content": "A", "status": "completed"}]
+
+
+def test_control_tools_never_become_tool_cards():
+    # finalize_goal / write_todos must never leak into the persisted parts as an
+    # empty-name "Used tool:" error card, even when the tool-call name arrives in a
+    # later streaming chunk than the args.
+    from langchain_core.messages import AIMessageChunk, ToolMessage
+
+    runtime = object.__new__(OpenAICompatibleStreamRuntime)
+    content_parts: list[str] = []
+    tool_state: dict = {}
+    parts: list[dict] = []
+
+    # Chunk 1: args arrive first, name empty → would create a stray tool_start.
+    runtime._handle_message_chunk(
+        AIMessageChunk(content="", tool_call_chunks=[{"index": 0, "id": "tc1", "name": "", "args": '{"progress":"x"}'}]),
+        content_parts, tool_state, parts, "s1",
+    )
+    assert any(p.get("type") == "tool_start" and p.get("id") == "tc1" for p in parts)
+
+    # Chunk 2: name arrives → control-tool cleanup must drop the stray card.
+    runtime._handle_message_chunk(
+        AIMessageChunk(content="", tool_call_chunks=[{"index": 0, "id": "tc1", "name": "finalize_goal", "args": '{"achieved":false}'}]),
+        content_parts, tool_state, parts, "s1",
+    )
+    # ToolMessage arrives → goal_checkpoint emitted, still no card.
+    events = runtime._handle_message_chunk(
+        ToolMessage(content='{"achieved": false, "progress": "x"}', name="finalize_goal", tool_call_id="tc1"),
+        content_parts, tool_state, parts, "s1",
+    )
+    assert [e.get("type") for e in events] == ["goal_checkpoint"]
+    assert not any(p.get("id") == "tc1" for p in parts)
+    assert "tc1" not in tool_state
+
+
+def test_goal_budget_note_mirrors_remaining():
+    from coworker.agents import _goal_budget_note
+
+    note = _goal_budget_note(
+        tokens_used=250_000, token_budget=1_000_000,
+        time_used=60.0, time_budget_seconds=1800,
+        phase="execute",
+    )
+    assert "250000" in note and "1000000" in note and "750000" in note
+    assert "60" in note and "1800" in note
+
+
+def test_effective_goal_status_legacy_mapping():
+    from coworker.sessions import Session
+
+    s = Session(id="x", title="t", created_at="", updated_at="", goal_done=True)
+    assert s.effective_goal_status() == "done"
+    s2 = Session(id="x", title="t", created_at="", updated_at="", goal_paused=True)
+    assert s2.effective_goal_status() == "paused"
+    s3 = Session(id="x", title="t", created_at="", updated_at="", goal_status="done", goal_paused=True)
+    assert s3.effective_goal_status() == "done"
+
+
+def test_goal_round_persisted_and_resume_continues():
+    # The goal card's "round N" must survive session switches and pause/resume:
+    # goal_stream persists goal_round each round, and a resumed goal continues the
+    # counter from the persisted value instead of restarting at round 1.
+    store = FakeStore()
+    store.goal_round = 5
+    rounds = [
+        [{"type": "goal_checkpoint", "achieved": True, "progress": "done", "verification": "ok"}, {"type": "done", "content": "", "parts": [], "round_budget": False}],
+    ]
+    runtime = _make_runtime(rounds, store=store)
+    events = _run_goal(runtime, goal_continue_first=True)
+
+    # Resumed from persisted round 5 → the resumed round is round 6, and it was
+    # persisted back so the next session-switch restore shows 6.
+    assert [e.get("round") for e in events if e["type"] == "goal_round"] == [6]
+    assert store.goal_round == 6
+
+
+def test_usage_only_stream_chunk_does_not_crash_reasoning_patch():
+    # Regression for the "goal stopped immediately with stream_error" bug: enabling
+    # stream_usage=True makes vLLM/Ollama send a FINAL usage-only chunk with
+    # `choices: []`. The reasoning-preserving patch indexed choices[0] directly and
+    # raised "list index out of range", aborting the whole round. The patched
+    # converter must tolerate the empty-choices chunk (and still surface usage).
+    from langchain_core.messages import AIMessageChunk
+
+    from coworker.agents import ReasonPreservingChatOpenAI
+
+    llm = ReasonPreservingChatOpenAI.create(model="m", temperature=0, api_key="k", base_url="http://127.0.0.1:1/v1")
+    usage_only_chunk = {
+        "id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "m",
+        "choices": [],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+    }
+    out = llm._convert_chunk_to_generation_chunk(usage_only_chunk, AIMessageChunk, None)
+
+    assert out is not None
+    assert out.message.usage_metadata is not None
+    assert out.message.usage_metadata["total_tokens"] == 8
+
+
+def test_normalize_usage_accepts_both_key_naming():
+    # Regression for the 04146cdd bug: langchain-core 1.x UsageMetadata uses
+    # input_tokens/output_tokens, but the goal accumulator read prompt_tokens/
+    # completion_tokens → goal_tokens_used was always 0 and the token budget was
+    # silently disabled. Both key sets must normalize to the same numbers.
+    from coworker.agents import _normalize_usage
+
+    # langchain-core 1.x UsageMetadata (what the AIMessage carries)
+    assert _normalize_usage({"input_tokens": 10270, "output_tokens": 59, "total_tokens": 10329}) == (10270, 59)
+    # raw OpenAI-compatible usage dict (older / other providers)
+    assert _normalize_usage({"prompt_tokens": 10270, "completion_tokens": 59, "total_tokens": 10329}) == (10270, 59)
+    # empty / missing usage never crashes and yields zeros
+    assert _normalize_usage({}) == (0, 0)

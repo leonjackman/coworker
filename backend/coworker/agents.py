@@ -106,6 +106,7 @@ class CoworkerAgentState(AgentState[Any]):
     goal_nudge: NotRequired[str]
     goal_phase: NotRequired[str]
     goal_todo: NotRequired[str]
+    goal_budget_note: NotRequired[str]
     todos: NotRequired[list[Any]]
     # Cumulative count of context compressions (trim or summarize) for this
     # session. Lives in state (not on the middleware) because the middleware is
@@ -1823,7 +1824,10 @@ class ReasonPreservingChatOpenAI:
                 return gen_chunk
             msg = gen_chunk.message
             if isinstance(msg, AIMessageChunk):
-                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                # The final usage-only chunk from vLLM/Ollama (stream_options.include_usage)
+                # carries `choices: []` — guard against indexing into an empty list.
+                choices = chunk.get("choices") or []
+                delta = choices[0].get("delta", {}) if choices else {}
                 reasoning = delta.get("reasoning_content")
                 if isinstance(reasoning, str) and reasoning:
                     additional = dict(getattr(msg, "additional_kwargs", {}) or {})
@@ -1847,6 +1851,13 @@ class ReasonPreservingChatOpenAI:
             # generous, configurable timeout so concurrent or slow tasks are not
             # killed just because the next token took a while.
             stream_chunk_timeout=_llm_stream_chunk_timeout(),
+            # OpenAI-compatible servers (vLLM, DeepSeek, Ollama, ...) only include
+            # token usage in a streaming response when the request asks for it, and
+            # langchain-openai leaves stream_usage OFF for custom base URLs (it only
+            # auto-enables for the default api.openai.com endpoint). Enable it
+            # explicitly so every AI message carries usage_metadata — the data source
+            # for goal budget accounting (goal_tokens_used) and context-budget telemetry.
+            stream_usage=True,
         )
 
 
@@ -2892,6 +2903,76 @@ GOAL_MAX_FORCE = 3
 # only injects it.
 _GOAL_PHASES = ("plan", "execute", "verify")
 
+# ---- Goal budget governance (Codex-style accounting) -------------------------
+# Token budget is the primary governor; the time budget is a fallback that keeps
+# working even when a provider omits usage in streaming. Budgets default at
+# 1,000,000 tokens / 30 minutes per goal and can be overridden per user via the
+# Settings file (read_user_goal_budget_* in main.py).
+GOAL_TOKEN_BUDGET_DEFAULT = 1_000_000
+GOAL_TIME_BUDGET_DEFAULT_SECONDS = 30 * 60
+# A round whose token spend exceeds this fraction of the budget is asked to wrap
+# up the current chunk and hand off (finalize_goal(achieved=false)) so long tasks
+# span multiple rounds instead of one unbounded push.
+GOAL_ROUND_SOFT_HANDOFF_FRACTION = 0.15
+# When the remaining budget drops below this fraction, the model is told to wrap
+# up cleanly; when it reaches zero, one wrap-up round is allowed before the goal
+# is terminated as budget_exhausted.
+GOAL_NEAR_LIMIT_FRACTION = 0.10
+# Consecutive rounds producing an IDENTICAL achieved=false checkpoint mean the
+# agent is repeating itself — terminate as no_progress instead of looping.
+GOAL_MAX_IDENTICAL_ROUNDS = 3
+
+
+def _normalize_usage(usage: dict[str, Any]) -> tuple[int, int]:
+    """Normalize a provider usage dict into (prompt_tokens, completion_tokens).
+
+    langchain-core 1.x stores usage on messages as a ``UsageMetadata`` TypedDict
+    with ``input_tokens`` / ``output_tokens`` / ``total_tokens``, while raw
+    OpenAI-compatible responses (and older langchain) use ``prompt_tokens`` /
+    ``completion_tokens``. Accept both so goal budget accounting never silently
+    reads zeros (the 04146cdd regression: token budget was disabled because the
+    accumulator looked for the wrong key).
+    """
+    return (
+        int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),
+        int(usage.get("output_tokens") or usage.get("completion_tokens") or 0),
+    )
+
+
+def _goal_budget_note(
+    *,
+    tokens_used: int, token_budget: int,
+    time_used: float, time_budget_seconds: int,
+    phase: str, wrap_up: bool = False, handoff: bool = False,
+) -> str:
+    """Compose the budget-awareness line injected into the goal system prompt.
+
+    Mirrors Codex's continuation prompt: the model sees what it has spent and
+    what remains so it can self-manage — finishing the current chunk and calling
+    ``finalize_goal(achieved=false)`` to hand the goal to the next round — instead
+    of being hard-truncated by the runtime.
+    """
+    remaining = max(token_budget - tokens_used, 0)
+    pct = round(tokens_used / token_budget * 100) if token_budget > 0 else 0
+    soft_limit = max(int(token_budget * GOAL_ROUND_SOFT_HANDOFF_FRACTION), 1) if token_budget > 0 else 0
+    near_limit = token_budget > 0 and remaining < token_budget * GOAL_NEAR_LIMIT_FRACTION
+    lines = [
+        "[Coworker] 目標預算狀態：",
+        f"- 已用 tokens：{tokens_used} / {token_budget}（{pct}%，剩餘 {remaining}）",
+        f"- 已用時間：{int(time_used)} / {time_budget_seconds} 秒",
+    ]
+    if soft_limit:
+        lines.append(f"- 每輪建議工作量：約 {soft_limit} tokens")
+    if wrap_up:
+        lines.append("預算已耗盡：請總結已完成的內容，用 finalize_goal(achieved=true, ...) 收尾；若有未完成的關鍵工作，簡短說明。")
+    elif near_limit:
+        lines.append("預算即將耗盡：請完成當前工作並調用 finalize_goal(achieved=false, ...) 把進度交回，不要開啟新任務。")
+    elif handoff:
+        lines.append("上一輪工作量較大：本輪請在完成當前 todo 後調用 finalize_goal(achieved=false, ...) 交回，讓系統開新回合繼續。")
+    elif phase == "verify":
+        lines.append("請運行驗證（測試/命令）證明目標達成後，調用 finalize_goal(achieved=true, verification=...) 結束。")
+    return "\n".join(lines)
+
 
 def _first_incomplete_todo(todos: list[Any]) -> str:
     """First todo whose status is not ``completed`` (single source of truth for
@@ -2912,6 +2993,9 @@ _GOAL_TERMINAL_LABELS = {
     "interrupted": "Goal interrupted",
     "max_rounds_exceeded": "Max rounds exceeded",
     "paused": "Goal paused",
+    "no_progress": "Goal made no progress",
+    "budget_exhausted": "Goal budget exhausted",
+    "stream_error": "Goal stopped due to a stream error",
 }
 
 
@@ -3043,6 +3127,13 @@ class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         goal_phase = str(request.state.get("goal_phase") or "plan")
         current_todo = str(request.state.get("goal_todo") or "")
         prompt = goal_system_prompt(self.language, goal_text, autonomy, goal_phase, current_todo)
+        # Budget awareness: the model sees tokens/time used + remaining every round
+        # so it can wrap up the current chunk and hand off to the next round before
+        # the budget is exhausted (Codex continuation-prompt pattern). Empty when
+        # budget accounting has nothing to report.
+        budget_note = str(request.state.get("goal_budget_note") or "").strip()
+        if budget_note:
+            prompt = f"{prompt}\n\n{budget_note}"
         if nudge:
             prompt = f"{prompt}\n\n[Coworker] {str(nudge)[:1000]}"
         return {
@@ -3909,7 +4000,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     async def _stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool,
         goal_mode: bool = False, goal_text: str = "", goal_continue: bool = False, _nudge: str = "", _cancel_event: Any = None,
-        goal_phase: str = "plan", goal_todo: str = "",
+        goal_phase: str = "plan", goal_todo: str = "", goal_budget_note: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
@@ -3983,6 +4074,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 inputs["goal_text"] = goal_text
                 inputs["goal_phase"] = goal_phase
                 inputs["goal_todo"] = goal_todo
+                inputs["goal_budget_note"] = goal_budget_note
                 # A stale goal_nudge left in the checkpoint from a previous
                 # force retry must not re-inject into later rounds. Clear it
                 # unless THIS call is the force retry carrying a fresh nudge.
@@ -3995,6 +4087,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             content_parts: list[str] = []
             tool_state: dict[str, dict[str, Any]] = {}
             parts: list[dict[str, Any]] = []
+            # Token usage for this stream run (one goal round / one chat turn).
+            # Summed from the model node's final AIMessage usage_metadata so each
+            # model call inside the tool loop is counted exactly once.
+            run_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
 
             # Overflow recovery: run the stream, and if the provider rejects the
             # request for being too long before anything was emitted, force a
@@ -4033,9 +4129,18 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                     yield event
                                 return
                             # write_todos updates the todo list via a Command state update.
-                            for node_update in chunk.values():
+                            for node_name, node_update in chunk.items():
                                 if isinstance(node_update, dict) and "todos" in node_update:
                                     yield {"type": "todos", "todos": node_update.get("todos") or []}
+                                if isinstance(node_update, dict):
+                                    node_messages = node_update.get("messages")
+                                    if isinstance(node_messages, list) and node_messages:
+                                        last_msg = node_messages[-1]
+                                        usage = getattr(last_msg, "usage_metadata", None) or {}
+                                        if isinstance(usage, dict):
+                                            p, c = _normalize_usage(usage)
+                                            run_usage["prompt_tokens"] += p
+                                            run_usage["completion_tokens"] += c
                             # Drain any delegation SSE frames buffered by the delegate tools.
                             for delegate_event in self._drain_delegation_events():
                                 yield delegate_event
@@ -4076,7 +4181,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage}
 
     async def goal_stream(
         self,
@@ -4106,9 +4211,18 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         state, so a crash between "decision" and "persist" can never leave the
         goal looking active.
         """
-        # Accumulated content/parts across rounds, used as the terminal message.
+        # Accumulated content/parts for the CURRENT round, used as the terminal
+        # message. Reset at every round boundary so a long multi-round goal does
+        # not persist a concatenation of every round's streamed text (the old
+        # 21KB-message bug).
         accum_content = ""
         accum_parts: list[dict[str, Any]] = []
+        # Budget accounting (tokens + wall-clock) and no-progress fingerprint.
+        goal_token_budget = GOAL_TOKEN_BUDGET_DEFAULT
+        goal_tokens_used = 0
+        goal_time_budget = GOAL_TIME_BUDGET_DEFAULT_SECONDS
+        goal_time_used = 0.0
+        goal_repeat_count = 0
 
         def _commit_terminal(
             *,
@@ -4143,6 +4257,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             deduped_parts[idx] = part
                             continue
                     deduped_parts.append(part)
+                # NEVER clobber persisted todos with an empty last_todos: a round
+                # that produced no write_todos event must not wipe the task list
+                # that earlier rounds built (old todos=[] bug).
+                resolved_todos = list(todos) if todos else None
+                if not resolved_todos:
+                    try:
+                        resolved_todos = list(self.session_store.require(session_id).goal_todos) or None
+                    except Exception:
+                        resolved_todos = None
                 session = self.session_store.commit_goal_end(
                     session_id,
                     message_id=assistant_message_id or None,
@@ -4157,8 +4280,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     paused=paused,
                     stopped=stopped,
                     interrupted=interrupted,
-                    todos=list(todos) if todos is not None else None,
+                    todos=resolved_todos,
                     agent_id=self.agent,
+                    status="done" if done else ("paused" if paused else ("interrupted" if interrupted else ("stopped" if stopped else None))),
+                    stop_reason=reason or None,
+                    tokens_used=goal_tokens_used,
+                    time_used=goal_time_used,
+                    repeat_count=goal_repeat_count,
                 )
                 if label and self.change_store is not None:
                     last = session.messages[-1] if session.messages else None
@@ -4185,10 +4313,27 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 pass
         last_checkpoint: dict[str, Any] | None = None
         last_todos: list[Any] = []
+        prev_checkpoint: dict[str, Any] | None = None
+        # A resumed goal continues its round counter from the persisted value so
+        # the goal card does not reset to round 1 after pause/resume.
         round_no = 0
+        if goal_continue_first and self.session_store is not None:
+            try:
+                round_no = int(getattr(self.session_store.require(session_id), "goal_round", 0) or 0)
+            except Exception:
+                round_no = 0
+        # This round is the allowed "wrap up" round after the budget was exhausted.
+        wrap_up_round = False
+        # Set when the previous round spent more than the soft threshold; the next
+        # round's prompt then asks the model to hand off (finalize achieved=false).
+        handoff_hint = False
         yield {"type": "goal_start", "goal": goal_text, "session_id": session_id}
         while True:
             round_no += 1
+            # Per-round content/parts reset so the terminal message only carries
+            # the LAST round's work (not a concatenation of every round's text).
+            accum_content = ""
+            accum_parts = []
             # Read session state: goal_just_edited flag, goal_text, stop request, max_rounds.
             session_state: Any = None
             if self.session_store is not None:
@@ -4208,6 +4353,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         return
                     # Preserve 0 (unlimited); only fall back to 50 when unset (None).
                     goal_max_rounds = 50 if session_state.goal_max_rounds is None else int(session_state.goal_max_rounds)
+                    # Budget accounting persists across rounds/resumes.
+                    goal_token_budget = int(getattr(session_state, "goal_token_budget", 0) or 0) or GOAL_TOKEN_BUDGET_DEFAULT
+                    goal_tokens_used = int(getattr(session_state, "goal_tokens_used", 0) or 0)
+                    goal_time_budget = int(getattr(session_state, "goal_time_budget_seconds", 0) or 0) or GOAL_TIME_BUDGET_DEFAULT_SECONDS
+                    goal_time_used = float(getattr(session_state, "goal_time_used", 0.0) or 0.0)
+                    goal_repeat_count = int(getattr(session_state, "goal_repeat_count", 0) or 0)
                 except Exception:
                     # Failed to read session state: fail safe to the default cap
                     # rather than 0, which would otherwise mean "unlimited".
@@ -4230,6 +4381,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     pass
             if is_first and not goal_continue_first:
                 goal_phase = "plan"
+                wrap_up_round = False
+                handoff_hint = False
             # Current todo (execute phase only): first incomplete todo to inject.
             current_todo = _first_incomplete_todo(goal_todos) if goal_phase == "execute" else ""
             # Max rounds guard: stop when we exceed goal_max_rounds (0 = no limit).
@@ -4240,8 +4393,34 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     "content": "", "reason": "max_rounds_exceeded",
                 }
                 return
+            # Budget exhausted: the PREVIOUS round was the wrap-up round and the
+            # goal still isn't done → terminate (work is preserved).
+            budget_exhausted = goal_tokens_used >= goal_token_budget or goal_time_used >= goal_time_budget
+            if budget_exhausted:
+                if wrap_up_round:
+                    _commit_terminal(stopped=True, reason="budget_exhausted", content=accum_content, todos=last_todos)
+                    yield {
+                        "type": "goal_done", "round": round_no, "goal": goal_text,
+                        "content": "", "reason": "budget_exhausted",
+                    }
+                    return
+                # First time we notice: allow ONE wrap-up round with an explicit
+                # "budget exhausted, wrap up now" prompt.
+                wrap_up_round = True
+                handoff_hint = False
+            budget_note = _goal_budget_note(
+                tokens_used=goal_tokens_used, token_budget=goal_token_budget,
+                time_used=goal_time_used, time_budget_seconds=goal_time_budget,
+                phase=goal_phase, wrap_up=wrap_up_round, handoff=handoff_hint,
+            )
+            # Consume the hand-off hint: it applies to THIS round's prompt only.
+            # The next round's hint (if any) is re-armed below when its token spend
+            # exceeds the soft threshold.
+            handoff_hint = False
             yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running", "phase": goal_phase}
             round_had_interrupt = False
+            round_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+            round_started = time.monotonic()
             try:
                 async with asyncio.timeout(600):  # 5 min per turn
                     async for event in self._stream(
@@ -4253,6 +4432,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         goal_mode=True, goal_text=goal_text,
                         goal_continue=(not is_first or goal_continue_first),
                         goal_phase=goal_phase, goal_todo=current_todo,
+                        goal_budget_note=budget_note,
                         _cancel_event=_cancel_event,
                     ):
                         etype = event.get("type", "")
@@ -4269,6 +4449,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             # (persisted atomically below) has the round's trajectory.
                             for part in (event.get("parts") or []):
                                 accum_parts.append(part)
+                            usage = event.get("usage") or {}
+                            if isinstance(usage, dict):
+                                round_usage["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+                                round_usage["completion_tokens"] += int(usage.get("completion_tokens") or 0)
                         yield event
             except asyncio.TimeoutError:
                 _commit_terminal(stopped=True, reason="timeout", content=accum_content, todos=last_todos)
@@ -4278,6 +4462,34 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 _commit_terminal(stopped=True, reason="stopped", content=accum_content, todos=last_todos)
                 yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
                 return
+            except Exception as exc:
+                # Any other stream failure (GraphRecursionError, provider error,
+                # etc.) must end the goal cleanly instead of hanging the stream:
+                # record it, persist a terminal state, and surface a goal_done.
+                try:
+                    self.trace_store.record(
+                        "agent_activity", "error", current_trace_context, {"error": str(exc)[:400], "round": round_no}
+                    )
+                except Exception:
+                    pass
+                _commit_terminal(stopped=True, reason="stream_error", content=accum_content, todos=last_todos)
+                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stream_error"}
+                return
+            # Account this round: tokens from the stream usage + wall-clock time.
+            goal_tokens_used += round_usage.get("prompt_tokens", 0) + round_usage.get("completion_tokens", 0)
+            goal_time_used += time.monotonic() - round_started
+            if self.session_store is not None:
+                try:
+                    self.session_store.update_goal(
+                        session_id, goal_tokens_used=goal_tokens_used, goal_time_used=goal_time_used,
+                        goal_round=round_no,
+                    )
+                except Exception:
+                    pass
+            # Soft hand-off: if this round burned more than the per-round budget
+            # fraction, ask the NEXT round to wrap up its chunk and hand over.
+            if goal_token_budget > 0 and (round_usage.get("prompt_tokens", 0) + round_usage.get("completion_tokens", 0)) > goal_token_budget * GOAL_ROUND_SOFT_HANDOFF_FRACTION:
+                handoff_hint = True
             # Round boundary decision.
             paused = False
             if self.session_store is not None:
@@ -4311,6 +4523,36 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 _commit_terminal(paused=True, content=accum_content, todos=last_todos)
                 yield {"type": "goal_paused", "round": round_no, "goal": goal_text}
                 return
+            # ---- No-progress fingerprint (identical achieved=false checkpoints) ----
+            # An agent that calls finalize_goal(achieved=false) with the SAME
+            # progress/verification every round is looping, not progressing. The
+            # old anti-stall only caught rounds WITHOUT a checkpoint, so identical
+            # checkpoints reset the counter forever (the 14-round runaway). Here we
+            # detect repetition directly and terminate after a few identical rounds.
+            if last_checkpoint is not None and not achieved:
+                same_as_prev = (
+                    prev_checkpoint is not None
+                    and not prev_checkpoint.get("achieved")
+                    and (last_checkpoint.get("progress") or "") == (prev_checkpoint.get("progress") or "")
+                    and (last_checkpoint.get("verification") or "") == (prev_checkpoint.get("verification") or "")
+                )
+                goal_repeat_count = goal_repeat_count + 1 if same_as_prev else 0
+                prev_checkpoint = last_checkpoint
+            else:
+                goal_repeat_count = 0
+                prev_checkpoint = last_checkpoint
+            if self.session_store is not None:
+                try:
+                    self.session_store.update_goal(session_id, goal_repeat_count=goal_repeat_count)
+                except Exception:
+                    pass
+            if goal_repeat_count >= GOAL_MAX_IDENTICAL_ROUNDS:
+                _commit_terminal(stopped=True, reason="no_progress", content=accum_content, todos=last_todos)
+                yield {
+                    "type": "goal_done", "round": round_no, "goal": goal_text,
+                    "content": "", "stalled": True, "reason": "no_progress",
+                }
+                return
             # ---- Phase progression (owned by goal_stream) ----
             # plan → execute once a plan (todos) exists; execute → verify once every
             # todo is completed. Phase is persisted so /goal/status and the frontend
@@ -4324,7 +4566,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             pass
                     goal_phase = "execute"
             elif goal_phase == "execute":
-                if last_todos and not _first_incomplete_todo(last_todos):
+                # Check the PERSISTED todos too: an execute round that emits no new
+                # todos event (all todos were completed in an earlier round) must
+                # still advance to verify — otherwise the loop stays stuck in execute
+                # with an empty current_todo forever (the phase-stuck bug).
+                todos_to_check = last_todos or goal_todos
+                if todos_to_check and not _first_incomplete_todo(todos_to_check):
                     if self.session_store is not None:
                         try:
                             self.session_store.update_goal(session_id, goal_phase="verify")
@@ -4393,6 +4640,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             goal_mode=True, goal_text=goal_text,
                             goal_continue=True,
                             goal_phase=goal_phase, goal_todo=current_todo,
+                            goal_budget_note=budget_note,
                             _nudge=nudge,
                             _cancel_event=_cancel_event,
                         ):
@@ -4474,6 +4722,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 if tc_name in ("finalize_goal", "write_todos"):
                     # finalize_goal/write_todos are goal-loop / task-list controls
                     # rendered via goal_checkpoint/todos events, not tool cards.
+                    # If the tool-call name arrived EMPTY in an earlier chunk, a
+                    # stray tool_start part was created before we knew what it was
+                    # — drop it so it never persists as a "Used tool:" error card.
+                    if tc_id in tool_state:
+                        tool_state.pop(tc_id, None)
+                        parts[:] = [
+                            p for p in parts
+                            if not (p.get("type") == "tool_start" and p.get("id") == tc_id)
+                        ]
                     continue
 
                 if tc_id not in tool_state:
@@ -4510,9 +4767,16 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     "progress": str(checkpoint.get("progress", "") or "")[:500],
                     "verification": str(checkpoint.get("verification", "") or "")[:500],
                 })
+                # Drop any stray tool_start part left by an early empty-name chunk.
+                if tc_id and tc_id in tool_state:
+                    tool_state.pop(tc_id, None)
+                    parts[:] = [p for p in parts if not (p.get("type") == "tool_start" and p.get("id") == tc_id)]
                 return events
             if msg_name == "write_todos":
                 # Todo progress is streamed via the `todos` event; no tool card.
+                if tc_id and tc_id in tool_state:
+                    tool_state.pop(tc_id, None)
+                    parts[:] = [p for p in parts if not (p.get("type") == "tool_start" and p.get("id") == tc_id)]
                 return events
             # The real outcome: HITL rejections/errors carry status "error",
             # only genuine completions are "success".
