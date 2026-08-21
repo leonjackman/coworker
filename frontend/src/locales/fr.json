@@ -895,5 +895,7 @@
   "chat.send_queued": "Mettre en file d'attente",
   "chat.queued_messages": "{count} en attente",
   "chat.queue_section": "Messages en attente",
-  "chat.remove_queued": "Retirer de la file"
+  "chat.remove_queued": "Retirer de la file",
+  "chat.edit_queued": "Modifier le message en attente",
+  "chat.reorder_queued": "Glisser pour réordonner"
 }

@@ -9915,8 +9915,38 @@ body.bottom-panel-resizing {
   background: color-mix(in oklab, var(--material-control) 40%, transparent);
 }
 
+.todo-block__queue-item--editing {
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  outline: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+.todo-block__queue-item[data-dragging='true'] {
+  position: relative;
+  z-index: 2;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--foreground) 18%, transparent);
+}
+
 .todo-block__queue-item:hover {
   background: var(--panel-hover);
+}
+
+.todo-block__queue-drag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+  cursor: grab;
+  opacity: 0.55;
+  transition: opacity 150ms ease, color 150ms ease;
+}
+
+.todo-block__queue-drag:hover {
+  opacity: 1;
+  color: var(--foreground);
+}
+
+.todo-block__queue-drag:active {
+  cursor: grabbing;
 }
 
 .todo-block__queue-dot {
@@ -9955,6 +9985,48 @@ body.bottom-panel-resizing {
 .todo-block__queue-remove:hover {
   background: color-mix(in oklab, var(--color-danger, #e5484d) 14%, transparent);
   color: var(--color-danger, #e5484d);
+}
+
+.todo-block__queue-edit {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: background 150ms ease, color 150ms ease, opacity 150ms ease;
+}
+
+.todo-block__queue-item:hover .todo-block__queue-edit,
+.todo-block__queue-item--editing .todo-block__queue-edit {
+  opacity: 1;
+}
+
+.todo-block__queue-edit:hover {
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.todo-block__queue-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--foreground);
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent);
+  background: var(--input);
+  outline: none;
+}
+
+.todo-block__queue-input:focus {
+  border-color: var(--accent);
 }
 
 /* ── Org team settings panel ─────────────────────────────────────────── */

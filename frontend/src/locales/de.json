@@ -895,5 +895,7 @@
   "chat.send_queued": "Nachricht in Warteschlange",
   "chat.queued_messages": "{count} in der Warteschlange",
   "chat.queue_section": "Warteschlange",
-  "chat.remove_queued": "Aus der Warteschlange entfernen"
+  "chat.remove_queued": "Aus der Warteschlange entfernen",
+  "chat.edit_queued": "Nachricht in Warteschlange bearbeiten",
+  "chat.reorder_queued": "Ziehen zum Sortieren"
 }

@@ -895,5 +895,7 @@
   "chat.send_queued": "Поставить в очередь",
   "chat.queued_messages": "{count} в очереди",
   "chat.queue_section": "Очередь сообщений",
-  "chat.remove_queued": "Убрать из очереди"
+  "chat.remove_queued": "Убрать из очереди",
+  "chat.edit_queued": "Изменить сообщение в очереди",
+  "chat.reorder_queued": "Перетащите для изменения порядка"
 }

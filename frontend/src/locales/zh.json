@@ -897,5 +897,7 @@
   "chat.send_queued": "排队发送",
   "chat.queued_messages": "已有 {count} 条排队",
   "chat.queue_section": "排队发送",
-  "chat.remove_queued": "取消排队"
+  "chat.remove_queued": "取消排队",
+  "chat.edit_queued": "编辑排队消息",
+  "chat.reorder_queued": "拖动调整顺序"
 }

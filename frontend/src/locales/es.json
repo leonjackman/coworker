@@ -895,5 +895,7 @@
   "chat.send_queued": "Poner en cola el mensaje",
   "chat.queued_messages": "{count} en cola",
   "chat.queue_section": "Mensajes en cola",
-  "chat.remove_queued": "Quitar de la cola"
+  "chat.remove_queued": "Quitar de la cola",
+  "chat.edit_queued": "Editar mensaje en cola",
+  "chat.reorder_queued": "Arrastrar para reordenar"
 }

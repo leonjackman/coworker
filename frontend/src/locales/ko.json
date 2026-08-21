@@ -895,5 +895,7 @@
   "chat.send_queued": "메시지 대기열에 추가",
   "chat.queued_messages": "{count}개 대기 중",
   "chat.queue_section": "대기 중인 메시지",
-  "chat.remove_queued": "대기열에서 제거"
+  "chat.remove_queued": "대기열에서 제거",
+  "chat.edit_queued": "대기 중인 메시지 편집",
+  "chat.reorder_queued": "드래그하여 순서 변경"
 }

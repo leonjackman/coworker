@@ -897,5 +897,7 @@
   "chat.send_queued": "Queue message",
   "chat.queued_messages": "{count} queued",
   "chat.queue_section": "Queued messages",
-  "chat.remove_queued": "Remove from queue"
+  "chat.remove_queued": "Remove from queue",
+  "chat.edit_queued": "Edit queued message",
+  "chat.reorder_queued": "Drag to reorder"
 }

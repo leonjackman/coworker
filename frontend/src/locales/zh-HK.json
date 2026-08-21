@@ -895,5 +895,7 @@
   "chat.send_queued": "排隊發送",
   "chat.queued_messages": "已有 {count} 條排隊",
   "chat.queue_section": "排隊發送",
-  "chat.remove_queued": "取消排隊"
+  "chat.remove_queued": "取消排隊",
+  "chat.edit_queued": "編輯排隊訊息",
+  "chat.reorder_queued": "拖動調整順序"
 }

@@ -439,6 +439,24 @@ function App() {
     queuedMessagesRef.current[key] = queue.filter((entry) => entry.id !== id);
     setQueuedEntries((current) => ({ ...current, [key]: queuedMessagesRef.current[key] ?? [] }));
   };
+  const updateQueuedMessage = (sessionId: string | undefined, id: string, message: string) => {
+    const key = streamKey(sessionId);
+    const queue = queuedMessagesRef.current[key] ?? [];
+    queuedMessagesRef.current[key] = queue.map((entry) =>
+      entry.id === id ? { ...entry, message } : entry,
+    );
+    setQueuedEntries((current) => ({ ...current, [key]: queuedMessagesRef.current[key] ?? [] }));
+  };
+  const reorderQueuedMessage = (sessionId: string | undefined, orderedIds: string[]) => {
+    const key = streamKey(sessionId);
+    const queue = queuedMessagesRef.current[key] ?? [];
+    const byId = new Map(queue.map((entry) => [entry.id, entry]));
+    const next = orderedIds
+      .map((id) => byId.get(id))
+      .filter((entry): entry is QueuedEntry => Boolean(entry));
+    queuedMessagesRef.current[key] = next;
+    setQueuedEntries((current) => ({ ...current, [key]: next }));
+  };
   const queuedMessagesFor = (sessionId: string | undefined) => queuedEntries[streamKey(sessionId)] ?? [];
 
   const abortStreamFor = (sessionId?: string | null) => {
@@ -3138,6 +3156,12 @@ function App() {
                           queuedMessages={queuedMessagesFor(sessionId)}
                           onRemoveQueued={(id) => {
                             if (sessionId) removeQueuedMessage(sessionId, id);
+                          }}
+                          onEditQueued={(id, message) => {
+                            if (sessionId) updateQueuedMessage(sessionId, id, message);
+                          }}
+                          onReorderQueued={(orderedIds) => {
+                            if (sessionId) reorderQueuedMessage(sessionId, orderedIds);
                           }}
                           onClose={dismissCurrentTodos}
                         />
