@@ -92,11 +92,6 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
             {t('titlebar.context_compressing')}
           </span>
         )}
-        {(usage.compactCount > 0 || usage.compacted) && (
-          <span className="context-budget-badge" title={t('titlebar.context_compressed')}>
-            {t('titlebar.context_badge')}
-          </span>
-        )}
       </div>
     </Tooltip>
   );

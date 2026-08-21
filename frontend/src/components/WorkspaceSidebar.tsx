@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { Tooltip } from './ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
+import { ContextMenu, type ContextMenuItem } from './ui/context-menu';
 import { SidebarScrollbar } from './ui/sidebar-scrollbar';
 import {
   DndContext,
@@ -111,6 +112,7 @@ function orderProjects(projects: ProjectEntry[], preferred: string[]): ProjectEn
 
 function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorSessionId }: SessionRowProps) {
   const [copied, setCopied] = useState(false);
+  const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number } | null>(null);
 
   const handleCopyId = async () => {
     try {
@@ -122,8 +124,15 @@ function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorS
     }
   };
 
+  const sessionMenuItems: ContextMenuItem[] = [
+    { id: 'open', label: t('sidebar.session_open'), icon: <FolderOpen size={14} />, onSelect: () => onOpen(session.id) },
+    { id: 'copy-id', label: copied ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id'), icon: copied ? <Check size={14} /> : <Copy size={14} />, onSelect: () => void handleCopyId() },
+    { id: 'delete', label: t('common.delete'), icon: <Trash2 size={14} />, danger: true, onSelect: () => onDelete(session.id) },
+  ];
+
   return (
-    <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`}>
+    <>
+    <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`} onContextMenu={(e) => { e.preventDefault(); setSessionMenu({ x: e.clientX, y: e.clientY }); }}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
         {running && <Loader2 size={13} className="sidebar-session__running-icon" aria-label="Running" />}
         {goalIndicatorSessionId === session.id && <Target size={13} className="sidebar-session__goal-icon" />}
@@ -150,6 +159,14 @@ function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorS
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+    <ContextMenu
+      open={sessionMenu !== null}
+      x={sessionMenu?.x ?? 0}
+      y={sessionMenu?.y ?? 0}
+      onClose={() => setSessionMenu(null)}
+      items={sessionMenuItems}
+    />
+    </>
   );
 }
 
@@ -278,6 +295,7 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
 
 function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const {
     listeners,
     setNodeRef,
@@ -335,11 +353,22 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
     setExpanded((v) => !v);
   };
 
+  const projectMenuItems: ContextMenuItem[] = [
+    { id: 'history', label: t('sidebar.session_history'), icon: <MessageSquare size={14} />, onSelect: () => onOpenProject(project.id) },
+    ...(onOpenOrgSettings && !isSingle
+      ? [{ id: 'team', label: t('sidebar.org_team_manage'), icon: <Users size={14} />, dividerBefore: true, onSelect: () => onOpenOrgSettings(project.id) }]
+      : []),
+    { id: 'rename', label: t('sidebar.project_rename'), icon: <Pencil size={14} />, dividerBefore: true, onSelect: () => onRenameProject(project) },
+    { id: 'delete', label: t('sidebar.project_delete'), icon: <Trash2 size={14} />, danger: true, onSelect: () => onDeleteProject(project.id) },
+  ];
+
   return (
+    <>
     <div ref={setNodeRef} style={dragStyle} className="sidebar-project" data-dragging={isDragging}>
       <div
         className={`sidebar-project__title-row ${active ? 'sidebar-project__title-row--active' : ''}`}
         {...listeners}
+        onContextMenu={(e) => { e.preventDefault(); setProjectMenu({ x: e.clientX, y: e.clientY }); }}
       >
         <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
           {expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />)}
@@ -347,7 +376,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
           <span className="sidebar-project__chevron-icon" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} onPointerDown={(e) => e.stopPropagation()}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </span>
-          <div className="sidebar-project__actions" onPointerDown={(e) => e.stopPropagation()}>
+          <div className="sidebar-project__actions" onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild className="sidebar-project__more-trigger" aria-label="Project actions">
                 <span className="more-icon-wrapper"><MoreHorizontal size={15} /></span>
@@ -427,6 +456,14 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
         </div>
       )}
     </div>
+    <ContextMenu
+      open={projectMenu !== null}
+      x={projectMenu?.x ?? 0}
+      y={projectMenu?.y ?? 0}
+      onClose={() => setProjectMenu(null)}
+      items={projectMenuItems}
+    />
+    </>
   );
 }
 
