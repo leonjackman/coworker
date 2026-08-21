@@ -555,22 +555,10 @@ export function ChatInput({
     if (!editor || !commandChip) return;
     const chip = editor.querySelector("[data-command-chip]");
     if (chip && editor.firstChild !== chip) editor.prepend(chip);
-    const selection = window.getSelection();
-    if (selection && selection.isCollapsed && selection.anchorNode === editor && selection.anchorOffset <= 1) {
-      const range = document.createRange();
-      const next = chip?.nextSibling;
-      if (next) {
-        range.setStart(next, 0);
-        range.collapse(true);
-      } else if (chip) {
-        range.setStartAfter(chip);
-        range.collapse(true);
-      } else {
-        return;
-      }
-      selection.removeAllRanges();
-      selection.addRange(range);
-    }
+    // Re-focus after the chip renders so the caret stays active: for skill chips
+    // the chip only mounts once an async validation resolves, so the focus we
+    // applied at commit time is lost when this contentEditable re-renders.
+    focusAfterChip();
   }, [commandChip]);
 
   /** Remove the leading "/token " text currently being typed (the raw command
@@ -603,7 +591,7 @@ export function ChatInput({
     let firstText: Text | null = null;
     while (walker.nextNode()) {
       const candidate = walker.currentNode as Text;
-      if (chip && candidate.parentElement === chip) continue;
+      if (chip && chip.contains(candidate)) continue;
       firstText = candidate;
       break;
     }
