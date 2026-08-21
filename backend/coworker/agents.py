@@ -50,6 +50,7 @@ from .sessions import SessionStore
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .workspace import (
     COMMAND_APPROVAL_FILENAME,
+    READ_FILE_MAX_CHARS,
     READ_ONLY_COMMANDS,
     TOOL_AUDIT_FILENAME,
     CommandApprovalStore,
@@ -103,6 +104,8 @@ class CoworkerAgentState(AgentState[Any]):
     goal_text: NotRequired[str]
     goal_done: NotRequired[bool]
     goal_nudge: NotRequired[str]
+    goal_phase: NotRequired[str]
+    goal_todo: NotRequired[str]
     todos: NotRequired[list[Any]]
     # Cumulative count of context compressions (trim or summarize) for this
     # session. Lives in state (not on the middleware) because the middleware is
@@ -556,9 +559,20 @@ def build_workspace_tools(
 
     @tool(args_schema=ReadFileArgs)
     def read_file(file_path: str) -> str:
-        """Read a UTF-8 text file from the configured workspace."""
+        """Read a text file from the workspace (binary files return a hint; large
+        text files are truncated)."""
         try:
-            return workspace.read_text(file_path)
+            preview = workspace.read_preview(file_path, max_chars=READ_FILE_MAX_CHARS)
+            if preview.get("binary"):
+                return json.dumps(
+                    {
+                        "binary": True,
+                        "size": preview.get("size", 0),
+                        "hint": "Binary file — open it in the file panel; its raw bytes are not readable as text.",
+                    },
+                    ensure_ascii=False,
+                )
+            return json.dumps(preview, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "read_file")
 
@@ -2867,13 +2881,25 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 # GoalModeMiddleware – autonomous /goal loop (Codex Goal mode).
 # ---------------------------------------------------------------------------
 
-GOAL_MARKER = "[CW-GOAL]"
-
 # Max forced-continuation nudges before declaring a goal stalled. Shared by
 # GoalModeMiddleware (docstring reference) and the goal loop in
 # OpenAICompatibleStreamRuntime, which previously referenced `self.MAX_FORCE`
 # on a class that never defined it (AttributeError on every stall).
 GOAL_MAX_FORCE = 3
+
+# Formal goal phases (single source of truth): plan → execute → verify. The
+# goal loop owns the transitions; sessions only store the string and middleware
+# only injects it.
+_GOAL_PHASES = ("plan", "execute", "verify")
+
+
+def _first_incomplete_todo(todos: list[Any]) -> str:
+    """First todo whose status is not ``completed`` (single source of truth for
+    which todo the execute phase focuses on). Returns "" when none remains."""
+    for todo in todos or []:
+        if isinstance(todo, dict) and todo.get("status") != "completed":
+            return str(todo.get("content", "") or "")
+    return ""
 
 # Short human-readable labels persisted as the goal's terminal assistant message
 # when a round ends without any streamed content (timeout / stop / stall / cap).
@@ -2916,7 +2942,13 @@ def _goal_tools() -> list[Any]:
     return [finalize_goal]
 
 
-def goal_system_prompt(language: Language, goal_text: str, autonomy: Autonomy = "autonomous") -> str:
+def goal_system_prompt(
+    language: Language,
+    goal_text: str,
+    autonomy: Autonomy = "autonomous",
+    goal_phase: str = "plan",
+    current_todo: str = "",
+) -> str:
     lang_line = f"Reply in {language_name(language)}."
     if autonomy == "autonomous":
         mode_line = (
@@ -2935,21 +2967,42 @@ def goal_system_prompt(language: Language, goal_text: str, autonomy: Autonomy = 
             "the workspace. You may call ask_user only when you are genuinely blocked and "
             "need a decision; otherwise proceed autonomously."
         )
+    if goal_phase == "execute":
+        phase_line = (
+            "Current phase: EXECUTE. Focus ONLY on the current todo below; ignore "
+            "unrelated work. When it is done, call "
+            "`finalize_goal(achieved=false, progress=<1-2 sentence status>)` — the "
+            "system advances to the next todo automatically."
+        )
+        if current_todo:
+            phase_line += f"\nCurrent todo: {current_todo}"
+    elif goal_phase == "verify":
+        phase_line = (
+            "Current phase: VERIFY. All todos are complete. Run verification "
+            "(tests / commands) that prove the whole goal is achieved, then you MUST "
+            "call `finalize_goal(achieved=true, verification=<evidence: tests/commands "
+            "that passed>)`."
+        )
+    else:
+        phase_line = (
+            "Current phase: PLAN. First make a plan before touching anything: use "
+            "`search_files` / `read_file` to progressively understand ONLY the parts "
+            "of the repository relevant to the goal — do not try to read the whole "
+            "repository. Then break the work into concrete todos with `write_todos`, "
+            "marking each in_progress/completed as you go."
+        )
     return (
         f"{lang_line}\n"
         f"{mode_line}\n"
         f"GOAL: {goal_text}\n\n"
+        f"{phase_line}\n\n"
         "Work continuously toward the goal.\n"
-        "1. Break the work into concrete todos with `write_todos`, marking each "
-        "in_progress/completed as you go.\n"
-        "2. Research, edit files and run workspace commands. Use `run_command` to run "
-        "tests/checks that prove real progress.\n"
-        "3. After a work chunk, if more remains, call "
-        "`finalize_goal(achieved=false, progress=<1-2 sentence status>)` — the system "
-        "starts the next round automatically.\n"
-        "4. When the goal is FULLY achieved and verified, you MUST call "
-        "`finalize_goal(achieved=true, verification=<evidence: tests/commands that passed>)`.\n"
-        "5. CRITICAL: A plain-text answer does NOT complete the goal. The ONLY way to "
+        "Do NOT call `git_status` to survey the repository — use `search_files`, "
+        "`read_file` and workspace commands to locate only what you need.\n"
+        "Use `run_command` to run tests/checks that prove real progress.\n"
+        "When the goal is FULLY achieved and verified, you MUST call "
+        "`finalize_goal(achieved=true, verification=<evidence>)`.\n"
+        "CRITICAL: A plain-text answer does NOT complete the goal. The ONLY way to "
         "finish is to call `finalize_goal(achieved=true, ...)`. Do NOT stop with a "
         "text summary before calling it. If you are truly blocked, call "
         "`finalize_goal(achieved=false, progress=<blocker>)`."
@@ -2959,11 +3012,12 @@ def goal_system_prompt(language: Language, goal_text: str, autonomy: Autonomy = 
 class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     """Autonomous goal loop (Codex ``/goal``).
 
-    * Injects the goal system prompt and exposes ``finalize_goal``.
-    * Guards against premature conclusions: ``wrap_model_call`` re-invokes the
-      model (up to ``MAX_FORCE`` times) with a continuation nudge whenever it
-      returns plain text without having called ``finalize_goal`` this round, so
-      the loop keeps working instead of stopping early.
+    * Injects the goal system prompt (plan → execute → verify phases) and exposes
+      ``finalize_goal``.
+    * Removes ``git_status`` from the goal-mode tool set so the model explores the
+      repository progressively instead of dumping a whole-repo diff.
+    * Premature-conclusion / stall handling is owned by ``goal_stream`` (the
+      force-loop with ``GOAL_MAX_FORCE`` nudges), not by this middleware.
     """
 
     MAX_FORCE = GOAL_MAX_FORCE
@@ -2975,27 +3029,20 @@ class GoalModeMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     def _active(self, state: CoworkerAgentState) -> bool:
         return bool(state.get("goal_mode"))
 
-    def _finalize_called(self, state: CoworkerAgentState) -> bool:
-        from langchain_core.messages import AIMessage, ToolMessage
-        finalized: set[str] = set()
-        for msg in state.get("messages", []):
-            if isinstance(msg, AIMessage):
-                for tc in getattr(msg, "tool_calls", None) or []:
-                    if tc.get("name") == "finalize_goal" and tc.get("id"):
-                        finalized.add(tc["id"])
-        for msg in state.get("messages", []):
-            if isinstance(msg, ToolMessage) and getattr(msg, "tool_call_id", None) in finalized:
-                return True
-        return False
-
     def _overrides(self, request: Any) -> dict[str, Any]:
         tools = list(request.tools)
         if not any(getattr(t, "name", "") == "finalize_goal" for t in tools):
             tools.append(self._finalize_tool)
+        # Goal mode explores the repository progressively: git_status would dump a
+        # whole-repo diff into the context. It stays available in normal chat /
+        # read-only sub-agents (the tool definition and _READ_ONLY_TOOLS are intact).
+        tools = [t for t in tools if getattr(t, "name", "") != "git_status"]
         goal_text = str(request.state.get("goal_text") or "")
         autonomy = normalize_autonomy(request.state.get("autonomy"))
         nudge = request.state.get("goal_nudge")
-        prompt = goal_system_prompt(self.language, goal_text, autonomy)
+        goal_phase = str(request.state.get("goal_phase") or "plan")
+        current_todo = str(request.state.get("goal_todo") or "")
+        prompt = goal_system_prompt(self.language, goal_text, autonomy, goal_phase, current_todo)
         if nudge:
             prompt = f"{prompt}\n\n[Coworker] {str(nudge)[:1000]}"
         return {
@@ -3862,6 +3909,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     async def _stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool,
         goal_mode: bool = False, goal_text: str = "", goal_continue: bool = False, _nudge: str = "", _cancel_event: Any = None,
+        goal_phase: str = "plan", goal_todo: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
@@ -3933,6 +3981,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             if goal_mode:
                 inputs["goal_mode"] = True
                 inputs["goal_text"] = goal_text
+                inputs["goal_phase"] = goal_phase
+                inputs["goal_todo"] = goal_todo
                 # A stale goal_nudge left in the checkpoint from a previous
                 # force retry must not re-inject into later rounds. Clear it
                 # unless THIS call is the force retry carrying a fresh nudge.
@@ -4165,6 +4215,23 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             else:
                 goal_max_rounds = 50
             is_first = round_no == 1
+            # Phase + todos come from the persisted session (owned by this loop).
+            # Fresh goals start in "plan"; resumed goals keep the phase inferred by
+            # /goal/resume. Old sessions without the field default to "plan".
+            goal_phase = "plan"
+            goal_todos: list[Any] = list(last_todos)
+            if session_state is not None:
+                try:
+                    stored_phase = str(getattr(session_state, "goal_phase", "") or "")
+                    if stored_phase in _GOAL_PHASES:
+                        goal_phase = stored_phase
+                    goal_todos = list(getattr(session_state, "goal_todos", None) or [])
+                except Exception:
+                    pass
+            if is_first and not goal_continue_first:
+                goal_phase = "plan"
+            # Current todo (execute phase only): first incomplete todo to inject.
+            current_todo = _first_incomplete_todo(goal_todos) if goal_phase == "execute" else ""
             # Max rounds guard: stop when we exceed goal_max_rounds (0 = no limit).
             if goal_max_rounds > 0 and round_no > goal_max_rounds:
                 _commit_terminal(stopped=True, reason="max_rounds_exceeded", content=accum_content, todos=last_todos)
@@ -4173,7 +4240,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     "content": "", "reason": "max_rounds_exceeded",
                 }
                 return
-            yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running"}
+            yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running", "phase": goal_phase}
             round_had_interrupt = False
             try:
                 async with asyncio.timeout(600):  # 5 min per turn
@@ -4185,6 +4252,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         session_id, language, "build", autonomy, rerun=False,
                         goal_mode=True, goal_text=goal_text,
                         goal_continue=(not is_first or goal_continue_first),
+                        goal_phase=goal_phase, goal_todo=current_todo,
                         _cancel_event=_cancel_event,
                     ):
                         etype = event.get("type", "")
@@ -4243,6 +4311,26 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 _commit_terminal(paused=True, content=accum_content, todos=last_todos)
                 yield {"type": "goal_paused", "round": round_no, "goal": goal_text}
                 return
+            # ---- Phase progression (owned by goal_stream) ----
+            # plan → execute once a plan (todos) exists; execute → verify once every
+            # todo is completed. Phase is persisted so /goal/status and the frontend
+            # show the current stage, and the next round injects the right context.
+            if goal_phase == "plan":
+                if last_todos:
+                    if self.session_store is not None:
+                        try:
+                            self.session_store.update_goal(session_id, goal_phase="execute")
+                        except Exception:
+                            pass
+                    goal_phase = "execute"
+            elif goal_phase == "execute":
+                if last_todos and not _first_incomplete_todo(last_todos):
+                    if self.session_store is not None:
+                        try:
+                            self.session_store.update_goal(session_id, goal_phase="verify")
+                        except Exception:
+                            pass
+                    goal_phase = "verify"
             # Anti-stall (round-level progress signal). A round is "empty" when it
             # ended WITHOUT a goal_checkpoint — the agent produced a plain-text
             # answer (with or without tool calls) but never called finalize_goal.
@@ -4304,6 +4392,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             session_id, language, "build", autonomy, rerun=False,
                             goal_mode=True, goal_text=goal_text,
                             goal_continue=True,
+                            goal_phase=goal_phase, goal_todo=current_todo,
                             _nudge=nudge,
                             _cancel_event=_cancel_event,
                         ):

@@ -56,6 +56,9 @@ class Session:
     goal_just_edited: bool = False
     goal_stream_id: str = ""
     goal_interrupted: bool = False
+    # Plan → Execute → Verify. Owned by goal_stream; persisted so /goal/status and
+    # the frontend can show the current stage. Defaults to "plan" for old sessions.
+    goal_phase: str = "plan"
     title_auto: bool = False
     messages: list[SessionMessage] = field(default_factory=list)
 
@@ -85,6 +88,7 @@ class Session:
             goal_just_edited=bool(payload.get("goal_just_edited", False)),
             goal_stream_id=str(payload.get("goal_stream_id", "")),
             goal_interrupted=bool(payload.get("goal_interrupted", False)),
+            goal_phase=str(payload.get("goal_phase", "plan")),
             title_auto=bool(payload.get("title_auto", False)),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
@@ -112,6 +116,7 @@ class Session:
             "goal_just_edited": self.goal_just_edited,
             "goal_stream_id": self.goal_stream_id,
             "goal_interrupted": self.goal_interrupted,
+            "goal_phase": self.goal_phase,
             "message_count": len(self.messages),
         }
 
@@ -135,6 +140,7 @@ class Session:
             "goal_just_edited": self.goal_just_edited,
             "goal_stream_id": self.goal_stream_id,
             "goal_interrupted": self.goal_interrupted,
+            "goal_phase": self.goal_phase,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -214,6 +220,7 @@ class SessionStore:
         goal_just_edited: bool | None = None,
         goal_stream_id: str | None = None,
         goal_interrupted: bool | None = None,
+        goal_phase: str | None = None,
     ) -> Session:
         session = self.require(session_id)
         if goal_text is not None:
@@ -236,6 +243,8 @@ class SessionStore:
             session.goal_stream_id = goal_stream_id
         if goal_interrupted is not None:
             session.goal_interrupted = goal_interrupted
+        if goal_phase is not None:
+            session.goal_phase = goal_phase
         self.save(session)
         return session
 

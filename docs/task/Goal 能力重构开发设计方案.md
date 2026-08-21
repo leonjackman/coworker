@@ -1,7 +1,7 @@
 # Coworker Goal 能力重构开发设计方案
 
 更新时间：2026-08-21
-状态：规划版（待 task list 拆解与实现）
+状态：已完成（2026-08-21 实现落地，回归通过）
 适用范围：`/Users/leon/Documents/CodeProjects/coworker` 下 Goal 能力专项重构
 设计规范参照：`/Users/leon/Documents/CodeProjects/ARKS/docs/ruls/ARKS 专项开发设计方案制定规范.md`
 
@@ -15,8 +15,23 @@
 
 ---
 
-## 0. 输入真源 / 当前证据
+## 0.1 实现落地记录（2026-08-21）
 
+- 已按 task-list 全量实现并回归通过（详见 task-list「实现记录」与完成标准核对表）。
+- 实现偏差（相对本设计，均为小范围收口）：
+  1. `read_preview` 默认 `max_chars` 保持 `100_000`（task-list Step 2.3 显式要求，前端文件预览路径不变），未按 §8「对齐 `READ_FILE_MAX_CHARS`」改默认值。
+  2. plan 阶段无 todos 不强制计入 stall（§6.2 的「无 todos → force-loop/stalled」以既有 checkpoint 防空转语义落地，避免破坏 `test_goal_loop.py` 既有用例的「checkpoint 重置 force 计数」行为）。
+  3. goal 模式工具列表移除 `git_status` 落在 `GoalModeMiddleware._overrides`（goal 模式模型可见工具集过滤），未改 `build_coworker_agent_graph` 的 tools 入参——`git_status` 定义与 `_READ_ONLY_TOOLS` 原样保留。
+- 主要落点（行号以当前工作区为准）：
+  - `workspace.py`：`READ_FILE_MAX_CHARS=50_000`（≈37 行）、`GIT_MAX_FILES=50` / `GIT_MAX_DIFF_CHARS=100_000` / `GIT_MAX_PER_FILE_DIFF_CHARS=2_000`（≈1337 行）、`workspace_git_diff` 每文件 diff 截断（≈1445 行）。
+  - `agents.py`：`_GOAL_PHASES` / `_first_incomplete_todo`（≈2890 行）、`goal_system_prompt` 三阶段文案（≈2947 行）、`GoalModeMiddleware._overrides` 移除 `git_status` + 注入 phase/todo（≈3059 行）、`read_file` 复用 `read_preview`（≈565 行）、`_stream` 新增 `goal_phase`/`goal_todo` 参数与 inputs（≈3915 / 3990 行）、`goal_stream` 阶段推进（≈4230-4360 行）。
+  - `sessions.py`：`goal_phase` 字段 / `from_dict` / `public` / `full` / `update_goal`。
+  - `main.py`：`chat_stream` goal 分支与 `/goal/start` 初始化 `goal_phase="plan"`、`/goal/resume` 按 todo 推断写回、`/goal/status` 返回 `goal_phase`。
+  - 前端：`types.ts`（`GoalState.phase` / `goal_round.phase` / `SessionSummary.goal_phase`）、`GoalCard.tsx` 阶段徽标、`App.tsx` 事件与恢复透传、11 个 locale 阶段文案。
+
+---
+
+## 0. 输入真源 / 当前证据
 - 调研报告：《Goal 能力调研报告.md》（同目录）—— 含完整代码行号、运行证据、行业对标。
 - 当前代码（精确定位见调研报告第 0.1 节）：
   - `backend/coworker/agents.py`：`goal_stream`（4031）、`GoalModeMiddleware`（2959）、`goal_system_prompt`（2919）、`_goal_tools`（2898）、工具列表（924）、`git_status`（679）、`read_file`（557）、`_stream`（3862）、`CoworkerSummarizationMiddleware`（2306）、`build_coworker_agent_graph`（3220）、`_handle_message_chunk`（4380-4427）
@@ -329,6 +344,9 @@ while True:
 - 本轮收口（同链路不规范）：
   - `read_text` 无二进制检测/无上限（收口为 `read_file` 走 `read_preview`）。
   - `read_preview` 与 `read_file` 双路径并存（收口统一）。
+- **已删除（实现后验收补充）**：
+  - `Workspace.read_text` 方法——read_file 改走 `read_preview` 后全仓无调用（§8 中「write/replace/apply 回读路径」实为 `Path.read_text()`，非该方法），已删除。
+  - `GOAL_MARKER`（agents.py）、`GoalModeMiddleware._finalize_called`（agents.py，含 class docstring 不实描述修正）、`App.tsx` `handleGoalResumeEvent`（无 `WithChat` 变体）——均为无调用方死代码，已删除。
 - 暂缓（记入删除面或暂缓项）：
   - goal 系统提示中 force-loop（`MAX_FORCE`）语义随阶段化的进一步优化。
   - vLLM 并发治理。

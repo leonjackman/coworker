@@ -1259,10 +1259,10 @@ function App() {
         inGoal = true;
         if (goalMatchesView) {
           if (event.session_id) goalSessionIdRef.current = event.session_id;
-          setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false, stalled: false, stopped: false });
+          setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", phase: 'plan', editingDraft: false, stalled: false, stopped: false });
         }
       } else if (event.type === 'goal_round') {
-        if (goalMatchesView) setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
+        if (goalMatchesView) setGoal((current) => ({ ...current, round: event.round, running: true, paused: false, ...(event.phase ? { phase: event.phase } : {}) }));
       } else if (event.type === 'goal_edited') {
         if (goalMatchesView) setGoal((current) => ({ ...current, goalText: event.goal || current.goalText }));
       } else if (event.type === 'goal_checkpoint') {
@@ -2559,6 +2559,7 @@ function App() {
         goal_todos?: GoalTodo[];
         goal_stopped?: boolean;
         goal_interrupted?: boolean;
+        goal_phase?: 'plan' | 'execute' | 'verify';
       };
       if (sessionRecord.goal_text) {
         // An interrupted goal (e.g. a crash) still has goal_text but no
@@ -2574,6 +2575,7 @@ function App() {
           running: false,
           round: 0,
           progress: '',
+          ...(sessionRecord.goal_phase ? { phase: sessionRecord.goal_phase } : {}),
           stalled: stopped,
           stopped,
           editingDraft: false,
@@ -3028,45 +3030,12 @@ function App() {
     setGoal((current) => ({ ...current, editingDraft: false }));
   };
 
-  const handleGoalResumeEvent = (event: StreamEvent) => {
-    if (event.session_id && event.session_id !== sessionIdRef.current) return;
-    trackBrowserToolEvent(event);
-    if (event.type === 'goal_start' || event.type === 'goal_round') {
-      setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false, round: event.type === 'goal_round' ? event.round : current.round }));
-    } else if (event.type === 'goal_checkpoint') {
-      setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
-    } else if (event.type === 'todos') {
-      setSessionTodos(event.session_id ?? sessionIdRef.current, `goal:${goalResumeTokenRef.current}`, event.todos);
-      setGoal((current) => ({ ...current, todos: event.todos }));
-    } else if (event.type === 'goal_done') {
-      const failed =
-        Boolean(event.stalled) ||
-        ['timeout', 'stopped', 'interrupted', 'max_rounds_exceeded'].includes(event.reason || '');
-      setGoal((current) => {
-        const next: GoalState = { ...current, done: true, running: false, stalled: failed, progress: event.content || current.progress };
-        if (event.reason) {
-          next.reason = event.reason;
-          if (event.reason === 'stopped') next.stopped = true;
-        }
-        return next;
-      });
-      clearSessionTodos(event.session_id ?? sessionIdRef.current);
-      playSound(failed ? 'reply_error' : 'reply_done');
-    } else if (event.type === 'goal_paused') {
-      setGoal((current) => ({ ...current, paused: true, running: false }));
-      clearSessionTodos(event.session_id ?? sessionIdRef.current);
-      playSound('attention');
-    } else if (event.type === 'goal_force') {
-      setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
-    }
-  };
-
   const handleGoalResumeEventWithChat = (event: StreamEvent) => {
     if (event.session_id && event.session_id !== sessionIdRef.current) return;
     trackBrowserToolEvent(event);
     if (event.type === 'goal_start' || event.type === 'goal_round') {
       if (event.session_id) goalSessionIdRef.current = event.session_id;
-      setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false, round: event.type === 'goal_round' ? event.round : current.round }));
+      setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false, round: event.type === 'goal_round' ? event.round : current.round, ...(event.type === 'goal_round' && event.phase ? { phase: event.phase } : {}) }));
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
     } else if (event.type === 'todos') {

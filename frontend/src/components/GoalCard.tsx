@@ -23,6 +23,11 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recen
             {goal.done ? t('chat.goal_status_done') : goal.paused ? t('chat.goal_status_paused') : goal.stalled || goal.stopped ? t('chat.goal_status_stopped') : t('chat.goal_status_active')}
           </span>
           <span className="goal-card__round">{t('chat.goal_round', { round: goal.round })}</span>
+          {goal.phase && (
+            <span className={`goal-card__phase goal-card__phase--${goal.phase}`}>
+              {goal.phase === 'plan' ? t('chat.goal_phase_plan') : goal.phase === 'execute' ? t('chat.goal_phase_execute') : t('chat.goal_phase_verify')}
+            </span>
+          )}
         </div>
         <div className="goal-card__actions">
           {!goal.done && !goal.stalled && !goal.stopped && !goal.paused && (

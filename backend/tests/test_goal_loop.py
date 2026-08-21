@@ -36,6 +36,7 @@ class FakeStore:
         self.goal_stopped = False
         self.goal_paused = False
         self.goal_todos: list[dict] = []
+        self.goal_phase = "plan"
         self.messages: list[dict] = []
         self.updates: list[dict] = []
         self.commits: list[dict] = []
@@ -52,6 +53,7 @@ class FakeStore:
             goal_stopped=self.goal_stopped,
             goal_paused=self.goal_paused,
             goal_todos=self.goal_todos,
+            goal_phase=self.goal_phase,
         )
 
     def save(self, session):
@@ -68,6 +70,8 @@ class FakeStore:
             self.goal_done = kwargs["goal_done"]
         if "goal_todos" in kwargs:
             self.goal_todos = list(kwargs["goal_todos"])
+        if "goal_phase" in kwargs:
+            self.goal_phase = kwargs["goal_phase"]
         return self.require(session_id)
 
     def commit_goal_end(self, session_id, **kwargs):
@@ -105,20 +109,28 @@ def _make_runtime(rounds, *, store=None, change_store=None, timeout_on=None, err
     """Build a runtime whose ``_stream`` replays one event batch per round.
 
     ``rounds`` is a list of per-round event lists. ``timeout_on``/``error_on``
-    select a round (1-based) whose stream raises instead of yielding.
+    select a round (1-based) whose stream raises instead of yielding. Each
+    ``_stream`` call's kwargs are recorded on ``runtime.stream_calls["kw"]`` so
+    tests can assert the injected goal_phase / goal_todo, and a yielded
+    ``todos`` event is persisted to the store (mirroring main.py), so the next
+    round reads the updated goal_todos when selecting the current todo.
     """
+    active_store = store or FakeStore()
 
     def _generator(events):
         async def _gen():
             for event in events:
+                if event.get("type") == "todos":
+                    active_store.update_goal("s1", goal_todos=list(event.get("todos") or []))
                 yield event
 
         return _gen()
 
-    calls = {"n": 0}
+    calls = {"n": 0, "kw": []}
 
     def _stream(*args, **kwargs):
         calls["n"] += 1
+        calls["kw"].append(kwargs)
         idx = calls["n"] - 1
         events = rounds[min(idx, len(rounds) - 1)]
         if timeout_on is not None and calls["n"] == timeout_on:
@@ -139,13 +151,14 @@ def _make_runtime(rounds, *, store=None, change_store=None, timeout_on=None, err
 
     runtime = SimpleNamespace(
         _stream=_stream,
-        session_store=store or FakeStore(),
+        session_store=active_store,
         change_store=change_store or FakeChangeStore(),
         mode="single",
         provider_name="fake",
         model_name="fake-model",
         agent="default_agent",
     )
+    runtime.stream_calls = calls
     return runtime
 
 
@@ -395,3 +408,126 @@ def test_already_done_is_noop():
     assert events[-1].get("already") is True
     # No spurious commit: nothing to persist.
     assert store.commits == []
+
+
+# ---------------------------------------------------------------------------
+# Phase progression: plan → execute → verify (one todo per execute round).
+# ---------------------------------------------------------------------------
+
+
+def test_plan_to_execute_to_verify_to_done():
+    store = FakeStore()
+    runtime = _make_runtime(
+        [
+            # Round 1 (plan): agent produces a plan (todos) then checks in.
+            [
+                {"type": "todos", "todos": [{"content": "A", "status": "pending"}, {"content": "B", "status": "pending"}]},
+                {"type": "goal_checkpoint", "achieved": False, "progress": "planned"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+            # Round 2 (execute): focus on todo A, marks it done, B still open.
+            [
+                {"type": "todos", "todos": [{"content": "A", "status": "completed"}, {"content": "B", "status": "in_progress"}]},
+                {"type": "goal_checkpoint", "achieved": False, "progress": "A done"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+            # Round 3 (execute): todo B done → all todos complete → verify.
+            [
+                {"type": "todos", "todos": [{"content": "A", "status": "completed"}, {"content": "B", "status": "completed"}]},
+                {"type": "goal_checkpoint", "achieved": False, "progress": "B done"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+            # Round 4 (verify): agent runs verification and completes.
+            [
+                {"type": "goal_checkpoint", "achieved": True, "progress": "verified", "verification": "tests ok"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+        ],
+        store=store,
+    )
+    events = _run_goal(runtime)
+
+    # goal_round events carry the phase.
+    assert [e.get("phase") for e in events if e["type"] == "goal_round"] == ["plan", "execute", "execute", "verify"]
+
+    # Each round injected the right phase + current todo.
+    kw = [k for k in runtime.stream_calls["kw"]]
+    assert [k.get("goal_phase") for k in kw] == ["plan", "execute", "execute", "verify"]
+    assert [k.get("goal_todo") for k in kw] == ["", "A", "B", ""]
+
+    # Transitions were persisted via update_goal.
+    assert {"goal_phase": "execute"} in store.updates
+    assert {"goal_phase": "verify"} in store.updates
+
+    # Terminal: achieved in the verify round, atomically committed done.
+    assert events[-1]["type"] == "goal_done"
+    assert events[-1].get("verification") == "tests ok"
+    assert store.goal_done is True
+
+
+def test_plan_without_todos_stays_in_plan():
+    # A plan round that produces no todos must NOT advance to execute; once todos
+    # finally appear it advances.
+    store = FakeStore()
+    runtime = _make_runtime(
+        [
+            # Round 1: checkpoint but no todos → still "plan".
+            [
+                {"type": "goal_checkpoint", "achieved": False, "progress": "working"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+            # Round 2: produces the plan.
+            [
+                {"type": "todos", "todos": [{"content": "X", "status": "pending"}]},
+                {"type": "goal_checkpoint", "achieved": False, "progress": "planned"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+            # Round 3: execute, achieved.
+            [
+                {"type": "goal_checkpoint", "achieved": True, "progress": "done", "verification": "ok"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+        ],
+        store=store,
+    )
+    events = _run_goal(runtime)
+
+    assert [e.get("phase") for e in events if e["type"] == "goal_round"] == ["plan", "plan", "execute"]
+    # Only ONE execute transition, and it happened after round 2.
+    executes = [u for u in store.updates if u == {"goal_phase": "execute"}]
+    assert len(executes) == 1
+    assert [k.get("goal_phase") for k in runtime.stream_calls["kw"]] == ["plan", "plan", "execute"]
+    assert events[-1]["type"] == "goal_done"
+    assert store.goal_done is True
+
+
+def test_execute_stays_in_execute_while_todos_remain():
+    store = FakeStore()
+    runtime = _make_runtime(
+        [
+            # Round 1: plan.
+            [
+                {"type": "todos", "todos": [{"content": "A", "status": "pending"}, {"content": "B", "status": "pending"}]},
+                {"type": "goal_checkpoint", "achieved": False, "progress": "planned"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+            # Round 2: only todo A progressed; B remains → no verify transition.
+            [
+                {"type": "todos", "todos": [{"content": "A", "status": "in_progress"}, {"content": "B", "status": "pending"}]},
+                {"type": "goal_checkpoint", "achieved": False, "progress": "on A"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+            # Round 3: done.
+            [
+                {"type": "goal_checkpoint", "achieved": True, "progress": "done", "verification": "ok"},
+                {"type": "done", "content": "", "parts": [], "round_budget": False},
+            ],
+        ],
+        store=store,
+    )
+    events = _run_goal(runtime)
+
+    assert [e.get("phase") for e in events if e["type"] == "goal_round"] == ["plan", "execute", "execute"]
+    assert {"goal_phase": "verify"} not in store.updates
+    assert events[-1]["type"] == "goal_done"
+    assert store.goal_done is True

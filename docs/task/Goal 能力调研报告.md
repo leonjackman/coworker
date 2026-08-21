@@ -1,7 +1,7 @@
 # Coworker Goal 能力调研报告
 
 更新时间：2026-08-21
-状态：当前生效（作为 Goal 能力重构的输入证据与行业对标记录）
+状态：已完成（作为 Goal 能力重构的输入证据与行业对标记录；对应重构已按《Goal 能力重构开发设计方案.md》落地，见 task-list 实现记录）
 适用范围：`/Users/leon/Documents/CodeProjects/coworker/docs/task/` 下的 Goal 能力专项调研
 
 说明：

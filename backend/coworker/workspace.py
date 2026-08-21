@@ -35,6 +35,10 @@ DEFAULT_SEARCH_MAX_FILE_BYTES = 1_000_000
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20
 MAX_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_OUTPUT_CHARS = 12_000
+# Agent-facing file reads (`read_file` tool) are truncated at the source so a
+# single oversized file never floods the model context. Matches the spirit of
+# opencode's TOOL_OUTPUT_MAX_CHARS=2000 and run_command's MAX_COMMAND_OUTPUT_CHARS.
+READ_FILE_MAX_CHARS = 50_000
 TOOL_AUDIT_FILENAME = "tool_audit.jsonl"
 COMMAND_APPROVAL_FILENAME = "command_approvals.json"
 
@@ -495,12 +499,6 @@ class Workspace:
                 f"File changed since it was last read: {rel}. "
                 "Re-read the file before editing to avoid overwriting newer content."
             )
-
-    def read_text(self, file_path: str) -> str:
-        target = self.resolve_read_path(file_path)
-        content = target.read_text(encoding="utf-8")
-        self._record_fingerprint(target)
-        return content
 
     def _capture_change(
         self,
@@ -1334,8 +1332,14 @@ def trim_jsonl_file(path: Path, max_lines: int) -> None:
     trim_jsonl(path, max_lines)
 
 
-GIT_MAX_FILES = 500
-GIT_MAX_DIFF_CHARS = 1_000_000
+# git_status output budget: bounded at the source so a large working tree can
+# never inject megabytes of diff into the model context. Per-file diffs are
+# truncated to GIT_MAX_PER_FILE_DIFF_CHARS (keeping path/added/removed stats),
+# the file list is capped at GIT_MAX_FILES, and the whole diff body at
+# GIT_MAX_DIFF_CHARS.
+GIT_MAX_FILES = 50
+GIT_MAX_DIFF_CHARS = 100_000
+GIT_MAX_PER_FILE_DIFF_CHARS = 2_000
 GIT_COMMAND_TIMEOUT_SECONDS = 5.0
 
 
@@ -1438,6 +1442,9 @@ def workspace_git_diff(workspace_root: Path) -> dict[str, Any]:
                 continue
             body = sections.get(file_entry["path"], "")
             if body:
+                if len(body) > GIT_MAX_PER_FILE_DIFF_CHARS:
+                    body = body[:GIT_MAX_PER_FILE_DIFF_CHARS] + "\n…[diff truncated]"
+                    truncated_diff = True
                 file_entry["diff"] = body
 
     untracked: list[str] = []

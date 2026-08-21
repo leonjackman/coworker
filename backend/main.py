@@ -1904,6 +1904,7 @@ async def chat_stream(request: ChatStreamRequest):
                     session_id, goal_text=goal_text, goal_done=False, goal_paused=False,
                     goal_todos=[], goal_stopped=False, goal_interrupted=False,
                     goal_force_count=0, goal_just_edited=False, goal_stream_id=new_stream_id,
+                    goal_phase="plan",
                     goal_max_rounds=read_user_goal_max_rounds(),
                 )
             except KeyError:
@@ -2466,6 +2467,7 @@ async def goal_status(session_id: str):
             "goal_force_count": session.goal_force_count,
             "goal_stopped": session.goal_stopped,
             "goal_interrupted": session.goal_interrupted,
+            "goal_phase": session.goal_phase,
         },
     }
 
@@ -2519,6 +2521,7 @@ async def goal_start(request: GoalStartRequest):
             goal_force_count=0,
             goal_just_edited=False,
             goal_stream_id=str(uuid.uuid4()),
+            goal_phase="plan",
             goal_max_rounds=read_user_goal_max_rounds(),
         )
 
@@ -2573,6 +2576,17 @@ async def goal_resume(request: GoalResumeRequest):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session_store.update_goal(request.session_id, goal_paused=False, goal_stopped=False, goal_interrupted=False, goal_stream_id=stream_id)
     goal_text = session.goal_text
+    # Infer the phase from the current todo list (old sessions have no stored
+    # phase): unfinished todos → execute, all done but not finished → verify,
+    # no todos → back to plan.
+    if session.goal_todos:
+        if any(isinstance(t, dict) and t.get("status") != "completed" for t in session.goal_todos):
+            inferred_phase = "execute"
+        else:
+            inferred_phase = "verify"
+    else:
+        inferred_phase = "plan"
+    session_store.update_goal(request.session_id, goal_phase=inferred_phase)
     work_mode = normalize_work_mode(session.work_mode)
     autonomy = normalize_autonomy(session.autonomy)
     language = request.language

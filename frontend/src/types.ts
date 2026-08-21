@@ -382,6 +382,7 @@ export interface SessionSummary {
   goal_just_edited?: boolean;
   goal_stream_id?: string;
   goal_interrupted?: boolean;
+  goal_phase?: 'plan' | 'execute' | 'verify';
 }
 
 export type ProjectMode = 'single' | 'multi';
@@ -665,7 +666,7 @@ export interface PendingRequest {
     | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
     | { type: 'error'; error: string; session_id?: string }
     | { type: 'goal_start'; goal: string; session_id?: string }
-    | { type: 'goal_round'; round: number; goal: string; status?: string; session_id?: string }
+    | { type: 'goal_round'; round: number; goal: string; status?: string; phase?: 'plan' | 'execute' | 'verify'; session_id?: string }
     | { type: 'goal_edited'; goal: string; round?: number; stream_id?: string; session_id?: string }
     | { type: 'goal_checkpoint'; achieved: boolean; progress?: string; verification?: string; session_id?: string }
     | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number; session_id?: string; stalled?: boolean; reason?: string; already?: boolean }
@@ -725,6 +726,7 @@ export interface GoalState {
   running: boolean;
   round: number;
   progress: string;
+  phase?: 'plan' | 'execute' | 'verify';
   stalled?: boolean;
   stopped?: boolean;
   reason?: string;
