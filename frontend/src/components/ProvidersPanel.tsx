@@ -27,6 +27,10 @@ const emptyForm = (): FormState => ({
   availableModels: [],
 });
 
+// Preset max-output options (tokens) for the per-provider cap; a custom value
+// falls outside the list.
+const MAX_OUTPUT_PRESETS = [4096, 8192, 16384, 32768, 65536, 128000];
+
 interface ProvidersPanelProps {
   onProviderChange: () => void;
 }
@@ -46,6 +50,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   const [discoveringCtx, setDiscoveringCtx] = useState(false);
   const [ctxSource, setCtxSource] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [maxOutputMode, setMaxOutputMode] = useState<'preset' | 'custom'>('preset');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,7 +103,9 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
       model: provider.model,
       availableModels: provider.model ? [provider.model] : [],
       ...(provider.context_window ? { context_window: provider.context_window } : {}),
+      ...(provider.max_output_tokens !== undefined && provider.max_output_tokens > 0 ? { max_output_tokens: provider.max_output_tokens } : {}),
     });
+    setMaxOutputMode(provider.max_output_tokens !== undefined && MAX_OUTPUT_PRESETS.includes(provider.max_output_tokens) ? 'preset' : 'custom');
     setTestResult(null);
     setCtxSource(provider.context_source ?? '');
     setViewMode('form');
@@ -148,6 +155,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           ...(form.api_key ? { api_key: form.api_key } : {}),
           model: form.model,
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
+          ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
         });
       } else {
         await chatService.createProvider({
@@ -157,6 +165,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           api_key: form.api_key,
           model: form.model,
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
+          ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
         });
       }
       await load();
@@ -338,6 +347,56 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
               )}
               {ctxSource && ctxSource !== 'unreachable' && <small>{t(`providers.context_source_${ctxSource}`)}</small>}
               {form.provider_type === 'ollama' && <small>{t('providers.ollama_ctx_hint')}</small>}
+            </label>
+
+            <label className="field">
+              <span>{t('providers.max_output_tokens')}</span>
+              <div className="provider-model-row">
+                <select
+                  value={maxOutputMode === 'custom' && form.max_output_tokens !== undefined ? '__custom__' : (form.max_output_tokens ?? '')}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === '__custom__') {
+                      setMaxOutputMode('custom');
+                    } else if (value === '') {
+                      const { max_output_tokens: _m, ...rest } = form;
+                      setForm(rest);
+                      setMaxOutputMode('preset');
+                    } else {
+                      setMaxOutputMode('preset');
+                      setForm({ ...form, max_output_tokens: Number(value) });
+                    }
+                  }}
+                  disabled={saving}
+                >
+                  <option value="">{t('providers.max_output_tokens_default')}</option>
+                  {MAX_OUTPUT_PRESETS.map((value) => (
+                    <option key={value} value={value}>{value.toLocaleString()}</option>
+                  ))}
+                  <option value="__custom__">{t('providers.max_output_tokens_custom')}</option>
+                </select>
+                {maxOutputMode === 'custom' && (
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000000}
+                    step={1000}
+                    value={form.max_output_tokens ?? ''}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (value === '') {
+                        const { max_output_tokens: _m, ...rest } = form;
+                        setForm(rest);
+                      } else {
+                        setForm({ ...form, max_output_tokens: Number(value) });
+                      }
+                    }}
+                    placeholder={t('providers.max_output_tokens_placeholder')}
+                    disabled={saving}
+                  />
+                )}
+              </div>
+              <small>{t('providers.max_output_tokens_hint')}</small>
             </label>
 
             <div className="provider-test-row">

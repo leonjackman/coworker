@@ -592,6 +592,7 @@ class ProviderCreate(BaseModel):
     api_key: str = ""
     model: str = ""
     context_window: int = 0
+    max_output_tokens: int = 0
 
 class ProviderUpdate(BaseModel):
     name: Optional[str] = None
@@ -600,6 +601,7 @@ class ProviderUpdate(BaseModel):
     model: Optional[str] = None
     enabled: Optional[bool] = None
     context_window: Optional[int] = None
+    max_output_tokens: Optional[int] = None
 
 class DefaultProviderPayload(BaseModel):
     provider_id: str
@@ -4135,6 +4137,7 @@ def create_provider(request: ProviderCreate):
             api_key=request.api_key,
             model=request.model,
             context_window=request.context_window,
+            max_output_tokens=request.max_output_tokens,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4162,6 +4165,7 @@ def update_provider(provider_id: str, request: ProviderUpdate):
             model=request.model,
             enabled=request.enabled,
             context_window=request.context_window,
+            max_output_tokens=request.max_output_tokens,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

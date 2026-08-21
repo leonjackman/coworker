@@ -277,19 +277,44 @@ def test_pause_commits_paused():
     assert store.goal_paused is True
 
 
-def test_timeout_commits_stopped():
+def test_round_timeout_ends_round_and_continues():
+    # A per-round wall-clock timeout must end ONLY the round, not the whole goal:
+    # accounting is persisted and a fresh round continues (long tasks span rounds).
     store = FakeStore()
+    rounds = [
+        # Round 1 times out mid-stream.
+        [{"type": "tool_start", "id": "t1", "name": "read_file", "input": ""}],
+        # Round 2 achieves.
+        [
+            {"type": "goal_checkpoint", "achieved": True, "progress": "done", "verification": "ok"},
+            {"type": "done", "content": "", "parts": [], "round_budget": False},
+        ],
+    ]
+    runtime = _make_runtime(rounds, store=store, timeout_on=1)
+    events = _run_goal(runtime)
+
+    # The timed-out round surfaced as a goal_round(status="timeout") event and the
+    # goal CONTINUED to a fresh round instead of terminating.
+    assert any(e["type"] == "goal_round" and e.get("status") == "timeout" for e in events)
+    assert events[-1]["type"] == "goal_done"
+    assert events[-1].get("reason") in (None, "")
+    assert store.goal_done is True
+    assert store.goal_round == 2
+
+
+def test_round_timeout_with_exhausted_budget_terminates():
+    # When the budget is already spent, a round timeout terminates the goal as
+    # budget_exhausted (the safety net) instead of starting another round.
+    store = FakeStore()
+    store.goal_time_budget_seconds = 1
+    store.goal_time_used = 1.0  # budget already spent
     runtime = _make_runtime([[]], store=store, timeout_on=1)
     events = _run_goal(runtime)
 
     assert events[-1]["type"] == "goal_done"
-    assert events[-1]["reason"] == "timeout"
-    # Atomic terminal commit: goal_stopped=True + non-empty label message.
-    assert len(store.commits) == 1
-    assert store.commits[0]["stopped"] is True
-    assert store.commits[0]["content"] == "Agent timed out"
-    assert store.goal_stopped is True
-    assert store.messages and store.messages[-1].content == "Agent timed out"
+    assert events[-1].get("reason") == "budget_exhausted"
+    assert store.goal_status == "stopped"
+    assert store.goal_stop_reason == "budget_exhausted"
 
 
 def test_cancel_commits_stopped():

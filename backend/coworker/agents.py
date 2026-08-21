@@ -45,7 +45,7 @@ from .changes import ChangeStore
 from .project_snapshot import ProjectSnapshotManager
 from .config import BackendSettings
 from .mcp.mcp import McpManager
-from .providers import ProviderEntry, ProviderManager
+from .providers import DEFAULT_MAX_OUTPUT_TOKENS, ProviderEntry, ProviderManager
 from .sessions import SessionStore
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
 from .workspace import (
@@ -1812,7 +1812,7 @@ class ReasonPreservingChatOpenAI:
     """
 
     @staticmethod
-    def create(model: str, temperature: float, api_key: str, base_url: str | None) -> Any:
+    def create(model: str, temperature: float, api_key: str, base_url: str | None, *, max_tokens: int = 0, repetition_penalty: float | None = None) -> Any:
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import AIMessageChunk
 
@@ -1839,7 +1839,7 @@ class ReasonPreservingChatOpenAI:
         # Patch at the class level so bind() / model_copy() clones inherit it
         ChatOpenAI._convert_chunk_to_generation_chunk = _patched_convert
 
-        return ChatOpenAI(
+        kwargs: dict[str, Any] = dict(
             model=model, temperature=temperature, api_key=api_key, base_url=base_url,
             # LangChain's built-in retry covers transient 5xx / connection
             # resets (default max_retries=2 with exponential backoff); a local
@@ -1859,6 +1859,36 @@ class ReasonPreservingChatOpenAI:
             # for goal budget accounting (goal_tokens_used) and context-budget telemetry.
             stream_usage=True,
         )
+        if max_tokens and max_tokens > 0:
+            # Bound a single model call so a degenerate / repeating generation is
+            # cut off at the provider's configured cap instead of burning the GPU
+            # (the 3b5bffff runaway). 0 = unset → provider/model default.
+            kwargs["max_tokens"] = int(max_tokens)
+        if repetition_penalty:
+            # Repetition collapse is the root cause of degenerate generation under
+            # greedy decoding. vLLM/Ollama accept `repetition_penalty` in the body;
+            # only self-hosted providers opt in (callers gate this).
+            kwargs["extra_body"] = {"repetition_penalty": float(repetition_penalty)}
+        return ChatOpenAI(**kwargs)
+
+
+def _provider_llm_kwargs(model_name: str, provider: ProviderEntry, temperature: float, base_url: str | None) -> dict[str, Any]:
+    """Shared llm construction for the streaming runtimes.
+
+    Applies the user-configured per-request output cap (max_output_tokens, default
+    DEFAULT_MAX_OUTPUT_TOKENS) and a mild repetition penalty on self-hosted
+    endpoints only (cloud OpenAI-compatible APIs reject ``repetition_penalty``).
+    """
+    max_tokens = provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS
+    use_penalty = ProviderManager._is_local(provider) or provider.provider_type in ("ollama", "llamacpp", "llmstudio", "lmstudio")
+    return dict(
+        model=model_name,
+        temperature=temperature,
+        api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
+        base_url=base_url,
+        max_tokens=max_tokens,
+        repetition_penalty=DEFAULT_REPETITION_PENALTY if use_penalty else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2908,7 +2938,7 @@ _GOAL_PHASES = ("plan", "execute", "verify")
 # working even when a provider omits usage in streaming. Budgets default at
 # 1,000,000 tokens / 30 minutes per goal and can be overridden per user via the
 # Settings file (read_user_goal_budget_* in main.py).
-GOAL_TOKEN_BUDGET_DEFAULT = 1_000_000
+GOAL_TOKEN_BUDGET_DEFAULT = 100_000
 GOAL_TIME_BUDGET_DEFAULT_SECONDS = 30 * 60
 # A round whose token spend exceeds this fraction of the budget is asked to wrap
 # up the current chunk and hand off (finalize_goal(achieved=false)) so long tasks
@@ -2921,6 +2951,12 @@ GOAL_NEAR_LIMIT_FRACTION = 0.10
 # Consecutive rounds producing an IDENTICAL achieved=false checkpoint mean the
 # agent is repeating itself — terminate as no_progress instead of looping.
 GOAL_MAX_IDENTICAL_ROUNDS = 3
+
+# Agentic sampling: goal rounds use a small sampling temperature (not greedy) so a
+# degenerate repetition loop can be escaped by randomness, and self-hosted providers
+# get a mild repetition penalty (root-cause mitigation for the 3b5bffff runaway).
+GOAL_TEMPERATURE = 0.3
+DEFAULT_REPETITION_PENALTY = 1.05
 
 
 def _normalize_usage(usage: dict[str, Any]) -> tuple[int, int]:
@@ -3525,7 +3561,8 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
-        self.llm = llm_cls(model=self.model_name, temperature=0, api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed", base_url=self._openai_compatible_base_url(provider))
+        self.llm = llm_cls(**_provider_llm_kwargs(self.model_name, provider, 0, self._openai_compatible_base_url(provider)))
+        self.goal_llm = llm_cls(**_provider_llm_kwargs(self.model_name, provider, GOAL_TEMPERATURE, self._openai_compatible_base_url(provider)))
         self.workspace = workspace
         self.approval_store = approval_store
         self.trace_store = trace_store
@@ -3783,7 +3820,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
-        self.llm = llm_cls(model=self.model_name, temperature=0, api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed", base_url=self._openai_compatible_base_url(provider))
+        self.llm = llm_cls(**_provider_llm_kwargs(self.model_name, provider, 0, self._openai_compatible_base_url(provider)))
+        self.goal_llm = llm_cls(**_provider_llm_kwargs(self.model_name, provider, GOAL_TEMPERATURE, self._openai_compatible_base_url(provider)))
         self.workspace = workspace
         self.approval_store = approval_store
         self.trace_store = trace_store
@@ -4036,7 +4074,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         async with _open_checkpointer(self.checkpoint_path) as checkpointer:
             graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(
+                self.goal_llm if goal_mode else self.llm, build_workspace_tools(
                     self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
                     session_store=self.session_store, referenced_sessions=self.referenced_sessions,
                     skill_manager=self.skill_manager,
@@ -4455,9 +4493,27 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                 round_usage["completion_tokens"] += int(usage.get("completion_tokens") or 0)
                         yield event
             except asyncio.TimeoutError:
-                _commit_terminal(stopped=True, reason="timeout", content=accum_content, todos=last_todos)
-                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
-                return
+                # The per-round wall clock was reached. This ends the ROUND, not the
+                # goal: long tasks must be able to span multiple rounds, and a single
+                # slow/degenerate call must not kill the whole goal. Persist the
+                # accounting done so far and continue with a fresh round (the graph's
+                # intermediate checkpoint is preserved via goal_continue=True).
+                goal_tokens_used += round_usage.get("prompt_tokens", 0) + round_usage.get("completion_tokens", 0)
+                goal_time_used += time.monotonic() - round_started
+                if self.session_store is not None:
+                    try:
+                        self.session_store.update_goal(
+                            session_id, goal_tokens_used=goal_tokens_used, goal_time_used=goal_time_used,
+                            goal_round=round_no,
+                        )
+                    except Exception:
+                        pass
+                if goal_tokens_used >= goal_token_budget or goal_time_used >= goal_time_budget:
+                    _commit_terminal(stopped=True, reason="budget_exhausted", content=accum_content, todos=last_todos)
+                    yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "budget_exhausted"}
+                    return
+                yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "timeout", "phase": goal_phase}
+                continue
             except asyncio.CancelledError:
                 _commit_terminal(stopped=True, reason="stopped", content=accum_content, todos=last_todos)
                 yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}

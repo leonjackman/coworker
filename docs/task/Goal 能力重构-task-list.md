@@ -54,6 +54,18 @@
 - **goal_round 持久化**：GoalCard「第 x 轮」切会话不再回 0；resume 从持久化 round 续号（`test_goal_round_persisted_and_resume_continues`）。
 - 第二轮验收后全套 30 例通过 + `tsc`/`vite build` 通过。
 
+**第四轮（2026-08-21 深夜，会话 `3b5bffff` 审计）**：
+
+- **审计结论**：qwen3.6-35b 对 goal 提示词产生**退化/无限生成**——贪择解码（`temperature=0`）+ 无 `max_tokens`（vLLM 跑满 262k）+ 无 `repetition_penalty` + qwen3 关 thinking。实测 GPU 95%、~78 tok/s 连续生成 17K+ tokens 不停。
+- **§1 每次模型呼叫输出上限（用户自填，默认 8192）**：
+  - `ProviderEntry.max_output_tokens`（0=未设→默认 8192），`add_provider`/`update_provider` clamp `[0,1_000_000]`，`public_provider` 返回有效值；`main.py` ProviderCreate/Update 透传。
+  - `ReasonPreservingChatOpenAI.create(max_tokens=...)`；两个 streaming runtime 经 `_provider_llm_kwargs` 传 cap（delegation 复用 runtime llm 自动覆盖）。
+  - 前端 `ProvidersPanel.tsx`：下拉固定值 `4096/8192/16384/32768/65536/128000` + 「自定义...」数字输入；`types.ts` + 11 locale。
+- **§2a 回合 600s 超时「只结束单轮、续开下一轮」**：`goal_stream` 的 `asyncio.TimeoutError` 不再终态终止，改为记账 + `goal_round(status=timeout)` + `continue`；预算已耗尽则终态 `budget_exhausted`。测试 `test_round_timeout_ends_round_and_continues` / `test_round_timeout_with_exhausted_budget_terminates`。
+- **§2b `repetition_penalty=1.05`**：仅对自建/本地端点（`ProviderManager._is_local` 或 ollama/llamacpp/lmstudio）经 `extra_body` 启用；云端 OpenAI 相容不传（避免 400）。
+- **§2c goal 采样温度 0.3**：streaming runtime 新增 `self.goal_llm`（`GOAL_TEMPERATURE=0.3`），goal 模式建图用 `self.goal_llm`；普通对话仍 `temperature=0`。
+- **验证**：新增 `tests/test_max_output_tokens.py`（7 例：默认 8192/自定义/持久化/clamp/reset/本地penalty/云端无penalty/温度区分/create 传参）；全套 38 例通过；前端 `tsc`/`vite build` 通过。
+
 ## 目标
 
 - 建立「工具源头截断」正式机制：`git_status` 单文件 diff ≤2K / 文件数 ≤50 / 总量 ≤100K；`read_file` 复用 `read_preview` 语义（二进制检测 + 50K 上限）。

@@ -327,6 +327,7 @@ export interface ProviderEntry {
   context_window?: number;
   context_source?: string;
   context_error?: string;
+  max_output_tokens?: number;
   created_at: string;
   updated_at: string;
 }
@@ -345,6 +346,7 @@ export interface ProviderPayload {
   api_key: string;
   model: string;
   context_window?: number;
+  max_output_tokens?: number;
 }
 
 export interface ProviderUpdatePayload {
@@ -354,6 +356,7 @@ export interface ProviderUpdatePayload {
   model?: string;
   enabled?: boolean;
   context_window?: number;
+  max_output_tokens?: number;
 }
 
 export interface ProviderTestResult {

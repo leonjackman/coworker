@@ -48,6 +48,10 @@ class ProviderEntry:
     # Context window in tokens. 0 = unknown: resolved at runtime via
     # resolve_context_window() (user override > MODEL_CONTEXT_TABLE > discover > 128k).
     context_window: int = 0
+    # Per-request max output tokens. 0 = unset → DEFAULT_MAX_OUTPUT_TOKENS (8192).
+    # Users pick a preset or type a custom value (custom providers where the model
+    # is not in the catalog).
+    max_output_tokens: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +180,15 @@ MODEL_CONTEXT_TABLE: list[tuple[str, int]] = [
 ]
 
 DEFAULT_CONTEXT_WINDOW = 128_000
+
+# Effective per-request output cap when a provider does not configure
+# ``max_output_tokens``. Bounds a single model call so a degenerate / repeating
+# generation cannot burn the whole GPU budget (the 3b5bffff runaway: an unbounded
+# greedy generation ran to 17k+ tokens). Users can raise/lower it per provider.
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
+# Clamp bounds for user-set values (0 = unset → default).
+MAX_OUTPUT_TOKENS_MIN = 0
+MAX_OUTPUT_TOKENS_MAX = 1_000_000
 
 
 @dataclass
@@ -340,7 +353,7 @@ class ProviderManager:
             provider.model = config.default_model
         return provider
 
-    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0) -> dict[str, Any]:
+    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0) -> dict[str, Any]:
         base_url = self.validate_base_url(base_url, provider_type)
         if not name.strip():
             raise ValueError("provider name is required")
@@ -360,6 +373,7 @@ class ProviderManager:
             created_at=now,
             updated_at=now,
             context_window=max(0, int(context_window or 0)),
+            max_output_tokens=max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens or 0))),
         )
         config.providers.append(provider)
         if not config.default_provider_id:
@@ -368,7 +382,7 @@ class ProviderManager:
         self.save(config)
         return self.public_provider(provider)
 
-    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None) -> dict[str, Any]:
+    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None, max_output_tokens: int | None = None) -> dict[str, Any]:
         config = self.load()
         provider = self.require_provider(config, provider_id)
         if name is not None:
@@ -388,6 +402,8 @@ class ProviderManager:
                 config.default_model = ""
         if context_window is not None:
             provider.context_window = max(0, int(context_window))
+        if max_output_tokens is not None:
+            provider.max_output_tokens = max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens)))
         if enabled is not None:
             provider.enabled = enabled
             if not enabled and config.default_provider_id == provider.id:
@@ -732,6 +748,7 @@ class ProviderManager:
             "context_window": window,
             "context_source": source,
             "context_error": error,
+            "max_output_tokens": provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS,
             "created_at": provider.created_at,
             "updated_at": provider.updated_at,
         }
