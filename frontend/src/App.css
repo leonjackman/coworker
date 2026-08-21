@@ -9863,6 +9863,100 @@ body.bottom-panel-resizing {
   background: var(--ring);
 }
 
+.todo-block__queue {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border, rgba(120, 140, 180, 0.16));
+}
+
+.todo-block__queue-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.todo-block__queue-title {
+  font-size: 12px;
+  font-weight: 640;
+  color: var(--muted-foreground);
+}
+
+.todo-block__queue-count {
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 5px;
+}
+
+.todo-block__queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.todo-block__queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--material-control) 40%, transparent);
+}
+
+.todo-block__queue-item:hover {
+  background: var(--panel-hover);
+}
+
+.todo-block__queue-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.todo-block__queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--foreground);
+}
+
+.todo-block__queue-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.todo-block__queue-remove:hover {
+  background: color-mix(in oklab, var(--color-danger, #e5484d) 14%, transparent);
+  color: var(--color-danger, #e5484d);
+}
+
 /* ── Org team settings panel ─────────────────────────────────────────── */
 .settings-org {
   display: flex;

@@ -172,6 +172,12 @@ def _memory_agent_name(project_dir: str, agent_id: str) -> str:
 
 memory_manager.scanner.agent_name_resolver = _memory_agent_name
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir, org_store=org_store)
+# Sessions whose in-flight stream was interrupted (client abort / Stop). The
+# next /chat/stream for such a session must NOT continue from the dirty runtime
+# checkpoint (which would make the model keep executing the ORIGINAL task); it
+# rebuilds from the session history instead so the new message becomes the
+# active instruction.
+_interrupted_sessions: set[str] = set()
 agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
 
 # Persistent MCP sessions: start the background loop, pre-warm connections so
@@ -1769,6 +1775,15 @@ async def chat_stream(request: ChatStreamRequest):
     # submit) would race the graph's SQLite writes on the same thread_id.
     await _guard_session_not_streaming(session_id)
 
+    # The previous turn was interrupted (client abort / Stop): forget the dirty
+    # runtime checkpoint so this turn rebuilds from the session history and the
+    # new user message becomes the active instruction. Otherwise the graph would
+    # continue from the mid-task checkpoint and keep executing the ORIGINAL task
+    # (or a huge accumulated context) instead of following the new message.
+    if session_id in _interrupted_sessions:
+        _interrupted_sessions.discard(session_id)
+        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
+
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
     session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
     snapshot_user_message_id = request.user_message_id or session_store.require(session_id).messages[-1].id
@@ -1914,6 +1929,10 @@ async def chat_stream(request: ChatStreamRequest):
         def _on_error(exc):
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
             nonlocal terminal_sent
+            # The in-flight turn was interrupted (client abort / Stop). Mark the
+            # session so the NEXT /chat/stream rebuilds from session history
+            # instead of continuing from the dirty runtime checkpoint.
+            _interrupted_sessions.add(session_id)
             if accumulated_content and not terminal_sent:
                 # Persist the partial reply with a GENERATED id (not the
                 # client-supplied one) so the frontend's stream-settle

@@ -891,5 +891,9 @@
   "context_menu.clear": "Очистить",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "Переключить список задач"
+  "todo.toggle": "Переключить список задач",
+  "chat.send_queued": "Поставить в очередь",
+  "chat.queued_messages": "{count} в очереди",
+  "chat.queue_section": "Очередь сообщений",
+  "chat.remove_queued": "Убрать из очереди"
 }

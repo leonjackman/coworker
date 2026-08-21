@@ -891,5 +891,9 @@
   "context_menu.clear": "清空",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "切換待辦清單"
+  "todo.toggle": "切換待辦清單",
+  "chat.send_queued": "排隊發送",
+  "chat.queued_messages": "已有 {count} 條排隊",
+  "chat.queue_section": "排隊發送",
+  "chat.remove_queued": "取消排隊"
 }

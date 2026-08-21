@@ -891,5 +891,9 @@
   "context_menu.clear": "Effacer",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "Basculer la liste des tâches"
+  "todo.toggle": "Basculer la liste des tâches",
+  "chat.send_queued": "Mettre en file d'attente",
+  "chat.queued_messages": "{count} en attente",
+  "chat.queue_section": "Messages en attente",
+  "chat.remove_queued": "Retirer de la file"
 }

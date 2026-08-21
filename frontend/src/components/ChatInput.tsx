@@ -64,6 +64,8 @@ interface ChatInputProps {
   value: string;
   disabled: boolean;
   isThinking: boolean;
+  /** Queue the current composer content; auto-send after the stream finishes. */
+  onSendQueued?: () => void;
   workMode: WorkMode;
   autonomy: Autonomy;
   selectedModel: string;
@@ -203,6 +205,7 @@ export function ChatInput({
   value,
   disabled,
   isThinking,
+  onSendQueued,
   workMode,
   autonomy,
   selectedModel,
@@ -729,7 +732,15 @@ export function ChatInput({
       event.preventDefault();
       // Sync the latest DOM text into the parent before sending.
       onChange(getPromptText(editor));
-      onSend();
+      if (isThinking && !editing) {
+        // Agent is streaming: default to queueing the message (it auto-sends
+        // after the stream finishes). An empty composer does nothing.
+        if (canSend) {
+          onSendQueued?.();
+        }
+      } else if (!isThinking) {
+        onSend();
+      }
       return;
     }
     if (event.key === "Escape") {
@@ -1027,11 +1038,20 @@ export function ChatInput({
             </div>
 
             {isThinking ? (
-              <Button variant="secondary"className="composer__send-button composer__send-button--stop"onClick={onStop}aria-label={t("chat.stop")}>
-                <Square size={15} fill="currentColor" />
-              </Button>
+              // Agent is streaming. Priority: if the composer has content, show
+              // the SEND button (defaults to queueing) and hide Stop; if it is
+              // empty, show Stop so the running task can still be interrupted.
+              canSend ? (
+                <Button variant="primary" className="composer__send-button" onClick={onSendQueued} disabled={!canSend} aria-label={t("chat.send_queued")}>
+                  <Send size={17} />
+                </Button>
+              ) : (
+                <Button variant="secondary" className="composer__send-button composer__send-button--stop" onClick={onStop} aria-label={t("chat.stop")}>
+                  <Square size={15} fill="currentColor" />
+                </Button>
+              )
             ) : (
-              <Button variant="primary"className="composer__send-button"onClick={onSend}disabled={disabled || !canSend}aria-label={editing ? t("message.edit_save") : t("common.send")}>
+              <Button variant="primary" className="composer__send-button" onClick={onSend} disabled={disabled || !canSend} aria-label={editing ? t("message.edit_save") : t("common.send")}>
                 {editing ? <Check size={17} /> : <Send size={17} />}
               </Button>
             )}

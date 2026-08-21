@@ -396,6 +396,51 @@ function App() {
   const streamControllersRef = useRef<Record<string, AbortController>>({});
   const activeAssistantMessageIdsRef = useRef<Record<string, string>>({});
   const streamStartAtsRef = useRef<Record<string, number>>({});
+
+  // Codex-style "queue while streaming": per-session FIFO of messages typed
+  // while the agent is replying. Each entry auto-sends as the next request once
+  // that session's stream finishes (done / goal_done / error / stopped). The
+  // queue is surfaced in the TodoBlock above the composer, one entry per row.
+  interface QueuedEntry {
+    id: string;
+    message: string;
+    ts: number;
+    attachments?: ComposerAttachment[];
+    references?: SessionReference[];
+  }
+  const queuedMessagesRef = useRef<Record<string, QueuedEntry[]>>({});
+  const [queuedEntries, setQueuedEntries] = useState<Record<string, QueuedEntry[]>>({});
+  const enqueueMessage = (sessionId: string | undefined, message: string, extra?: { attachments?: ComposerAttachment[]; references?: SessionReference[] }) => {
+    const key = streamKey(sessionId);
+    const entry: QueuedEntry = {
+      id: `queued-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      message,
+      ts: Date.now(),
+      ...(extra?.attachments && extra.attachments.length > 0 ? { attachments: extra.attachments } : {}),
+      ...(extra?.references && extra.references.length > 0 ? { references: extra.references } : {}),
+    };
+    const queue = [...(queuedMessagesRef.current[key] ?? []), entry];
+    queuedMessagesRef.current[key] = queue;
+    setQueuedEntries((current) => ({ ...current, [key]: queue }));
+  };
+  const dequeueMessage = (sessionId: string | undefined): QueuedEntry | null => {
+    const key = streamKey(sessionId);
+    const queue = queuedMessagesRef.current[key] ?? [];
+    if (queue.length === 0) return null;
+    const [next, ...rest] = queue;
+    if (next == null) return null;
+    queuedMessagesRef.current[key] = rest;
+    setQueuedEntries((current) => ({ ...current, [key]: rest }));
+    return next;
+  };
+  const removeQueuedMessage = (sessionId: string | undefined, id: string) => {
+    const key = streamKey(sessionId);
+    const queue = queuedMessagesRef.current[key] ?? [];
+    queuedMessagesRef.current[key] = queue.filter((entry) => entry.id !== id);
+    setQueuedEntries((current) => ({ ...current, [key]: queuedMessagesRef.current[key] ?? [] }));
+  };
+  const queuedMessagesFor = (sessionId: string | undefined) => queuedEntries[streamKey(sessionId)] ?? [];
+
   const abortStreamFor = (sessionId?: string | null) => {
     const key = streamKey(sessionId);
     streamControllersRef.current[key]?.abort();
@@ -788,14 +833,35 @@ function App() {
 
   const sendMessage = async (override?: { message: string; projectId?: string }) => {
     const typedMessage = (override?.message ?? input).trim();
-    if (isThinking) return;
+    if (isThinking) {
+      // Agent is streaming for this session — do NOT start a second stream. A
+      // plain send here (Enter / programmatic fallback) queues the message so it
+      // auto-sends once the current stream finishes.
+      if (!override && sessionIdRef.current) {
+        const queuedText = typedMessage || t('chat.attachment_only_message');
+        const queuedAttachments = attachments;
+        const queuedReferences = references;
+        setInput('');
+        // 排隊路徑必須一併清命令 chip（含同步 ref），否則運行中再發命令會
+        // 留下一個看似「沒發出去」的殘留 chip，且訊息被當普通文字排隊。
+        setCommandChip(null);
+        commandChipRef.current = null;
+        setAttachments([]);
+        setReferences([]);
+        enqueueMessage(sessionIdRef.current, queuedText, { attachments: queuedAttachments, references: queuedReferences });
+        return;
+      }
+      if (!override) return;
+    }
 
     // 命令 chip 路径：skill/子命令已作为真实 chip 提交，raw 文字不再携带
     // 命令 token，这里把 chip + 提示词组合回注入标记并走既有 handler（含气泡逻辑）。
-    const chip = commandChip;
+    // 用同步 ref ?? state，避免 commitCommand 的异步 state 尚未落地时漏掉 chip。
+    const chip = commandChipRef.current ?? commandChip;
     if (chip && !override) {
       const prompt = input.trim();
       setCommandChip(null);
+      commandChipRef.current = null;
       if (chip.type === 'skill') {
         setInput('');
         if (chip.packageName) {
@@ -1268,6 +1334,51 @@ function App() {
     }
   };
 
+  // Auto-send the next queued message once a session's stream settles. Watched
+  // via messages/queued state so the session is guaranteed idle (no running /
+  // waiting message) before dequeuing — a queued message must never race the
+  // stream it is waiting for.
+  useEffect(() => {
+    for (const key of Object.keys(queuedMessagesRef.current)) {
+      const queuedSessionId = key === '__none__' ? undefined : key;
+      if (queuedSessionId == null) continue;
+      const queue = queuedMessagesRef.current[key];
+      if (!queue || queue.length === 0) continue;
+      const busy = messages.some(
+        (m) => (m.status === 'running' || m.status === 'waiting') && m.sessionId === queuedSessionId,
+      );
+      if (busy) continue;
+      const dequeued = dequeueMessage(queuedSessionId);
+      if (dequeued) {
+        void sendMessage({
+          message: dequeued.message,
+          ...(dequeued.attachments && dequeued.attachments.length > 0 ? { attachments: dequeued.attachments } : {}),
+          ...(dequeued.references && dequeued.references.length > 0 ? { references: dequeued.references } : {}),
+        });
+      }
+    }
+  }, [messages, queuedEntries]);
+
+  // Queue the current composer content; it auto-sends after the stream ends.
+  const handleSendQueued = () => {
+    if (!isThinking) {
+      void sendMessage();
+      return;
+    }
+    const sid = sessionIdRef.current;
+    const messageText = input.trim();
+    if (!sid || !messageText) return;
+    const queuedAttachments = attachments;
+    const queuedReferences = references;
+    enqueueMessage(sid, messageText, { attachments: queuedAttachments, references: queuedReferences });
+    setInput('');
+    // 排隊時一併清命令 chip（含同步 ref），避免運行中發命令殘留 chip。
+    setCommandChip(null);
+    commandChipRef.current = null;
+    setAttachments([]);
+    setReferences([]);
+  };
+
   const stopMessage = () => {
     const key = streamKey(sessionIdRef.current);
     const assistantMessageId = activeAssistantMessageIdsRef.current[key];
@@ -1292,6 +1403,12 @@ function App() {
   // 已提交到 composer 的命令 chip（skill/子命令）。真实 DOM 元素渲染在
   // ChatInput 里，这里持有权威状态供 sendMessage / 编辑流程使用。
   const [commandChip, setCommandChip] = useState<CommandChip | null>(null);
+  // 同步镜像：ChatInput 在输入事件里同步删除编辑器中的命令 token 并异步
+  // setCommandChip(chip)；若用户在 React re-render 前按下 Enter（例如运行中
+  // 排隊），sendMessage 闭包会读到旧的 null，把命令当普通文字送出。ref 在
+  // handleCommandCommit 被调用时同步写入，sendMessage 读 ref ?? state，彻底
+  // 消除这个竞态。
+  const commandChipRef = useRef<CommandChip | null>(null);
   // 点编辑键即回滚（edit-begin）后，记下待恢复的 (session, message)，取消编辑 /
   // 内容未变退出 / 切换会话时自动调用 edit-cancel 恢复文件。
   const pendingEditRevertRef = useRef<{ sessionId: string; messageId: string } | null>(null);
@@ -1302,6 +1419,7 @@ function App() {
     const parsed = parseSkillMarker(content);
     setEditDraft(parsed?.text ?? content);
     setCommandChip(parsed?.chip ?? null);
+    commandChipRef.current = parsed?.chip ?? null;
     // 点击编辑即回滚：立即还原该消息之后回合的代码改动，让用户在干净的
     // 文件态下编辑。取消/内容未变/切走会话时自动恢复（restorePendingEdit）。
     const currentSessionId = sessionIdRef.current;
@@ -2567,12 +2685,15 @@ function App() {
   const handleCommandCommit = useCallback(
     (chip: CommandChip | null) => {
       pendingCommandRef.current = chip;
+      // 同步鏡像先寫，避免 sendMessage 閉包在 state 落地前讀到舊值。
+      commandChipRef.current = chip;
       if (!chip) {
         setCommandChip(null);
         return;
       }
       if (chip.type === 'sys') {
         setCommandChip(null);
+        commandChipRef.current = null;
         handleSlashCommand(chip.command);
         return;
       }
@@ -2591,6 +2712,7 @@ function App() {
                 createMessage('assistant', t('skills.slash_not_found').replace('{name}', name), { status: 'done' }),
               ]);
               setCommandChip(null);
+              commandChipRef.current = null;
               return;
             }
             setCommandChip(chip);
@@ -2601,6 +2723,7 @@ function App() {
               createMessage('assistant', t('skills.slash_not_found').replace('{name}', name), { status: 'done' }),
             ]);
             setCommandChip(null);
+            commandChipRef.current = null;
           }
         })();
         return;
@@ -3005,10 +3128,20 @@ function App() {
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
                       {/* Task list (write_todos) — the agent's self-decomposed
-                          checklist, shown in every mode above the composer. Only
-                          rendered while the current session is actively streaming
-                          (errors / failures / stopped keep it closed). */}
-                      {showTodoCard && <TodoBlock todos={todos} onToggleTodo={toggleTodo} onClose={dismissCurrentTodos} />}
+                          checklist, shown in every mode above the composer.
+                          Queued messages are listed in the same card so the user
+                          sees each pending message and can remove it. */}
+                      {(showTodoCard || queuedMessagesFor(sessionId).length > 0) && (
+                        <TodoBlock
+                          todos={todos}
+                          onToggleTodo={toggleTodo}
+                          queuedMessages={queuedMessagesFor(sessionId)}
+                          onRemoveQueued={(id) => {
+                            if (sessionId) removeQueuedMessage(sessionId, id);
+                          }}
+                          onClose={dismissCurrentTodos}
+                        />
+                      )}
                       {webSetupHint && (
                         <WebSetupHintBar
                           status={webSetupHint}
@@ -3032,8 +3165,9 @@ function App() {
                       ) : (
                         <ChatInput
                         value={editingMessage ? editDraft : input}
-                        disabled={isThinking || runtimeStatus === 'connecting'}
+                        disabled={runtimeStatus === 'connecting'}
                         isThinking={isThinking}
+                        onSendQueued={handleSendQueued}
                         workMode={workMode}
                         autonomy={autonomy}
                         selectedModel={selectedModel}

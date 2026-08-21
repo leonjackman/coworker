@@ -893,5 +893,9 @@
   "context_menu.clear": "清空",
   "settings.sound_enabled": "提示音效",
   "settings.sound_enabled_desc": "在聊天事件（回复完成、错误、审批请求）时播放音效。",
-  "todo.toggle": "展开/收起任务清单"
+  "todo.toggle": "展开/收起任务清单",
+  "chat.send_queued": "排队发送",
+  "chat.queued_messages": "已有 {count} 条排队",
+  "chat.queue_section": "排队发送",
+  "chat.remove_queued": "取消排队"
 }

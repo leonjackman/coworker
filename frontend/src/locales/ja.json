@@ -891,5 +891,9 @@
   "context_menu.clear": "クリア",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "TODOリストの切り替え"
+  "todo.toggle": "TODOリストの切り替え",
+  "chat.send_queued": "メッセージをキューに追加",
+  "chat.queued_messages": "{count} 件キュー中",
+  "chat.queue_section": "キュー中のメッセージ",
+  "chat.remove_queued": "キューから削除"
 }

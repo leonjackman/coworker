@@ -35,6 +35,7 @@
 | Feature | Description |
 | --- | --- |
 | 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
+| 📥 **Message Queue** | Keep typing while the agent works — sends queue up per session and auto-send one-by-one when the stream finishes |
 | 🔌 **Multi-Provider** | OpenAI, Ollama, and any OpenAI-compatible API, with live context-window discovery |
 | 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract and zip export / import |
 | 👥 **Multi-Agent Teams** ⚠️ | Create teams & departments and let agents delegate tasks to each other. **Experimental** — see note below |
@@ -225,6 +226,37 @@ Run the memory self-checks with:
 ```
 cd backend && ./venv/bin/python coworker/memory/selftest.py
 ```
+
+---
+
+## Message Queue (Queue While Streaming)
+
+While the agent is replying you don't have to wait — keep typing and send your
+next message right away.
+
+- **Composer stays editable during streaming** — the input box is never locked
+  while a reply is in progress; only the "connecting" phase disables it.
+- **Sending queues the message** — pressing Enter / the send button while a
+  stream is running does *not* start a parallel turn. The message is appended to
+  a per-session FIFO queue and auto-sends as the next request once the current
+  stream finishes (`done` / error / stopped). Send without content shows the
+  Stop button instead, so you can still interrupt the running task.
+- **Queued messages are visible** — each pending message is listed in the
+  task-list card above the composer (one row per message) with a **✕** remove
+  action, so nothing is hidden behind an icon.
+- **Edits & regenerations stay serialized** — only one stream runs per session;
+  queued messages never race the stream they are waiting for.
+
+### How interrupted turns restart cleanly
+
+If a stream is aborted (Stop, client disconnect), the backend marks the session
+as interrupted. The **next** `/chat/stream` forgets the dirty runtime checkpoint
+and rebuilds from the session history, so the new (or first queued) message
+becomes the active instruction instead of the model continuing the original task
+from a stale mid-task checkpoint.
+
+> Note: this is a plain queue — there is no "steer" / priority injection. A
+> queued message always waits for the in-flight turn to settle.
 
 ---
 

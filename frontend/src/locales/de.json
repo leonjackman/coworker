@@ -891,5 +891,9 @@
   "context_menu.clear": "Leeren",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "Aufgabenliste umschalten"
+  "todo.toggle": "Aufgabenliste umschalten",
+  "chat.send_queued": "Nachricht in Warteschlange",
+  "chat.queued_messages": "{count} in der Warteschlange",
+  "chat.queue_section": "Warteschlange",
+  "chat.remove_queued": "Aus der Warteschlange entfernen"
 }

@@ -893,5 +893,9 @@
   "context_menu.clear": "Clear",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "Toggle todo list"
+  "todo.toggle": "Toggle todo list",
+  "chat.send_queued": "Queue message",
+  "chat.queued_messages": "{count} queued",
+  "chat.queue_section": "Queued messages",
+  "chat.remove_queued": "Remove from queue"
 }

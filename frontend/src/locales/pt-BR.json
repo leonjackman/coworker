@@ -891,5 +891,9 @@
   "context_menu.clear": "Limpar",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "Alternar lista de tarefas"
+  "todo.toggle": "Alternar lista de tarefas",
+  "chat.send_queued": "Enfileirar mensagem",
+  "chat.queued_messages": "{count} na fila",
+  "chat.queue_section": "Mensagens na fila",
+  "chat.remove_queued": "Remover da fila"
 }

@@ -891,5 +891,9 @@
   "context_menu.clear": "지우기",
   "settings.sound_enabled": "Sound effects",
   "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
-  "todo.toggle": "할 일 목록 전환"
+  "todo.toggle": "할 일 목록 전환",
+  "chat.send_queued": "메시지 대기열에 추가",
+  "chat.queued_messages": "{count}개 대기 중",
+  "chat.queue_section": "대기 중인 메시지",
+  "chat.remove_queued": "대기열에서 제거"
 }
