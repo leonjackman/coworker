@@ -2751,7 +2751,13 @@ async def delete_session(session_id: str):
     await _guard_session_not_streaming(session_id)
     if not session_store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
-    await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
+    # Checkpoint teardown (delete_thread) can block for many seconds on the
+    # shared SQLite writer lock while *another* session streams and writes
+    # checkpoints (busy_timeout up to 30s, multiple retries). The session
+    # record is already gone and thread ids are UUIDs, so cleanup is safe to
+    # run in the background — awaiting it here would push the response past
+    # the caller's timeout.
+    asyncio.create_task(asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id))
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
     _goal_locks.pop(session_id, None)

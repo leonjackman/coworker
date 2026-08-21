@@ -1955,7 +1955,9 @@ ipcMain.handle('create-session', async (event, payload) => {
 });
 
 ipcMain.handle('delete-session', async (event, sessionId) => {
-  return requestBackend(`/sessions/${encodeURIComponent(sessionId)}`, 'DELETE');
+  // Checkpoint teardown runs in the background on the backend, but keep a
+  // generous timeout as a safety net in case the backend is under load.
+  return requestBackend(`/sessions/${encodeURIComponent(sessionId)}`, 'DELETE', undefined, 60_000);
 });
 
 ipcMain.handle('rename-session', async (event, payload) => {
