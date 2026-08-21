@@ -1790,7 +1790,6 @@ async def chat_stream(request: ChatStreamRequest):
         error_emitted = False
         interrupt_emitted = False
         accumulated_content = ""
-        goal_parts_accum: list[dict[str, Any]] = []
         stream_iter: Any
         in_goal_flag = bool(request.goal_mode)
         cancel_event: asyncio.Event | None = None
@@ -1857,8 +1856,10 @@ async def chat_stream(request: ChatStreamRequest):
                     logger.warning("update_goal(todos) failed for session %s", session_id, exc_info=True)
             if etype == "done":
                 if in_goal_flag:
-                    for part in (event.get("parts") or []):
-                        goal_parts_accum.append(part)
+                    # Per-round done: goal_stream owns persistence. Just keep
+                    # forwarding; the terminal state lands atomically at the loop's
+                    # termination decision.
+                    pass
                 else:
                     _persist_assistant(
                         event.get("content", ""),
@@ -1873,32 +1874,15 @@ async def chat_stream(request: ChatStreamRequest):
                         logger.warning("update_modes failed on done for session %s", session_id, exc_info=True)
                     terminal_sent = True
             elif etype == "goal_done":
-                _persist_assistant(
-                    event.get("content", ""),
-                    request.mode,
-                    "",
-                    request.model or "",
-                    _merge_goal_parts(goal_parts_accum),
-                )
+                # Pure forwarder: goal_stream atomically committed the terminal
+                # state (flags + todos + message) before yielding this event.
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
                 except Exception:  # noqa: BLE001 - never break the terminal event
                     logger.warning("update_modes failed on goal_done for session %s", session_id, exc_info=True)
                 terminal_sent = True
             elif etype == "goal_paused":
-                # Persist the work done up to the pause point (tool calls,
-                # plans, progress) so refreshing the page does not lose the
-                # goal's trajectory.
-                try:
-                    _persist_assistant(
-                        accumulated_content or "",
-                        request.mode,
-                        "",
-                        request.model or "",
-                        _merge_goal_parts(goal_parts_accum),
-                    )
-                except Exception:
-                    pass
+                # Pure forwarder: goal_stream atomically committed the pause state.
                 terminal_sent = True
             elif etype == "error":
                 # The runtime yields an explicit error event BEFORE re-raising so
@@ -1941,6 +1925,7 @@ async def chat_stream(request: ChatStreamRequest):
                     messages, session_id, request.language, work_mode, autonomy,
                     goal_text=goal_text, goal_continue_first=False,
                     _cancel_event=cancel_event, goal_stream_id=stream_id,
+                    assistant_message_id=request.assistant_message_id,
                 )
             except Exception:  # noqa: BLE001 - clean up cancel event on setup failure
                 _goal_cancel_events.pop(session_id, None)
@@ -1988,6 +1973,10 @@ async def chat_stream(request: ChatStreamRequest):
 
         def _on_end():
             if not terminal_sent and not error_emitted and not interrupt_emitted:
+                if in_goal_flag:
+                    # Goal mode: goal_stream atomically owns the terminal message;
+                    # never synthesize an empty bubble here.
+                    return None
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
@@ -1999,30 +1988,35 @@ async def chat_stream(request: ChatStreamRequest):
                 # so a refresh keeps the question context, but do NOT emit a done
                 # frame — the frontend is waiting for the user's decision and must
                 # keep the message in `waiting` until the resume stream settles it.
-                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+                if not in_goal_flag:
+                    _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
             return None
 
         def _on_error(exc):
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
             nonlocal terminal_sent
-            if accumulated_content and not terminal_sent:
-                # Persist the partial reply with a GENERATED id (not the
-                # client-supplied one) so the frontend's stream-settle
-                # reconciliation can never adopt a half reply as a successful
-                # commit. The persist still binds this turn's tool changes to a
-                # message for rollback (see assign_message in _persist_assistant).
-                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [], message_id=None)
-            elif not terminal_sent:
-                # The stream was cut before any text was emitted (client
-                # disconnected mid-tool / mid-thought). Persist a short
-                # interrupted marker so the session does not look like the
-                # assistant never answered — otherwise a half-finished turn
-                # (e.g. a team member creation that already took effect) is
-                # invisible to the user after refresh. _persist_assistant is
-                # fully guarded and can never raise, so this path cannot drop
-                # the terminal error event either. Generated id: never adopt as
-                # a successful commit.
-                _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [], message_id=None)
+            if not in_goal_flag:
+                # Goal mode: goal_stream owns terminal persistence (its outer
+                # guard atomically commits an interrupted state on escape), so a
+                # consumer-side message write here would only duplicate/blank it.
+                if accumulated_content and not terminal_sent:
+                    # Persist the partial reply with a GENERATED id (not the
+                    # client-supplied one) so the frontend's stream-settle
+                    # reconciliation can never adopt a half reply as a successful
+                    # commit. The persist still binds this turn's tool changes to a
+                    # message for rollback (see assign_message in _persist_assistant).
+                    _persist_assistant(accumulated_content, request.mode, "", request.model or "", [], message_id=None)
+                elif not terminal_sent:
+                    # The stream was cut before any text was emitted (client
+                    # disconnected mid-tool / mid-thought). Persist a short
+                    # interrupted marker so the session does not look like the
+                    # assistant never answered — otherwise a half-finished turn
+                    # (e.g. a team member creation that already took effect) is
+                    # invisible to the user after refresh. _persist_assistant is
+                    # fully guarded and can never raise, so this path cannot drop
+                    # the terminal error event either. Generated id: never adopt as
+                    # a successful commit.
+                    _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [], message_id=None)
             if in_goal_flag:
                 _goal_active_streams.pop(f"chat-goal:{session_id}", None)
                 if not any(v == session_id for v in _goal_active_streams.values()):
@@ -2452,6 +2446,8 @@ async def goal_status(session_id: str):
     # reconciliation never fired.
     if session.goal_done:
         status = "done"
+    elif session.goal_stopped:
+        status = "stopped"
     elif session.goal_paused or session.goal_interrupted:
         status = "paused"
     elif session.goal_text:
@@ -2594,7 +2590,6 @@ async def goal_resume(request: GoalResumeRequest):
 
     async def event_stream():
         terminal_sent = False
-        goal_parts_accum: list[dict[str, Any]] = []
         # Hold the per-session goal lock for the ENTIRE stream. The previous
         # version returned StreamingResponse inside `async with lock`, which
         # released the lock before the generator was even driven — so two
@@ -2603,7 +2598,6 @@ async def goal_resume(request: GoalResumeRequest):
         async with lock:
             async def _goal_iter():
                 nonlocal terminal_sent
-                accumulated_content = ""
                 async with asyncio.timeout(SSE_TIMEOUT):
                     async for event in runtime.goal_stream(
                         [], request.session_id, language, work_mode, autonomy,
@@ -2613,42 +2607,13 @@ async def goal_resume(request: GoalResumeRequest):
                         event["session_id"] = request.session_id
                         etype = event.get("type")
                         if etype == "done":
-                            accumulated_content = str(event.get("content") or accumulated_content)
-                            for part in (event.get("parts") or []):
-                                goal_parts_accum.append(part)
+                            # Per-round done: goal_stream owns persistence.
+                            pass
                         elif etype == "goal_done":
-                            try:
-                                session_store.update_goal(request.session_id, goal_done=True)
-                                session_store.append_message(
-                                    request.session_id,
-                                    role="assistant",
-                                    content=str(event.get("content") or ""),
-                                    mode="single",
-                                    work_mode=work_mode,
-                                    autonomy=autonomy,
-                                    parts=_merge_goal_parts(goal_parts_accum),
-                                )
-                            except Exception:  # noqa: BLE001 - never break the terminal event
-                                logger.warning("goal_done persist failed for session %s", request.session_id, exc_info=True)
+                            # Pure forwarder: goal_stream atomically committed the
+                            # terminal state (flags + todos + message).
                             terminal_sent = True
                         elif etype == "goal_paused":
-                            # Persist the work done up to the pause point (content
-                            # + tool/plan parts) so pausing/resuming/refreshing the
-                            # goal never loses the round's trajectory — mirroring
-                            # the chat_stream goal_paused path.
-                            if accumulated_content or goal_parts_accum:
-                                try:
-                                    session_store.append_message(
-                                        request.session_id,
-                                        role="assistant",
-                                        content=accumulated_content,
-                                        mode="single",
-                                        work_mode=work_mode,
-                                        autonomy=autonomy,
-                                        parts=_merge_goal_parts(goal_parts_accum),
-                                    )
-                                except Exception:  # noqa: BLE001 - never break the terminal event
-                                    logger.warning("goal_paused persist failed for session %s", request.session_id, exc_info=True)
                             terminal_sent = True
                         yield event
 
@@ -3923,12 +3888,6 @@ async def resolve_command_approval(request: CommandApprovalResolve):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-def _merge_goal_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge tool/reasoning/plan parts accumulated across goal rounds into one
-    final part list (tools deduped by id, newest wins)."""
-    return _merge_message_parts([], parts)
 
 
 def _merge_message_parts(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:

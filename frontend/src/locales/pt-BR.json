@@ -912,5 +912,7 @@
   "context_menu.delete": "Excluir",
   "context_menu.clear": "Limpar",
   "settings.sound_enabled": "Sound effects",
-  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
+  "chat.goal_status_stopped": "Meta parada",
+  "chat.goal_stopped_hint": "A meta foi interrompida. Você pode excluí-la ou iniciar uma nova."
 }

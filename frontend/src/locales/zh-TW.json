@@ -912,5 +912,7 @@
   "context_menu.delete": "刪除",
   "context_menu.clear": "清空",
   "settings.sound_enabled": "Sound effects",
-  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
+  "chat.goal_status_stopped": "目標已停止",
+  "chat.goal_stopped_hint": "目標已停止。你可以刪除它或開始一個新的目標。"
 }

@@ -726,6 +726,7 @@ export interface GoalState {
   round: number;
   progress: string;
   stalled?: boolean;
+  stopped?: boolean;
   reason?: string;
   verification?: string;
   editingDraft?: boolean;

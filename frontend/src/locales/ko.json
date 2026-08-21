@@ -912,5 +912,7 @@
   "context_menu.delete": "삭제",
   "context_menu.clear": "지우기",
   "settings.sound_enabled": "Sound effects",
-  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
+  "chat.goal_status_stopped": "목표 중지됨",
+  "chat.goal_stopped_hint": "목표가 중지되었습니다. 삭제하거나 새 목표를 시작할 수 있습니다."
 }

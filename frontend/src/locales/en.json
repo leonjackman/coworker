@@ -914,5 +914,7 @@
   "context_menu.delete": "Delete",
   "context_menu.clear": "Clear",
   "settings.sound_enabled": "Sound effects",
-  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
+  "chat.goal_status_stopped": "Goal stopped",
+  "chat.goal_stopped_hint": "Goal was stopped. You can delete it or start a new one."
 }

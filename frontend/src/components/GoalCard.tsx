@@ -15,23 +15,23 @@ interface GoalCardProps {
 export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recentToolNames }: GoalCardProps) {
 
   return (
-    <div className="goal-card" data-state={goal.done ? 'done' : goal.paused ? 'paused' : goal.stalled ? 'stalled' : 'active'}>
+    <div className="goal-card" data-state={goal.done ? 'done' : goal.paused ? 'paused' : goal.stalled || goal.stopped ? 'stalled' : 'active'}>
       <div className="goal-card__header">
         <div className="goal-card__header-left">
           <span className="goal-card__status">
             <Target size={15} />
-            {goal.done ? t('chat.goal_status_done') : goal.paused ? t('chat.goal_status_paused') : goal.stalled ? t('chat.goal_status_stalled') : t('chat.goal_status_active')}
+            {goal.done ? t('chat.goal_status_done') : goal.paused ? t('chat.goal_status_paused') : goal.stalled || goal.stopped ? t('chat.goal_status_stopped') : t('chat.goal_status_active')}
           </span>
           <span className="goal-card__round">{t('chat.goal_round', { round: goal.round })}</span>
         </div>
         <div className="goal-card__actions">
-          {!goal.done && !goal.stalled && !goal.paused && (
+          {!goal.done && !goal.stalled && !goal.stopped && !goal.paused && (
             <Button type="button" variant="secondary" size="sm" onClick={onPause} aria-label={t('chat.goal_pause')}>
               <Pause size={13} />
               {t('chat.goal_pause')}
             </Button>
           )}
-          {!goal.done && !goal.stalled && goal.paused && (
+          {!goal.done && !goal.stalled && !goal.stopped && goal.paused && (
             <Button type="button" variant="secondary" size="sm" onClick={onResume} aria-label={t('chat.goal_resume')}>
               <Play size={13} />
               {t('chat.goal_resume')}
@@ -39,7 +39,7 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recen
           )}
           {/* Editing the goal only works while paused (running the composer is
               locked by isThinking, so the edit would be a dead end). */}
-          {!goal.done && !goal.stalled && goal.paused && (
+          {!goal.done && !goal.stalled && !goal.stopped && goal.paused && (
             <Button type="button" variant="icon" size="icon-sm" onClick={onDraftEdit} aria-label={t('chat.goal_edit')}>
               <Pencil size={14} />
             </Button>
@@ -58,12 +58,12 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recen
             <span>{goal.verification}</span>
           </div>
         )}
-        {goal.stalled && (
+        {(goal.stalled || goal.stopped) && (
           <p className="goal-card__stalled">
-            {t('chat.goal_stalled_hint')}
+            {goal.stopped || goal.reason === 'stopped' ? t('chat.goal_stopped_hint') : t('chat.goal_stalled_hint')}
           </p>
         )}
-        {goal.done && goal.reason && (
+        {(goal.done || goal.stalled || goal.stopped) && goal.reason && (
           <p className="goal-card__reason">{goal.reason}</p>
         )}
         {recentToolNames && recentToolNames.length > 0 && (
@@ -76,7 +76,7 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recen
             </ul>
           </div>
         )}
-        {!goal.done && !goal.stalled && goal.progress && <p className="goal-card__progress">{goal.progress}</p>}
+        {!goal.done && !goal.stalled && !goal.stopped && goal.progress && <p className="goal-card__progress">{goal.progress}</p>}
       </div>
     </div>
   );

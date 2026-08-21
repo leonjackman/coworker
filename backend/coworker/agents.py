@@ -2875,6 +2875,19 @@ GOAL_MARKER = "[CW-GOAL]"
 # on a class that never defined it (AttributeError on every stall).
 GOAL_MAX_FORCE = 3
 
+# Short human-readable labels persisted as the goal's terminal assistant message
+# when a round ends without any streamed content (timeout / stop / stall / cap).
+# The goal loop persists its terminal state atomically (see commit_goal_end), so
+# a failure reason must never land as a blank bubble.
+_GOAL_TERMINAL_LABELS = {
+    "stopped": "Goal stopped",
+    "timeout": "Agent timed out",
+    "stalled": "Agent stalled",
+    "interrupted": "Goal interrupted",
+    "max_rounds_exceeded": "Max rounds exceeded",
+    "paused": "Goal paused",
+}
+
 
 class FinalizeGoalArgs(BaseModel):
     achieved: bool = Field(description="True only when the goal is fully achieved and verified.")
@@ -4026,6 +4039,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         goal_continue_first: bool = False,
         _cancel_event: Any = None,
         goal_stream_id: str = "",
+        assistant_message_id: str = "",
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Autonomous /goal loop (Codex Goal mode): rounds until the agent calls
         ``finalize_goal(achieved=True)`` or the goal is paused.
@@ -4033,7 +4047,76 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         Each round is one agent turn (model → tools → … → finalize_goal or a
         status). Pause is honoured at round boundaries: the current round finishes,
         then the loop stops; ``/goal/resume`` re-enters with ``goal_continue_first``.
+
+        The loop is the SOLE OWNER of the goal state machine: every terminal
+        decision (achieved / paused / stopped / timed out / stalled / cap) is
+        atomically committed to the session (flags + todos + final message in one
+        load→mutate→save via ``SessionStore.commit_goal_end``) BEFORE the terminal
+        event is yielded. Consumers only forward events — they never write goal
+        state, so a crash between "decision" and "persist" can never leave the
+        goal looking active.
         """
+        # Accumulated content/parts across rounds, used as the terminal message.
+        accum_content = ""
+        accum_parts: list[dict[str, Any]] = []
+
+        def _commit_terminal(
+            *,
+            done: bool | None = None,
+            paused: bool | None = None,
+            stopped: bool | None = None,
+            interrupted: bool | None = None,
+            reason: str = "",
+            content: str = "",
+            todos: list[Any] | None = None,
+        ) -> None:
+            """Atomically persist the goal's terminal state + a non-empty message."""
+            if self.session_store is None:
+                return
+            label = content.strip() or _GOAL_TERMINAL_LABELS.get(reason, "")
+            if not label and not done and not paused:
+                # Nothing worth persisting (e.g. already-done no-op re-entry).
+                return
+            try:
+                # Tools accumulate across rounds; dedupe by id (newest wins) so
+                # the persisted terminal message mirrors the SSE tool cards
+                # (equivalent to main.py's _merge_goal_parts).
+                raw_parts = _merge_event_parts(accum_parts)
+                deduped_parts: list[dict[str, Any]] = []
+                for part in raw_parts:
+                    if part.get("type") == "tool":
+                        idx = next(
+                            (i for i, p in enumerate(deduped_parts) if p.get("type") == "tool" and p.get("id") == part.get("id")),
+                            None,
+                        )
+                        if idx is not None:
+                            deduped_parts[idx] = part
+                            continue
+                    deduped_parts.append(part)
+                session = self.session_store.commit_goal_end(
+                    session_id,
+                    message_id=assistant_message_id or None,
+                    content=label,
+                    parts=deduped_parts,
+                    mode=self.mode,
+                    provider=self.provider_name,
+                    model=self.model_name,
+                    work_mode=work_mode,
+                    autonomy=autonomy,
+                    done=done,
+                    paused=paused,
+                    stopped=stopped,
+                    interrupted=interrupted,
+                    todos=list(todos) if todos is not None else None,
+                    agent_id=self.agent,
+                )
+                if label and self.change_store is not None:
+                    last = session.messages[-1] if session.messages else None
+                    if last is not None:
+                        self.change_store.assign_message(session_id, last.id)
+            except Exception:  # noqa: BLE001 - persistence must never break the terminal event
+                logger.warning("goal terminal commit failed for session %s", session_id, exc_info=True)
+
         if self.session_store is not None:
             try:
                 session_state = self.session_store.require(session_id)
@@ -4041,6 +4124,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 # Preserve 0 (unlimited); only fall back to 50 when unset (None).
                 goal_max_rounds = 50 if session_state.goal_max_rounds is None else int(session_state.goal_max_rounds)
                 if session_state.goal_interrupted:
+                    _commit_terminal(interrupted=True, reason="interrupted")
                     yield {"type": "goal_done", "round": 0, "goal": goal_text, "content": "", "reason": "interrupted"}
                     return
                 if session_state.goal_done:
@@ -4066,6 +4150,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         self.session_store.save(session_state)
                         yield {"type": "goal_edited", "round": round_no, "goal": goal_text, "stream_id": goal_stream_id}
                     if session_state.goal_stopped:
+                        _commit_terminal(stopped=True, reason="stopped", content=accum_content, todos=last_todos)
                         yield {
                             "type": "goal_done", "round": round_no, "goal": goal_text,
                             "content": "", "reason": "stopped",
@@ -4082,13 +4167,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             is_first = round_no == 1
             # Max rounds guard: stop when we exceed goal_max_rounds (0 = no limit).
             if goal_max_rounds > 0 and round_no > goal_max_rounds:
+                _commit_terminal(stopped=True, reason="max_rounds_exceeded", content=accum_content, todos=last_todos)
                 yield {
                     "type": "goal_done", "round": round_no, "goal": goal_text,
                     "content": "", "reason": "max_rounds_exceeded",
                 }
                 return
             yield {"type": "goal_round", "round": round_no, "goal": goal_text, "status": "running"}
-            round_had_tools = False
             round_had_interrupt = False
             try:
                 async with asyncio.timeout(600):  # 5 min per turn
@@ -4107,15 +4192,22 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                             last_checkpoint = event
                         elif etype == "todos":
                             last_todos = event.get("todos") or []
-                        elif etype == "tool_start":
-                            round_had_tools = True
                         elif etype == "approval_required":
                             round_had_interrupt = True
+                        elif etype == "delta":
+                            accum_content += str(event.get("content", "") or "")
+                        elif etype == "done":
+                            # Accumulate the round's parts so the terminal message
+                            # (persisted atomically below) has the round's trajectory.
+                            for part in (event.get("parts") or []):
+                                accum_parts.append(part)
                         yield event
             except asyncio.TimeoutError:
+                _commit_terminal(stopped=True, reason="timeout", content=accum_content, todos=last_todos)
                 yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
                 return
             except asyncio.CancelledError:
+                _commit_terminal(stopped=True, reason="stopped", content=accum_content, todos=last_todos)
                 yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
                 return
             # Round boundary decision.
@@ -4132,21 +4224,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 # re-entering and re-triggering the same interrupt repeatedly
                 # until the round cap — the user approves, then resumes from the
                 # checkpoint.
-                if self.session_store is not None:
-                    try:
-                        self.session_store.update_goal(session_id, goal_paused=True)
-                    except Exception:
-                        pass
+                _commit_terminal(paused=True, content=accum_content, todos=last_todos)
                 yield {"type": "goal_paused", "round": round_no, "goal": goal_text}
                 return
-            if self.session_store is not None:
-                try:
-                    self.session_store.update_goal(
-                        session_id, goal_done=achieved, goal_todos=list(last_todos or []),
-                    )
-                except Exception:
-                    pass
             if achieved:
+                _commit_terminal(
+                    done=True,
+                    content=str((last_checkpoint or {}).get("progress", "") or "") or accum_content,
+                    todos=last_todos,
+                )
                 yield {
                     "type": "goal_done", "round": round_no, "goal": goal_text,
                     "content": str((last_checkpoint or {}).get("progress", "") or ""),
@@ -4154,137 +4240,114 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 }
                 return
             if paused:
+                _commit_terminal(paused=True, content=accum_content, todos=last_todos)
                 yield {"type": "goal_paused", "round": round_no, "goal": goal_text}
                 return
-            if last_checkpoint is None and not round_had_tools:
-                # The agent concluded with plain text without calling finalize_goal
-                # and made no tool calls this round — it is stalling, not working.
-                # Apply force-loop nudges up to MAX_FORCE times before giving up.
+            # Anti-stall (round-level progress signal). A round is "empty" when it
+            # ended WITHOUT a goal_checkpoint — the agent produced a plain-text
+            # answer (with or without tool calls) but never called finalize_goal.
+            # The round is bounded by the per-turn wall clock, not by step count,
+            # so legitimately long tasks (dozens of model calls) still advance as
+            # long as each round lands a checkpoint. Only CONSECUTIVE empty rounds
+            # count: any checkpoint resets the counter.
+            if last_checkpoint is not None:
+                # Real progress this round — reset the consecutive-empty counter.
                 if self.session_store is not None:
                     try:
                         session_state = self.session_store.require(session_id)
-                        goal_force = int(session_state.goal_force_count or 0)
+                        if int(session_state.goal_force_count or 0) != 0:
+                            self.session_store.update_goal(session_id, goal_force_count=0)
                     except Exception:
-                        goal_force = 0
-                else:
+                        pass
+                continue
+            # No checkpoint this round → candidate stall. Read the persisted counter.
+            goal_force = 0
+            if self.session_store is not None:
+                try:
+                    session_state = self.session_store.require(session_id)
+                    goal_force = int(session_state.goal_force_count or 0)
+                except Exception:
                     goal_force = 0
-                if goal_force < GOAL_MAX_FORCE:
-                    # Yield a force_continue event to inform the client, then
-                    # re-invoke _stream with a nudge appended to the user message.
-                    yield {"type": "goal_force", "round": round_no, "reason": "agent_without_tools", "count": goal_force}
-                    goal_force += 1
-                    # Persist the incremented force count so it survives at round boundary
-                    if self.session_store is not None:
-                        try:
-                            self.session_store.update_goal(session_id, goal_force_count=goal_force)
-                        except Exception:
-                            pass
-                    # Reset checkpoint state for the forced continuation round.
-                    last_checkpoint = None
-                    last_todos = []
-                    round_had_tools = False
-                    # Re-invoke _stream with a nudge appended via state.
-                    nudge = (
-                        "\n\n[Coworker] You gave a plain-text answer without calling "
-                        "`finalize_goal` or using any tools. Keep working toward the goal "
-                        "using your tools (read_file, search_files, write_file, run_command, etc.) "
-                        "and call finalize_goal when done."
-                    )
+            if goal_force < GOAL_MAX_FORCE:
+                # Yield a force_continue event to inform the client, then
+                # re-invoke _stream with a nudge appended to the user message.
+                yield {"type": "goal_force", "round": round_no, "reason": "agent_without_progress", "count": goal_force}
+                goal_force += 1
+                # Persist the incremented force count so it survives at round boundary.
+                if self.session_store is not None:
                     try:
-                        async with asyncio.timeout(5 * 60):  # 5 min per turn
-                            async for event in self._stream(
-                                # Force retry always CONTINUES the existing thread:
-                                # the round's user message was already added by its
-                                # first _stream attempt, so re-adding it here would
-                                # duplicate the user message in the checkpoint.
-                                [],
-                                # A goal is an autonomous "do the work" loop: always run in
-                        # the execute phase so write/run tools are available,
-                        # regardless of the session's plan/build toggle.
-                        session_id, language, "build", autonomy, rerun=False,
-                                goal_mode=True, goal_text=goal_text,
-                                goal_continue=True,
-                                _nudge=nudge,
-                                _cancel_event=_cancel_event,
-                            ):
-                                etype = event.get("type", "")
-                                if etype == "goal_checkpoint":
-                                    last_checkpoint = event
-                                elif etype == "todos":
-                                    last_todos = event.get("todos") or []
-                                elif etype == "tool_start":
-                                    round_had_tools = True
-                                # Respect user pause/stop cancel during force loop so
-                                # the user does not have to wait for the full stream to
-                                # finish before seeing their action take effect.
-                                if _cancel_event.is_set():
-                                    raise asyncio.CancelledError("user cancelled during force loop")
-                                yield event
-                    except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
-                        if isinstance(exc, asyncio.TimeoutError):
-                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
-                        else:
-                            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
-                        return
-                    # Check again after the forced continuation.
-                    if last_checkpoint is not None:
-                        continue
-                    # Second attempt also stalled — check force count again.
+                        self.session_store.update_goal(session_id, goal_force_count=goal_force)
+                    except Exception:
+                        pass
+                # Reset checkpoint state for the forced continuation round.
+                last_checkpoint = None
+                last_todos = []
+                # Re-invoke _stream with a nudge appended via state.
+                nudge = (
+                    "\n\n[Coworker] You gave an answer without calling `finalize_goal` "
+                    "this round. Keep working toward the goal using your tools "
+                    "(read_file, search_files, write_file, run_command, etc.) and call "
+                    "finalize_goal(achieved=false, ...) after finishing a work chunk, "
+                    "or finalize_goal(achieved=true, ...) when the whole goal is done."
+                )
+                try:
+                    async with asyncio.timeout(5 * 60):  # 5 min per turn
+                        async for event in self._stream(
+                            # Force retry always CONTINUES the existing thread:
+                            # the round's user message was already added by its
+                            # first _stream attempt, so re-adding it here would
+                            # duplicate the user message in the checkpoint.
+                            [],
+                            # A goal is an autonomous "do the work" loop: always run in
+                            # the execute phase so write/run tools are available,
+                            # regardless of the session's plan/build toggle.
+                            session_id, language, "build", autonomy, rerun=False,
+                            goal_mode=True, goal_text=goal_text,
+                            goal_continue=True,
+                            _nudge=nudge,
+                            _cancel_event=_cancel_event,
+                        ):
+                            etype = event.get("type", "")
+                            if etype == "goal_checkpoint":
+                                last_checkpoint = event
+                            elif etype == "todos":
+                                last_todos = event.get("todos") or []
+                            elif etype == "delta":
+                                accum_content += str(event.get("content", "") or "")
+                            elif etype == "done":
+                                for part in (event.get("parts") or []):
+                                    accum_parts.append(part)
+                            # Respect user pause/stop cancel during force loop so
+                            # the user does not have to wait for the full stream to
+                            # finish before seeing their action take effect.
+                            if _cancel_event.is_set():
+                                raise asyncio.CancelledError("user cancelled during force loop")
+                            yield event
+                except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
+                    if isinstance(exc, asyncio.TimeoutError):
+                        _commit_terminal(stopped=True, reason="timeout", content=accum_content, todos=last_todos)
+                        yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
+                    else:
+                        _commit_terminal(stopped=True, reason="stopped", content=accum_content, todos=last_todos)
+                        yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
+                    return
+                # Forced continuation made real progress → next normal round.
+                if last_checkpoint is not None:
                     if self.session_store is not None:
                         try:
                             session_state = self.session_store.require(session_id)
-                            goal_force = int(session_state.goal_force_count or 0)
+                            if int(session_state.goal_force_count or 0) != 0:
+                                self.session_store.update_goal(session_id, goal_force_count=0)
                         except Exception:
-                            goal_force = 0
-                    if goal_force < GOAL_MAX_FORCE:
-                        goal_force += 1
-                        yield {"type": "goal_force", "round": round_no, "reason": "agent_without_tools", "count": goal_force}
-                        last_checkpoint = None
-                        last_todos = []
-                        round_had_tools = False
-                        if self.session_store is not None:
-                            try:
-                                self.session_store.update_goal(session_id, goal_force_count=goal_force)
-                            except Exception:
-                                pass
-                        try:
-                            async with asyncio.timeout(600):  # 5 min per turn
-                                async for event in self._stream(
-                                    # Force retry continues the existing thread (see above).
-                                    [],
-                                    # A goal is an autonomous "do the work" loop: always run in
-                         # the execute phase so write/run tools are available,
-                         # regardless of the session's plan/build toggle.
-                         session_id, language, "build", autonomy, rerun=False,
-                                     goal_mode=True, goal_text=goal_text,
-                                     goal_continue=True,
-                                     _nudge=nudge,
-                                     _cancel_event=_cancel_event,
-                                 ):
-                                     etype = event.get("type", "")
-                                     if etype == "goal_checkpoint":
-                                         last_checkpoint = event
-                                     elif etype == "todos":
-                                         last_todos = event.get("todos") or []
-                                     elif etype == "tool_start":
-                                         round_had_tools = True
-                                     # Respect user pause/stop cancel during force loop so
-                                     # the user does not have to wait for the full stream to
-                                     # finish before seeing their action take effect.
-                                     if _cancel_event.is_set():
-                                         raise asyncio.CancelledError("user cancelled during force loop")
-                                     yield event
-                        except (asyncio.CancelledError, asyncio.TimeoutError) as exc:
-                            if isinstance(exc, asyncio.TimeoutError):
-                                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "timeout"}
-                            else:
-                                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "reason": "stopped"}
-                            return
-                    if last_checkpoint is not None:
-                        continue
-                # Force exhausted or goal_force >= MAX_FORCE — stop with stall signal.
-                yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "stalled": True}
-                return
+                            pass
+                    continue
+                # Still no checkpoint: loop top re-reads the persisted counter
+                # (already incremented) and stalls once GOAL_MAX_FORCE is reached.
+                continue
+            # Force exhausted or goal_force >= MAX_FORCE — stop with stall signal.
+            _commit_terminal(stopped=True, reason="stalled", content=accum_content, todos=last_todos)
+            yield {"type": "goal_done", "round": round_no, "goal": goal_text, "content": "", "stalled": True}
+            return
 
     def _handle_message_chunk(
         self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]], session_id: str = "",

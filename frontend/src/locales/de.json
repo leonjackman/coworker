@@ -912,5 +912,7 @@
   "context_menu.delete": "Löschen",
   "context_menu.clear": "Leeren",
   "settings.sound_enabled": "Sound effects",
-  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
+  "chat.goal_status_stopped": "Ziel gestoppt",
+  "chat.goal_stopped_hint": "Ziel wurde gestoppt. Sie können es löschen oder neu starten."
 }

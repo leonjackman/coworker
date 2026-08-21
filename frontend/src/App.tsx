@@ -1259,7 +1259,7 @@ function App() {
         inGoal = true;
         if (goalMatchesView) {
           if (event.session_id) goalSessionIdRef.current = event.session_id;
-          setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
+          setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false, stalled: false, stopped: false });
         }
       } else if (event.type === 'goal_round') {
         if (goalMatchesView) setGoal((current) => ({ ...current, round: event.round, running: true, paused: false }));
@@ -1300,7 +1300,10 @@ function App() {
               stalled: failed,
               progress: event.content || current.progress,
             };
-            if (event.reason) next.reason = event.reason;
+            if (event.reason) {
+              next.reason = event.reason;
+              if (event.reason === 'stopped') next.stopped = true;
+            }
             if (event.verification) next.verification = event.verification;
             return next;
           });
@@ -1425,6 +1428,8 @@ function App() {
                       ...(status.goal?.reason ? { reason: status.goal.reason } : {}),
                     },
               );
+            } else if (status.status === 'stopped') {
+              setGoal((current) => ({ ...current, done: true, running: false, stalled: true, stopped: true, reason: 'stopped' }));
             } else if (status.status === 'paused') {
               setGoal((current) => ({ ...current, paused: true, running: false }));
             }
@@ -1454,6 +1459,8 @@ function App() {
                         ...(status.goal?.reason ? { reason: status.goal.reason } : {}),
                       },
                 );
+              } else if (status.status === 'stopped') {
+                setGoal((current) => ({ ...current, done: true, running: false, stalled: true, stopped: true, reason: 'stopped' }));
               } else if (status.status === 'paused') {
                 setGoal((current) => ({ ...current, paused: true, running: false }));
               } else {
@@ -2553,22 +2560,26 @@ function App() {
         goal_stopped?: boolean;
         goal_interrupted?: boolean;
       };
-      if (sessionRecord.goal_text && !sessionRecord.goal_stopped) {
+      if (sessionRecord.goal_text) {
         // An interrupted goal (e.g. a crash) still has goal_text but no
         // goal_paused flag — treat it as resumable so the user can restart it
         // from the checkpoint instead of being stuck with no controls.
         const recoverable = Boolean(sessionRecord.goal_paused || sessionRecord.goal_interrupted);
-        setGoal({
+        const stopped = Boolean(sessionRecord.goal_stopped);
+        const restoredGoal: GoalState = {
           goalText: sessionRecord.goal_text,
           done: Boolean(sessionRecord.goal_done),
-          paused: recoverable,
+          paused: recoverable && !stopped,
           todos: sessionRecord.goal_todos || [],
           running: false,
           round: 0,
           progress: '',
-          stalled: false,
+          stalled: stopped,
+          stopped,
           editingDraft: false,
-        });
+        };
+        if (stopped) restoredGoal.reason = 'stopped';
+        setGoal(restoredGoal);
         goalSessionIdRef.current = sessionIdToOpen;
         // 同步恢复该会话的任务卡（切走再切回时卡片不消失）。
         if (sessionRecord.goal_todos && sessionRecord.goal_todos.length > 0) {
@@ -2910,7 +2921,7 @@ function App() {
     // cannot spin up a concurrent stream that would race the running goal.
     // isThinking is derived from goal.running scoped to this session.
     goalSessionIdRef.current = targetSessionId;
-    setGoal((current) => ({ ...current, running: true, paused: false }));
+    setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false }));
     // 新一轮 resume 任务开始：换一个新的 owner token，让上一轮被 "x" 关闭的
     // 任务卡可以重新出现；并清掉旧一轮残留的任务卡。
     goalResumeTokenRef.current += 1;
@@ -2943,6 +2954,8 @@ function App() {
           const status = await chatService.getGoalStatus(targetSessionId);
           if (status.status === 'done' && status.goal?.progress) {
             setGoal((current) => (current.running ? { ...current, done: true, running: false, progress: status.goal?.progress || current.progress } : current));
+          } else if (status.status === 'stopped') {
+            setGoal((current) => (current.running ? { ...current, done: true, running: false, stalled: true, stopped: true, reason: 'stopped' } : current));
           } else if (status.status === 'paused') {
             setGoal((current) => (current.running ? { ...current, paused: true, running: false } : current));
           } else if (!status.status || status.status === 'none') {
@@ -3019,7 +3032,7 @@ function App() {
     if (event.session_id && event.session_id !== sessionIdRef.current) return;
     trackBrowserToolEvent(event);
     if (event.type === 'goal_start' || event.type === 'goal_round') {
-      setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
+      setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false, round: event.type === 'goal_round' ? event.round : current.round }));
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
     } else if (event.type === 'todos') {
@@ -3031,7 +3044,10 @@ function App() {
         ['timeout', 'stopped', 'interrupted', 'max_rounds_exceeded'].includes(event.reason || '');
       setGoal((current) => {
         const next: GoalState = { ...current, done: true, running: false, stalled: failed, progress: event.content || current.progress };
-        if (event.reason) next.reason = event.reason;
+        if (event.reason) {
+          next.reason = event.reason;
+          if (event.reason === 'stopped') next.stopped = true;
+        }
         return next;
       });
       clearSessionTodos(event.session_id ?? sessionIdRef.current);
@@ -3050,7 +3066,7 @@ function App() {
     trackBrowserToolEvent(event);
     if (event.type === 'goal_start' || event.type === 'goal_round') {
       if (event.session_id) goalSessionIdRef.current = event.session_id;
-      setGoal((current) => ({ ...current, running: true, paused: false, round: event.type === 'goal_round' ? event.round : current.round }));
+      setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false, round: event.type === 'goal_round' ? event.round : current.round }));
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
     } else if (event.type === 'todos') {
@@ -3069,7 +3085,10 @@ function App() {
     } else if (event.type === 'goal_done') {
       setGoal((current) => {
         const next: GoalState = { ...current, done: true, running: false, stalled: event.stalled || false, progress: event.content || current.progress };
-        if (event.reason) next.reason = event.reason;
+        if (event.reason) {
+          next.reason = event.reason;
+          if (event.reason === 'stopped') next.stopped = true;
+        }
         return next;
       });
       clearSessionTodos(event.session_id ?? sessionIdRef.current);

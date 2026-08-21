@@ -914,5 +914,7 @@
   "context_menu.delete": "删除",
   "context_menu.clear": "清空",
   "settings.sound_enabled": "提示音效",
-  "settings.sound_enabled_desc": "在聊天事件（回复完成、错误、审批请求）时播放音效。"
+  "settings.sound_enabled_desc": "在聊天事件（回复完成、错误、审批请求）时播放音效。",
+  "chat.goal_status_stopped": "目标已停止",
+  "chat.goal_stopped_hint": "目标已停止。你可以删除它或开始一个新的目标。"
 }

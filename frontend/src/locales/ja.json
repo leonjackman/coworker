@@ -912,5 +912,7 @@
   "context_menu.delete": "削除",
   "context_menu.clear": "クリア",
   "settings.sound_enabled": "Sound effects",
-  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
+  "chat.goal_status_stopped": "ゴール停止済み",
+  "chat.goal_stopped_hint": "ゴールが停止されました。削除するか、新しいゴールを開始できます。"
 }

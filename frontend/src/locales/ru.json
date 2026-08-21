@@ -912,5 +912,7 @@
   "context_menu.delete": "Удалить",
   "context_menu.clear": "Очистить",
   "settings.sound_enabled": "Sound effects",
-  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests."
+  "settings.sound_enabled_desc": "Play audio cues for chat events like replies, errors, and approval requests.",
+  "chat.goal_status_stopped": "Цель остановлена",
+  "chat.goal_stopped_hint": "Цель была остановлена. Вы можете удалить её или начать новую."
 }

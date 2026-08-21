@@ -239,6 +239,69 @@ class SessionStore:
         self.save(session)
         return session
 
+    def commit_goal_end(
+        self,
+        session_id: str,
+        *,
+        message_id: str | None = None,
+        content: str = "",
+        parts: list[dict[str, Any]] | None = None,
+        mode: str = "",
+        provider: str = "",
+        model: str = "",
+        work_mode: str = "",
+        autonomy: str = "",
+        done: bool | None = None,
+        paused: bool | None = None,
+        stopped: bool | None = None,
+        interrupted: bool | None = None,
+        todos: list[dict[str, Any]] | None = None,
+        agent_id: str = "",
+    ) -> Session:
+        """Atomically commit a goal's terminal state AND its final assistant
+        message in a single load→mutate→save cycle.
+
+        The goal loop owns the goal state machine; every terminal decision
+        (achieved / paused / stopped / timed out / stalled / max rounds) must
+        land in the session together with the round's message so that a crash
+        between the two can never leave the goal looking "active". The message
+        is only appended when ``content`` is non-empty — a blank bubble is never
+        persisted.
+        """
+        session = self.require(session_id)
+        if done is not None:
+            session.goal_done = done
+        if paused is not None:
+            session.goal_paused = paused
+        if stopped is not None:
+            session.goal_stopped = stopped
+        if interrupted is not None:
+            session.goal_interrupted = interrupted
+        if todos is not None:
+            session.goal_todos = todos
+        if content:
+            resolved_id = message_id or str(uuid.uuid4())
+            resolved_agent = agent_id or session.agent_id
+            session.messages.append(
+                SessionMessage(
+                    id=resolved_id,
+                    role="assistant",
+                    content=content,
+                    created_at=_now(),
+                    mode=mode,
+                    provider=provider,
+                    model=model,
+                    work_mode=work_mode,
+                    autonomy=autonomy,
+                    attachments=[],
+                    parts=parts or [],
+                    references=[],
+                    agent_id=resolved_agent,
+                )
+            )
+        self.save(session)
+        return session
+
     def update_force_count(self, session_id: str, count: int) -> Session:
         return self.update_goal(session_id, goal_force_count=count)
 
