@@ -130,7 +130,6 @@
   "chat.goal_phase_verify": "验证中",
   "chat.goal_verification": "验证",
   "chat.goal_stalled_hint": "多次尝试后 agent 停滞。可考虑暂停或编辑目标。",
-  "chat.goal_tools": "工具",
   "chat.goal_pause": "暂停",
   "chat.goal_resume": "继续",
   "chat.goal_edit": "编辑目标",

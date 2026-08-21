@@ -151,7 +151,6 @@
   "chat.goal_phase_verify": "Vérification",
   "chat.goal_verification": "Vérification",
   "chat.goal_stalled_hint": "L'agent est bloqué après plusieurs tentatives. Envisagez de mettre en pause ou de modifier l'objectif.",
-  "chat.goal_tools": "Outils",
   "chat.goal_pause": "Pause",
   "chat.goal_resume": "Reprendre",
   "chat.goal_edit": "Modifier l'objectif",

@@ -122,7 +122,6 @@
   "chat.goal_phase_verify": "Проверка",
   "chat.goal_verification": "Проверка",
   "chat.goal_stalled_hint": "Агент застрял после нескольких попыток. Рассмотрите приостановку или редактирование цели.",
-  "chat.goal_tools": "Инструменты",
   "chat.goal_pause": "Приостановить",
   "chat.goal_resume": "Продолжить",
   "chat.goal_edit": "Редактировать цель",

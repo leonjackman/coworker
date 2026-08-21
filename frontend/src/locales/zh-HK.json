@@ -150,7 +150,6 @@
   "chat.goal_phase_verify": "驗證中",
   "chat.goal_verification": "驗證",
   "chat.goal_stalled_hint": "Agent 反覆嘗試之後卡住。建議暫停或者修改目標。",
-  "chat.goal_tools": "工具",
   "chat.goal_pause": "暫停",
   "chat.goal_resume": "繼續",
   "chat.goal_edit": "編輯目標",

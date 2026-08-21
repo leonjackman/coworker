@@ -71,17 +71,6 @@ export function GoalCard({ goal, onPause, onResume, onDelete, onDraftEdit, recen
         {(goal.done || goal.stalled || goal.stopped) && goal.reason && (
           <p className="goal-card__reason">{goal.reason}</p>
         )}
-        {recentToolNames && recentToolNames.length > 0 && (
-          <div className="goal-card__tools">
-            <span className="goal-card__tools-label">{t('chat.goal_tools')}:</span>
-            <ul className="goal-card__tools-list">
-              {recentToolNames.map((name, i) => (
-                <li key={i} className="goal-card__tool-item"><span className="goal-card__tool-name">{name}</span></li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {!goal.done && !goal.stalled && !goal.stopped && goal.progress && <p className="goal-card__progress">{goal.progress}</p>}
       </div>
     </div>
   );

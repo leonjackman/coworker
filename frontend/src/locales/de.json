@@ -122,7 +122,6 @@
   "chat.goal_phase_verify": "Verifizierung",
   "chat.goal_verification": "Verifizierung",
   "chat.goal_stalled_hint": "Agent ist nach mehreren Versuchen festgefahren. Consider Sie das Ziel zu pausieren oder zu bearbeiten.",
-  "chat.goal_tools": "Tools",
   "chat.goal_pause": "Pause",
   "chat.goal_resume": "Fortsetzen",
   "chat.goal_edit": "Ziel bearbeiten",

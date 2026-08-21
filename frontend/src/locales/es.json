@@ -122,7 +122,6 @@
   "chat.goal_phase_verify": "Verificación",
   "chat.goal_verification": "Verificación",
   "chat.goal_stalled_hint": "El agente se estancó después de múltiples intentos. Considera hacer una pausa o editar el objetivo.",
-  "chat.goal_tools": "Herramientas",
   "chat.goal_pause": "Pausar",
   "chat.goal_resume": "Reanudar",
   "chat.goal_edit": "Editar objetivo",

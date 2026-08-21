@@ -130,7 +130,6 @@
   "chat.goal_phase_verify": "Verifying",
   "chat.goal_verification": "Verification",
   "chat.goal_stalled_hint": "Agent stalled after multiple attempts. Consider pausing or editing the goal.",
-  "chat.goal_tools": "Tools",
   "chat.goal_pause": "Pause",
   "chat.goal_resume": "Resume",
   "chat.goal_edit": "Edit goal",
