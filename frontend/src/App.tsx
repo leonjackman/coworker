@@ -1530,14 +1530,6 @@ function App() {
     const trimmed = encoded.trim();
     setCommandChip(null);
     if (!trimmed) return;
-    // 内容未变化：退出编辑态并恢复点编辑时已回滚的文件。
-    const original = messages.find((m) => m.id === messageId)?.content;
-    if (original !== undefined && trimmed === (original ?? '').trim()) {
-      setEditingMessage(null);
-      setEditDraft('');
-      void restorePendingEdit();
-      return;
-    }
     setEditingMessage(null);
     setEditDraft('');
     // 已进入发送流程：清掉待恢复标记，避免切换会话时重复恢复。
