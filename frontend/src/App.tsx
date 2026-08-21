@@ -2621,6 +2621,9 @@ function App() {
 
   const deleteSession = async (sessionIdToDelete: string) => {
     try {
+      // 先硬终止该会话正在进行的流/任务（SSE 断开会让后端取消生成），
+      // 再删除，避免后端因会话仍在生成而拒绝（409）。
+      abortStreamFor(sessionIdToDelete);
       await chatService.deleteSession(sessionIdToDelete);
       // 清理被删除会话所属项目的 activeProjectId（先于 sessionId 清理，避免中间状态导致 currentProjectId 指向已删除项目）
       const deletedSessionProject = sessions.find((s) => s.id === sessionIdToDelete)?.project_id;
@@ -2639,7 +2642,6 @@ function App() {
       }
       // 清理被删除会话在所有上下文中的消息
       setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionIdToDelete));
-      abortStreamFor(sessionIdToDelete);
       requestSeqRef.current += 1;
       setPendingRequests([]);
       await Promise.all([refreshSessions(), refreshProjects()]);

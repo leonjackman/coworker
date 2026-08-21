@@ -219,11 +219,16 @@ async def _tracked_stream(stream_iter: Any, session_id: str):
     """Mark a session active while its stream is consumed so the periodic
     sweep never trims a thread that is currently being written to."""
     agent_registry.checkpoint_manager.mark_active(session_id)
+    # Register the task consuming this stream (the _sse_events producer) so a
+    # hard stop — e.g. deleting the session mid-generation — can cancel it.
+    _stream_tasks[session_id] = asyncio.current_task()
     try:
         async for event in stream_iter:
             yield event
     finally:
         agent_registry.checkpoint_manager.mark_idle(session_id)
+        if _stream_tasks.get(session_id) is asyncio.current_task():
+            _stream_tasks.pop(session_id, None)
 
 
 @app.on_event("startup")
@@ -410,6 +415,9 @@ _goal_locks: dict[str, asyncio.Lock] = {}
 _goal_cancel_events: dict[str, asyncio.Event] = {}
 # Track active goal stream coroutines by stream_id.
 _goal_active_streams: dict[str, str] = {}  # stream_id -> session_id
+# Task consuming each session's SSE stream, so a hard stop (session delete)
+# can cancel the run mid-generation instead of waiting for it to finish.
+_stream_tasks: dict[str, asyncio.Task] = {}
 
 SSE_TIMEOUT = int(os.environ.get("COWORKER_SSE_TIMEOUT", str(30 * 60)))
 
@@ -2748,6 +2756,10 @@ async def get_session(session_id: str):
 
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
+    # Hard-terminate the session's in-flight stream/task first, so a delete
+    # always succeeds even while the session is mid-generation. The streaming
+    # guard below then returns promptly once the teardown marks the session idle.
+    _hard_stop_session_stream(session_id)
     await _guard_session_not_streaming(session_id)
     if not session_store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
@@ -2826,6 +2838,24 @@ class RegenerateRequest(BaseModel):
 
 class EditBeginRequest(BaseModel):
     revert_code: bool = True
+
+
+def _hard_stop_session_stream(session_id: str) -> None:
+    """Hard-terminate any in-flight stream/task for a session.
+
+    Called by session delete so a session can be removed even while it is
+    mid-generation (regular stream, regenerate/edit, or goal loop). Sets the
+    goal cancel event (cooperative stop for goal loops) and cancels the task
+    consuming the session's SSE stream (hard stop). Both paths funnel through
+    ``_tracked_stream``'s ``finally``, which marks the session idle so the
+    caller's streaming guard returns promptly.
+    """
+    cancel = _goal_cancel_events.pop(session_id, None)
+    if cancel is not None:
+        cancel.set()
+    task = _stream_tasks.pop(session_id, None)
+    if task is not None and not task.done():
+        task.cancel()
 
 
 async def _guard_session_not_streaming(session_id: str) -> None:
