@@ -2676,14 +2676,16 @@ body.bottom-panel-resizing {
 }
 
 .markdown-inline-code {
-  border: 1px solid var(--material-border);
-  border-radius: 4px;
-  padding: 1px 5px;
-  background: var(--material-control);
+  color: var(--accent);
+  /* border: 1px solid var(--material-border); */
+  /* border-radius: 4px; */
+  /* padding: 1px 5px; */
+  /* background: var(--material-control); */
   font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
   font-size: 0.88em;
-  overflow-wrap: break-word;
-  word-break: break-word;
+  font-weight: 600;
+  /* overflow-wrap: break-word; */
+  /* word-break: break-word; */
 }
 
 .markdown-code {
