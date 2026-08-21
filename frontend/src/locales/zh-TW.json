@@ -136,6 +136,7 @@
   "chat.goal_paused_message": "目標已暫停—按一下「繼續」以持續。",
   "chat.goal_toggle_todos": "切換待辦清單",
   "todo.task_list": "任務清單",
+  "todo.close": "關閉任務卡",
   "chat.command_approval_waiting": "指令核准等候中。請在「設定 > 工具稽核」中核准或拒絕。",
   "chat.approval_title": "指令需要您的核准",
   "chat.approval_deny": "拒絕",

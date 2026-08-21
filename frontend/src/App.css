@@ -10089,6 +10089,25 @@ body.bottom-panel-resizing {
   margin-left: auto;
 }
 
+.todo-block__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  border-radius: var(--radius-sm);
+  opacity: 0.7;
+}
+
+.todo-block__close:hover {
+  opacity: 1;
+  color: var(--foreground);
+  background: var(--material-control);
+}
+
 /* ── Org team settings panel ─────────────────────────────────────────── */
 .settings-org {
   display: flex;

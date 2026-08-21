@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Check, ListChecks, ChevronDown } from 'lucide-react';
+import { Check, ListChecks, ChevronDown, X } from 'lucide-react';
 import type { GoalTodo } from '../types';
 import { t } from '../lib/i18n';
 
 interface TodoBlockProps {
   todos: GoalTodo[];
   onToggleTodo?: (index: number) => void;
+  onClose?: () => void;
 }
 
 /**
@@ -15,7 +16,7 @@ interface TodoBlockProps {
  * the agent re-renders the card live, so the user sees each step get checked
  * off as the agent works.
  */
-export function TodoBlock({ todos, onToggleTodo }: TodoBlockProps) {
+export function TodoBlock({ todos, onToggleTodo, onClose }: TodoBlockProps) {
   const [expanded, setExpanded] = useState(true);
   if (!todos || todos.length === 0) return null;
   const doneCount = todos.filter((todo) => todo.status === 'completed').length;
@@ -31,6 +32,11 @@ export function TodoBlock({ todos, onToggleTodo }: TodoBlockProps) {
         <button type="button" className="goal-card__toggle" onClick={() => setExpanded((value) => !value)} aria-label={t('chat.goal_toggle_todos')}>
           <ChevronDown size={13} className={expanded ? 'goal-card__toggle-open' : ''} />
         </button>
+        {onClose && (
+          <button type="button" className="todo-block__close" onClick={onClose} aria-label={t('todo.close')}>
+            <X size={13} />
+          </button>
+        )}
       </div>
       {expanded && (
         <ul className="goal-card__todos">

@@ -130,6 +130,7 @@
   "chat.goal_paused_message": "Objetivo en pausa: haz clic en Reanudar para continuar.",
   "chat.goal_toggle_todos": "Cambiar lista de tareas pendientes",
   "todo.task_list": "Lista de tareas",
+  "todo.close": "Cerrar lista de tareas",
   "chat.command_approval_waiting": "La aprobación del comando está pendiente. Apruébala o recházala en Configuración > Auditoría de herramientas.",
   "chat.approval_title": "El comando necesita tu aprobación",
   "chat.approval_deny": "Denegar",

@@ -210,6 +210,7 @@
   "chat.markdown_copied": "已複製",
   "chat.stream_error": "串流中斷，請重試",
   "todo.task_list": "任務清單",
+  "todo.close": "關閉任務卡",
   "theme.light": "亮色",
   "theme.dark": "暗色",
   "theme.system": "系統",

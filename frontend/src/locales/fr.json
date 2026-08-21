@@ -812,6 +812,7 @@
   "update.close": "Fermer",
   "update.version_unknown": "Inconnu",
   "todo.task_list": "Liste des tâches",
+  "todo.close": "Fermer la liste des tâches",
   "memory.tree.system": "Mémoire système",
   "memory.tree.projects_list": "Projets",
   "memory.tree.project": "Projet",

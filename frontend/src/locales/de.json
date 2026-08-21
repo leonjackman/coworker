@@ -130,6 +130,7 @@
   "chat.goal_paused_message": "Ziel pausiert – Klicken Sie auf Fortsetzen, um fortzufahren.",
   "chat.goal_toggle_todos": "Aufgabenliste umschalten",
   "todo.task_list": "Aufgabenliste",
+  "todo.close": "Aufgabenliste schließen",
   "chat.command_approval_waiting": "Die Befehlsfreigabe steht aus. Genehmigen oder lehnen Sie sie in Einstellungen > Tool-Audit ab.",
   "chat.approval_title": "Der Befehl benötigt Ihre Genehmigung",
   "chat.approval_deny": "Ablehnen",

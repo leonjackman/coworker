@@ -130,6 +130,7 @@
   "chat.goal_paused_message": "Meta pausada — clique em Continuar para continuar.",
   "chat.goal_toggle_todos": "Alternar lista de tarefas",
   "todo.task_list": "Lista de tarefas",
+  "todo.close": "Fechar lista de tarefas",
   "chat.command_approval_waiting": "Aprovação do comando está pendente. Aprova ou rejeita em Configurações > Auditoria de Ferramentas.",
   "chat.approval_title": "O comando precisa da sua aprovação",
   "chat.approval_deny": "Negar",

@@ -130,6 +130,7 @@
   "chat.goal_paused_message": "ゴール一時停止 — 再開して続行するにはクリックしてください。",
   "chat.goal_toggle_todos": "TODOリストの切り替え",
   "todo.task_list": "タスクリスト",
+  "todo.close": "タスクリストを閉じる",
   "chat.command_approval_waiting": "コマンド承認を待機しています。設定 > ツール監査で承認または却下してください。",
   "chat.approval_title": "コマンドの承認が必要です",
   "chat.approval_deny": "却下",

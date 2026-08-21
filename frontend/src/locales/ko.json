@@ -766,6 +766,7 @@
   "titlebar.sidebar_hide": "왼쪽 사이드바 숨기기",
   "titlebar.sidebar_show": "왼쪽 사이드바 표시",
   "todo.task_list": "작업 목록",
+  "todo.close": "작업 목록 닫기",
   "tool.apply_text_edits": "편집 적용",
   "tool.ask_user": "사용자에게 물어보기",
   "tool.read_file": "파일 읽기",

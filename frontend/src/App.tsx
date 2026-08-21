@@ -216,9 +216,17 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [goal, setGoal] = useState<GoalState>({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
-  // Global task-list (write_todos) shown by the TodoBlock card above the
-  // composer, in every mode — the agent's self-decomposed checklist.
-  const [todos, setTodos] = useState<GoalTodo[]>([]);
+  // Task-list (write_todos) shown by the TodoBlock card above the composer, in
+  // every mode — the agent's self-decomposed checklist. The card is keyed by
+  // session so a running task's todos survive switching sessions (the entry
+  // belongs to the session that produced it, not to whatever session happens
+  // to be on screen). `todos` is derived from the currently-viewed session's
+  // entry; a per-session owner token lets the manual "x" dismiss only the
+  // current task, and the card auto-hides whenever the stream is not actively
+  // producing a reply (errors / failures / stopped).
+  const [todosBySession, setTodosBySession] = useState<Record<string, GoalTodo[]>>({});
+  const [todosOwnerBySession, setTodosOwnerBySession] = useState<Record<string, string>>({});
+  const [dismissedTodoOwners, setDismissedTodoOwners] = useState<Record<string, string>>({});
   const [editingGoalDraft, setEditingGoalDraft] = useState(false);
   const goalDraftRef = useRef('');
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
@@ -466,6 +474,51 @@ function App() {
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
   const goalStreamIdRef = useRef<string | undefined>(undefined);
 
+  // Per-task token for goal resume streams (they have no assistant message id),
+  // bumped once per resume so the "x" dismissal of one resume doesn't stick to
+  // the next one.
+  const goalResumeTokenRef = useRef(0);
+
+  const todosSessionKey = (sid?: string | null) => sid || '__ambient__';
+
+  // Store the task list for a specific session (from a stream's `todos` event).
+  // Works for background sessions too: the entry is kept keyed by session so it
+  // reappears when the user switches back, instead of being lost.
+  const setSessionTodos = (sessionIdValue: string | undefined, owner: string, value: GoalTodo[]) => {
+    const key = todosSessionKey(sessionIdValue);
+    setTodosBySession((current) => {
+      const next = { ...current };
+      if (value.length > 0) next[key] = value;
+      else delete next[key];
+      return next;
+    });
+    setTodosOwnerBySession((current) => {
+      const next = { ...current };
+      if (value.length > 0) next[key] = owner;
+      else delete next[key];
+      return next;
+    });
+  };
+
+  const clearSessionTodos = (sessionIdValue: string | undefined) => {
+    const key = todosSessionKey(sessionIdValue);
+    setTodosBySession((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    setTodosOwnerBySession((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
+
+  // Task list of the currently-viewed session.
+  const todos = todosBySession[todosSessionKey(sessionId)] ?? [];
+
   // Whether the CURRENT session is busy. Derived (not a hand-maintained flag)
   // so that a stream left running in another session (we keep it alive across
   // session switches instead of aborting it) never locks the composer here,
@@ -478,6 +531,24 @@ function App() {
       ),
     [goal.running, goalSessionIdRef.current, messages, sessionId],
   );
+
+  // 任务卡仅在当前会话流式回复正常进行中（running/waiting）时显示：失败、
+  // 报错、停止、结束后一律保持关闭。用户手动点 "x" 只隐藏当前任务（按 owner
+  // 区分），下一次新任务自动重新出现。
+  const currentTodoOwner = todosOwnerBySession[todosSessionKey(sessionId)];
+  const showTodoCard = Boolean(
+    currentTodoOwner &&
+      todos.length > 0 &&
+      isThinking &&
+      dismissedTodoOwners[todosSessionKey(sessionId)] !== currentTodoOwner,
+  );
+
+  const dismissCurrentTodos = () => {
+    const owner = todosOwnerBySession[todosSessionKey(sessionId)];
+    if (owner) {
+      setDismissedTodoOwners((current) => ({ ...current, [todosSessionKey(sessionId)]: owner }));
+    }
+  };
 
   // 后端轮询到的活跃会话 id 集合（Phase 2 兜底：前端刷新/重启后不知道哪些
   // 会话仍在后台运行）。只作为 runningSessionIds 的补充来源。
@@ -931,6 +1002,9 @@ function App() {
         model: requestModel,
       }),
     ]);
+    // 新一轮任务开始：清掉该会话上一轮的残留任务卡（若上一轮异常退出未清理），
+    // 让卡片只在本次流真正产出 todos 后出现。
+    clearSessionTodos(requestSessionId);
 
     // 发送瞬间即把会话提前到列表顶部：对本地产出的新会话乐观置顶；
     // 已存在会话则更新其 updated_at 并重排，无需等 agent 回复结束。
@@ -1179,7 +1253,7 @@ function App() {
               : item,
           ),
         );
-        setTodos([]);
+        clearSessionTodos(event.session_id ?? requestSessionId);
         playSound('reply_done');
       } else if (event.type === 'goal_start') {
         inGoal = true;
@@ -1200,10 +1274,13 @@ function App() {
           }));
         }
       } else if (event.type === 'todos') {
-        // Task list is global across modes: the TodoBlock card above the composer
-        // shows it in build / plan / goal alike; keep goal.todos in sync too.
+        // Task list is keyed by session (works for background streams too): the
+        // TodoBlock card above the composer shows it in build / plan / goal
+        // alike. Only the currently-viewed session's goal card needs the view
+        // gate — the per-session store must always be updated so the card
+        // reappears after switching back.
+        setSessionTodos(event.session_id ?? requestSessionId, assistantMessageId, event.todos);
         if (goalMatchesView) {
-          setTodos(event.todos);
           setGoal((current) => ({ ...current, todos: event.todos }));
         }
       } else if (event.type === 'goal_force') {
@@ -1227,7 +1304,7 @@ function App() {
             if (event.verification) next.verification = event.verification;
             return next;
           });
-          setTodos([]);
+          clearSessionTodos(event.session_id ?? requestSessionId);
         }
         if (event.content) streamedContent = event.content;
         localParts = settleRunningTools(localParts);
@@ -1253,7 +1330,7 @@ function App() {
       } else if (event.type === 'goal_paused') {
         if (goalMatchesView) {
           setGoal((current) => ({ ...current, paused: true, running: false }));
-          setTodos([]);
+          clearSessionTodos(event.session_id ?? requestSessionId);
         }
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
@@ -1273,6 +1350,7 @@ function App() {
               : item,
           ),
         );
+        clearSessionTodos(event.session_id ?? requestSessionId);
       } else if (event.type === 'goal_stream_id') {
         goalStreamIdRef.current = event.stream_id;
       } else if (event.type === 'goal_system') {
@@ -1441,6 +1519,7 @@ function App() {
         ),
       );
     }
+    clearSessionTodos(sessionIdRef.current);
     requestSeqRef.current += 1;
     bumpSessionSeq(sessionIdRef.current);
   };
@@ -1574,6 +1653,7 @@ function App() {
         }),
       ];
     });
+    clearSessionTodos(currentSessionId);
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let receivedDone = false;
@@ -1704,7 +1784,9 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
           ),
         );
-        setTodos([]);
+        clearSessionTodos(event.session_id ?? currentSessionId);
+      } else if (event.type === 'todos') {
+        setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
       } else if (event.type === 'stage') {
         // P1 补充 stage 处理（编辑/重生成路径）
         setMessages((current) =>
@@ -1723,6 +1805,7 @@ function App() {
               : item,
           ),
         );
+        clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_error');
       }
     };
@@ -1811,6 +1894,7 @@ function App() {
         }),
       ];
     });
+    clearSessionTodos(currentSessionId);
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let receivedDone = false;
@@ -1941,8 +2025,10 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
           ),
         );
-        setTodos([]);
+        clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_done');
+      } else if (event.type === 'todos') {
+        setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
       } else if (event.type === 'stage') {
         // P1 补充 stage 处理（编辑/重生成路径）
         setMessages((current) =>
@@ -1961,6 +2047,7 @@ function App() {
               : item,
           ),
         );
+        clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_error');
       }
     };
@@ -2166,7 +2253,10 @@ function App() {
             }
             resumeParts = settleRunningTools(resumeParts);
             applyResume('done');
+            clearSessionTodos(event.session_id ?? resumeSessionId);
             playSound('reply_done');
+          } else if (event.type === 'todos') {
+            setSessionTodos(event.session_id ?? resumeSessionId, targetMessageId, event.todos);
           } else if (event.type === 'delta') {
             resumeContent += event.content;
             const last = resumeParts[resumeParts.length - 1];
@@ -2257,6 +2347,7 @@ function App() {
               : item,
           ),
         );
+        clearSessionTodos(event.session_id ?? resumeSessionId);
         playSound('reply_error');
           }
         },
@@ -2479,9 +2570,14 @@ function App() {
           editingDraft: false,
         });
         goalSessionIdRef.current = sessionIdToOpen;
+        // 同步恢复该会话的任务卡（切走再切回时卡片不消失）。
+        if (sessionRecord.goal_todos && sessionRecord.goal_todos.length > 0) {
+          setSessionTodos(sessionIdToOpen, `persisted:${sessionIdToOpen}`, sessionRecord.goal_todos);
+        }
       } else {
         setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
-        setTodos([]);
+        // 任务卡按会话保存：非 goal 会话切回时从 per-session 存储恢复
+        // （后台流仍在跑时其 todos 已在流事件里写入），而不是清空。
       }
       // 后台 resume 可能仍在运行：切回时首扫可能早于新审批创建，延迟重扫兜底。
       for (const delay of [5000, 15000]) {
@@ -2813,6 +2909,10 @@ function App() {
     // isThinking is derived from goal.running scoped to this session.
     goalSessionIdRef.current = targetSessionId;
     setGoal((current) => ({ ...current, running: true, paused: false }));
+    // 新一轮 resume 任务开始：换一个新的 owner token，让上一轮被 "x" 关闭的
+    // 任务卡可以重新出现；并清掉旧一轮残留的任务卡。
+    goalResumeTokenRef.current += 1;
+    clearSessionTodos(targetSessionId);
     // Register an abort controller so the Stop button can cancel the resume
     // stream (previously stopMessage was a no-op during goal resume).
     const controller = new AbortController();
@@ -2857,11 +2957,19 @@ function App() {
     const todo = todos[index];
     if (!todo) return;
     const newStatus = todo.status === 'completed' ? 'pending' : 'completed';
-    setTodos((current) => current.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t)));
+    const updated = (list: GoalTodo[]) =>
+      list.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t));
+    // 同步 per-session 存储，切走再切回后勾选状态保留。
+    setTodosBySession((current) => {
+      const key = todosSessionKey(sessionId);
+      const entry = current[key];
+      if (!entry) return current;
+      return { ...current, [key]: updated(entry) };
+    });
     // Keep the goal card's todo list in sync for goal-mode runs.
     setGoal((current) => {
       if (!current.goalText) return current;
-      return { ...current, todos: current.todos.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t)) };
+      return { ...current, todos: updated(current.todos) };
     });
   };
 
@@ -2913,7 +3021,7 @@ function App() {
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
     } else if (event.type === 'todos') {
-      setTodos(event.todos);
+      setSessionTodos(event.session_id ?? sessionIdRef.current, `goal:${goalResumeTokenRef.current}`, event.todos);
       setGoal((current) => ({ ...current, todos: event.todos }));
     } else if (event.type === 'goal_done') {
       const failed =
@@ -2924,11 +3032,11 @@ function App() {
         if (event.reason) next.reason = event.reason;
         return next;
       });
-      setTodos([]);
+      clearSessionTodos(event.session_id ?? sessionIdRef.current);
       playSound(failed ? 'reply_error' : 'reply_done');
     } else if (event.type === 'goal_paused') {
       setGoal((current) => ({ ...current, paused: true, running: false }));
-      setTodos([]);
+      clearSessionTodos(event.session_id ?? sessionIdRef.current);
       playSound('attention');
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
@@ -2944,7 +3052,7 @@ function App() {
     } else if (event.type === 'goal_checkpoint') {
       setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
     } else if (event.type === 'todos') {
-      setTodos(event.todos);
+      setSessionTodos(event.session_id ?? sessionIdRef.current, `goal:${goalResumeTokenRef.current}`, event.todos);
       setGoal((current) => ({ ...current, todos: event.todos }));
     } else if (event.type === 'goal_system') {
       // Display system messages in chat
@@ -2962,7 +3070,7 @@ function App() {
         if (event.reason) next.reason = event.reason;
         return next;
       });
-      setTodos([]);
+      clearSessionTodos(event.session_id ?? sessionIdRef.current);
       const content = event.content;
       if (content) {
         setMessages((current) => [
@@ -2973,7 +3081,7 @@ function App() {
       }
     } else if (event.type === 'goal_paused') {
       setGoal((current) => ({ ...current, paused: true, running: false }));
-      setTodos([]);
+      clearSessionTodos(event.session_id ?? sessionIdRef.current);
       playSound('attention');
     } else if (event.type === 'goal_force') {
       setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
@@ -3382,8 +3490,10 @@ function App() {
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
                       {/* Task list (write_todos) — the agent's self-decomposed
-                          checklist, shown in every mode above the composer. */}
-                      <TodoBlock todos={todos} onToggleTodo={toggleTodo} />
+                          checklist, shown in every mode above the composer. Only
+                          rendered while the current session is actively streaming
+                          (errors / failures / stopped keep it closed). */}
+                      {showTodoCard && <TodoBlock todos={todos} onToggleTodo={toggleTodo} onClose={dismissCurrentTodos} />}
                       {goal.goalText && !editingGoalDraft && (
                         <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} recentToolNames={goal.recentToolNames ?? undefined} />
                       )}
