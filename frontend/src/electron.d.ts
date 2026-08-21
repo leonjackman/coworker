@@ -2,7 +2,6 @@ import type {
   AgentTraceResponse,
   ApprovalDecisionPayload,
   ChatRequest,
-  ChatResponse,
   CommandApprovalResponse,
   CommandApprovalsResponse,
   CreateProjectRequest,

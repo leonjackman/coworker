@@ -673,13 +673,6 @@ class SkillValidatePayload(BaseModel):
     name: str = ""
 
 
-class CommandApprovalAction(BaseModel):
-    approval_id: str
-    type: str
-    message: str = ""
-    autonomy: Optional[str] = None
-
-
 class ApprovalDecisionPayload(BaseModel):
     # The resolve endpoint keys off the TOP-LEVEL `request.approval_id`;
     # this nested copy is legacy/optional and must not fail validation when the
@@ -2299,13 +2292,6 @@ class SessionCreateRequest(BaseModel):
 
 class SessionRenameRequest(BaseModel):
     title: str
-
-class SessionMessageIn(BaseModel):
-    role: str
-    content: str
-    mode: str = ""
-    provider: str = ""
-    model: str = ""
 
 class ProjectCreateRequest(BaseModel):
     name: str

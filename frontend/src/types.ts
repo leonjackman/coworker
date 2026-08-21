@@ -306,13 +306,6 @@ export interface ChatRequest {
   max_attachment_bytes?: number;
 }
 
-export interface ChatResponse {
-  response: string;
-  session_id: string;
-  mode: AgentMode;
-  provider: string;
-}
-
 export interface ProviderEntry {
   id: string;
   name: string;
@@ -419,16 +412,19 @@ export interface SessionMessageRecord {
   agent_id?: string;
 }
 
-export interface SessionDetail {
-  id: string;
-  title: string;
-  created_at: string;
-  updated_at: string;
-  project_id: string;
-  agent_id?: string;
-  work_mode: string;
-  autonomy: string;
-  messages: SessionMessageRecord[];
+export interface SessionDetailResponse {
+  status: string;
+  session: {
+    id: string;
+    title: string;
+    created_at: string;
+    updated_at: string;
+    project_id: string;
+    agent_id?: string;
+    work_mode: string;
+    autonomy: string;
+    messages: SessionMessageRecord[];
+  };
 }
 
 export interface SessionsListResponse {
@@ -451,11 +447,6 @@ export interface SessionResponse {
   session: SessionSummary;
 }
 
-export interface SessionDetailResponse {
-  status: string;
-  session: SessionDetail;
-}
-
 export interface FileTreeNode {
   name: string;
   path: string;
@@ -464,60 +455,11 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
-export interface WorkspaceTreeResponse {
-  status: string;
-  root: string;
-  tree: FileTreeNode;
-}
-
-export interface WorkspaceDirResponse {
-  status: string;
-  path: string;
-  entries: FileTreeNode[];
-}
-
-export interface WorkspaceFileResponse {
-  status: string;
-  path: string;
-  file: {
-    content: string | null;
-    binary: boolean;
-    size: number;
-    truncated?: boolean;
-  };
-}
-
 export interface WorkspaceBranchResponse {
   status: string;
   is_repo: boolean;
   branch: string | null;
   workspace?: string;
-}
-
-export interface WorkspaceCommandRequest {
-  command: string;
-  cwd?: string;
-  timeout_seconds?: number;
-  project_id?: string;
-}
-
-export interface WorkspaceCommandResult {
-  command: string[];
-  cwd: string;
-  return_code: number | null;
-  timed_out: boolean;
-  stdout: string;
-  stderr: string;
-  stdout_truncated: boolean;
-  stderr_truncated: boolean;
-  approval_required?: boolean;
-  approval_id?: string;
-  approval_status?: string;
-}
-
-export interface WorkspaceCommandResponse {
-  status: string;
-  result: WorkspaceCommandResult;
 }
 
 export interface ToolAuditEvent {
@@ -910,19 +852,6 @@ export interface MemoryStatusResponse {
   over_budget: boolean;
 }
 
-export interface MemoryWriteRequest {
-  action: 'add' | 'replace' | 'remove';
-  content: string;
-  target?: string;
-  project_id?: string;
-  agent?: string;
-}
-
-export interface MemoryWriteResponse {
-  rel: string;
-  blocks: string[];
-}
-
 export interface MemoryFileContentResponse {
   path: string;
   rel: string;
@@ -979,14 +908,9 @@ export interface MemoryImportPickResult {
   path?: string;
 }
 
-export interface MemoryImportPreviewFile {
-  rel: string;
-  exists: boolean;
-}
-
 export interface MemoryImportPreviewResponse {
   token: string;
-  files: MemoryImportPreviewFile[];
+  files: { rel: string; exists: boolean }[];
 }
 
 export interface MemoryImportApplyResponse {
@@ -1075,13 +999,6 @@ export type UpdateStateStatus =
   | 'downloaded'
   | 'error';
 
-export interface UpdateDownloadProgress {
-  percent: number;
-  bytesPerSecond: number;
-  transferred: number;
-  total: number;
-}
-
 export interface UpdateStateSnapshot {
   isDev: boolean;
   enabled: boolean;
@@ -1090,7 +1007,7 @@ export interface UpdateStateSnapshot {
   state: UpdateStateStatus;
   availableVersion: string | null;
   releaseNotes: string | null;
-  progress: UpdateDownloadProgress | null;
+  progress: { percent: number; bytesPerSecond: number; transferred: number; total: number } | null;
   errorMessage: string | null;
   errorCode: string | null;
 }
