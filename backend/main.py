@@ -409,12 +409,6 @@ class ApprovalEventBus:
 approval_event_bus = ApprovalEventBus()
 
 
-# Per-session locks to prevent concurrent goal_resume calls for the same session.
-_goal_locks: dict[str, asyncio.Lock] = {}
-# Per-session cancel events for goal streaming termination.
-_goal_cancel_events: dict[str, asyncio.Event] = {}
-# Track active goal stream coroutines by stream_id.
-_goal_active_streams: dict[str, str] = {}  # stream_id -> session_id
 # Task consuming each session's SSE stream, so a hard stop (session delete)
 # can cancel the run mid-generation instead of waiting for it to finish.
 _stream_tasks: dict[str, asyncio.Task] = {}
@@ -530,8 +524,6 @@ class ChatRequest(BaseModel):
     language: Language = "zh"
     work_mode: Optional[str] = None
     autonomy: Optional[str] = None
-    goal_mode: Optional[bool] = None
-    goal_text: Optional[str] = None
     provider_id: Optional[str] = None
     model: Optional[str] = None
     project_id: Optional[str] = None
@@ -1793,8 +1785,6 @@ async def chat_stream(request: ChatStreamRequest):
         interrupt_emitted = False
         accumulated_content = ""
         stream_iter: Any
-        in_goal_flag = bool(request.goal_mode)
-        cancel_event: asyncio.Event | None = None
 
         # Fast-fail: when the requested provider was recently discovered as
         # unreachable (cached probe failure), refuse to start the agent and
@@ -1853,38 +1843,21 @@ async def chat_stream(request: ChatStreamRequest):
                 accumulated_content += event.get("content", "")
             if etype == "todos":
                 try:
-                    session_store.update_goal(session_id, goal_todos=event.get("todos") or [])
+                    session_store.update_todos(session_id, event.get("todos") or [])
                 except Exception:  # noqa: BLE001 - a todo persist hiccup must not kill the stream
-                    logger.warning("update_goal(todos) failed for session %s", session_id, exc_info=True)
+                    logger.warning("update_todos(todos) failed for session %s", session_id, exc_info=True)
             if etype == "done":
-                if in_goal_flag:
-                    # Per-round done: goal_stream owns persistence. Just keep
-                    # forwarding; the terminal state lands atomically at the loop's
-                    # termination decision.
-                    pass
-                else:
-                    _persist_assistant(
-                        event.get("content", ""),
-                        event.get("mode"),
-                        event.get("provider"),
-                        event.get("model"),
-                        event.get("parts"),
-                    )
-                    try:
-                        session_store.update_modes(session_id, work_mode, autonomy)
-                    except Exception:  # noqa: BLE001 - never break the terminal event
-                        logger.warning("update_modes failed on done for session %s", session_id, exc_info=True)
-                    terminal_sent = True
-            elif etype == "goal_done":
-                # Pure forwarder: goal_stream atomically committed the terminal
-                # state (flags + todos + message) before yielding this event.
+                _persist_assistant(
+                    event.get("content", ""),
+                    event.get("mode"),
+                    event.get("provider"),
+                    event.get("model"),
+                    event.get("parts"),
+                )
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
                 except Exception:  # noqa: BLE001 - never break the terminal event
-                    logger.warning("update_modes failed on goal_done for session %s", session_id, exc_info=True)
-                terminal_sent = True
-            elif etype == "goal_paused":
-                # Pure forwarder: goal_stream atomically committed the pause state.
+                    logger.warning("update_modes failed on done for session %s", session_id, exc_info=True)
                 terminal_sent = True
             elif etype == "error":
                 # The runtime yields an explicit error event BEFORE re-raising so
@@ -1897,71 +1870,13 @@ async def chat_stream(request: ChatStreamRequest):
                 # error_emitted only suppresses _on_end's synthetic `done`.
                 error_emitted = True
 
-        if in_goal_flag:
-            goal_text = str(request.goal_text or request.message or "")
-            try:
-                existing = session_store.require(session_id)
-                new_stream_id = existing.goal_stream_id or str(uuid.uuid4())
-                session_store.update_goal(
-                    session_id, goal_text=goal_text, goal_done=False, goal_paused=False,
-                    goal_todos=[], goal_stopped=False, goal_interrupted=False,
-                    goal_force_count=0, goal_just_edited=False, goal_stream_id=new_stream_id,
-                    goal_phase="plan",
-                    goal_round=0,
-                    goal_max_rounds=read_user_goal_max_rounds(),
-                    goal_status="active", goal_stop_reason="",
-                    goal_token_budget=read_user_goal_token_budget(),
-                    goal_tokens_used=0,
-                    goal_time_budget_seconds=read_user_goal_time_budget_seconds(),
-                    goal_time_used=0.0, goal_repeat_count=0,
-                )
-            except KeyError:
-                pass
-            cancel_event = asyncio.Event()
-            # Register the cancel event BEFORE building the runtime so that
-            # _on_error / finally can always clean it up if setup fails.
-            _goal_cancel_events[session_id] = cancel_event
-            try:
-                runtime = await _build_stream_runtime(
-                    request.mode, request.provider_id, request.model,
-                    resolved_workspace, referenced_ids, agent, request.project_id,
-                )
-                try:
-                    stream_id = session_store.require(session_id).goal_stream_id or ""
-                except KeyError:
-                    stream_id = ""
-                stream_iter = runtime.goal_stream(
-                    messages, session_id, request.language, work_mode, autonomy,
-                    goal_text=goal_text, goal_continue_first=False,
-                    _cancel_event=cancel_event, goal_stream_id=stream_id,
-                    assistant_message_id=request.assistant_message_id,
-                )
-            except Exception:  # noqa: BLE001 - clean up cancel event on setup failure
-                _goal_cancel_events.pop(session_id, None)
-                raise
-        else:
-            runtime = await _build_stream_runtime(
-                request.mode, request.provider_id, request.model,
-                resolved_workspace, referenced_ids, agent, request.project_id,
-            )
-            stream_iter = runtime.stream(
-                messages, session_id, request.language, work_mode, autonomy,
-            )
-
-        # Serialize concurrent goal loops for the same session. Without this,
-        # a second /goal (or a /goal/resume racing this stream) starts a
-        # parallel loop that writes the same LangGraph checkpoint and corrupts
-        # state. Non-goal streams are passed through untouched.
-        goal_lock = _goal_locks.get(session_id) if in_goal_flag else None
-        if goal_lock is None and in_goal_flag:
-            goal_lock = asyncio.Lock()
-            _goal_locks[session_id] = goal_lock
-        if in_goal_flag:
-            # Register the chat-started goal stream so goal_delete's lock-release
-            # guard sees an active stream (it would otherwise falsely pop the lock
-            # under a running loop and allow a second goal to race it on the same
-            # checkpoint thread).
-            _goal_active_streams[f"chat-goal:{session_id}"] = session_id
+        runtime = await _build_stream_runtime(
+            request.mode, request.provider_id, request.model,
+            resolved_workspace, referenced_ids, agent, request.project_id,
+        )
+        stream_iter = runtime.stream(
+            messages, session_id, request.language, work_mode, autonomy,
+        )
 
         _raw_stream_iter = stream_iter
 
@@ -1974,7 +1889,7 @@ async def chat_stream(request: ChatStreamRequest):
                     async for _ev in it:
                         yield _ev
 
-        stream_iter = _locked_stream_iterator(_raw_stream_iter, goal_lock)
+        stream_iter = _locked_stream_iterator(_raw_stream_iter, None)
 
         def _on_event(event):
             event["session_id"] = session_id
@@ -1982,10 +1897,6 @@ async def chat_stream(request: ChatStreamRequest):
 
         def _on_end():
             if not terminal_sent and not error_emitted and not interrupt_emitted:
-                if in_goal_flag:
-                    # Goal mode: goal_stream atomically owns the terminal message;
-                    # never synthesize an empty bubble here.
-                    return None
                 _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
@@ -1997,45 +1908,30 @@ async def chat_stream(request: ChatStreamRequest):
                 # so a refresh keeps the question context, but do NOT emit a done
                 # frame — the frontend is waiting for the user's decision and must
                 # keep the message in `waiting` until the resume stream settles it.
-                if not in_goal_flag:
-                    _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
+                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [])
             return None
 
         def _on_error(exc):
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
             nonlocal terminal_sent
-            if not in_goal_flag:
-                # Goal mode: goal_stream owns terminal persistence (its outer
-                # guard atomically commits an interrupted state on escape), so a
-                # consumer-side message write here would only duplicate/blank it.
-                if accumulated_content and not terminal_sent:
-                    # Persist the partial reply with a GENERATED id (not the
-                    # client-supplied one) so the frontend's stream-settle
-                    # reconciliation can never adopt a half reply as a successful
-                    # commit. The persist still binds this turn's tool changes to a
-                    # message for rollback (see assign_message in _persist_assistant).
-                    _persist_assistant(accumulated_content, request.mode, "", request.model or "", [], message_id=None)
-                elif not terminal_sent:
-                    # The stream was cut before any text was emitted (client
-                    # disconnected mid-tool / mid-thought). Persist a short
-                    # interrupted marker so the session does not look like the
-                    # assistant never answered — otherwise a half-finished turn
-                    # (e.g. a team member creation that already took effect) is
-                    # invisible to the user after refresh. _persist_assistant is
-                    # fully guarded and can never raise, so this path cannot drop
-                    # the terminal error event either. Generated id: never adopt as
-                    # a successful commit.
-                    _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [], message_id=None)
-            if in_goal_flag:
-                _goal_active_streams.pop(f"chat-goal:{session_id}", None)
-                if not any(v == session_id for v in _goal_active_streams.values()):
-                    _goal_locks.pop(session_id, None)
-            if cancel_event is not None:
-                _goal_cancel_events.pop(session_id, None)
-                try:
-                    session_store.update_goal(session_id, goal_interrupted=True)
-                except Exception:  # noqa: BLE001 - never break the terminal event
-                    logger.warning("update_goal failed in _on_error for session %s", session_id, exc_info=True)
+            if accumulated_content and not terminal_sent:
+                # Persist the partial reply with a GENERATED id (not the
+                # client-supplied one) so the frontend's stream-settle
+                # reconciliation can never adopt a half reply as a successful
+                # commit. The persist still binds this turn's tool changes to a
+                # message for rollback (see assign_message in _persist_assistant).
+                _persist_assistant(accumulated_content, request.mode, "", request.model or "", [], message_id=None)
+            elif not terminal_sent:
+                # The stream was cut before any text was emitted (client
+                # disconnected mid-tool / mid-thought). Persist a short
+                # interrupted marker so the session does not look like the
+                # assistant never answered — otherwise a half-finished turn
+                # (e.g. a team member creation that already took effect) is
+                # invisible to the user after refresh. _persist_assistant is
+                # fully guarded and can never raise, so this path cannot drop
+                # the terminal error event either. Generated id: never adopt as
+                # a successful commit.
+                _persist_assistant("（会话流被中断，回复未完成）", request.mode, "", request.model or "", [], message_id=None)
             try:
                 session_store.update_modes(session_id, work_mode, autonomy)
             except Exception:  # noqa: BLE001 - never break the terminal event
@@ -2075,14 +1971,6 @@ async def chat_stream(request: ChatStreamRequest):
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, snapshot_user_message_id, resolved_workspace,
                 )
-        # Goal stream ended (normal, error, or disconnect): drop the active marker
-        # and release the per-session goal lock/cancel state so long-running use
-        # does not leak (goal_resume cleans up the same way).
-        if in_goal_flag:
-            _goal_active_streams.pop(f"chat-goal:{session_id}", None)
-            _goal_cancel_events.pop(session_id, None)
-            if not any(v == session_id for v in _goal_active_streams.values()):
-                _goal_locks.pop(session_id, None)
 
     return StreamingResponse(
         event_stream(),
@@ -2090,23 +1978,7 @@ async def chat_stream(request: ChatStreamRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-class GoalPauseRequest(BaseModel):
-    session_id: str
-
-
-class GoalResumeRequest(BaseModel):
-    session_id: str
-    language: Language = "zh"
-
-
-class GoalStopRequest(BaseModel):
-    session_id: str
-
-
 class SettingsUpdate(BaseModel):
-    goal_max_rounds: int = 50
-    goal_token_budget: Optional[int] = None
-    goal_time_budget_seconds: Optional[int] = None
     max_attachment_mb: int = 25
     revert_code: Optional[bool] = None
 
@@ -2120,51 +1992,6 @@ SETTING_FILE = str(settings.data_dir / ".coworker_settings.json")
 DEFAULT_MAX_ATTACHMENT_MB = 25
 MIN_MAX_ATTACHMENT_MB = 1
 MAX_MAX_ATTACHMENT_MB = 1024
-
-
-def read_user_goal_max_rounds() -> int:
-    """Read the user-level goal step cap from .coworker_settings.json.
-
-    Falls back to 50 (the product default) when the file is missing or the
-    key is absent. This is the bridge between the Settings page and the actual
-    /goal loop, which otherwise only sees the per-session default.
-    """
-    try:
-        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
-        if "goal_max_rounds" in data:
-            return int(data["goal_max_rounds"])
-    except Exception:
-        pass
-    return 50
-
-
-def read_user_goal_token_budget() -> int:
-    """Read the user-level goal token budget from .coworker_settings.json.
-
-    Falls back to 1,000,000 (the product default) when the file is missing or
-    the key is absent.
-    """
-    try:
-        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
-        if "goal_token_budget" in data:
-            return max(0, int(data["goal_token_budget"]))
-    except Exception:
-        pass
-    return 1_000_000
-
-
-def read_user_goal_time_budget_seconds() -> int:
-    """Read the user-level goal time budget (seconds) from .coworker_settings.json.
-
-    Falls back to 1800 (30 minutes) when the file is missing or the key is absent.
-    """
-    try:
-        data = json.loads(Path(SETTING_FILE).read_text() or "{}")
-        if "goal_time_budget_seconds" in data:
-            return max(0, int(data["goal_time_budget_seconds"]))
-    except Exception:
-        pass
-    return 1800
 
 
 def read_user_max_attachment_mb() -> int:
@@ -2291,11 +2118,8 @@ apply_stored_retention_settings()
 
 @app.get("/settings")
 async def get_settings():
-    """Get user-level settings (goal cap/budget + attachment size cap + edit revert)."""
+    """Get user-level settings (attachment size cap + edit revert)."""
     return {
-        "goal_max_rounds": read_user_goal_max_rounds(),
-        "goal_token_budget": read_user_goal_token_budget(),
-        "goal_time_budget_seconds": read_user_goal_time_budget_seconds(),
         "max_attachment_mb": read_user_max_attachment_mb(),
         "revert_code": read_user_revert_code(),
     }
@@ -2303,37 +2127,24 @@ async def get_settings():
 
 @app.post("/settings")
 async def set_settings(request: SettingsUpdate):
-    """Update user-level settings (goal cap/budget + attachment size cap + edit revert)."""
-    max_rounds = request.goal_max_rounds
-    if max_rounds < 0 or max_rounds > 1000:
-        max_rounds = max(0, min(1000, max_rounds))
+    """Update user-level settings (attachment size cap + edit revert)."""
     max_attachment_mb = max(MIN_MAX_ATTACHMENT_MB, min(MAX_MAX_ATTACHMENT_MB, request.max_attachment_mb))
     try:
         # Merge so the two keys don't clobber each other across saves.
         existing: dict = _load_user_settings_file()
-        existing.update({"goal_max_rounds": max_rounds, "max_attachment_mb": max_attachment_mb})
-        if request.goal_token_budget is not None:
-            existing["goal_token_budget"] = max(0, request.goal_token_budget)
-        if request.goal_time_budget_seconds is not None:
-            existing["goal_time_budget_seconds"] = max(0, request.goal_time_budget_seconds)
+        existing.update({"max_attachment_mb": max_attachment_mb})
         if request.revert_code is not None:
             existing["revert_code"] = bool(request.revert_code)
         _save_user_settings_file(existing)
     except Exception as exc:
         return {
             "status": "error",
-            "goal_max_rounds": max_rounds,
-            "goal_token_budget": read_user_goal_token_budget(),
-            "goal_time_budget_seconds": read_user_goal_time_budget_seconds(),
             "max_attachment_mb": max_attachment_mb,
             "revert_code": read_user_revert_code(),
             "detail": str(exc),
         }
     return {
         "status": "ok",
-        "goal_max_rounds": max_rounds,
-        "goal_token_budget": read_user_goal_token_budget(),
-        "goal_time_budget_seconds": read_user_goal_time_budget_seconds(),
         "max_attachment_mb": max_attachment_mb,
         "revert_code": read_user_revert_code(),
     }
@@ -2462,283 +2273,6 @@ async def register_browser_bridge(request: BrowserBridgeUpdate):
     return {"ok": True}
 
 
-@app.post("/goal/stop")
-async def goal_stop(request: GoalStopRequest):
-    """Stop an active goal loop: set flags and trigger cancel event for immediate exit."""
-    try:
-        session_store.update_goal(request.session_id, goal_stopped=True, goal_interrupted=True, goal_status="stopped", goal_stop_reason="stopped")
-        cancel = _goal_cancel_events.pop(request.session_id, None)
-        if cancel:
-            cancel.set()
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"status": "stopped", "session_id": request.session_id}
-
-class GoalEditRequest(BaseModel):
-    session_id: str
-    goal: str
-
-
-class GoalStartRequest(BaseModel):
-    session_id: str
-    goal: str
-    language: Language = "zh"
-
-
-@app.get("/goal/status")
-async def goal_status(session_id: str):
-    try:
-        session = session_store.require(session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    # Map session state to a single terminal state the frontend can branch on.
-    # Previously this always returned "ok", so the frontend's done/paused
-    # reconciliation never fired. Uses the consolidated status field with a
-    # legacy-boolean fallback.
-    status = session.effective_goal_status()
-    return {
-        "status": status,
-        "session_id": session_id,
-        "goal": {
-            "goal_text": session.goal_text,
-            "goal_done": session.goal_done,
-            "goal_paused": session.goal_paused,
-            "goal_todos": session.goal_todos,
-            "goal_max_rounds": session.goal_max_rounds,
-            "goal_force_count": session.goal_force_count,
-            "goal_stopped": session.goal_stopped,
-            "goal_interrupted": session.goal_interrupted,
-            "goal_phase": session.goal_phase,
-            "goal_round": session.goal_round,
-            "goal_status": status,
-            "goal_stop_reason": session.goal_stop_reason,
-            "goal_token_budget": session.goal_token_budget,
-            "goal_tokens_used": session.goal_tokens_used,
-            "goal_token_remaining": max(session.goal_token_budget - session.goal_tokens_used, 0),
-            "goal_time_budget_seconds": session.goal_time_budget_seconds,
-            "goal_time_used": session.goal_time_used,
-        },
-    }
-
-@app.post("/goal/pause")
-async def goal_pause(request: GoalPauseRequest):
-    try:
-        # Keep the cancel handle registered so a subsequent stop can still
-        # interrupt the loop — only clear it once the loop has fully ended.
-        session_store.update_goal(request.session_id, goal_paused=True, goal_status="paused")
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"status": "ok", "session_id": request.session_id, "goal_paused": True}
-
-@app.post("/goal/edit")
-async def goal_edit(request: GoalEditRequest):
-    try:
-        session_store.update_goal(request.session_id, goal_text=request.goal, goal_just_edited=True)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"status": "ok", "session_id": request.session_id, "goal_text": request.goal}
-
-
-@app.post("/goal/start")
-async def goal_start(request: GoalStartRequest):
-    """Start a goal loop: set goal_text and begin autonomous run."""
-    lock = _goal_locks.get(request.session_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _goal_locks[request.session_id] = lock
-
-    async with lock:
-        try:
-            session = session_store.require(request.session_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        goal_text = request.goal or str(session.goal_text or "")
-        work_mode = normalize_work_mode(session.work_mode)
-        autonomy = normalize_autonomy(session.autonomy)
-        language = request.language
-
-        # Reset goal state
-        session_store.update_goal(
-            request.session_id,
-            goal_text=goal_text,
-            goal_done=False,
-            goal_paused=False,
-            goal_todos=[],
-            goal_stopped=False,
-            goal_interrupted=False,
-            goal_force_count=0,
-            goal_just_edited=False,
-            goal_stream_id=str(uuid.uuid4()),
-            goal_phase="plan",
-            goal_round=0,
-            goal_max_rounds=read_user_goal_max_rounds(),
-            goal_status="active",
-            goal_stop_reason="",
-            goal_token_budget=read_user_goal_token_budget(),
-            goal_tokens_used=0,
-            goal_time_budget_seconds=read_user_goal_time_budget_seconds(),
-            goal_time_used=0.0,
-            goal_repeat_count=0,
-        )
-
-        return { "status": "ok", "goal_text": goal_text }
-
-@app.post("/goal/delete")
-async def goal_delete(request: GoalPauseRequest):
-    try:
-        # Actually stop the running loop: flag it and trigger the cancel event
-        # so the in-flight round aborts and the loop ends at the next boundary.
-        # Not "interrupted" — a delete is a clean removal (goal text is cleared),
-        # so it must not surface as a resumable/paused goal.
-        session_store.update_goal(
-            request.session_id,
-            goal_text="", goal_done=False, goal_paused=False, goal_todos=[],
-            goal_stopped=True, goal_interrupted=False, goal_force_count=0,
-            goal_stream_id="",
-            goal_status="stopped", goal_stop_reason="deleted",
-        )
-        cancel = _goal_cancel_events.pop(request.session_id, None)
-        if cancel:
-            cancel.set()
-        # The goal is gone for this session: release the per-session lock/state
-        # so long-running use does not leak memory. Only when no stream is still
-        # holding the lock (a delete mid-stream must not free the lock under the
-        # running generator).
-        if not any(v == request.session_id for v in _goal_active_streams.values()):
-            _goal_locks.pop(request.session_id, None)
-        for sid, vlist in list(_goal_active_streams.items()):
-            if vlist == request.session_id:
-                _goal_active_streams.pop(sid, None)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"status": "ok", "session_id": request.session_id}
-
-@app.post("/goal/resume")
-async def goal_resume(request: GoalResumeRequest):
-    """Resume a paused goal: clear the pause flag and continue the autonomous
-    goal loop from the checkpoint (round 2+), streaming progress via SSE."""
-    await _guard_session_not_streaming(request.session_id)
-    memory_manager.note_turn_active(request.session_id) if request.session_id else None
-    stream_id = str(uuid.uuid4())
-    _goal_active_streams[stream_id] = request.session_id
-    lock = _goal_locks.get(request.session_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _goal_locks[request.session_id] = lock
-
-    try:
-        session = session_store.require(request.session_id)
-    except KeyError as exc:
-        _goal_active_streams.pop(stream_id, None)
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    session_store.update_goal(request.session_id, goal_paused=False, goal_stopped=False, goal_interrupted=False, goal_stream_id=stream_id, goal_status="active", goal_stop_reason="")
-    goal_text = session.goal_text
-    # Infer the phase from the current todo list (old sessions have no stored
-    # phase): unfinished todos → execute, all done but not finished → verify,
-    # no todos → back to plan.
-    if session.goal_todos:
-        if any(isinstance(t, dict) and t.get("status") != "completed" for t in session.goal_todos):
-            inferred_phase = "execute"
-        else:
-            inferred_phase = "verify"
-    else:
-        inferred_phase = "plan"
-    session_store.update_goal(request.session_id, goal_phase=inferred_phase)
-    work_mode = normalize_work_mode(session.work_mode)
-    autonomy = normalize_autonomy(session.autonomy)
-    language = request.language
-    references = []
-    referenced_ids: set[str] = set()
-    try:
-        resolved_workspace = workspace_controller.workspace_for_chat(session_id=request.session_id, project_id=session.project_id or None)
-        runtime = await _build_stream_runtime("single", None, None, resolved_workspace, referenced_ids, session.agent_id or DEFAULT_AGENT, session.project_id or None)
-    except (KeyError, ValueError, RuntimeError) as exc:
-        _goal_active_streams.pop(stream_id, None)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    cancel_event = asyncio.Event()
-    _goal_cancel_events[request.session_id] = cancel_event
-
-    async def event_stream():
-        terminal_sent = False
-        # Hold the per-session goal lock for the ENTIRE stream. The previous
-        # version returned StreamingResponse inside `async with lock`, which
-        # released the lock before the generator was even driven — so two
-        # /goal/resume (or a resume racing a /chat/stream goal) could run in
-        # parallel and corrupt the shared LangGraph checkpoint.
-        async with lock:
-            async def _goal_iter():
-                nonlocal terminal_sent
-                async with asyncio.timeout(SSE_TIMEOUT):
-                    async for event in runtime.goal_stream(
-                        [], request.session_id, language, work_mode, autonomy,
-                        goal_text=goal_text, goal_continue_first=True,
-                        _cancel_event=cancel_event, goal_stream_id=stream_id,
-                    ):
-                        event["session_id"] = request.session_id
-                        etype = event.get("type")
-                        if etype == "done":
-                            # Per-round done: goal_stream owns persistence.
-                            pass
-                        elif etype == "goal_done":
-                            # Pure forwarder: goal_stream atomically committed the
-                            # terminal state (flags + todos + message).
-                            terminal_sent = True
-                        elif etype == "goal_paused":
-                            terminal_sent = True
-                        yield event
-
-            def _on_error(exc):
-                _goal_cancel_events.pop(request.session_id, None)
-                if isinstance(exc, asyncio.TimeoutError):
-                    try:
-                        session_store.update_goal(request.session_id, goal_interrupted=True)
-                    except Exception:  # noqa: BLE001 - never break the terminal event
-                        logger.warning("update_goal failed (timeout) for session %s", request.session_id, exc_info=True)
-                    return {"type": "goal_done", "session_id": request.session_id, "content": "", "reason": "timeout"}
-                if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
-                    try:
-                        session_store.update_goal(request.session_id, goal_interrupted=True)
-                    except Exception:  # noqa: BLE001 - never break the terminal event
-                        logger.warning("update_goal failed (cancel) for session %s", request.session_id, exc_info=True)
-                return {"type": "error", "session_id": request.session_id, "error": str(exc)[:400]}
-
-            # Snapshot the workspace before resuming the goal so a later edit of
-            # the goal trigger can still restore the files the goal changed.
-            # preserve_existing keeps the goal's original pre baseline shared
-            # across resume rounds.
-            goal_user_ids = [m.id for m in session.messages if m.role == "user"]
-            snapshot_goal_msg = goal_user_ids[-1] if goal_user_ids else request.session_id
-            snapshot_pre = await asyncio.to_thread(
-                agent_registry.snapshot_manager.begin_turn, request.session_id, snapshot_goal_msg, resolved_workspace, preserve_existing=True,
-            )
-            try:
-                async for kind, payload in _sse_events(_tracked_stream(_goal_iter(), request.session_id), on_error=_on_error):
-                    if kind == "heartbeat":
-                        yield ": ping\n\n"
-                    else:
-                        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                        if kind == "end":
-                            break
-            finally:
-                if snapshot_pre is not None:
-                    await asyncio.to_thread(
-                        agent_registry.snapshot_manager.end_turn, request.session_id, snapshot_goal_msg, resolved_workspace,
-                    )
-                _goal_cancel_events.pop(request.session_id, None)
-                _goal_active_streams.pop(stream_id, None)
-                # Goal loop fully ended: release the per-session lock so it does
-                # not accumulate for every session that ever ran a goal.
-                if not any(v == request.session_id for v in _goal_active_streams.values()):
-                    _goal_locks.pop(request.session_id, None)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
 class SessionCreateRequest(BaseModel):
     title: str = ""
     project_id: str = ""
@@ -2809,8 +2343,6 @@ async def delete_session(session_id: str):
     asyncio.create_task(asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id))
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
-    _goal_locks.pop(session_id, None)
-    _goal_cancel_events.pop(session_id, None)
     return {"status": "ok"}
 
 @app.post("/sessions/{session_id}/rename")
@@ -2881,15 +2413,10 @@ def _hard_stop_session_stream(session_id: str) -> None:
     """Hard-terminate any in-flight stream/task for a session.
 
     Called by session delete so a session can be removed even while it is
-    mid-generation (regular stream, regenerate/edit, or goal loop). Sets the
-    goal cancel event (cooperative stop for goal loops) and cancels the task
-    consuming the session's SSE stream (hard stop). Both paths funnel through
-    ``_tracked_stream``'s ``finally``, which marks the session idle so the
-    caller's streaming guard returns promptly.
+    mid-generation (regular stream, regenerate/edit). Cancels the task
+    consuming the session's SSE stream; ``_tracked_stream``'s ``finally``
+    marks the session idle so the caller's streaming guard returns promptly.
     """
-    cancel = _goal_cancel_events.pop(session_id, None)
-    if cancel is not None:
-        cancel.set()
     task = _stream_tasks.pop(session_id, None)
     if task is not None and not task.done():
         task.cancel()
@@ -3993,7 +3520,7 @@ def _merge_message_parts(existing: list[dict[str, Any]], incoming: list[dict[str
                 merged.append(dict(part))
         elif ptype == "text":
             # 各次 resume 会重放同一轮执行（工具按 id 去重），文本同样按内容去重，
-            # 避免重放时 text part 重复叠加；goal 多轮文本内容各不相同，天然追加。
+            # 避免重放时 text part 重复叠加；多轮文本内容各不相同，天然追加。
             text_content = str(part.get("content") or "")
             if not text_content:
                 continue

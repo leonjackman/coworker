@@ -1,10 +1,10 @@
-"""Provider max-output-token cap + goal LLM construction tests.
+"""Provider max-output-token cap + LLM construction tests.
 
 Guards the 3b5bffff audit fixes:
 - every provider resolves an effective per-request output cap (default 8192);
 - known/custom values persist and clamp;
-- the streaming runtimes build a goal LLM (temperature 0.3) and a normal LLM,
-  both carrying the cap and a repetition penalty on self-hosted endpoints.
+- the streaming runtimes build an LLM carrying the cap and a repetition penalty
+  on self-hosted endpoints.
 """
 
 import sys
@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from coworker.agents import GOAL_TEMPERATURE, _provider_llm_kwargs  # noqa: E402
+from coworker.agents import _provider_llm_kwargs  # noqa: E402
 from coworker.providers import (  # noqa: E402
     DEFAULT_MAX_OUTPUT_TOKENS,
     MAX_OUTPUT_TOKENS_MAX,
@@ -84,15 +84,6 @@ def test_provider_llm_kwargs_applies_cap_and_local_penalty():
     kwargs = _provider_llm_kwargs("gpt-5.1", cloud, 0, "https://api.openai.com/v1")
     assert kwargs["max_tokens"] == 128000
     assert kwargs["repetition_penalty"] is None
-
-
-def test_goal_llm_uses_higher_temperature():
-    # §2c: goal rounds sample at GOAL_TEMPERATURE instead of greedy 0.
-    assert GOAL_TEMPERATURE == 0.3
-    normal = _provider_llm_kwargs("qwen3.6-35b", _entry(), 0, "http://192.168.1.100:8000/v1")
-    goal = _provider_llm_kwargs("qwen3.6-35b", _entry(), GOAL_TEMPERATURE, "http://192.168.1.100:8000/v1")
-    assert normal["temperature"] == 0
-    assert goal["temperature"] == 0.3
 
 
 def test_reasoning_create_passes_max_tokens():

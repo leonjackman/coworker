@@ -110,7 +110,7 @@ interface ChatInputProps {
   onCommandCommit?: (chip: CommandChip | null) => void;
 }
 
-const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/settings", "/memory"];
+const SLASH_COMMANDS = ["/help", "/new", "/clear", "/providers", "/skills", "/settings", "/memory"];
 
 interface SlashCommandItem {
   command: string;

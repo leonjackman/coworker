@@ -1,6 +1,6 @@
 """Tool-source truncation tests (git_status diff budget + read_file preview).
 
-These guard the Goal refactor's "source-side truncation": a large working tree
+These guard the "source-side truncation": a large working tree
 must never inject megabytes of diff into the model context, and read_file must
 return a bounded preview (binary hint / truncated text) instead of an unbounded
 read or a UnicodeDecodeError.

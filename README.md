@@ -36,7 +36,6 @@
 | --- | --- |
 | 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
 | 🔌 **Multi-Provider** | OpenAI, Ollama, and any OpenAI-compatible API, with live context-window discovery |
-| 🎯 **Goal Mode** | Multi-turn autonomous sessions — pause, resume, edit, stop, round caps, and to-do tracking |
 | 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract and zip export / import |
 | 👥 **Multi-Agent Teams** ⚠️ | Create teams & departments and let agents delegate tasks to each other. **Experimental** — see note below |
 | 🔒 **Human-In-The-Loop** | Approves commands, file writes, and MCP tools before they run — with supervised / guarded / autonomous levels |

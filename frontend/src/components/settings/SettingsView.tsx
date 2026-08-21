@@ -18,8 +18,6 @@ import { autonomyOptions, languageOptions, themeOptions } from './preference-opt
 interface SettingsViewProps {
   themeSettings: ThemeSettings;
   autonomy: Autonomy;
-  goalMaxRounds: number;
-  onGoalMaxRoundsChange: (value: number) => void;
   maxAttachmentMb: number;
   onMaxAttachmentMbChange: (value: number) => void;
   revertCode: boolean;
@@ -41,8 +39,6 @@ export type SettingsPage = 'main' | 'theme' | 'audit' | 'web';
 export function SettingsView({
   themeSettings,
   autonomy,
-  goalMaxRounds,
-  onGoalMaxRoundsChange,
   maxAttachmentMb,
   onMaxAttachmentMbChange,
   revertCode,
@@ -189,14 +185,6 @@ export function SettingsView({
                 value: autonomy,
                 options: autonomyOptions(),
                 onChange: (value) => onAutonomyChange(value as Autonomy),
-              },
-              {
-                id: 'goal_rounds',
-                type: 'goal_rounds',
-                label: t('settings.goal_rounds'),
-                description: t('settings.goal_rounds_desc'),
-                value: goalMaxRounds,
-                onChange: onGoalMaxRoundsChange,
               },
               {
                 id: 'revert_code',

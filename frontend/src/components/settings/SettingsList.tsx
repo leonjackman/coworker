@@ -1,5 +1,5 @@
 import { ChevronRight } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import { t } from '../../lib/i18n';
 import { Button } from '../ui/button';
@@ -32,14 +32,6 @@ export type SettingsItem =
       onAction: () => void;
       disabled?: boolean;
       meta?: ReactNode;
-    }
-  | {
-      id: string;
-      type: 'goal_rounds';
-      label: ReactNode;
-      description?: ReactNode;
-      value: number;
-      onChange: (value: number) => void;
     }
   | {
       id: string;
@@ -118,10 +110,6 @@ function SettingControl({ item }: { item: SettingsItem }) {
 
   if (item.type === 'info') {
     return null;
-  }
-
-  if (item.type === 'goal_rounds') {
-    return <GoalRoundsControl value={item.value} onChange={item.onChange} />;
   }
 
   if (item.type === 'number_input') {
@@ -233,59 +221,6 @@ function SelectControl({
         </option>
       ))}
     </select>
-  );
-}
-
-function GoalRoundsControl({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  // Internal mode/input state: mode is only initialized from `value` on mount,
-  // so switching INTO custom keeps its own number instead of snapping to the
-  // default (50) that the derived value would otherwise imply.
-  const [mode, setMode] = useState<'unlimited' | 'default' | 'custom'>(
-    value === 0 ? 'unlimited' : value === 50 ? 'default' : 'custom',
-  );
-  const [customInput, setCustomInput] = useState<number>(value === 0 || value === 50 ? 50 : value);
-
-  const selectMode = (next: 'unlimited' | 'default' | 'custom') => {
-    setMode(next);
-    if (next === 'unlimited') onChange(0);
-    else if (next === 'default') onChange(50);
-    else onChange(customInput);
-  };
-
-  const handleCustom = (raw: string) => {
-    const parsed = parseInt(raw, 10);
-    const clamped = Number.isFinite(parsed) ? Math.max(1, Math.min(1000, parsed)) : 1;
-    setCustomInput(clamped);
-    setMode('custom');
-    onChange(clamped);
-  };
-
-  return (
-    <div className="settings-goal-rounds">
-      <ToggleGroup
-        value={mode}
-        onValueChange={(next) => selectMode(next as 'unlimited' | 'default' | 'custom')}
-        items={[
-          { value: 'unlimited', label: t('settings.goal_rounds_unlimited') },
-          { value: 'default', label: t('settings.goal_rounds_default') },
-          { value: 'custom', label: t('settings.goal_rounds_custom') },
-        ]}
-      />
-      {mode === 'custom' && (
-        <div className="settings-goal-rounds__field">
-          <input
-            type="number"
-            min={1}
-            max={1000}
-            className="settings-goal-rounds__input"
-            value={customInput}
-            onChange={(e) => handleCustom(e.target.value)}
-            aria-label={t('settings.goal_rounds_custom')}
-          />
-          <span className="settings-goal-rounds__unit">{t('settings.goal_rounds_unit')}</span>
-        </div>
-      )}
-    </div>
   );
 }
 

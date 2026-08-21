@@ -41,7 +41,6 @@ import type {
   MarketSkillsResponse,
   MarketInstallResponse,
   WorkspaceBranchResponse,
-  GoalStatusResponse,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
@@ -117,13 +116,8 @@ declare global {
         options?: { work_mode?: string; autonomy?: string; revert_code?: boolean; assistant_message_id?: string },
         language?: string,
       ) => Promise<void>;
-      goalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
-      goalPause: (sessionId: string) => Promise<{ status: string }>;
-      goalEdit: (payload: { session_id: string; goal: string }) => Promise<{ status: string }>;
-      goalDelete: (sessionId: string) => Promise<{ status: string }>;
-  goalResume: (requestId: string, sessionId: string, onEvent: StreamEventCallback, language?: string, signal?: AbortSignalLike) => Promise<void>;
-      fetchSettings?: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
-      saveSettings?: (settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
+      fetchSettings?: () => Promise<{ max_attachment_mb: number; revert_code: boolean }>;
+      saveSettings?: (settings: { max_attachment_mb?: number; revert_code?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean }>;
       listMcps: () => Promise<McpServerListPayload>;
       discoverMcps: () => Promise<McpDiscoverPayload>;
       createMcp: (request: McpServerCreateRequest) => Promise<{ server: McpServerEntry }>;

@@ -9,7 +9,7 @@
  *
  * Sound events:
  *   reply_done      — assistant replied successfully
- *   reply_error     — reply failed (network error, stream error, goal failed)
+ *   reply_error     — reply failed (network error, stream error)
  *   attention       — approval/question required (pending dock card)
  *
  * 音效來源：

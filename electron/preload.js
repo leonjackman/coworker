@@ -32,26 +32,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     });
   },
   listProviders: () => ipcRenderer.invoke('list-providers'),
-  goalStatus: (sessionId) => ipcRenderer.invoke('goal-status', sessionId),
-  goalPause: (sessionId) => ipcRenderer.invoke('goal-pause', sessionId),
-  goalEdit: (payload) => ipcRenderer.invoke('goal-edit', payload),
-  goalDelete: (sessionId) => ipcRenderer.invoke('goal-delete', sessionId),
-  goalResume: (requestId, sessionId, onEvent, language, signal) => {
-    const listener = (_event, data) => {
-      if (data.requestId !== requestId) return;
-      onEvent(data.event);
-    };
-    ipcRenderer.on('chat-stream-event', listener);
-    const detachAbort = () => ipcRenderer.send('abort-chat-stream', requestId);
-    if (signal) {
-      if (signal.aborted) detachAbort();
-      else signal.addEventListener('abort', detachAbort, { once: true });
-    }
-    return ipcRenderer.invoke('start-goal-resume', { requestId, sessionId, language: language || 'zh' }).finally(() => {
-      ipcRenderer.removeListener('chat-stream-event', listener);
-      if (signal) signal.removeEventListener('abort', detachAbort);
-    });
-  },
   createProvider: (payload) => ipcRenderer.invoke('create-provider', payload),
   updateProvider: (providerId, params) => ipcRenderer.invoke('update-provider', { provider_id: providerId, params }),
   discoverProviderContext: (providerId) => ipcRenderer.invoke('discover-provider-context', providerId || ''),

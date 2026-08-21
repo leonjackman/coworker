@@ -1631,7 +1631,7 @@ ipcMain.handle('fetchSettings', async () => {
   try {
     return await requestBackend('/settings');
   } catch (e) {
-    return { goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true };
+    return { max_attachment_mb: 25, revert_code: true };
   }
 });
 
@@ -1639,7 +1639,7 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   try {
     return await requestBackend('/settings', 'POST', payload);
   } catch (e) {
-    return { status: 'error', goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true, detail: e.message };
+    return { status: 'error', max_attachment_mb: 25, revert_code: true, detail: e.message };
   }
 });
 
@@ -1791,7 +1791,7 @@ function openSseStream({
     // that ends without one of these (or `stream_end` for approval streams)
     // must be surfaced as a terminal error instead of silently leaving the
     // renderer guessing between "interrupted" and a successful commit.
-    const TERMINAL_TYPES = new Set(['done', 'error', 'goal_done', 'goal_paused', 'stream_end']);
+    const TERMINAL_TYPES = new Set(['done', 'error', 'stream_end']);
 
     function forwardEvent(parsed) {
       if (parsed && parsed.type && TERMINAL_TYPES.has(parsed.type)) {
@@ -2076,34 +2076,6 @@ ipcMain.handle('resolve-command-approval', async (event, payload) => {
     decision: payload?.decision || {},
   });
 });
-
-ipcMain.handle('goal-status', async (event, sessionId) => {
-  return requestBackend(`/goal/status?session_id=${encodeURIComponent(sessionId || '')}`);
-});
-
-ipcMain.handle('goal-pause', async (event, sessionId) => {
-  return requestBackend('/goal/pause', 'POST', { session_id: sessionId });
-});
-
-ipcMain.handle('goal-edit', async (event, payload) => {
-  return requestBackend('/goal/edit', 'POST', { session_id: payload?.session_id || '', goal: payload?.goal || '' });
-});
-
-ipcMain.handle('goal-delete', async (event, sessionId) => {
-  return requestBackend('/goal/delete', 'POST', { session_id: sessionId });
-});
-
-ipcMain.handle('start-goal-resume', async (event, { requestId, sessionId, language }) => {
-  return openSseStream({
-    requestId,
-    method: 'POST',
-    path: '/goal/resume',
-    payload: { session_id: sessionId, language: language || 'zh' },
-    sender: event.sender,
-    eventName: 'chat-stream-event',
-  });
-});
-
 
 ipcMain.handle('list-providers', async () => {
   return requestBackend('/providers');

@@ -257,8 +257,8 @@ class ProjectSnapshotManager:
     def begin_turn(self, session_id: str, user_message_id: str, workspace: Any, *, preserve_existing: bool = False) -> str | None:
         """Capture the pre-turn tree hash and register the session as active.
 
-        When ``preserve_existing`` is true (goal resume) an existing active pair
-        for the same key is reused so the whole goal shares one pre baseline.
+        When ``preserve_existing`` is true an existing active pair for the same
+        key is reused so the session keeps one shared pre baseline.
         Returns the pre-tree hash, or None when snapshots are unavailable.
         """
         if not self.enabled_for(workspace):

@@ -3,7 +3,6 @@ import { ChatInput, extractSessionIds, type CommandChip } from './components/Cha
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { WebSetupHintBar } from './components/WebSetupHintBar';
-import { GoalCard } from './components/GoalCard';
 import { TodoBlock } from './components/TodoBlock';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { MCPPanel } from './components/MCPPanel';
@@ -27,7 +26,7 @@ import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalState, GoalTodo, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -62,7 +61,7 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
       }
     } else if (part.type === 'text') {
       // 各次 resume 会重放同一轮执行（工具按 id 去重），文本同样按内容去重，
-      // 避免重放时 text part 重复叠加；goal 多轮文本内容各不相同，天然追加。
+      // 避免重放时 text part 重复叠加；多轮文本内容各不相同，天然追加。
       const exists = merged.some((p) => p.type === 'text' && p.content === part.content);
       if (!exists && part.content) {
         merged.push(part);
@@ -151,7 +150,7 @@ type ApprovalStreamEvent = Extract<
 /**
  * Single mapping from an interrupt stream event to a `PendingRequest`.
  *
- * All four call paths (stream, non-stream, goal loop and resume) funnel through
+ * All call paths (stream, non-stream and resume) funnel through
  * here so a new interrupt field only has to be handled once.
  */
 function pendingRequestFromEvent(
@@ -215,7 +214,6 @@ function createMessage(
 function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [goal, setGoal] = useState<GoalState>({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '' });
   // Task-list (write_todos) shown by the TodoBlock card above the composer, in
   // every mode — the agent's self-decomposed checklist. The card is keyed by
   // session so a running task's todos survive switching sessions (the entry
@@ -224,11 +222,9 @@ function App() {
   // entry; a per-session owner token lets the manual "x" dismiss only the
   // current task, and the card auto-hides whenever the stream is not actively
   // producing a reply (errors / failures / stopped).
-  const [todosBySession, setTodosBySession] = useState<Record<string, GoalTodo[]>>({});
+  const [todosBySession, setTodosBySession] = useState<Record<string, Todo[]>>({});
   const [todosOwnerBySession, setTodosOwnerBySession] = useState<Record<string, string>>({});
   const [dismissedTodoOwners, setDismissedTodoOwners] = useState<Record<string, string>>({});
-  const [editingGoalDraft, setEditingGoalDraft] = useState(false);
-  const goalDraftRef = useRef('');
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [runtimeError, setRuntimeError] = useState<string>('');
@@ -280,7 +276,6 @@ function App() {
     const stored = localStorage.getItem('cw.autonomy') as Autonomy | null;
     return stored === 'supervised' || stored === 'guarded' || stored === 'autonomous' ? stored : 'guarded';
   });
-  const [goalMaxRounds, setGoalMaxRounds] = useState<number>(50);
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
   const MAX_ATTACHMENT_MB_STORAGE_KEY = 'coworker-max-attachment-mb';
   const DEFAULT_MAX_ATTACHMENT_MB = 25;
@@ -380,7 +375,6 @@ function App() {
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [branchStatus, setBranchStatus] = useState<{ isRepo: boolean; branch: string | null } | null>(null);
   const requestSeqRef = useRef(0);
-  const goalSessionIdRef = useRef<string | undefined>(undefined);
   // Per-session generation counters for stream staleness. A stream is "stale"
   // only when a NEWER stream started in the SAME session (or it was stopped).
   // A stream belonging to another session must keep processing its events so a
@@ -472,19 +466,13 @@ function App() {
 
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingProjectIdRef = useRef<string | undefined>(undefined);
-  const goalStreamIdRef = useRef<string | undefined>(undefined);
-
-  // Per-task token for goal resume streams (they have no assistant message id),
-  // bumped once per resume so the "x" dismissal of one resume doesn't stick to
-  // the next one.
-  const goalResumeTokenRef = useRef(0);
 
   const todosSessionKey = (sid?: string | null) => sid || '__ambient__';
 
   // Store the task list for a specific session (from a stream's `todos` event).
   // Works for background sessions too: the entry is kept keyed by session so it
   // reappears when the user switches back, instead of being lost.
-  const setSessionTodos = (sessionIdValue: string | undefined, owner: string, value: GoalTodo[]) => {
+  const setSessionTodos = (sessionIdValue: string | undefined, owner: string, value: Todo[]) => {
     const key = todosSessionKey(sessionIdValue);
     setTodosBySession((current) => {
       const next = { ...current };
@@ -525,11 +513,10 @@ function App() {
   // and a background stream completing never spuriously unlocks this session.
   const isThinking = useMemo(
     () =>
-      (goal.running && goalSessionIdRef.current === sessionId) ||
       messages.some(
         (m) => (m.status === 'running' || m.status === 'waiting') && (!m.sessionId || m.sessionId === sessionId),
       ),
-    [goal.running, goalSessionIdRef.current, messages, sessionId],
+    [messages, sessionId],
   );
 
   // 任务卡仅在当前会话流式回复正常进行中（running/waiting）时显示：失败、
@@ -554,17 +541,16 @@ function App() {
   // 会话仍在后台运行）。只作为 runningSessionIds 的补充来源。
   const [backendActiveSessionIds, setBackendActiveSessionIds] = useState<Set<string>>(new Set());
 
-  // 侧栏会话"运行中"指示器：来自前台消息流状态（实时）、当前 goal 会话
-  // （goal.running）与后端轮询结果（兜底）的并集。
+  // 侧栏会话"运行中"指示器：来自前台消息流状态（实时）与后端轮询结果（兜底）
+  // 的并集。
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const m of messages) {
       if ((m.status === 'running' || m.status === 'waiting') && m.sessionId) ids.add(m.sessionId);
     }
-    if (goal.running && goalSessionIdRef.current) ids.add(goalSessionIdRef.current);
     for (const id of backendActiveSessionIds) ids.add(id);
     return ids;
-  }, [messages, goal.running, goalSessionIdRef.current, backendActiveSessionIds]);
+  }, [messages, backendActiveSessionIds]);
 
   // 轮询后端活跃会话（仅当前端判断可能遗漏时才持续；集合为空即停止以省资源）。
   useEffect(() => {
@@ -709,9 +695,6 @@ function App() {
         await refreshMcps();
         try {
           const settings = await chatService.fetchSettings();
-          if (typeof settings.goal_max_rounds === 'number') {
-            setGoalMaxRounds(settings.goal_max_rounds);
-          }
           if (typeof settings.max_attachment_mb === 'number') {
             const fromBackend = Math.max(
               MIN_MAX_ATTACHMENT_MB,
@@ -803,51 +786,11 @@ function App() {
     setActiveView('settings');
   };
 
-  const sendMessage = async (override?: { message: string; projectId?: string; goalMode?: boolean; goalText?: string }) => {
-    // 目标编辑模式：composer 已是 contentEditable（无 textarea），草稿经
-    // ChatInput 的 onChange 同步进 input state，这里直接读它更新目标卡。
-    if (editingGoalDraft) {
-      const newGoal = (override?.message ?? input).trim();
-      if (newGoal && !override) {
-        setInput(newGoal);
-        goalDraftRef.current = newGoal;
-      }
-      if (!newGoal) {
-        setInput('');
-        setEditingGoalDraft(false);
-        setGoal((prev) => ({ ...prev, editingDraft: false }));
-        return;
-      }
-      const sid = sessionIdRef.current;
-      if (!sid) {
-        setInput(newGoal);
-        return;
-      }
-      setInput('');
-      try {
-        await chatService.editGoal(sid, newGoal);
-        await new Promise((r) => setTimeout(r, 300));
-        setEditingGoalDraft(false);
-        // Only auto-resume if the goal was paused
-        const wasPaused = goal.paused;
-        setGoal({ goalText: newGoal, done: false, paused: false, todos: [], running: true, round: 0, progress: '', editingDraft: false });
-        setMessages((current) => [
-          ...current,
-          createMessage('assistant', `目标已更新为：${newGoal}`, { status: 'done' }),
-        ]);
-        if (wasPaused) {
-          void resumeGoal();
-        }
-      } catch (error) {
-        console.error('Failed to edit goal:', error);
-      }
-      return;
-    }
-
+  const sendMessage = async (override?: { message: string; projectId?: string }) => {
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) return;
 
-    // 命令 chip 路径：skill/子命令/goal 已作为真实 chip 提交，raw 文字不再携带
+    // 命令 chip 路径：skill/子命令已作为真实 chip 提交，raw 文字不再携带
     // 命令 token，这里把 chip + 提示词组合回注入标记并走既有 handler（含气泡逻辑）。
     const chip = commandChip;
     if (chip && !override) {
@@ -862,23 +805,13 @@ function App() {
         }
         return;
       }
-      if (chip.command === '/goal') {
-        setInput('');
-        if (!prompt) {
-          setMessages((current) => [...current, createMessage('assistant', t('chat.goal_help_text'), { status: 'done' })]);
-          return;
-        }
-        setGoal({ goalText: prompt, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
-        void sendMessage({ message: prompt, goalMode: true, goalText: prompt });
-        return;
-      }
       return;
     }
 
     if (!typedMessage && attachments.length === 0) return;
 
     if (typedMessage.startsWith('/')) {
-      // 消息墙也要显示命令令牌（/goal、/new、/help 等系统命令显示原始令牌）。
+      // 消息墙也要显示命令令牌（/new、/help 等系统命令显示原始令牌）。
       // 技能命令不显示原始令牌——由 handler 以「已加载技能」的干净标签气泡展示。
       const command = typedMessage.split(/\s+/)[0] ?? '';
       const bareCmd = command.startsWith('/') ? command.slice(1) : '';
@@ -963,7 +896,7 @@ function App() {
       }
     }
 
-    // 在消息墙展示用户输入（含 /goal 等命令令牌）
+    // 在消息墙展示用户输入（含 /new、/help 等命令令牌）
     // 前端生成稳定的消息 id，回传后端以统一前后端 id（修复按 id 回退/重生成时 404）
     const userMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1026,7 +959,6 @@ function App() {
     let receivedDone = false;
     let streamStartAt = Date.now();
     streamStartAtsRef.current[streamKey(requestSessionId)] = streamStartAt;
-    let inGoal = false;
 
     const handleEvent = (event: StreamEvent) => {
       trackBrowserToolEvent(event);
@@ -1037,10 +969,6 @@ function App() {
       // freezing at status "running" forever.
       if (isStreamStale(requestSessionId, myRequestSeq)) return;
       handleStreamWebEvents(event);
-      // Goal-state events (goal_*, todos) must only drive the goal card of the
-      // currently-viewed session; a background session's goal must not clobber
-      // it (including while on the hero/draft, where no goal card should exist).
-      // Message events (delta/tool/plan/done) are always processed.
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
           const cu = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) };
@@ -1048,7 +976,6 @@ function App() {
         }
         return;
       }
-      const goalMatchesView = !event.session_id || event.session_id === sessionIdRef.current;
       if (event.type === 'start') {
         streamStartAt = Date.now();
         // Only the stream started by THIS sendMessage may bind the view to a
@@ -1221,26 +1148,6 @@ function App() {
           setSessionId(event.session_id);
           sessionIdRef.current = event.session_id;
         }
-        if (inGoal) {
-          // Per-round done: accumulate parts, keep the message running.
-          if (event.parts && event.parts.length > 0) {
-            localParts = mergeMessageParts(localParts, event.parts);
-          }
-          // Track recent tool names for goal card display
-          const toolNames = event.parts
-            ?.filter((p) => p.type === 'tool')
-            .map((p) => (p as Extract<MessagePart, { type: 'tool' }>).name)
-            .filter(Boolean);
-          if (toolNames && toolNames.length > 0) {
-            setGoal((current) => ({ ...current, recentToolNames: toolNames }));
-          }
-          setMessages((current) =>
-            current.map((item) =>
-              item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-            ),
-          );
-          return;
-        }
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) {
           localParts = mergeMessageParts(localParts, event.parts);
@@ -1255,94 +1162,12 @@ function App() {
         );
         clearSessionTodos(event.session_id ?? requestSessionId);
         playSound('reply_done');
-      } else if (event.type === 'goal_start') {
-        inGoal = true;
-        if (goalMatchesView) {
-          if (event.session_id) goalSessionIdRef.current = event.session_id;
-          setGoal({ goalText: event.goal, done: false, paused: false, todos: [], running: true, round: 0, progress: "", phase: 'plan', editingDraft: false, stalled: false, stopped: false });
-        }
-      } else if (event.type === 'goal_round') {
-        if (goalMatchesView) setGoal((current) => ({ ...current, round: event.round, running: true, paused: false, ...(event.phase ? { phase: event.phase } : {}) }));
-      } else if (event.type === 'goal_edited') {
-        if (goalMatchesView) setGoal((current) => ({ ...current, goalText: event.goal || current.goalText }));
-      } else if (event.type === 'goal_checkpoint') {
-        if (goalMatchesView) {
-          setGoal((current) => ({
-            ...current,
-            progress: event.progress || current.progress,
-            ...(event.achieved ? { done: true } : {}),
-          }));
-        }
       } else if (event.type === 'todos') {
         // Task list is keyed by session (works for background streams too): the
-        // TodoBlock card above the composer shows it in build / plan / goal
-        // alike. Only the currently-viewed session's goal card needs the view
-        // gate — the per-session store must always be updated so the card
-        // reappears after switching back.
+        // TodoBlock card above the composer shows it in every mode. The
+        // per-session store must always be updated so the card reappears after
+        // switching back.
         setSessionTodos(event.session_id ?? requestSessionId, assistantMessageId, event.todos);
-        if (goalMatchesView) {
-          setGoal((current) => ({ ...current, todos: event.todos }));
-        }
-      } else if (event.type === 'goal_force') {
-        // Force-loop nudge: agent didn't use tools, system will retry.
-        if (goalMatchesView) setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
-      } else if (event.type === 'goal_done') {
-        receivedDone = true;
-        const failed =
-          Boolean(event.stalled) ||
-          ['timeout', 'stopped', 'interrupted', 'max_rounds_exceeded'].includes(event.reason || '');
-        if (goalMatchesView) {
-          setGoal((current) => {
-            const next: GoalState = {
-              ...current,
-              done: true,
-              running: false,
-              stalled: failed,
-              progress: event.content || current.progress,
-            };
-            if (event.reason) {
-              next.reason = event.reason;
-              if (event.reason === 'stopped') next.stopped = true;
-            }
-            return next;
-          });
-          clearSessionTodos(event.session_id ?? requestSessionId);
-        }
-        if (event.content) streamedContent = event.content;
-        localParts = settleRunningTools(localParts);
-        const msgStatus = failed ? 'error' : 'done';
-        const failedReasonLabel: Record<string, string> = {
-          timeout: 'Agent timed out',
-          stopped: 'Goal stopped',
-          interrupted: 'Goal interrupted',
-          max_rounds_exceeded: 'Max rounds exceeded',
-          stalled: 'Agent stalled',
-        };
-        const msgContent = failed
-          ? event.content || failedReasonLabel[event.reason || ''] || 'Goal failed'
-          : streamedContent || '✓ 目标已完成';
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: msgContent, status: msgStatus, parts: [...localParts], streamEndAt: Date.now() }
-              : item,
-          ),
-        );
-        playSound(failed ? 'reply_error' : 'reply_done');
-      } else if (event.type === 'goal_paused') {
-        if (goalMatchesView) {
-          setGoal((current) => ({ ...current, paused: true, running: false }));
-          clearSessionTodos(event.session_id ?? requestSessionId);
-        }
-        localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: streamedContent || t('chat.goal_paused_message'), status: 'done', parts: [...localParts], streamEndAt: Date.now() }
-              : item,
-          ),
-        );
-        playSound('attention');
       } else if (event.type === 'error') {
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
@@ -1353,18 +1178,6 @@ function App() {
           ),
         );
         clearSessionTodos(event.session_id ?? requestSessionId);
-      } else if (event.type === 'goal_stream_id') {
-        goalStreamIdRef.current = event.stream_id;
-      } else if (event.type === 'goal_system') {
-        setMessages((current) => [
-          ...current,
-          createMessage('assistant', event.content, {
-            status: 'done',
-            ...(event.session_id ? { sessionId: event.session_id } : {}),
-          }),
-        ]);
-      } else if (event.type === 'goal_attached') {
-        goalStreamIdRef.current = event.stream_id;
       } else if (event.type === 'idle_warning') {
         // Backend detected N seconds of inactivity on the SSE stream.
         // The client's idle watchdog will fire in (300 - seconds_idle) seconds.
@@ -1397,7 +1210,6 @@ function App() {
           ...(draftAgentId ? { agent: draftAgentId } : {}),
           user_message_id: userMessageId,
           assistant_message_id: assistantMessageId,
-          ...(override?.goalMode ? { goal_mode: true, goal_text: override.goalText || message } : {}),
         },
         handleEvent,
         controller.signal,
@@ -1408,66 +1220,11 @@ function App() {
       await refreshSessions();
       await refreshProjects();
       setChangesRefreshKey((value) => value + 1);
-      // For goal mode: check if the goal stream ended naturally and query final status
-      if (inGoal && override?.goalMode) {
-        void (async () => {
-          try {
-            const status = await chatService.getGoalStatus(sessionIdRef.current || '');
-            if (status.status === 'done') {
-              // Don't clobber a correctly-set stalled/error state with a plain
-              // "done" — the SSE goal_done event already carried the truth.
-              setGoal((current) =>
-                current.stalled
-                  ? current
-                  : {
-                      ...current,
-                      done: true,
-                      running: false,
-                      progress: status.goal?.progress || current.progress,
-                      ...(status.goal?.reason ? { reason: status.goal.reason } : {}),
-                    },
-              );
-            } else if (status.status === 'stopped') {
-              setGoal((current) => ({ ...current, done: true, running: false, stalled: true, stopped: true, reason: 'stopped' }));
-            } else if (status.status === 'paused') {
-              setGoal((current) => ({ ...current, paused: true, running: false }));
-            }
-          } catch { /* ignore */ }
-        })();
-      }
       _generateSessionTitleIfNeeded(message, streamedContent, requestSessionId);
     } catch (error) {
       if (isStreamStale(requestSessionId, myRequestSeq)) return;
       console.error('Failed to stream message:', error);
       if ((error as Error).name === 'AbortError') {
-        // For goal mode, abort on disconnect — check session status to let backend finalize
-        if (inGoal) {
-          void (async () => {
-            try {
-              if (!sessionIdRef.current) throw new Error('no session');
-              const status = await chatService.getGoalStatus(sessionIdRef.current);
-              if (status.status === 'done') {
-                setGoal((current) =>
-                  current.stalled
-                    ? current
-                    : {
-                        ...current,
-                        done: true,
-                        running: false,
-                        progress: status.goal?.progress || current.progress,
-                        ...(status.goal?.reason ? { reason: status.goal.reason } : {}),
-                      },
-                );
-              } else if (status.status === 'stopped') {
-                setGoal((current) => ({ ...current, done: true, running: false, stalled: true, stopped: true, reason: 'stopped' }));
-              } else if (status.status === 'paused') {
-                setGoal((current) => ({ ...current, paused: true, running: false }));
-              } else {
-                setGoal((current) => ({ ...current, running: false }));
-              }
-            } catch { /* ignore */ }
-          })();
-        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
@@ -1491,7 +1248,7 @@ function App() {
       // 安全网：强制把这条流命中的 assistant 消息退出 running，避免「蓝条一直挂起不结束」。
       // 按消息 id 收尾（每个流持有独立 id），因此切走会话后后台流结束时也会被正确收尾，
       // 侧栏 running 指示随之清除；不会误伤其它流的消息。
-      // 若流结束却从未收到 done/goal_done（断线、后端重启、终态事件在
+      // 若流结束却从未收到 done（断线、后端重启、终态事件在
       // SSE→IPC→renderer 链路丢失），先与后端已落库的消息对账：后端在写出 done
       // 帧之前就已持久化 assistant 消息，若该消息 id 已存在则回复其实成功了，
       // 采纳后端内容并标记 done；只有后端也无记录时才算 interrupted。
@@ -1532,7 +1289,7 @@ function App() {
 
   const [editingMessage, setEditingMessage] = useState<{ id: string; content: string } | null>(null);
   const [editDraft, setEditDraft] = useState('');
-  // 已提交到 composer 的命令 chip（skill/子命令/goal）。真实 DOM 元素渲染在
+  // 已提交到 composer 的命令 chip（skill/子命令）。真实 DOM 元素渲染在
   // ChatInput 里，这里持有权威状态供 sendMessage / 编辑流程使用。
   const [commandChip, setCommandChip] = useState<CommandChip | null>(null);
   // 点编辑键即回滚（edit-begin）后，记下待恢复的 (session, message)，取消编辑 /
@@ -1625,7 +1382,7 @@ function App() {
     // 事件会被陈旧守卫丢弃，气泡悬在 running 计秒。
     abortStreamFor(currentSessionId);
 
-    // 编辑模式下，如果内容包含 /goal 等斜杠命令，走 sendMessage 路径
+    // 编辑模式下，如果内容包含斜杠命令，走 sendMessage 路径
     if (trimmed.startsWith('/')) {
       // 斜杠命令路径不做 /edit 截断重跑：先恢复点编辑时已回滚的文件，
       // 避免旧回合改动停留在已回滚态。
@@ -2409,9 +2166,6 @@ function App() {
     const project = projects.find((p) => p.id === projectId);
     const resolvedAgent = project?.mode === 'single' ? 'default_agent' : (agentId ?? 'default_agent');
     setDraftAgentId(resolvedAgent);
-    // 新开对话属于新的空会话：清掉上一会话残留的 goal 卡片，避免它串到新会话显示。
-    setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
-    goalSessionIdRef.current = undefined;
     setActiveView('chat');
   };
 
@@ -2420,7 +2174,6 @@ function App() {
   const startNewChat = (projectId?: string, agentId?: string) => {
     startProjectDraft(projectId, '', agentId);
     setDraftMode(true);
-    setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
   };
 
   // 草稿态下切换 workspace：仅改归属，不清空已输入内容
@@ -2550,47 +2303,10 @@ function App() {
       pendingProjectIdRef.current = undefined;
       setPendingRequests((current) => current.filter((item) => item.session_id !== sessionIdToOpen));
       void restorePendingForSession(sessionIdToOpen);
-      // 恢复持久化的目标状态（goal 卡片）
-      const sessionRecord = response.session as SessionDetailResponse['session'] & {
-        goal_text?: string;
-        goal_done?: boolean;
-        goal_paused?: boolean;
-        goal_todos?: GoalTodo[];
-        goal_stopped?: boolean;
-        goal_interrupted?: boolean;
-        goal_phase?: 'plan' | 'execute' | 'verify';
-        goal_round?: number;
-      };
-      if (sessionRecord.goal_text) {
-        // An interrupted goal (e.g. a crash) still has goal_text but no
-        // goal_paused flag — treat it as resumable so the user can restart it
-        // from the checkpoint instead of being stuck with no controls.
-        const recoverable = Boolean(sessionRecord.goal_paused || sessionRecord.goal_interrupted);
-        const stopped = Boolean(sessionRecord.goal_stopped);
-        const restoredGoal: GoalState = {
-          goalText: sessionRecord.goal_text,
-          done: Boolean(sessionRecord.goal_done),
-          paused: recoverable && !stopped,
-          todos: sessionRecord.goal_todos || [],
-          running: false,
-          round: sessionRecord.goal_round || 0,
-          progress: '',
-          ...(sessionRecord.goal_phase ? { phase: sessionRecord.goal_phase } : {}),
-          stalled: stopped,
-          stopped,
-          editingDraft: false,
-        };
-        if (stopped) restoredGoal.reason = 'stopped';
-        setGoal(restoredGoal);
-        goalSessionIdRef.current = sessionIdToOpen;
-        // 同步恢复该会话的任务卡（切走再切回时卡片不消失）。
-        if (sessionRecord.goal_todos && sessionRecord.goal_todos.length > 0) {
-          setSessionTodos(sessionIdToOpen, `persisted:${sessionIdToOpen}`, sessionRecord.goal_todos);
-        }
-      } else {
-        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
-        // 任务卡按会话保存：非 goal 会话切回时从 per-session 存储恢复
-        // （后台流仍在跑时其 todos 已在流事件里写入），而不是清空。
+      // 恢复该会话持久化的任务卡（切走再切回时卡片不消失）。
+      const sessionRecord = response.session as SessionDetailResponse['session'] & { todos?: Todo[] };
+      if (sessionRecord.todos && sessionRecord.todos.length > 0) {
+        setSessionTodos(sessionIdToOpen, `persisted:${sessionIdToOpen}`, sessionRecord.todos);
       }
       // 后台 resume 可能仍在运行：切回时首扫可能早于新审批创建，延迟重扫兜底。
       for (const delay of [5000, 15000]) {
@@ -2650,7 +2366,6 @@ function App() {
         setContextUsage(null); // 删除当前会话后清掉残留预算（B10）
         setInput('');
         setAttachments([]);
-        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
         setDraftMode(true);
       }
       // 清理被删除会话在所有上下文中的消息
@@ -2716,7 +2431,6 @@ function App() {
         setContextUsage(null); // 删除项目后清掉残留预算（B10）
         setInput('');
         setAttachments([]);
-        setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
       }
       // 清理所有属于该项目的会话的消息
       setMessages((current) => current.filter((m) => !m.sessionId || !deletedSessionIds.has(m.sessionId)));
@@ -2730,16 +2444,6 @@ function App() {
   const handleSlashCommand = (message: string) => {
     const [command] = message.split(/\s+/);
     setInput('');
-    if (command === '/goal') {
-      const goalText = message.slice('/goal'.length).trim();
-      if (!goalText) {
-        setMessages((current) => [...current, createMessage('assistant', t('chat.goal_help_text'), { status: 'done' })]);
-        return;
-      }
-      setGoal({ goalText, done: false, paused: false, todos: [], running: true, round: 0, progress: "", editingDraft: false });
-      void sendMessage({ message: goalText, goalMode: true, goalText });
-      return;
-    }
     if (command === '/clear') {
       // 只清当前会话的消息，其它会话仍在后台运行的流不受影响。
       setMessages((current) => current.filter((m) => m.sessionId && m.sessionId !== sessionIdRef.current));
@@ -2856,7 +2560,7 @@ function App() {
     chip.packageName ? `[skill:${chip.packageName}:${chip.command.slice(1)}]` : `[skill:${chip.command.slice(1)}]`;
 
   /** ChatInput 提交/移除命令 chip。skill 型在此异步验证（无效立即拒绝并提示），
-   *  即时 sys 命令直接执行（不留 chip），/goal 与 skill 型保留 chip 等提示词。 */
+   *  即时 sys 命令直接执行（不留 chip），skill 型保留 chip 等提示词。 */
   // 正在异步验证的 chip（防较慢的旧验证把更新的提交覆盖掉）
   const pendingCommandRef = useRef<CommandChip | null>(null);
 
@@ -2867,7 +2571,7 @@ function App() {
         setCommandChip(null);
         return;
       }
-      if (chip.type === 'sys' && chip.command !== '/goal') {
+      if (chip.type === 'sys') {
         setCommandChip(null);
         handleSlashCommand(chip.command);
         return;
@@ -2906,75 +2610,11 @@ function App() {
     [handleSlashCommand],
   );
 
-  const pauseGoal = async () => {
-    if (!sessionIdRef.current) return;
-    try {
-      await chatService.pauseGoal(sessionIdRef.current);
-      setGoal((current) => ({ ...current, paused: true, running: false }));
-    } catch (error) {
-      console.error('Failed to pause goal:', error);
-    }
-  };
-
-  const resumeGoal = async () => {
-    const targetSessionId = sessionIdRef.current;
-    if (!targetSessionId) return;
-    // Lock the composer for the duration of the resumed loop so the user
-    // cannot spin up a concurrent stream that would race the running goal.
-    // isThinking is derived from goal.running scoped to this session.
-    goalSessionIdRef.current = targetSessionId;
-    setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false }));
-    // 新一轮 resume 任务开始：换一个新的 owner token，让上一轮被 "x" 关闭的
-    // 任务卡可以重新出现；并清掉旧一轮残留的任务卡。
-    goalResumeTokenRef.current += 1;
-    clearSessionTodos(targetSessionId);
-    // Register an abort controller so the Stop button can cancel the resume
-    // stream (previously stopMessage was a no-op during goal resume).
-    const controller = new AbortController();
-    const key = streamKey(targetSessionId);
-    streamControllersRef.current[key] = controller;
-    try {
-      await chatService.resumeGoal(targetSessionId, handleGoalResumeEventWithChat, controller.signal);
-    } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        console.error('Failed to resume goal:', error);
-      }
-      setGoal((current) => ({ ...current, running: false }));
-    } finally {
-      stopBrowserAgent();
-      if (streamControllersRef.current[key] === controller) {
-        delete streamControllersRef.current[key];
-        delete activeAssistantMessageIdsRef.current[key];
-        delete streamStartAtsRef.current[key];
-      }
-      // Reconcile with the backend: if the stream ended WITHOUT a terminal
-      // goal_done/goal_paused (e.g. the backend restarted mid-loop), the goal
-      // card would stay "running" forever and lock the composer. Ask the
-      // backend for the real status and settle it.
-      void (async () => {
-        try {
-          const status = await chatService.getGoalStatus(targetSessionId);
-          if (status.status === 'done' && status.goal?.progress) {
-            setGoal((current) => (current.running ? { ...current, done: true, running: false, progress: status.goal?.progress || current.progress } : current));
-          } else if (status.status === 'stopped') {
-            setGoal((current) => (current.running ? { ...current, done: true, running: false, stalled: true, stopped: true, reason: 'stopped' } : current));
-          } else if (status.status === 'paused') {
-            setGoal((current) => (current.running ? { ...current, paused: true, running: false } : current));
-          } else if (!status.status || status.status === 'none') {
-            setGoal((current) => ({ ...current, running: false }));
-          }
-        } catch {
-          // keep whatever the card shows; polling covers it later
-        }
-      })();
-    }
-  };
-
   const toggleTodo = (index: number) => {
     const todo = todos[index];
     if (!todo) return;
     const newStatus = todo.status === 'completed' ? 'pending' : 'completed';
-    const updated = (list: GoalTodo[]) =>
+    const updated = (list: Todo[]) =>
       list.map((t, i) => (i === index ? { ...t, status: newStatus as 'completed' | 'pending' } : t));
     // 同步 per-session 存储，切走再切回后勾选状态保留。
     setTodosBySession((current) => {
@@ -2983,115 +2623,6 @@ function App() {
       if (!entry) return current;
       return { ...current, [key]: updated(entry) };
     });
-    // Keep the goal card's todo list in sync for goal-mode runs.
-    setGoal((current) => {
-      if (!current.goalText) return current;
-      return { ...current, todos: updated(current.todos) };
-    });
-  };
-
-  const draftEditGoal = () => {
-    if (!sessionIdRef.current || !goal.goalText) return;
-    // composer 已是 contentEditable（无 textarea），草稿即 input state。
-    const currentComposerVal = input.trim() || goal.goalText;
-    setInput(currentComposerVal);
-    goalDraftRef.current = currentComposerVal;
-    setEditingGoalDraft(true);
-    setGoal((prev) => ({ ...prev, editingDraft: true }));
-  };
-
-  const saveGoalEdit = async (goalText: string) => {
-    if (!sessionIdRef.current) return;
-    try {
-      await chatService.editGoal(sessionIdRef.current, goalText);
-      // Only auto-resume if the goal was paused
-      const wasPaused = goal.paused;
-      setGoal((current) => ({ ...current, goalText, editingDraft: false }));
-      if (wasPaused) {
-        void resumeGoal();
-      }
-    } catch (error) {
-      console.error('Failed to edit goal:', error);
-    }
-  };
-
-  const deleteGoal = async () => {
-    if (!sessionIdRef.current) return;
-    try {
-      await chatService.deleteGoal(sessionIdRef.current);
-      setGoal({ goalText: '', done: false, paused: false, todos: [], running: false, round: 0, progress: '', editingDraft: false });
-    } catch (error) {
-      console.error('Failed to delete goal:', error);
-    }
-  };
-
-  const cancelGoalEdit = () => {
-    setEditingGoalDraft(false);
-    setGoal((current) => ({ ...current, editingDraft: false }));
-  };
-
-  const handleGoalResumeEventWithChat = (event: StreamEvent) => {
-    if (event.session_id && event.session_id !== sessionIdRef.current) return;
-    trackBrowserToolEvent(event);
-    if (event.type === 'goal_start' || event.type === 'goal_round') {
-      if (event.session_id) goalSessionIdRef.current = event.session_id;
-      setGoal((current) => ({ ...current, running: true, paused: false, stalled: false, stopped: false, round: event.type === 'goal_round' ? event.round : current.round, ...(event.type === 'goal_round' && event.phase ? { phase: event.phase } : {}) }));
-    } else if (event.type === 'goal_checkpoint') {
-      setGoal((current) => ({ ...current, progress: event.progress || current.progress, ...(event.achieved ? { done: true } : {}) }));
-    } else if (event.type === 'todos') {
-      setSessionTodos(event.session_id ?? sessionIdRef.current, `goal:${goalResumeTokenRef.current}`, event.todos);
-      setGoal((current) => ({ ...current, todos: event.todos }));
-    } else if (event.type === 'goal_system') {
-      // Display system messages in chat
-      setMessages((current) => [
-        ...current,
-        createMessage('assistant', event.content, { status: 'done' }),
-      ]);
-    } else if (event.type === 'goal_stream_id') {
-      goalStreamIdRef.current = event.stream_id;
-    } else if (event.type === 'goal_attached') {
-      goalStreamIdRef.current = event.stream_id;
-    } else if (event.type === 'goal_done') {
-      setGoal((current) => {
-        const next: GoalState = { ...current, done: true, running: false, stalled: event.stalled || false, progress: event.content || current.progress };
-        if (event.reason) {
-          next.reason = event.reason;
-          if (event.reason === 'stopped') next.stopped = true;
-        }
-        return next;
-      });
-      clearSessionTodos(event.session_id ?? sessionIdRef.current);
-      const content = event.content;
-      if (content) {
-        setMessages((current) => [
-          ...current,
-          createMessage('assistant', content, { status: event.stalled ? 'error' : 'done' }),
-        ]);
-        playSound(event.stalled ? 'reply_error' : 'reply_done');
-      }
-    } else if (event.type === 'goal_paused') {
-      setGoal((current) => ({ ...current, paused: true, running: false }));
-      clearSessionTodos(event.session_id ?? sessionIdRef.current);
-      playSound('attention');
-    } else if (event.type === 'goal_force') {
-      setGoal((current) => ({ ...current, progress: `Force retry ${event.count}/3` }));
-    } else if (event.type === 'delta') {
-      // Append streaming deltas to the last assistant message in goal context.
-      // Only search within the current session's messages — a background session's
-      // streaming message must not be clobbered with this goal's delta.
-      setMessages((current) => {
-        const last = [...current].reverse().find(
-          (m) =>
-            m.role === 'assistant' &&
-            !m.content.includes('目标已更新') &&
-            (!m.sessionId || m.sessionId === sessionIdRef.current),
-        );
-        if (last) {
-          return current.map((m) => m.id === last.id ? { ...m, content: m.content + event.content } : m);
-        }
-        return current;
-      });
-    }
   };
 
   const changeSelectedModel = async (providerId: string) => {
@@ -3325,11 +2856,6 @@ function App() {
     setThemeSettings(nextSettings);
   };
 
-  const changeGoalMaxRounds = (value: number) => {
-    setGoalMaxRounds(value);
-    chatService.saveSettings({ goal_max_rounds: value }).catch(() => { /* ignore */ });
-  };
-
   const changeMaxAttachmentMb = (value: number) => {
     const clamped = Math.max(
       MIN_MAX_ATTACHMENT_MB,
@@ -3421,7 +2947,6 @@ function App() {
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
           onOpenOrgSettings={openOrgSettings}
-          {...(goal.goalText && !goal.done && sessionId ? { goalIndicatorSessionId: sessionId } : {})}
           runningSessionIds={runningSessionIds}
         />
         <section ref={workspaceFrameRef} className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
@@ -3484,17 +3009,6 @@ function App() {
                           rendered while the current session is actively streaming
                           (errors / failures / stopped keep it closed). */}
                       {showTodoCard && <TodoBlock todos={todos} onToggleTodo={toggleTodo} onClose={dismissCurrentTodos} />}
-                      {goal.goalText && !editingGoalDraft && (
-                        <GoalCard goal={goal} onPause={pauseGoal} onResume={resumeGoal} onDelete={deleteGoal} onDraftEdit={draftEditGoal} recentToolNames={goal.recentToolNames ?? undefined} />
-                      )}
-                      {editingGoalDraft && (
-                        <div className="goal-edit-banner">
-                          <p className="goal-edit-banner__text">编辑目标：在下方输入框中输入新目标，按回车确认</p>
-                          <button type="button" className="goal-edit-banner__cancel" onClick={cancelGoalEdit} aria-label="取消编辑">
-                            取消
-                          </button>
-                        </div>
-                      )}
                       {webSetupHint && (
                         <WebSetupHintBar
                           status={webSetupHint}
@@ -3517,7 +3031,7 @@ function App() {
                         </div>
                       ) : (
                         <ChatInput
-                        value={editingMessage ? editDraft : (editingGoalDraft ? input : input)}
+                        value={editingMessage ? editDraft : input}
                         disabled={isThinking || runtimeStatus === 'connecting'}
                         isThinking={isThinking}
                         workMode={workMode}
@@ -3586,8 +3100,6 @@ function App() {
                 <SettingsView
                   themeSettings={themeSettings}
                   autonomy={autonomy}
-                  goalMaxRounds={goalMaxRounds}
-                  onGoalMaxRoundsChange={changeGoalMaxRounds}
                   maxAttachmentMb={maxAttachmentMb}
                   onMaxAttachmentMbChange={changeMaxAttachmentMb}
                   revertCode={revertCode}

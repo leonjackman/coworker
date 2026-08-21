@@ -2820,7 +2820,6 @@ body.bottom-panel-resizing {
   opacity: 0.78;
 }
 
-.sidebar-session--active .sidebar-session__goal-icon,
 .sidebar-session--active .sidebar-session__running-icon {
   color: var(--accent-foreground);
   opacity: 0.9;
@@ -2836,12 +2835,6 @@ body.bottom-panel-resizing {
 
 .sidebar-session__title {
   flex: 1;
-}
-
-.sidebar-session__goal-icon {
-  flex: 0 0 auto;
-  color: var(--ring);
-  display: inline-flex;
 }
 
 .sidebar-session__running-icon {
@@ -2907,303 +2900,6 @@ body.bottom-panel-resizing {
   scrollbar-gutter: stable;
 }
 
-.goal-card {
-  box-sizing: border-box;
-  width: var(--bottom-card-width);
-  min-width: 0;
-  margin: 0 auto 12px;
-  max-height: 40vh;
-  overflow-y: auto;
-  border: 1px solid var(--material-border);
-  border-radius: 16px;
-  background: var(--material-panel-solid);
-  backdrop-filter: var(--material-blur);
-  box-shadow: 0 8px 24px -10px var(--material-shadow);
-}
-
-.goal-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--material-border);
-}
-
-.goal-card__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ring);
-}
-
-.goal-card[data-state='done'] .goal-card__status {
-  color: var(--success, #2e7d32);
-}
-
-.goal-card[data-state='paused'] .goal-card__status {
-  color: var(--muted-foreground);
-}
-
-.goal-card[data-state='stalled'] .goal-card__status {
-  color: var(--destructive, #f44336);
-}
-
-.goal-card__header-left {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.goal-card__round {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--muted-foreground);
-  padding: 1px 6px;
-  background: var(--accent);
-  border-radius: var(--radius-sm);
-}
-
-.goal-card__phase {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
-
-.goal-card__phase--plan {
-  color: var(--primary, #4f8cff);
-  background: color-mix(in srgb, var(--primary, #4f8cff) 14%, transparent);
-}
-
-.goal-card__phase--execute {
-  color: var(--warning, #e8a23d);
-  background: color-mix(in srgb, var(--warning, #e8a23d) 14%, transparent);
-}
-
-.goal-card__phase--verify {
-  color: var(--success, #2e9e5b);
-  background: color-mix(in srgb, var(--success, #2e9e5b) 14%, transparent);
-}
-
-.goal-card__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.goal-card__body {
-  padding: 10px 12px 12px;
-}
-
-.goal-card__text {
-  margin: 0 0 8px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--foreground);
-  word-break: break-word;
-}
-
-.goal-card__todos-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin: 4px 0 4px;
-}
-
-.goal-card__todos-count {
-  font-size: 11px;
-  color: var(--muted-foreground);
-}
-
-.goal-card__toggle {
-  background: none;
-  border: none;
-  padding: 2px;
-  cursor: pointer;
-  color: var(--muted-foreground);
-  display: inline-flex;
-  align-items: center;
-}
-
-.goal-card__toggle-open {
-  transform: rotate(180deg);
-}
-
-.goal-card__todos {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.goal-card__todo {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--foreground);
-  padding: 2px 0;
-  min-width: 0;
-}
-
-.goal-card__todo > span {
-  /* Long todo text (including unbroken strings/paths) wraps to multiple lines
-     at a fixed width instead of stretching the card / overflowing. */
-  min-width: 0;
-  overflow-wrap: break-word;
-  word-break: break-word;
-}
-
-.goal-card__todo--completed {
-  color: var(--muted-foreground);
-  text-decoration: line-through;
-}
-
-.goal-card__todo-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--muted-foreground);
-  flex-shrink: 0;
-}
-
-.goal-card__todo--in_progress .goal-card__todo-dot {
-  background: var(--ring);
-}
-
-.goal-card__progress {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--muted-foreground);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.goal-card__verification {
-  margin: 6px 0;
-  padding: 6px 10px;
-  background: var(--accent);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-.goal-card__verification-label {
-  display: block;
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--muted-foreground);
-  margin-bottom: 2px;
-  text-transform: uppercase;
-}
-
-.goal-card__stalled {
-  margin: 6px 0 0;
-  padding: 6px 10px;
-  background: rgba(244, 67, 54, 0.1);
-  border: 1px solid rgba(244, 67, 54, 0.3);
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  color: var(--destructive, #f44336);
-  line-height: 1.5;
-}
-
-.goal-card__tools {
-  margin-top: 8px;
-  padding: 6px 8px;
-  background: var(--muted);
-  border-radius: 4px;
-}
-
-.goal-card__tools-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--muted-foreground);
-}
-
-.goal-card__tools-list {
-  list-style: none;
-  padding: 0;
-  margin: 4px 0 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.goal-card__tool-item {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.7rem;
-  padding: 2px 6px;
-  background: var(--accent);
-  border-radius: 3px;
-}
-
-.goal-card__tool-name {
-  color: var(--accent-foreground);
-}
-
-.goal-card__reason {
-  font-size: 0.8rem;
-  color: var(--muted-foreground);
-  margin-top: 4px;
-  font-style: italic;
-}
-
-.goal-card__todo {
-  cursor: pointer;
-  user-select: none;
-  transition: opacity 0.15s;
-}
-
-.goal-card__todo:hover {
-  opacity: 0.7;
-}
-
-.goal-edit-banner {
-  position: relative;
-  padding: 12px 16px;
-  margin-bottom: 8px;
-  background: var(--accent);
-  border: 2px solid var(--accent);
-  border-radius: var(--radius);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.goal-edit-banner__text {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--accent-foreground);
-}
-
-.goal-edit-banner__cancel {
-  flex-shrink: 0;
-  padding: 4px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--accent-foreground);
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 0.15s;
-  white-space: nowrap;
-}
-
-.goal-edit-banner__cancel:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
 
 /* 底部卡片共用外壳（composer / 提问 / 回答 / 批准共用）：
    高度由内部容器撑起，内部容器顶满 slot 宽度 */
@@ -4440,40 +4136,6 @@ body.bottom-panel-resizing {
 
 .settings-row__control {
   flex: 0 0 auto;
-}
-
-.settings-goal-rounds {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.settings-goal-rounds__field {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.settings-goal-rounds__input {
-  width: 84px;
-  height: 32px;
-  padding: 0 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--input);
-  color: var(--text-base, var(--foreground));
-  font-size: 13px;
-  outline: none;
-}
-
-.settings-goal-rounds__input:focus {
-  border-color: var(--accent, #6366f1);
-}
-
-.settings-goal-rounds__unit {
-  font-size: 13px;
-  color: var(--text-muted, #9ca3af);
 }
 
 .settings-number-input {
@@ -10109,7 +9771,7 @@ body.bottom-panel-resizing {
   color: var(--accent);
 }
 
-.todo-block__head .goal-card__todos-count {
+.todo-block__head .todo-block__count {
   margin-left: auto;
 }
 
@@ -10130,6 +9792,75 @@ body.bottom-panel-resizing {
   opacity: 1;
   color: var(--foreground);
   background: var(--material-control);
+}
+
+.todo-block__count {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.todo-block__toggle {
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+}
+
+.todo-block__toggle-open {
+  transform: rotate(180deg);
+}
+
+.todo-block__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.todo-block__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--foreground);
+  padding: 2px 0;
+  min-width: 0;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+
+.todo-block__item:hover {
+  opacity: 0.7;
+}
+
+.todo-block__item > span {
+  /* Long todo text (including unbroken strings/paths) wraps to multiple lines
+     at a fixed width instead of stretching the card / overflowing. */
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.todo-block__item--completed {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+
+.todo-block__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+  flex-shrink: 0;
+}
+
+.todo-block__item--in_progress .todo-block__dot {
+  background: var(--ring);
 }
 
 /* ── Org team settings panel ─────────────────────────────────────────── */

@@ -293,8 +293,6 @@ export interface ChatRequest {
   language: Language;
   work_mode?: WorkMode;
   autonomy?: Autonomy;
-  goal_mode?: boolean;
-  goal_text?: string;
   provider_id?: string;
   model?: string;
   project_id?: string;
@@ -375,18 +373,7 @@ export interface SessionSummary {
   work_mode?: string;
   autonomy?: string;
   message_count: number;
-  goal_done?: boolean;
-  goal_paused?: boolean;
-  goal_text?: string;
-  goal_todos?: GoalTodo[];
-  goal_max_rounds?: number;
-  goal_force_count?: number;
-  goal_stopped?: boolean;
-  goal_just_edited?: boolean;
-  goal_stream_id?: string;
-  goal_interrupted?: boolean;
-  goal_phase?: 'plan' | 'execute' | 'verify';
-  goal_round?: number;
+  todos?: Todo[];
 }
 
 export type ProjectMode = 'single' | 'multi';
@@ -669,17 +656,7 @@ export interface PendingRequest {
       }
     | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
     | { type: 'error'; error: string; session_id?: string }
-    | { type: 'goal_start'; goal: string; session_id?: string }
-    | { type: 'goal_round'; round: number; goal: string; status?: string; phase?: 'plan' | 'execute' | 'verify'; session_id?: string }
-    | { type: 'goal_edited'; goal: string; round?: number; stream_id?: string; session_id?: string }
-    | { type: 'goal_checkpoint'; achieved: boolean; progress?: string; verification?: string; session_id?: string }
-    | { type: 'goal_done'; goal?: string; content?: string; verification?: string; round?: number; session_id?: string; stalled?: boolean; reason?: string; already?: boolean }
-    | { type: 'goal_paused'; goal?: string; round?: number; session_id?: string }
-    | { type: 'goal_force'; round: number; reason: string; count: number; session_id?: string }
-    | { type: 'todos'; todos: GoalTodo[]; session_id?: string }
-    | { type: 'goal_stream_id'; stream_id: string; session_id: string }
-    | { type: 'goal_system'; content: string; session_id?: string }
-    | { type: 'goal_attached'; stream_id: string; session_id: string }
+    | { type: 'todos'; todos: Todo[]; session_id?: string }
     | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string }
     | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string }
     | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string }
@@ -717,33 +694,9 @@ export interface ContextUsage {
   windowWarning?: string;
 }
 
-export interface GoalTodo {
+export interface Todo {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
-}
-
-export interface GoalState {
-  goalText: string;
-  done: boolean;
-  paused: boolean;
-  todos: GoalTodo[];
-  running: boolean;
-  round: number;
-  progress: string;
-  phase?: 'plan' | 'execute' | 'verify';
-  stalled?: boolean;
-  stopped?: boolean;
-  reason?: string;
-  editingDraft?: boolean;
-  recentToolNames?: string[];
-}
-
-export interface GoalStatusResponse {
-  status: string;
-  session_id: string;
-  goal: GoalState;
-  goal_stream_id?: string;
-  goal_interrupted?: boolean;
 }
 
 // -- Skills -----------------------------------------------------------------

@@ -45,7 +45,6 @@ import type {
   StreamEvent,
   ToolAuditResponse,
   WorkspaceBranchResponse,
-  GoalStatusResponse,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
@@ -160,13 +159,8 @@ export interface ChatService {
     onEvent: StreamEventCallback,
     options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string },
   ) => Promise<void>;
-  getGoalStatus: (sessionId: string) => Promise<GoalStatusResponse>;
-  pauseGoal: (sessionId: string) => Promise<{ status: string }>;
-  editGoal: (sessionId: string, goal: string) => Promise<{ status: string }>;
-  deleteGoal: (sessionId: string) => Promise<{ status: string }>;
-  resumeGoal: (sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
-  fetchSettings: () => Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
-  saveSettings: (settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }) => Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>;
+  fetchSettings: () => Promise<{ max_attachment_mb: number; revert_code: boolean }>;
+  saveSettings: (settings: { max_attachment_mb?: number; revert_code?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean }>;
   listMcps: () => Promise<McpServerListPayload>;
   discoverMcps: () => Promise<McpDiscoverPayload>;
   createMcp: (request: McpServerCreateRequest) => Promise<McpServerEntry>;
@@ -781,53 +775,14 @@ class ElectronChatService implements ChatService {
     }
   }
 
-  async getGoalStatus(sessionId: string): Promise<GoalStatusResponse> {
+  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.goalStatus(sessionId);
+    return window.electronAPI.fetchSettings?.() ?? { max_attachment_mb: 25, revert_code: true };
   }
 
-  async pauseGoal(sessionId: string): Promise<{ status: string }> {
+  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.goalPause(sessionId);
-  }
-  async editGoal(sessionId: string, goal: string): Promise<{ status: string }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.goalEdit({ session_id: sessionId, goal });
-  }
-
-  async deleteGoal(sessionId: string): Promise<{ status: string }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.goalDelete(sessionId);
-  }
-
-  async resumeGoal(sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    const requestId = `goal-resume-${Date.now()}`;
-    const abortStream = () => window.electronAPI?.abortChatStream(requestId);
-    const detachAbortListener = attachAbortListener(signal, abortStream);
-    let idleTimer: ReturnType<typeof setTimeout> | undefined;
-    const resetIdle = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => abortStream(), STREAM_IDLE_TIMEOUT_MS);
-    };
-    resetIdle();
-    const wrappedEvent: StreamEventCallback = (event) => { resetIdle(); onEvent(event); };
-    try {
-      await window.electronAPI.goalResume(requestId, sessionId, wrappedEvent, getLanguage(), signal);
-    } finally {
-      if (idleTimer) clearTimeout(idleTimer);
-      detachAbortListener();
-    }
-  }
-
-  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.fetchSettings?.() ?? { goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true };
-  }
-
-  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
-    if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', goal_max_rounds: 50, max_attachment_mb: 25, revert_code: true };
+    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', max_attachment_mb: 25, revert_code: true };
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -1237,38 +1192,6 @@ class HttpChatService implements ChatService {
     await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, payload, onEvent, options?.signal);
   }
 
-  async getGoalStatus(sessionId: string): Promise<GoalStatusResponse> {
-    return this.request<GoalStatusResponse>(`/goal/status?session_id=${encodeURIComponent(sessionId)}`);
-  }
-
-  async pauseGoal(sessionId: string): Promise<{ status: string }> {
-    return this.request<{ status: string }>('/goal/pause', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
-  }
-
-  async editGoal(sessionId: string, goal: string): Promise<{ status: string }> {
-    return this.request<{ status: string }>('/goal/edit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, goal }),
-    });
-  }
-
-  async deleteGoal(sessionId: string): Promise<{ status: string }> {
-    return this.request<{ status: string }>('/goal/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
-    });
-  }
-
-  async resumeGoal(sessionId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
-    await this.streamPost('/goal/resume', { session_id: sessionId, language: getLanguage() }, onEvent, signal);
-  }
-
   private async streamPost(path: string, payload: Record<string, unknown>, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
     // Merge the external abort signal with an idle watchdog so a backend
     // stream that stops pushing events (hung provider) cannot leave a bubble
@@ -1402,12 +1325,12 @@ class HttpChatService implements ChatService {
     return response.title;
   }
 
-  async fetchSettings(): Promise<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
-    return this.request<{ goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>('/settings');
+  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean }> {
+    return this.request<{ max_attachment_mb: number; revert_code: boolean }>('/settings');
   }
 
-  async saveSettings(settings: { goal_max_rounds?: number; max_attachment_mb?: number; revert_code?: boolean }): Promise<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }> {
-    return this.request<{ status: string; goal_max_rounds: number; max_attachment_mb: number; revert_code: boolean }>('/settings', {
+  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean }> {
+    return this.request<{ status: string; max_attachment_mb: number; revert_code: boolean }>('/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),

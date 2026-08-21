@@ -1,4 +1,4 @@
-import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Target, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
+import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import type { AppView, OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -49,7 +49,6 @@ interface WorkspaceSidebarProps {
   onRenameProject: (project: ProjectEntry) => void;
   onDeleteProject: (projectId: string) => void;
   onOpenOrgSettings?: (projectId: string) => void;
-  goalIndicatorSessionId?: string;
 }
 
 interface SessionRowProps {
@@ -58,7 +57,6 @@ interface SessionRowProps {
   running: boolean;
   onOpen: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
-  goalIndicatorSessionId?: string;
 }
 
 const DEFAULT_AGENT_ID = 'default_agent';
@@ -110,7 +108,7 @@ function orderProjects(projects: ProjectEntry[], preferred: string[]): ProjectEn
   return result;
 }
 
-function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorSessionId }: SessionRowProps) {
+function SessionRow({ session, active, running, onOpen, onDelete }: SessionRowProps) {
   const [copied, setCopied] = useState(false);
   const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -135,7 +133,6 @@ function SessionRow({ session, active, running, onOpen, onDelete, goalIndicatorS
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`} onContextMenu={(e) => { e.preventDefault(); setSessionMenu({ x: e.clientX, y: e.clientY }); }}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
         {running && <Loader2 size={13} className="sidebar-session__running-icon" aria-label="Running" />}
-        {goalIndicatorSessionId === session.id && <Target size={13} className="sidebar-session__goal-icon" />}
         <span className="sidebar-session__title">{session.title}</span>
         <span className="sidebar-session__time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
       </button>
