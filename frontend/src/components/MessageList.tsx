@@ -208,7 +208,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
           <>
             {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
             {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
-            {toolParts.length > 0 && <ToolChain toolParts={toolParts} running={isRunning} />}
+            {toolParts.length > 0 && <ToolChain toolParts={toolParts} />}
             {agentParts.map((part) => (
               <AgentBlock
                 key={`agent-${part.workerRunId}`}

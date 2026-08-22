@@ -4,6 +4,16 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
+/* shadcn 的 prefers-reduced-motion 規則會把 .shimmer 的文字填充改成
+   currentColor，使「疊加副本」shimmer（trigger 上的靜態重複文字）變成可見。
+   這裡覆蓋回 transparent：基底文字本身已顯示 label，疊加層只做流光動畫，
+   reduce-motion 下保持隱形即可，避免 running 態出現重複文字。 */
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    -webkit-text-fill-color: transparent;
+  }
+}
+
 @custom-variant dark (&:is(.dark *));
 @custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
 @custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

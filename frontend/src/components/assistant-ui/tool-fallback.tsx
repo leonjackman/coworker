@@ -152,7 +152,7 @@ function ToolFallbackTrigger({
       <Icon data-slot="tool-fallback-trigger-icon"className={cn("aui-tool-fallback-trigger-icon size-4 shrink-0",isCancelled && "text-muted-foreground",isRunning && "animate-spin [animation-duration:0.6s]",)}/>
       <span data-slot="tool-fallback-trigger-label"className={cn("aui-tool-fallback-trigger-label-wrapper relative inline-block text-start leading-none",isCancelled && "text-muted-foreground line-through",)}>
         <span>{label}: <b>{toolName}</b></span>
-        {isRunning && (<span aria-hiddendata-slot="tool-fallback-trigger-shimmer"className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none">{label}: <b>{toolName}</b></span>)}
+        {isRunning && (<span aria-hidden data-slot="tool-fallback-trigger-shimmer" className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none">{label}: <b>{toolName}</b></span>)}
       </span>
       {preview && (
         <span

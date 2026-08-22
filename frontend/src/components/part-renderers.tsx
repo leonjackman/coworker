@@ -25,12 +25,13 @@ export interface AgentBlockRenderProps {
 
 export type AgentBlockRenderer = (props: AgentBlockRenderProps) => ReactNode;
 
-export function ToolChain({ toolParts, running }: { toolParts: Extract<MessagePart, { type: 'tool' }>[]; running?: boolean }) {
+export function ToolChain({ toolParts }: { toolParts: Extract<MessagePart, { type: 'tool' }>[] }) {
   const visibleTools = toolParts.filter((t) => !HIDDEN_TOOLS.has(t.name) && !IGNORED_TOOLS.has(t.name));
   // 运行/折叠态：工具全部折进单个 ToolGroup，仅在 trigger 上暴露当前正在跑的
   // tool（名 + 命令/路径预览），与成功态同构；展开后仍能看到每张卡的实时进度。
+  // 转圈图标只跟 tool 自身状态绑定：工具跑完即停，不再受整个消息 running 态拖累。
   const runningTool = toolParts.find((part) => part.status === 'running');
-  const active = Boolean(running) || Boolean(runningTool);
+  const active = Boolean(runningTool);
   const current = runningTool ? toolLabel(runningTool.name) : undefined;
   const preview = runningTool ? toolPreview(runningTool.name, runningTool.input) : undefined;
   return (
@@ -77,7 +78,7 @@ export function OrderedParts({
   let toolRun: Extract<MessagePart, { type: 'tool' }>[] = [];
   const flushTools = (key: string) => {
     if (toolRun.length > 0) {
-      nodes.push(<ToolChain key={key} toolParts={toolRun} running={running} />);
+      nodes.push(<ToolChain key={key} toolParts={toolRun} />);
       toolRun = [];
     }
   };

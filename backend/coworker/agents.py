@@ -1598,6 +1598,14 @@ def _terminate_stray_tools(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return terminated
 
 
+# Reserved ``tool_state`` key: maps a tool call's streaming ``index`` to its
+# ``id``. LangGraph's ``tool_call_chunks`` carry the id/name only on the FIRST
+# chunk of a call; continuation chunks (incremental args) reuse the same index
+# with an empty id. Without this map they would be dropped and tool input would
+# stay a partial JSON fragment (e.g. ``{"command":``) for the whole turn.
+_TOOL_INDEX_MAP_KEY = "__cw_tool_index_map__"
+
+
 def _message_chunk_events(
     msg: Any,
     content_parts: list[str],
@@ -1646,9 +1654,17 @@ def _message_chunk_events(
             tc_id = tc.get("id") or ""
             tc_name = tc.get("name") or ""
             tc_args = tc.get("args") or ""
+            tc_index = tc.get("index")
 
             if not tc_id:
-                continue
+                # Continuation chunk: args stream incrementally, only the first
+                # chunk of a tool call carries the id. Route by index to the
+                # tool it belongs to; drop only if the index is unknown.
+                idx_map = tool_state.get(_TOOL_INDEX_MAP_KEY) or {}
+                if tc_index is None or tc_index not in idx_map:
+                    continue
+                tc_id = idx_map[tc_index]
+                tc_name = tool_state.get(tc_id, {}).get("name", "") or tc_name
 
             if tc_name == "write_todos":
                 if tc_id in tool_state:
@@ -1660,7 +1676,12 @@ def _message_chunk_events(
                 continue
 
             if tc_id not in tool_state:
-                tool_state[tc_id] = {"name": tc_name or "", "input": "", "status": "running", "started_at": time.time()}
+                # Start with the first args chunk so tool_state["input"] (used
+                # by tool_end / real_file_changes) reflects the full accumulated
+                # args — otherwise the leading fragment is lost.
+                tool_state[tc_id] = {"name": tc_name or "", "input": tc_args, "status": "running", "started_at": time.time()}
+                if tc_index is not None:
+                    tool_state.setdefault(_TOOL_INDEX_MAP_KEY, {})[tc_index] = tc_id
                 parts.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
                 events.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
             else:
@@ -1686,6 +1707,13 @@ def _message_chunk_events(
             return events
         tool_status = "success" if (getattr(msg, "status", "") or "success") == "success" else "error"
         if tc_id in tool_state:
+            # Tool finished: drop its index mapping so a stale continuation chunk
+            # can never be mis-routed to this (now complete) tool.
+            idx_map = tool_state.get(_TOOL_INDEX_MAP_KEY)
+            if idx_map:
+                for idx, mapped in list(idx_map.items()):
+                    if mapped == tc_id:
+                        idx_map.pop(idx, None)
             tool_state[tc_id]["status"] = tool_status
             tool_state[tc_id]["output"] = str(content)[:2000]
             started_at = tool_state[tc_id].get("started_at")

@@ -32,9 +32,51 @@ function tryParse(input: string): Record<string, unknown> | null {
 
 const PATH_KEYS = ['file_path', 'path', 'target', 'file_paths'];
 
+const QUOTED = /"((?:[^"\\]|\\.)*)"/g;
+
+/**
+ * Progressively extract a readable value for `key` from a STILL-STREAMING (and
+ * therefore invalid) JSON fragment. `run_command`'s `command` is the common
+ * case: while args stream in, the raw string is `{"command":` and then
+ * `{"command":["npm","run",...` — parse the value as it arrives instead of
+ * dumping raw JSON. Returns null when the key or its value hasn't arrived yet.
+ */
+function progressiveValue(raw: string, key: string): string | null {
+  const idx = raw.indexOf(`"${key}"`);
+  if (idx < 0) return null;
+  const rest = raw.slice(idx + `"${key}"`.length);
+  const colon = rest.match(/^\s*:\s*/);
+  if (!colon) return null;
+  const val = rest.slice(colon[0].length);
+
+  const str = val.match(/^"((?:[^"\\]|\\.)*)"/);
+  if (str) return str[1]!;
+
+  if (val.startsWith('[')) {
+    const end = val.indexOf(']');
+    const arr = end >= 0 ? val.slice(0, end + 1) : val;
+    const tokens: string[] = [];
+    for (const match of arr.matchAll(QUOTED)) tokens.push(match[1]!);
+    return tokens.join(' ');
+  }
+
+  const scalar = val.match(/^(-?\d+(?:\.\d+)?|true|false|null)/);
+  return scalar ? scalar[1]! : null;
+}
+
+function partialPreview(name: string, input: string): string {
+  const candidates = name === 'run_command' ? ['command'] : ['url', 'query', 'pattern', 'question', 'file_path', 'path', 'task'];
+  for (const key of candidates) {
+    const value = progressiveValue(input, key);
+    if (value) return value;
+  }
+  const cleaned = (input || '').replace(/^\s*\{/, '').replace(/\s*$/, '');
+  return (cleaned || input || '').slice(0, 80);
+}
+
 export function toolPreview(name: string, input: string): string {
   const args = tryParse(input);
-  if (!args) return (input || '').slice(0, 80);
+  if (!args) return partialPreview(name, input);
   const stringify = (value: unknown): string =>
     typeof value === 'string' ? value : JSON.stringify(value);
 
