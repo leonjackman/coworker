@@ -1797,7 +1797,9 @@ function openSseStream({
       if (parsed && parsed.type && TERMINAL_TYPES.has(parsed.type)) {
         terminalForwarded = true;
       }
-      if (sender) sender.send(eventName, { requestId, event: parsed });
+      if (sender && !sender.isDestroyed()) {
+        sender.send(eventName, { requestId, event: parsed });
+      }
     }
 
     if (method === 'POST' || method === 'PUT') {
