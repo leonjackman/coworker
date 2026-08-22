@@ -4,6 +4,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolGroup, ToolGroupTrigger, ToolGroupContent } from './assistant-ui/tool-group';
+import { toolLabel, toolPreview } from './toolMeta';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
@@ -16,8 +17,6 @@ export const IGNORED_TOOLS = new Set(['ask_user']);
  */
 export const HIDDEN_TOOLS = new Set(['use_worker', 'delegate_task', 'delegate_parallel']);
 
-const CONTEXT_TOOLS = new Set(['read_file', 'search_files']);
-
 export interface AgentBlockRenderProps {
   part: PartAgent;
   messageId?: string;
@@ -26,83 +25,34 @@ export interface AgentBlockRenderProps {
 
 export type AgentBlockRenderer = (props: AgentBlockRenderProps) => ReactNode;
 
-interface ToolGroupNode {
-  key: string;
-  tools: Extract<MessagePart, { type: 'tool' }>[];
-}
-
-function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): { groups: ToolGroupNode[]; ignored: Extract<MessagePart, { type: 'tool' }>[] } {
-  const groups: ToolGroupNode[] = [];
-  const ignored: Extract<MessagePart, { type: 'tool' }>[] = [];
-  let current: Extract<MessagePart, { type: 'tool' }>[] = [];
-  const flush = () => {
-    if (current.length > 0) {
-      groups.push({ key: current[0]!.id, tools: current });
-      current = [];
-    }
-  };
-  for (const part of toolParts) {
-    if (HIDDEN_TOOLS.has(part.name)) {
-      continue;
-    }
-    if (IGNORED_TOOLS.has(part.name)) {
-      ignored.push(part);
-    } else if (CONTEXT_TOOLS.has(part.name)) {
-      current.push(part);
-    } else {
-      flush();
-      groups.push({ key: part.id, tools: [part] });
-    }
-  }
-  flush();
-  return { groups, ignored };
-}
-
 export function ToolChain({ toolParts, running }: { toolParts: Extract<MessagePart, { type: 'tool' }>[]; running?: boolean }) {
-  if (!running) {
-    const visibleTools = toolParts.filter((t) => !HIDDEN_TOOLS.has(t.name) && !IGNORED_TOOLS.has(t.name));
-    const active = toolParts.some((part) => part.status === 'running');
-    return (
-      <div className="tool-chain">
-        {toolParts.filter((part) => IGNORED_TOOLS.has(part.name)).map((part) => (
-          <ToolCallCard key={part.id} tool={part} />
-        ))}
-        {visibleTools.length > 0 && (
-          <ToolGroup.Root variant="ghost">
-            <ToolGroupTrigger count={visibleTools.length} active={active} />
-            <ToolGroupContent>
-              {visibleTools.map((part) => (
-                <ToolCallCard key={part.id} tool={part} />
-              ))}
-            </ToolGroupContent>
-          </ToolGroup.Root>
-        )}
-      </div>
-    );
-  }
-  const { groups, ignored } = buildToolGroups(toolParts);
+  const visibleTools = toolParts.filter((t) => !HIDDEN_TOOLS.has(t.name) && !IGNORED_TOOLS.has(t.name));
+  // 运行/折叠态：工具全部折进单个 ToolGroup，仅在 trigger 上暴露当前正在跑的
+  // tool（名 + 命令/路径预览），与成功态同构；展开后仍能看到每张卡的实时进度。
+  const runningTool = toolParts.find((part) => part.status === 'running');
+  const active = Boolean(running) || Boolean(runningTool);
+  const current = runningTool ? toolLabel(runningTool.name) : undefined;
+  const preview = runningTool ? toolPreview(runningTool.name, runningTool.input) : undefined;
   return (
     <div className="tool-chain">
-      {ignored.map((part) => (
+      {toolParts.filter((part) => IGNORED_TOOLS.has(part.name)).map((part) => (
         <ToolCallCard key={part.id} tool={part} />
       ))}
-      {groups.map((group) => {
-        if (group.tools.length === 1) {
-          const single = group.tools[0]!;
-          return <ToolCallCard key={single.id} tool={single} />;
-        }
-        const active = group.tools.some((part) => part.status === 'running');
-        return (
-          <ToolGroup.Root key={group.key} variant="ghost">
-            <ToolGroupTrigger count={group.tools.length} active={active} />
-            <ToolGroupContent>
-              {group.tools.map((part) => (
-                <ToolCallCard key={part.id} tool={part} />
-              ))}
-            </ToolGroupContent>
-          </ToolGroup.Root>
-        );
-      })}
+      {visibleTools.length > 0 && (
+        <ToolGroup.Root variant="ghost">
+          <ToolGroupTrigger
+            count={visibleTools.length}
+            active={active}
+            {...(current !== undefined ? { current } : {})}
+            {...(preview !== undefined ? { preview } : {})}
+          />
+          <ToolGroupContent>
+            {visibleTools.map((part) => (
+              <ToolCallCard key={part.id} tool={part} />
+            ))}
+          </ToolGroupContent>
+        </ToolGroup.Root>
+      )}
     </div>
   );
 }

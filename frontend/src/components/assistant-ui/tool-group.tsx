@@ -95,11 +95,15 @@ function ToolGroupRoot({
 function ToolGroupTrigger({
   count,
   active = false,
+  current,
+  preview,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   count: number;
   active?: boolean;
+  current?: string;
+  preview?: string;
 }) {
   const label = `${count} tool ${count === 1 ? "call" : "calls"}`;
 
@@ -130,17 +134,34 @@ function ToolGroupTrigger({
           "group-data-[variant=muted]/tool-group-root:grow",
         )}
       >
-        <span className="text-xs">{label}</span>
+        {current ? (
+          <span className="text-xs">
+            <b>{current}</b> · {label}
+          </span>
+        ) : (
+          <span className="text-xs">{label}</span>
+        )}
         {active && (
           <span
             aria-hidden
             data-slot="tool-group-trigger-shimmer"
             className="aui-tool-group-trigger-shimmer shimmer pointer-events-none absolute inset-0 text-xs motion-reduce:animate-none"
           >
-            {label}
+            {current ? <><b>{current}</b> · {label}</> : label}
           </span>
         )}
       </span>
+      {preview && (
+        <span
+          data-slot="tool-group-trigger-preview"
+          className={cn(
+            "aui-tool-group-trigger-preview text-muted-foreground/70 min-w-0 max-w-full shrink-0 flex-[0_0_55%] truncate font-mono text-xs text-left",
+            !active && "opacity-60",
+          )}
+        >
+          {preview}
+        </span>
+      )}
       <ChevronDownIcon
         data-slot="tool-group-trigger-chevron"
         className={cn(
