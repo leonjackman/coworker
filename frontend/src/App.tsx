@@ -177,6 +177,39 @@ function settleRunningTools(parts: MessagePart[]): MessagePart[] {
 }
 
 /**
+ * 流式文本渲染节流。每 token 都触发 setMessages 会让 React 对整段累积文本全量
+ * 重解析 markdown（长回复/代码块尤其重），主线程被占满 → 文本「卡住不动、
+ * 稍后一次性补齐」。这里数据仍实时累积（streamedContent/localParts），仅把
+ * UI 推送限频；终态时 flushNow() 一次补齐。
+ */
+function createStreamThrottle(flush: () => void, intervalMs = 60) {
+  let lastFlush = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const update = () => {
+    const now = Date.now();
+    const elapsed = now - lastFlush;
+    if (elapsed >= intervalMs) {
+      lastFlush = now;
+      flush();
+    } else if (timer === undefined) {
+      timer = setTimeout(() => {
+        timer = undefined;
+        lastFlush = Date.now();
+        flush();
+      }, intervalMs - elapsed);
+    }
+  };
+  const flushNow = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    flush();
+  };
+  return { update, flushNow };
+}
+
+/**
  * Apply a delegation frame (delegate_start / delegate_progress / delegate_end)
  * to a parts array: creates the worker PartAgent block on start, updates its
  * status/error/chars on progress/end. Shared by the main stream, edit/rerun and
@@ -1256,6 +1289,16 @@ function App() {
     let receivedDone = false;
     let streamStartAt = Date.now();
     streamStartAtsRef.current[streamKey(requestSessionId)] = streamStartAt;
+    // 文本渲染限频：避免每 token 全量重解析 markdown 导致主线程卡顿
+    // （表现：文本中途卡住、稍后一次性补齐）。
+    const flushText = () => {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+        ),
+      );
+    };
+    const textThrottle = createStreamThrottle(flushText);
 
     const handleEvent = (event: StreamEvent) => {
       trackBrowserToolEvent(event);
@@ -1289,11 +1332,7 @@ function App() {
         streamedContent += event.content;
         // 与 worker 流共用同一 reducer，保证主流与 worker 转录用相同方式渲染。
         localParts = applyStreamEventToParts(localParts, event);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        textThrottle.update();
       } else if (event.type === 'reasoning_delta') {
         localParts = applyStreamEventToParts(localParts, event);
         setMessages((current) =>
@@ -1367,6 +1406,7 @@ function App() {
           ),
         );
       } else if (event.type === 'done') {
+        textThrottle.flushNow();
         receivedDone = true;
         // Only confirm the session for the currently-viewed session's stream;
         // a background stream from another session must never hijack the view.
@@ -1395,6 +1435,7 @@ function App() {
         // switching back.
         setSessionTodos(event.session_id ?? requestSessionId, assistantMessageId, event.todos);
       } else if (event.type === 'error') {
+        textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -1704,6 +1745,15 @@ function App() {
     const controller = new AbortController();
     streamControllersRef.current[streamKey(currentSessionId)] = controller;
     activeAssistantMessageIdsRef.current[streamKey(currentSessionId)] = assistantMessageId;
+    // 文本渲染限频（与主流一致），避免长回复 markdown 全量重解析卡住主线程。
+    const flushText = () => {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+        ),
+      );
+    };
+    const textThrottle = createStreamThrottle(flushText);
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
@@ -1743,11 +1793,7 @@ function App() {
         } else {
           localParts.push({ type: 'text', content: event.content });
         }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        textThrottle.update();
       } else if (event.type === 'reasoning_delta') {
         const last = localParts[localParts.length - 1];
         if (last && last.type === 'reasoning') {
@@ -1824,6 +1870,7 @@ function App() {
           ),
         );
       } else if (event.type === 'done') {
+        textThrottle.flushNow();
         receivedDone = true;
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
@@ -1846,6 +1893,7 @@ function App() {
           ),
         );
       } else if (event.type === 'error') {
+        textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -1952,6 +2000,15 @@ function App() {
     const controller = new AbortController();
     streamControllersRef.current[streamKey(currentSessionId)] = controller;
     activeAssistantMessageIdsRef.current[streamKey(currentSessionId)] = assistantMessageId;
+    // 文本渲染限频（与主流一致），避免长回复 markdown 全量重解析卡住主线程。
+    const flushText = () => {
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+        ),
+      );
+    };
+    const textThrottle = createStreamThrottle(flushText);
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
@@ -1990,11 +2047,7 @@ function App() {
         } else {
           localParts.push({ type: 'text', content: event.content });
         }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        textThrottle.update();
       } else if (event.type === 'reasoning_delta') {
         const last = localParts[localParts.length - 1];
         if (last && last.type === 'reasoning') {
@@ -2072,6 +2125,7 @@ function App() {
           ),
         );
       } else if (event.type === 'done') {
+        textThrottle.flushNow();
         receivedDone = true;
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
@@ -2095,6 +2149,7 @@ function App() {
           ),
         );
       } else if (event.type === 'error') {
+        textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
@@ -2287,6 +2342,8 @@ function App() {
         ),
       );
     };
+    // 文本渲染限频（与主流一致），避免长回复 markdown 全量重解析卡住主线程。
+    const resumeThrottle = createStreamThrottle(() => applyResume('running'));
     try {
       await chatService.subscribeApprovalEvents(
         resumeId,
@@ -2302,6 +2359,7 @@ function App() {
             return;
           }
           if (event.type === 'done') {
+            resumeThrottle.flushNow();
             resumeDone = true;
             resumeContent = event.content || resumeContent;
             if (event.parts && event.parts.length > 0) {
@@ -2321,7 +2379,7 @@ function App() {
             } else {
               resumeParts.push({ type: 'text', content: event.content });
             }
-            applyResume('running');
+            resumeThrottle.update();
           } else if (event.type === 'reasoning_delta') {
             const last = resumeParts[resumeParts.length - 1];
             if (last && last.type === 'reasoning') {
@@ -2398,6 +2456,7 @@ function App() {
               ),
             );
       } else if (event.type === 'error') {
+        resumeThrottle.flushNow();
         resumeParts = settleRunningTools(resumeParts);
         setMessages((current) =>
           current.map((item) =>

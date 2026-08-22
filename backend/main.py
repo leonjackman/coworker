@@ -544,6 +544,7 @@ async def _publish_turn(
     subscriber would hang waiting for a terminal ``worker_stream_end``.
     """
     try:
+        published = 0
         async for kind, payload in _sse_events(
             _tracked_stream(stream_iter, session_id),
             on_event=on_event,
@@ -557,6 +558,13 @@ async def _publish_turn(
                 session_event_bus.close(session_id)
             elif kind == "end":
                 session_event_bus.close(session_id)
+            # Model bursts can drain hundreds of deltas in one synchronous run
+            # (queue.get() on a non-empty queue never yields to the loop), which
+            # would starve the SSE subscriber task. Yield periodically so the
+            # subscriber keeps pace and the bus buffer never needs eviction.
+            published += 1
+            if published % 32 == 0:
+                await asyncio.sleep(0)
     except BaseException:  # noqa: BLE001 - incl. cancellation; must close the bus
         session_event_bus.close(session_id)
         raise

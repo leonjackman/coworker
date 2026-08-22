@@ -41,9 +41,20 @@ class WorkerEventBus:
         self._seen: set[str] = set()
         self._loaded: set[str] = set()
         self._notify: dict[str, asyncio.Event] = {}
+        # buffer_size <= 0 means unbounded (deque without maxlen). The session
+        # bus uses this: a bounded queue + positional cursor in stream() drops
+        # deltas whenever publishing outpaces the SSE subscriber (model bursts
+        # get evicted, the cursor goes stale, and the frontend freezes until the
+        # turn's done.parts lands). Unbounded guarantees nothing in-flight is
+        # ever lost; each turn's buffer is purged when the subscription ends.
         self._buffer_size = buffer_size
         self._data_dir: Path | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _new_buffer(self) -> deque:
+        if self._buffer_size <= 0:
+            return deque()
+        return deque(maxlen=self._buffer_size)
 
     def configure(self, data_dir: Path | str | None) -> None:
         """Point the bus at a directory for on-disk event persistence (optional)."""
@@ -76,7 +87,7 @@ class WorkerEventBus:
                     line = line.strip()
                     if not line:
                         continue
-                    buf = self._buffers.setdefault(run_id, deque(maxlen=self._buffer_size))
+                    buf = self._buffers.setdefault(run_id, self._new_buffer())
                     buf.append(json.loads(line))
                     self._seen.add(run_id)
         except Exception:  # noqa: BLE001 - replay must never break the stream
@@ -105,7 +116,7 @@ class WorkerEventBus:
         """Publish an event to a worker run. Safe to call from any thread."""
         with self._lock:
             self._seen.add(run_id)
-            buf = self._buffers.setdefault(run_id, deque(maxlen=self._buffer_size))
+            buf = self._buffers.setdefault(run_id, self._new_buffer())
             buf.append(event)
             f = self._file_for(run_id)
         if f is not None:
@@ -122,7 +133,7 @@ class WorkerEventBus:
         terminal: dict[str, Any] = {"type": "worker_stream_end", "worker_run_id": run_id}
         with self._lock:
             self._closed.add(run_id)
-            buf = self._buffers.setdefault(run_id, deque(maxlen=self._buffer_size))
+            buf = self._buffers.setdefault(run_id, self._new_buffer())
             buf.append(terminal)
             f = self._file_for(run_id)
         if f is not None:
@@ -206,5 +217,7 @@ worker_event_bus = WorkerEventBus()
 # (replay + live). Because the bus fan-out is independent of the graph generator
 # being blocked on a long-running tool, tool/worker status transitions reach the
 # frontend live — exactly like opencode's session event bus. Memory-only (no
-# configure); each turn's buffer is purged when its subscription ends.
-session_event_bus = WorkerEventBus()
+# configure); UNBOUNDED buffer (a bounded deque + positional cursor would drop
+# deltas whenever publishing outpaces the SSE subscriber), and each turn's buffer
+# is purged when its subscription ends.
+session_event_bus = WorkerEventBus(buffer_size=0)

@@ -7,7 +7,6 @@ import { ToolGroup, ToolGroupTrigger, ToolGroupContent } from './assistant-ui/to
 import { toolLabel, toolPreview } from './toolMeta';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
-
 /** Tools rendered as tool cards; anything listed here is shown elsewhere. */
 export const IGNORED_TOOLS = new Set(['ask_user']);
 
@@ -90,6 +89,8 @@ export function OrderedParts({
     flushTools(`tools-${index}`);
     if (part.type === 'text') {
       if (isError) return;
+      // 流式期间也直接渲染 markdown（60ms 节流由 App.tsx 控制重渲染频率），
+      // 不要给用户看 raw markdown 源码。
       nodes.push(
         <Suspense key={`text-${index}`} fallback={<div className="markdown-body">{part.content}</div>}>
           <MarkdownContent content={part.content} />
