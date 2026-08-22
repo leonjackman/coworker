@@ -39,8 +39,16 @@ class WorkerEventBus:
         self._buffers: dict[str, deque] = {}
         self._closed: set[str] = set()
         self._seen: set[str] = set()
+        self._expected: set[str] = set()
         self._loaded: set[str] = set()
         self._notify: dict[str, asyncio.Event] = {}
+        # Subscriber refcount per run. stream() increments on attach and purges
+        # the run's in-memory state once the last subscriber leaves a closed run.
+        # Worker runs stay disk-backed, so a later stream() re-hydrates from the
+        # persisted JSONL (see purge()). Without this, every completed worker run
+        # keeps its buffer + seen/closed/loaded/notify entries forever — a slow
+        # but unbounded memory leak across many worker runs in a long-lived backend.
+        self._subs: dict[str, int] = {}
         # buffer_size <= 0 means unbounded (deque without maxlen). The session
         # bus uses this: a bounded queue + positional cursor in stream() drops
         # deltas whenever publishing outpaces the SSE subscriber (model bursts
@@ -48,6 +56,12 @@ class WorkerEventBus:
         # turn's done.parts lands). Unbounded guarantees nothing in-flight is
         # ever lost; each turn's buffer is purged when the subscription ends.
         self._buffer_size = buffer_size
+        # Subscribe-before-publish grace: an unknown run (no event published yet)
+        # is heartbeated up to this many wait periods before terminating, instead
+        # of giving up after a single short timeout. This closes the race where a
+        # frontend expanding a just-spawned worker block subscribes before the
+        # worker's first bus event and is handed a bogus terminal frame.
+        self._unknown_idle_cap = int(os.environ.get("COWORKER_BUS_UNKNOWN_IDLE_CAP", "6"))
         self._data_dir: Path | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -94,10 +108,23 @@ class WorkerEventBus:
             logger.warning("worker event replay failed for %s", run_id, exc_info=True)
 
     def _is_seen(self, run_id: str) -> bool:
-        if run_id in self._seen or run_id in self._buffers:
+        if run_id in self._seen or run_id in self._buffers or run_id in self._expected:
             return True
         f = self._file_for(run_id)
         return f is not None and f.exists()
+
+    def expect(self, run_id: str) -> None:
+        """Register a worker run that is about to start (spawned) but has not
+        published its first event yet.
+
+        Called by the worker engine when it emits ``delegate_start``. Subscribers
+        that attach to an *expected* run are treated as attaching to a real pending
+        run: they never get an early ``worker_stream_end`` and simply heartbeat at
+        the normal cadence until the run closes. Only never-registered (garbage)
+        run ids hit the bounded unknown-run grace window.
+        """
+        with self._lock:
+            self._expected.add(run_id)
 
     def _wake(self, run_id: str) -> None:
         ev = self._notify.get(run_id)
@@ -129,7 +156,14 @@ class WorkerEventBus:
         self._wake(run_id)
 
     def close(self, run_id: str) -> None:
-        """Mark a run finished; append the terminal event (persisted for replay)."""
+        """Mark a run finished; append the terminal event (persisted for replay).
+
+        If no subscriber is currently attached, the run's in-memory state is
+        dropped right away (the on-disk JSONL still allows later replay). Active
+        subscribers keep the buffer; stream()'s refcount purges once the last one
+        leaves. This makes ``close()`` the authoritative cleanup signal, so even
+        never-subscribed runs cannot leak memory.
+        """
         terminal: dict[str, Any] = {"type": "worker_stream_end", "worker_run_id": run_id}
         with self._lock:
             self._closed.add(run_id)
@@ -144,9 +178,18 @@ class WorkerEventBus:
             except Exception:  # noqa: BLE001 - persistence is best-effort
                 logger.warning("worker terminal persist failed for %s", run_id, exc_info=True)
         self._wake(run_id)
+        # No live subscriber: nothing else will drain the buffer. Drop it now —
+        # but ONLY when the run is disk-backed, so a later subscriber can still
+        # re-hydrate the full history. Without disk, the in-memory buffer is the
+        # only copy and must be kept (it is bounded at buffer_size). Active
+        # subscribers keep the buffer; stream()'s refcount purges when the last
+        # one leaves.
+        with self._lock:
+            if self._subs.get(run_id, 0) == 0 and self._data_dir is not None:
+                self.purge(run_id)
 
     def purge(self, run_id: str) -> None:
-        """Drop a finished run's memory footprint (buffer/notify/closed/loaded/seen).
+        """Drop a finished run's memory footprint (buffer/notify/closed/loaded/seen/expected).
 
         Used by the session event bus after each turn so per-turn keys do not
         accumulate unboundedly. Worker runs remain disk-backed: the next
@@ -158,55 +201,80 @@ class WorkerEventBus:
             self._closed.discard(run_id)
             self._loaded.discard(run_id)
             self._seen.discard(run_id)
+            self._expected.discard(run_id)
 
     async def stream(self, run_id: str):
         """Async generator: replay persisted history, follow live, then terminate.
 
         Yields ``None`` on heartbeat timeout so the caller can emit an SSE
         comment line (``: ping``) to keep the connection alive. A subscriber
-        that attaches before the run's first event gets a short grace window
+        that attaches before the run's first event gets a bounded grace window
         (subscribe-before-publish race) before the run is treated as finished.
+
+        The generator holds a subscriber refcount for the run; once the last
+        subscriber leaves a *closed* run, the run's in-memory state is purged
+        (the on-disk JSONL still allows later replay).
         """
         self._bind_loop()
         cursor = 0
-        while True:
-            with self._lock:
-                self._load_from_disk(run_id)
-                buf = self._buffers.get(run_id)
-                closed = run_id in self._closed
-                seen = self._is_seen(run_id)
-                if buf is None:
-                    if not seen and closed:
-                        yield {"type": "worker_stream_end", "worker_run_id": run_id}
-                        return
-                    buf = deque()
-                items = list(buf)[cursor:]
-                cursor += len(items)
-            for event in items:
-                yield event
-                if isinstance(event, dict) and event.get("type") == "worker_stream_end":
-                    return
-            with self._lock:
-                closed = run_id in self._closed
-                buf = self._buffers.get(run_id)
-                if buf is not None and cursor >= len(buf) and closed:
-                    yield {"type": "worker_stream_end", "worker_run_id": run_id}
-                    return
-            ev = self._notify.setdefault(run_id, asyncio.Event())
-            # Unknown runs (first event not yet published) get a short grace
-            # window; idle known runs simply heartbeat at the normal cadence.
-            with self._lock:
-                timeout = min(SSE_HEARTBEAT_SECONDS, 5.0) if not self._is_seen(run_id) else SSE_HEARTBEAT_SECONDS
-            try:
-                await asyncio.wait_for(ev.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
+        unknown_idle = 0
+        with self._lock:
+            self._subs[run_id] = self._subs.get(run_id, 0) + 1
+        try:
+            while True:
                 with self._lock:
-                    if not self._is_seen(run_id):
+                    self._load_from_disk(run_id)
+                    buf = self._buffers.get(run_id)
+                    closed = run_id in self._closed
+                    seen = self._is_seen(run_id)
+                    if buf is None:
+                        if closed and not seen:
+                            yield {"type": "worker_stream_end", "worker_run_id": run_id}
+                            return
+                        buf = deque()
+                    items = list(buf)[cursor:]
+                    cursor += len(items)
+                for event in items:
+                    yield event
+                    if isinstance(event, dict) and event.get("type") == "worker_stream_end":
+                        return
+                with self._lock:
+                    closed = run_id in self._closed
+                    buf = self._buffers.get(run_id)
+                    if buf is not None and cursor >= len(buf) and closed:
                         yield {"type": "worker_stream_end", "worker_run_id": run_id}
                         return
-                yield None
-                continue
-            ev.clear()
+                ev = self._notify.setdefault(run_id, asyncio.Event())
+                # Unknown runs (first event not yet published) get a short grace
+                # window; idle known runs simply heartbeat at the normal cadence.
+                with self._lock:
+                    timeout = min(SSE_HEARTBEAT_SECONDS, 5.0) if not self._is_seen(run_id) else SSE_HEARTBEAT_SECONDS
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    with self._lock:
+                        if not self._is_seen(run_id):
+                            unknown_idle += 1
+                            if closed or unknown_idle >= self._unknown_idle_cap:
+                                yield {"type": "worker_stream_end", "worker_run_id": run_id}
+                                return
+                    yield None
+                    continue
+                ev.clear()
+        finally:
+            with self._lock:
+                self._subs[run_id] = max(0, self._subs.get(run_id, 1) - 1)
+                if self._subs[run_id] == 0:
+                    del self._subs[run_id]
+                    # Purge once the last subscriber leaves a disk-backed run: the
+                    # history stays on disk, so a later stream() re-hydrates from the
+                    # persisted JSONL. This also covers runs closed *after* a late
+                    # subscriber re-hydrated them (their _closed marker was already
+                    # wiped by close()'s purge-on-no-subscribers). Non-disk-backed
+                    # buses (session bus) keep their buffer as the only copy — the
+                    # session endpoints purge explicitly per turn.
+                    if self._data_dir is not None:
+                        self.purge(run_id)
 
 
 worker_event_bus = WorkerEventBus()

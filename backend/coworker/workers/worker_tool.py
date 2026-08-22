@@ -44,6 +44,7 @@ class UseWorkerTool:
         max_concurrent: int = 4,
         delegation_emit: Any | None = None,
         worker_bus: Any | None = None,
+        depth: int = 0,
     ):
         self.llm = llm
         self.workspace = workspace
@@ -62,6 +63,10 @@ class UseWorkerTool:
         self.max_concurrent = max_concurrent
         self.delegation_emit = delegation_emit or (lambda event: None)
         self.worker_bus = worker_bus
+        # 委派深度：主 agent = 0；spawn 出的 worker = depth+1。子代理自身工具集
+        # 由构造方（agents.build_workspace_tools）预先排除委派/spawn 工具，这里
+        # 只负责把深度传给引擎做兜底。
+        self.depth = depth
 
     def create_tool(self) -> Any:
         """创建 langchain @tool 装饰的函数。"""
@@ -103,12 +108,15 @@ class UseWorkerTool:
             caller_phase = getattr(self.workspace, "_current_phase", "execute")
             worker_readonly = caller_phase != "execute"
 
+            # self.tools 由构造方（agents.build_workspace_tools）在构造期就已排除
+            # 委派/spawn 工具（use_worker/delegate_*），worker 因此天然无法再 spawn
+            # 子代理；这里把深度传给引擎做兜底（见 WorkerAgent._execute 的 max_depth）。
             worker = WorkerAgent(
                 llm=self.llm,
                 brief=brief,
                 config=config,
                 workspace=self.workspace,
-                tools=self.tools,  # 继承父 agent 的工具集
+                tools=self.tools,
                 approval_store=self.approval_store,
                 change_store=self.change_store,
                 session_store=self.session_store,
@@ -122,6 +130,7 @@ class UseWorkerTool:
                 readonly=worker_readonly,
                 emit=self.delegation_emit,
                 worker_bus=self.worker_bus,
+                depth=self.depth + 1,
             )
 
             # 异步调用：LangGraph 在 async 上下文中 await 此工具

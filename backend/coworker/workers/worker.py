@@ -67,6 +67,7 @@ class WorkerAgent:
         emit: Any | None = None,
         worker_bus: Any | None = None,
         worker_run_id: str = "",
+        depth: int = 0,
     ):
         self.llm = llm
         self.brief = brief
@@ -90,6 +91,10 @@ class WorkerAgent:
         self.emit = emit or (lambda event: None)
         self.worker_bus = worker_bus
         self.worker_run_id = worker_run_id
+        # 委派深度：主 agent = 0，use_worker/delegate 每 spawn 一层 +1。
+        # 引擎级兜底：超过 config.max_depth 的子代理直接拒绝运行，防止任何
+        # spawn 路径（use_worker 或 delegate_task）形成无限嵌套链。
+        self.depth = depth
         self._thread_id: str = ""
         self._semaphore: asyncio.Semaphore | None = None
 
@@ -106,6 +111,18 @@ class WorkerAgent:
 
     async def _execute(self) -> WorkerResult:
         """执行子代理并处理结果。"""
+        # 引擎级深度兜底：达到或超过上限的子代理拒绝运行（不再 emit delegate_start，
+        # 前端不会出现空转的 worker 块）。正常路径由工具构造期过滤 + 委派端
+        # max_depth 前置校验保证，这里是最后的保险。
+        if self.depth >= self.config.max_depth:
+            return WorkerResult(
+                content=f"委派深度已达上限（max_depth={self.config.max_depth}），无法继续 spawn 子代理。",
+                success=False,
+                error="max_depth",
+                raw_length=0,
+                was_truncated=False,
+            )
+
         # 唯一 run id：既作为 worker 的 thread_id 一部分，也作为前端订阅
         # /worker-events/{worker_run_id} 的键。delegate_start/end 摘要帧携带它，
         # worker 内部流通过 worker_event_bus 独立发布（不进入主 SSE 流）。
@@ -121,6 +138,16 @@ class WorkerAgent:
             "task": self.brief.task[:200],
             "worker_run_id": worker_run_id,
         })
+
+        # 在 worker 开始发布内部流之前，先向 worker bus 注册这个 run 为"预期中的
+        # 真实 run"。这样即使前端在首个事件到达前就订阅（收到 delegate_start 后立即
+        # 展开块），也不会被当作未知 run 提前给 worker_stream_end —— 根源性消除
+        # subscribe-before-publish 竞态，而不是靠调大超时窗口。
+        if self.worker_bus is not None:
+            try:
+                self.worker_bus.expect(worker_run_id)
+            except Exception:  # noqa: BLE001 - expect 失败不能杀死 worker
+                logger.warning("worker bus expect failed for %s", worker_run_id, exc_info=True)
 
         # 1. 构建独立 graph
         graph = self._build_graph()

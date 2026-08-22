@@ -240,9 +240,13 @@ function applyDelegateEventToParts(parts: MessagePart[], event: StreamEvent): Me
   }
   if (event.type !== 'delegate_progress' && event.type !== 'delegate_end') return parts;
   const runId = event.worker_run_id || '';
+  // A delegation frame without a worker_run_id cannot be attributed to any
+  // specific block — never apply it to *every* agent part (an empty runId used
+  // to match all of them, corrupting sibling worker blocks in the same message).
+  if (!runId) return parts;
   return parts.map((p) => {
     if (p.type !== 'agent') return p;
-    if (runId && p.workerRunId !== runId) return p;
+    if (p.workerRunId !== runId) return p;
     if (event.type === 'delegate_progress') {
       return {
         ...p,
@@ -275,6 +279,38 @@ function upsertToolPart(parts: MessagePart[], id: string, name: string, input: s
     next.push(part);
   }
   return next;
+}
+
+/**
+ * Merge the live worker transcript back into the main stream's parts write.
+ *
+ * The main stream accumulates a separate `localParts` closure (the delegate
+ * *summary frame* only: `{workerRunId, status, chars, parts: []}`), while the
+ * worker's internal transcript (nested `parts` + `transcriptLoaded`) is written
+ * into React state by `subscribeWorkerTranscript`. A plain `parts: [...localParts]`
+ * write therefore overwrites the worker transcript every time the main agent
+ * streams — resetting `transcriptLoaded`, so an open worker block keeps falling
+ * back to the "正在加载 worker 流…" placeholder. This merge makes the main
+ * stream's write non-destructive: summary fields come from `nextParts`, the live
+ * transcript state comes from the current message.
+ */
+function mergeLiveAgentTranscript(nextParts: MessagePart[], currentParts: MessagePart[] | undefined): MessagePart[] {
+  if (!currentParts) return nextParts;
+  return nextParts.map((np) => {
+    if (np.type !== 'agent') return np;
+    const cur = currentParts.find(
+      (cp): cp is Extract<MessagePart, { type: 'agent' }> =>
+        cp.type === 'agent' && cp.workerRunId === np.workerRunId,
+    );
+    if (!cur) return np;
+    return {
+      ...np,
+      parts: cur.parts ?? np.parts,
+      ...(cur.transcriptLoaded !== undefined ? { transcriptLoaded: cur.transcriptLoaded } : {}),
+      ...(cur.done !== undefined ? { done: cur.done } : {}),
+      ...(cur.error ? { error: cur.error } : {}),
+    };
+  });
 }
 
 /**
@@ -581,6 +617,10 @@ function App() {
   // transcript can be subscribed on demand (block expanded) and aborted when the
   // message/component is torn down.
   const workerStreamControllersRef = useRef<Record<string, AbortController>>({});
+  // Bounded retries for the subscribe-before-publish race: when a worker stream
+  // terminates empty (no done/error/parts) we allow ONE re-subscribe per run so a
+  // slow-starting worker still gets its live transcript, but never loop forever.
+  const workerStreamRetriesRef = useRef<Record<string, number>>({});
 
   /**
    * Subscribe to a worker sub-agent's dedicated SSE stream and fold its events
@@ -623,6 +663,22 @@ function App() {
                 return { ...p, error: event.error, done: true };
               }
               if (event.type === 'worker_stream_end') {
+                // Terminal frame with NO prior done/error and an empty (or still
+                // empty) transcript usually means the subscribe raced the worker's
+                // first event (subscribe-before-publish) and was handed a bogus
+                // terminal. Reset transcriptLoaded so a re-expand re-subscribes and
+                // replays the persisted run once it actually has events. A finished
+                // worker always delivers done/error before worker_stream_end, so this
+                // cannot flip a genuinely-finished block back to loading. Bounded to
+                // one retry per run to avoid a re-subscribe loop on a truly-empty run.
+                const hasRealTerminal = p.done || p.error || (p.parts && p.parts.length > 0);
+                if (!hasRealTerminal) {
+                  const retries = workerStreamRetriesRef.current[workerRunId] ?? 0;
+                  if (retries < 1) {
+                    workerStreamRetriesRef.current[workerRunId] = retries + 1;
+                    return { ...p, transcriptLoaded: false };
+                  }
+                }
                 return { ...p, done: true };
               }
               return { ...p, parts: applyStreamEventToParts(p.parts, event) };
@@ -641,6 +697,25 @@ function App() {
         }
       });
   }, []);
+
+  // Auto-subscribe every worker transcript as soon as its block exists — not on
+  // expand. The subscription is therefore established the moment the block is
+  // created (right after delegate_start), before (or concurrently with) the
+  // worker's first bus event, so it can never race the worker's first event.
+  // Expanding the block only reveals already-streamed/replayed content.
+  // subscribeWorkerTranscript dedupes by worker_run_id and marks transcriptLoaded,
+  // so this effect stays a no-op for blocks already subscribed or settled.
+  useEffect(() => {
+    for (const m of messages) {
+      if (!m.parts || m.parts.length === 0) continue;
+      for (const p of m.parts) {
+        if (p.type !== 'agent') continue;
+        if (p.workerRunId && !p.transcriptLoaded) {
+          subscribeWorkerTranscript(m.id, p);
+        }
+      }
+    }
+  }, [messages, subscribeWorkerTranscript]);
 
   // Codex-style "queue while streaming": per-session FIFO of messages typed
   // while the agent is replying. Each entry auto-sends as the next request once
@@ -1292,13 +1367,30 @@ function App() {
     // 文本渲染限频：避免每 token 全量重解析 markdown 导致主线程卡顿
     // （表现：文本中途卡住、稍后一次性补齐）。
     const flushText = () => {
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-        ),
-      );
+      commit(localParts);
     };
     const textThrottle = createStreamThrottle(flushText);
+    // Non-destructive parts write for the main stream: preserves live worker
+    // transcripts (mergeLiveAgentTranscript) instead of overwriting them with
+    // the main stream's delegate summary frames. Extra status/content/streamEndAt
+    // patches cover the terminal variants (done/error/stopped/waiting).
+    const commit = (
+      nextParts: MessagePart[],
+      patch?: { content?: string; status?: ChatMessage['status']; streamEndAt?: number },
+    ) =>
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                content: patch?.content !== undefined ? patch.content : streamedContent,
+                parts: mergeLiveAgentTranscript(nextParts, item.parts),
+                ...(patch?.status ? { status: patch.status } : {}),
+                ...(patch?.streamEndAt !== undefined ? { streamEndAt: patch.streamEndAt } : {}),
+              }
+            : item,
+        ),
+      );
 
     const handleEvent = (event: StreamEvent) => {
       trackBrowserToolEvent(event);
@@ -1335,11 +1427,7 @@ function App() {
         textThrottle.update();
       } else if (event.type === 'reasoning_delta') {
         localParts = applyStreamEventToParts(localParts, event);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_start') {
         localParts = applyStreamEventToParts(localParts, event);
         // Built-in browser: auto-open the right-side browser tab so the user
@@ -1354,57 +1442,31 @@ function App() {
           }
           ensureBrowserTab(url);
         }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_delta') {
         localParts = applyStreamEventToParts(localParts, event);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_end') {
         localParts = applyStreamEventToParts(localParts, event);
         // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
         const finishedTool = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (finishedTool?.name === 'install_skill') void refreshSkills();
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'plan_start' || event.type === 'plan_delta' || event.type === 'plan_end') {
         localParts = applyStreamEventToParts(localParts, event);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
         // 每个 worker run 一个独立 PartAgent block。worker_run_id 作为订阅
         // /worker-events/{id} 的键；缺失时（旧后端）生成一个稳定的 fallback key。
         localParts = applyDelegateEventToParts(localParts, event);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
         const pending = pendingRequestFromEvent(event, sessionIdValue, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
         playSound('attention');
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: t('chat.waiting_resolution'), status: 'waiting', parts: [...localParts] }
-              : item,
-          ),
-        );
+        commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
         textThrottle.flushNow();
         receivedDone = true;
@@ -1419,13 +1481,7 @@ function App() {
           localParts = mergeMessageParts(localParts, event.parts);
         }
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() }
-              : item,
-          ),
-        );
+        commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? requestSessionId);
         playSound('reply_done');
       } else if (event.type === 'todos') {
@@ -1437,13 +1493,7 @@ function App() {
       } else if (event.type === 'error') {
         textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts], streamEndAt: Date.now() }
-              : item,
-          ),
-        );
+        commit(localParts, { content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? requestSessionId);
       } else if (event.type === 'idle_warning') {
         // Backend detected N seconds of inactivity on the SSE stream.
@@ -1493,13 +1543,7 @@ function App() {
       console.error('Failed to stream message:', error);
       if ((error as Error).name === 'AbortError') {
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: streamedContent || t('chat.stopped'), status: 'stopped', parts: [...localParts], streamEndAt: Date.now() }
-              : item,
-          ),
-        );
+        commit(localParts, { content: streamedContent || t('chat.stopped'), status: 'stopped', streamEndAt: Date.now() });
       } else {
         setRuntimeStatus('error');
         setMessages((current) =>
@@ -1747,13 +1791,29 @@ function App() {
     activeAssistantMessageIdsRef.current[streamKey(currentSessionId)] = assistantMessageId;
     // 文本渲染限频（与主流一致），避免长回复 markdown 全量重解析卡住主线程。
     const flushText = () => {
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-        ),
-      );
+      commit(localParts);
     };
     const textThrottle = createStreamThrottle(flushText);
+    // Non-destructive parts write: preserves live worker transcripts (see
+    // mergeLiveAgentTranscript) instead of overwriting them with the delegate
+    // summary frames accumulated in localParts.
+    const commit = (
+      nextParts: MessagePart[],
+      patch?: { content?: string; status?: ChatMessage['status']; streamEndAt?: number },
+    ) =>
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                content: patch?.content !== undefined ? patch.content : streamedContent,
+                parts: mergeLiveAgentTranscript(nextParts, item.parts),
+                ...(patch?.status ? { status: patch.status } : {}),
+                ...(patch?.streamEndAt !== undefined ? { streamEndAt: patch.streamEndAt } : {}),
+              }
+            : item,
+        ),
+      );
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
@@ -1801,27 +1861,15 @@ function App() {
         } else {
           localParts.push({ type: 'reasoning', content: event.content });
         }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_start') {
         // 编辑/重生成路径支持 tool_delta（P1 修复）
         localParts = upsertToolPart(localParts, event.id, event.name, event.input || '');
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_delta') {
         const td = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (td) td.input = (td.input || '') + (event.input || '');
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_end') {
         const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (toolPart) {
@@ -1833,11 +1881,7 @@ function App() {
         }
         // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
         if (toolPart?.name === 'install_skill') void refreshSkills();
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'plan_start' || event.type === 'plan_delta' || event.type === 'plan_end') {
         if (event.type === 'plan_start') {
           localParts.push({ type: 'plan', content: '' });
@@ -1848,38 +1892,22 @@ function App() {
             else if (event.type === 'plan_end' && event.content) planPart.content = event.content;
           }
         }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
         localParts = applyDelegateEventToParts(localParts, event);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'waiting', parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
         textThrottle.flushNow();
         receivedDone = true;
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
-          ),
-        );
+        commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
       } else if (event.type === 'todos') {
         setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
@@ -1895,13 +1923,7 @@ function App() {
       } else if (event.type === 'error') {
         textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts], streamEndAt: Date.now() }
-              : item,
-          ),
-        );
+        commit(localParts, { content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_error');
       }
@@ -2002,13 +2024,29 @@ function App() {
     activeAssistantMessageIdsRef.current[streamKey(currentSessionId)] = assistantMessageId;
     // 文本渲染限频（与主流一致），避免长回复 markdown 全量重解析卡住主线程。
     const flushText = () => {
-      setMessages((current) =>
-        current.map((item) =>
-          item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-        ),
-      );
+      commit(localParts);
     };
     const textThrottle = createStreamThrottle(flushText);
+    // Non-destructive parts write: preserves live worker transcripts (see
+    // mergeLiveAgentTranscript) instead of overwriting them with the delegate
+    // summary frames accumulated in localParts.
+    const commit = (
+      nextParts: MessagePart[],
+      patch?: { content?: string; status?: ChatMessage['status']; streamEndAt?: number },
+    ) =>
+      setMessages((current) =>
+        current.map((item) =>
+          item.id === assistantMessageId
+            ? {
+                ...item,
+                content: patch?.content !== undefined ? patch.content : streamedContent,
+                parts: mergeLiveAgentTranscript(nextParts, item.parts),
+                ...(patch?.status ? { status: patch.status } : {}),
+                ...(patch?.streamEndAt !== undefined ? { streamEndAt: patch.streamEndAt } : {}),
+              }
+            : item,
+        ),
+      );
     const handleEvent = (event: StreamEvent) => {
       // P1 陈旧守卫：仅同会话内被更新的流视为陈旧；其它会话的后台流继续更新自己的消息
       if (isStreamStale(currentSessionId, myRequestSeq)) return;
@@ -2055,27 +2093,15 @@ function App() {
         } else {
           localParts.push({ type: 'reasoning', content: event.content });
         }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_start') {
         // 编辑/重生成路径支持 tool_delta（P1 修复）
         localParts = upsertToolPart(localParts, event.id, event.name, event.input || '');
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_delta') {
         const td = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (td) td.input = (td.input || '') + (event.input || '');
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'tool_end') {
         const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (toolPart) {
@@ -2087,11 +2113,7 @@ function App() {
         }
         // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
         if (toolPart?.name === 'install_skill') void refreshSkills();
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'plan_start' || event.type === 'plan_delta' || event.type === 'plan_end') {
         if (event.type === 'plan_start') {
           localParts.push({ type: 'plan', content: '' });
@@ -2102,39 +2124,23 @@ function App() {
             else if (event.type === 'plan_end' && event.content) planPart.content = event.content;
           }
         }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
         localParts = applyDelegateEventToParts(localParts, event);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts);
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
         playSound('attention');
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: t('chat.waiting_resolution'), status: 'waiting', parts: [...localParts] } : item,
-          ),
-        );
+        commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
         textThrottle.flushNow();
         receivedDone = true;
         streamedContent = event.content || streamedContent;
         if (event.parts && event.parts.length > 0) localParts = event.parts;
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, status: 'done', parts: [...localParts], streamEndAt: Date.now() } : item,
-          ),
-        );
+        commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_done');
       } else if (event.type === 'todos') {
@@ -2151,13 +2157,7 @@ function App() {
       } else if (event.type === 'error') {
         textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: [...localParts], streamEndAt: Date.now() }
-              : item,
-          ),
-        );
+        commit(localParts, { content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_error');
       }

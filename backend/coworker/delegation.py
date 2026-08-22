@@ -396,6 +396,7 @@ class Delegator:
             memory_manager=view,
             memory_rel=memory_rel,
             language=self.language,
+            max_depth=max_depth,
         )
 
         worker = WorkerAgent(
@@ -420,6 +421,7 @@ class Delegator:
             autonomy=self.autonomy,
             worker_bus=self.worker_bus,
             worker_run_id=worker_run_id,
+            depth=depth,
         )
 
         # 同步调用（delegation 目前是同步的）

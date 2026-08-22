@@ -973,10 +973,19 @@ def build_workspace_tools(
     if use_worker_enabled and worker_llm is not None:
         from coworker.workers.worker_tool import UseWorkerTool
 
+        # 根源性护栏：在构造期就为子代理准备干净的工具集——排除所有委派/spawn
+        # 工具并拷贝成独立列表。否则 worker 继承同一可变 tools 列表（下面 append
+        # 的 use_worker 会泄漏进去），可无限嵌套 spawn 子代理（单 agent 模式无
+        # org.max_depth 约束）。worker 只做一次性研究/分析，不需要再委派。
+        worker_tools = [
+            tool
+            for tool in tools
+            if getattr(tool, "name", "") not in _CHILD_EXCLUDED_TOOLS
+        ]
         worker_tool = UseWorkerTool(
             llm=worker_llm,
             workspace=workspace,
-            tools=tools,  # 让 worker 能看到完整工具目录（worker 自己决定是否使用）
+            tools=worker_tools,
             approval_store=worker_approval_store,
             change_store=change_store,
             session_store=session_store,
@@ -991,6 +1000,7 @@ def build_workspace_tools(
             max_concurrent=max_concurrent,
             delegation_emit=delegation_emit,
             worker_bus=worker_bus,
+            depth=0,
         )
         tools.append(worker_tool.create_tool())
     return tools
@@ -1003,6 +1013,11 @@ _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", 
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
 _EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker"}
+
+# 子代理（worker）工具集在构造期就排除的委派/spawn 工具。把这些工具塞给子代理，
+# 会允许 worker 无限嵌套 spawn 更多 worker/team（单 agent 模式没有 org.max_depth
+# 约束）。见 build_workspace_tools 中 UseWorkerTool 的 tools= 传参。
+_CHILD_EXCLUDED_TOOLS = {"use_worker", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}
 
 
 def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
