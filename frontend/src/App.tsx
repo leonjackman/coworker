@@ -677,6 +677,7 @@ function App() {
                 ...item,
                 content: fallback || t('chat.stream_interrupted'),
                 status: 'interrupted',
+                parts: settleRunningTools(item.parts ?? []),
                 ...(extraParts ? partsField(item, mergeMessageParts(item.parts || [], extraParts)) : {}),
                 streamEndAt: Date.now(),
               }
@@ -1448,10 +1449,11 @@ function App() {
       if (isStreamStale(requestSessionId, myRequestSeq)) return;
       console.error('Failed to stream message:', error);
       if ((error as Error).name === 'AbortError') {
+        localParts = settleRunningTools(localParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId
-              ? { ...item, content: streamedContent || t('chat.stopped'), status: 'stopped', streamEndAt: Date.now() }
+              ? { ...item, content: streamedContent || t('chat.stopped'), status: 'stopped', parts: [...localParts], streamEndAt: Date.now() }
               : item,
           ),
         );
@@ -1545,7 +1547,7 @@ function App() {
       setMessages((current) =>
         current.map((item) =>
           item.id === assistantMessageId && item.status === 'running'
-            ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped', streamStartAt: streamStartAt ?? Date.now(), streamEndAt: Date.now() }
+            ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped', parts: settleRunningTools(item.parts ?? []), streamStartAt: streamStartAt ?? Date.now(), streamEndAt: Date.now() }
             : item,
         ),
       );

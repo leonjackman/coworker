@@ -93,6 +93,8 @@
   "chat.toggle_autonomy": "Autonomie umschalten",
   "chat.stop": "Stopp",
   "chat.stopped": "Warten auf diese Antwort gestoppt. Falls der Dienst bereits mit der Verarbeitung begonnen hat, wird sein Ergebnis ignoriert.",
+  "chat.meta_stopped": "Gestoppt",
+  "chat.meta_interrupted": "Unterbrochen",
   "chat.stream_interrupted": "Verbindung unterbrochen; die Antwort kann unvollständig sein. Sie können sie neu generieren.",
   "chat.slash_tooltip": "/-Befehl einfügen",
   "chat.new_chat_tooltip": "Neuen Chat starten",

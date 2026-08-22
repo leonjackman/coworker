@@ -49,7 +49,6 @@ function WorkerTranscript({ part }: { part: PartAgent }) {
         parts={parts}
         running={!done && status === 'running'}
         isError={status === 'error'}
-        isStopped={false}
       />
     );
   }

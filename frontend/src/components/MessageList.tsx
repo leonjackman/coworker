@@ -126,11 +126,10 @@ function UserMessage({ message, onEdit, onRedo }: { message: ChatMessage; onEdit
 
 function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSubscribeWorker }: { message: ChatMessage; onRegenerate?: () => void; actionsDisabled?: boolean; onSubscribeWorker?: (messageId: string, part: PartAgent) => void }) {
   const isError = message.status === 'error';
-  const isStopped = message.status === 'stopped' || message.status === 'interrupted';
-  const isInterrupted = message.status === 'interrupted';
   const isRunning = message.status === 'running';
   const isRunningEmpty = isRunning && !message.content;
   const isWaiting = message.status === 'waiting';
+  const isInterrupted = message.status === 'interrupted';
 
   // 流式进行中，让计时每秒跳动（否则只在收到 token 时刷新，思考阶段会"卡住"）
   const [, forceTick] = useState(0);
@@ -161,6 +160,8 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
   if (message.model) {
     metaParts.push(message.provider ? `${message.provider} · ${message.model}` : message.model);
   }
+  // 停止/打断与成功态同构渲染，仅用 meta 小标签提示回复不完整。
+  const statusLabel = message.status === 'stopped' ? t('chat.meta_stopped') : isInterrupted ? t('chat.meta_interrupted') : null;
   // 任务总计时：收到任务开始计时，done/error/stopped 结束
   if (message.streamStartAt) {
     if (message.streamEndAt) {
@@ -189,6 +190,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
         </div>
         {metaText !== null && (
           <div className="assistant-meta">
+            {statusLabel !== null && <span className="assistant-meta__status">{statusLabel}</span>}
             <span>{metaText}</span>
           </div>
         )}
@@ -198,7 +200,6 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
             parts={msgParts}
             running={isRunning}
             isError={isError}
-            isStopped={isStopped}
             messageId={message.id}
             {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
             renderAgentBlock={AgentBlock}
@@ -221,7 +222,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
 
         {isRunning && hasRunningTools && <AgentActivity working={isRunning} />}
 
-        {!hasTextParts && !isError && !isStopped && !isRunningEmpty && !isWaiting && (
+        {!hasTextParts && !isError && !isRunningEmpty && !isWaiting && (
           <Suspense fallback={<div className="markdown-body">{message.content}</div>}>
             <MarkdownContent content={message.content} />
           </Suspense>
@@ -273,8 +274,6 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
               </button>
             )}
           </div>
-        ) : isStopped ? (
-          <div className="stream-stopped">{message.content}</div>
         ) : isWaiting ? (
           <div className="stream-waiting">
             <span className="stream-waiting__dot" aria-hidden="true" />
@@ -282,12 +281,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
           </div>
         ) : null}
 
-        {/* interrupted messages keep the regenerate action so the user can act on
-            the "connection interrupted; you can regenerate" hint. */}
-        {!isError && !isStopped && !isRunning && !isRunningEmpty && !isWaiting && (
-          <MessageActions role="assistant" content={message.content} disabled={actionsDisabled} {...(onRegenerate ? { onRegenerate } : {})} />
-        )}
-        {isInterrupted && (
+        {!isError && !isRunning && !isRunningEmpty && !isWaiting && (
           <MessageActions role="assistant" content={message.content} disabled={actionsDisabled} {...(onRegenerate ? { onRegenerate } : {})} />
         )}
       </div>

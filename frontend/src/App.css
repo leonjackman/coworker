@@ -2387,16 +2387,6 @@ body.bottom-panel-resizing {
   padding-left: 12px;
 }
 
-.stream-content--stopped {
-  border-left: 2px solid var(--material-border);
-  padding-left: 12px;
-}
-
-.stream-content--interrupted {
-  border-left: 2px solid var(--warning, #d99100);
-  padding-left: 12px;
-}
-
 /* HITL waiting state: agent paused mid-turn waiting for user decision.
    Mirrors the PendingDocks visual language (accent-tinted left border). */
 .stream-content--waiting {
@@ -2468,15 +2458,13 @@ body.bottom-panel-resizing {
   color: var(--accent);
   font-weight: 600;
 }
+.assistant-meta__status {
+  color: var(--warning, #d99100);
+  font-weight: 600;
+}
 
 .stream-error {
   color: #c95343;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.stream-stopped {
-  color: var(--muted-foreground);
   font-size: 13px;
   line-height: 1.6;
 }

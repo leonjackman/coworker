@@ -93,6 +93,8 @@
   "chat.toggle_autonomy": "Cambiar autonomía",
   "chat.stop": "Detener",
   "chat.stopped": "Se detuvo la espera de esta respuesta. Si el servicio ya comenzó a procesar, su resultado se ignorará.",
+  "chat.meta_stopped": "Detenido",
+  "chat.meta_interrupted": "Interrumpido",
   "chat.stream_interrupted": "Conexión interrumpida; la respuesta puede estar incompleta. Puedes regenerarla.",
   "chat.slash_tooltip": "Insertar comando /",
   "chat.new_chat_tooltip": "Iniciar un nuevo chat",

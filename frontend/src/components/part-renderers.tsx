@@ -112,7 +112,6 @@ export function OrderedParts({
   parts,
   running,
   isError,
-  isStopped,
   messageId,
   onSubscribeWorker,
   renderAgentBlock,
@@ -120,7 +119,6 @@ export function OrderedParts({
   parts: MessagePart[];
   running: boolean;
   isError: boolean;
-  isStopped: boolean;
   messageId?: string;
   onSubscribeWorker?: (messageId: string, part: PartAgent) => void;
   renderAgentBlock?: AgentBlockRenderer;
@@ -140,7 +138,7 @@ export function OrderedParts({
     }
     flushTools(`tools-${index}`);
     if (part.type === 'text') {
-      if (isError || isStopped) return;
+      if (isError) return;
       nodes.push(
         <Suspense key={`text-${index}`} fallback={<div className="markdown-body">{part.content}</div>}>
           <MarkdownContent content={part.content} />

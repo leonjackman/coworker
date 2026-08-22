@@ -122,6 +122,8 @@
   "chat.toggle_autonomy": "Basculer l'autonomie",
   "chat.stop": "Arrêter",
   "chat.stopped": "L'attente de cette réponse a été interrompue. Si le service a déjà commencé à traiter, son résultat sera ignoré.",
+  "chat.meta_stopped": "Arrêté",
+  "chat.meta_interrupted": "Interrompu",
   "chat.stream_interrupted": "Connexion interrompue ; la réponse peut être incomplète. Vous pouvez la regénérer.",
   "chat.slash_tooltip": "Insérer une commande /",
   "chat.new_chat_tooltip": "Démarrer une nouvelle discussion",
