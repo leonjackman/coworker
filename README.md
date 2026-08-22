@@ -37,19 +37,50 @@
 | 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
 | 📥 **Message Queue** | Keep typing while the agent works — sends queue up per session and auto-send one-by-one when the stream finishes |
 | 🔌 **Multi-Provider** | OpenAI, Ollama, and any OpenAI-compatible API, with live context-window discovery |
-| 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract and zip export / import |
+| 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract, zip export / import, trash recovery, and cross-directory migration |
 | 👥 **Multi-Agent Teams** ⚠️ | Create teams & departments and let agents delegate tasks to each other. **Experimental** — see note below |
+| 👤 **Sub-Agent Workers** | Spawn independent sub-agents in single-agent mode for parallel or sequential tasks, each with its own LLM graph, memory, and restricted toolset |
+| 🔄 **MCP Integration** | Model Context Protocol — stdio / HTTP / SSE / WebSocket / Streamable HTTP transports, OAuth 2.1 + PKCE, template discovery, persistent sessions |
+| 📦 **Skills** | SKILL.md-based skills with marketplace browsing, one-click install (SkillHub · ClawHub), and in-chat install via the agent |
+| 🌐 **Web Search & Fetch** | Web search powered by [Tavily](https://tavily.com) (`web_search`) and web page fetching (`web_fetch`), with configurable search depth, result count, Cloudflare retry, and secure keychain storage for your API key |
+| 🖥️ **Built-in Browser** | Embedded Chromium view the agent can drive — navigate, click, type, scroll, screenshot, evaluate JS, and read DOM; right-click to capture elements or the whole page into your chat |
 | 🔒 **Human-In-The-Loop** | Approves commands, file writes, and MCP tools before they run — with supervised / guarded / autonomous levels |
-| 🔄 **MCP Integration** | Model Context Protocol — stdio / HTTP / SSE / WebSocket transports, OAuth 2.1 + PKCE, template discovery, persistent sessions |
-| 📦 **Skills** | SKILL.md-based skills with marketplace browsing and one-click install (SkillHub · ClawHub) |
 | 📓 **Change Tracking** | Every file change logged with before/after diffs; edit / regenerate / revert restores the state before changes |
 | 🖥️ **Integrated Terminal** | Interactive PTY shell in the bottom panel, plus a live tool-audit feed |
 | 🔎 **Audit & Traces** | Tool-audit log and agent traces with export, clear, and retention caps |
 | ✏️ **Message Editing** | Edit or regenerate any user message — downstream code changes are rolled back and can be restored |
-| 🌎 **i18n** | 11 languages — English, Chinese (Simplified / Traditional), Japanese, Korean, French, German, Spanish, Portuguese, Russian |
-| 🎨 **Theme** | Dark / light / system with custom accent colors |
+| 📎 **File Attachments** | Send text or binary files in chat messages (default 25 MB limit, configurable 1–1024 MB); the agent reads content directly |
+| 🔗 **Session Cross-Reference** | Paste a session ID in chat so the agent can read context from other sessions |
+| 🛡️ **Sensitive File Protection** | Blocked reads of `.env`, `.pem`, `.key`, `id_rsa`, etc. and enforced workspace boundary for all file writes |
+| 📋 **Plan / Build Work Mode** | "Plan" is read-only — the agent can only view, search, and create plans. Switch to "Build" to unlock full write and execute capabilities |
+| 🌎 **i18n** | 11 languages — English, Chinese (Simplified / Traditional / HK), Japanese, Korean, French, German, Spanish, Portuguese, Russian |
+| 🎨 **Theme** | 10 curated OKLCH presets (Mineral, Hermes, Ember, Sage, Graphite, Azure, Nocturne, Solarized, Monokai, Violet), each with light/dark palettes, plus custom accent colors |
+| 🔊 **Sound Notifications** | Audio feedback on agent reply done, errors, and attention events, with a global toggle |
+| 📊 **Context Budget Indicator** | Live context-window usage bar showing token / character consumption and compaction tracking, so you always know your budget |
+| 🔄 **Auto-Update** | Supports pre-release channels, progress bar, version skip, error classification, and local version notifications |
 
 > ⚠️ **Multi-Agent (Experimental)** — Multi-agent teams, departments, and delegation are an experimental capability still under active development: the feature set is not yet complete, behavior may change, and the project mode is immutable after creation. Prefer single-agent mode for daily work.
+
+---
+
+## About Coworker
+
+**Coworker is a new product actively under rapid development.** New features are shipped frequently and breaking changes may happen. Some features are still in progress or may contain bugs. We encourage you to try it out, explore, report issues, and give feedback — your input directly shapes the direction of this project.
+
+New releases are published irregularly as the team moves quickly. Star the repo or watch releases to stay up to date.
+
+---
+
+## Product Positioning
+
+Coworker is a local-first, fully-featured AI coding assistant. Unlike traditional cloud-based coding tools, Coworker's core value proposition is:
+
+- **Privacy first** — all data (code, memory, chat logs) stays on your machine; nothing touches a third-party server
+- **Model agnostic** — no vendor lock-in; use OpenAI-compatible APIs, Ollama, or any custom endpoint
+- **Full-powered Agent** — web search, browser automation, file management, sub-agents, MCP extensions, and a skill marketplace
+- **Human-in-the-loop** — built-in review mechanism so you approve every critical action
+- **Fully traceable** — complete audit trails, agent trace export, rollback to any state
+- **Extensible** — MCP protocol + SKILL.md skill system + marketplace ecosystem
 
 ---
 
@@ -155,6 +186,7 @@ NODE_ENV=development npx electron . --no-sandbox
 | No control over agent actions | **HITL by default** — manually approve every command and file change |
 | No audit trail | **Full trace** — export agent traces, tool audit logs, rollback to any state |
 | Black-box tool execution | **Transparent** — every change logged with before/after diffs in a human-readable format |
+| Limited tool capabilities | **Rich tool ecosystem** — web search, built-in browser, sub-agents, MCP extensions, SKILL.md skill marketplace |
 
 ---
 
@@ -267,8 +299,10 @@ from a stale mid-task checkpoint.
 | **Desktop** | Electron 43 · contextBridge · tray · electron-updater |
 | **Frontend** | React 19 · Vite 8 · Zustand · xterm.js · Tailwind · Shiki |
 | **Backend** | Python 3 · FastAPI · Uvicorn · Pydantic · SQLite · LangGraph |
-| **Agent** | LangChain · LangGraph · HumanInTheLoopMiddleware |
+| **Agent** | LangChain 1.3 · LangGraph 1.2 · Multi-level review middlewares |
 | **Models** | OpenAI-compatible APIs · Ollama · custom base URLs |
+| **MCP** | MCP 1.29 · langchain-mcp-adapters 0.3 · Five transport protocols |
+| **Web Search** | Tavily API (configurable provider, search depth, result count) |
 | **Extensibility** | MCP servers · SKILL.md skills · SkillHub / ClawHub marketplaces |
 | **i18n** | en · zh · zh-TW · zh-HK · ja · ko · fr · de · es · pt-BR · ru |
 
