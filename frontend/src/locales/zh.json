@@ -899,5 +899,6 @@
   "chat.queue_section": "排队发送",
   "chat.remove_queued": "取消排队",
   "chat.edit_queued": "编辑排队消息",
-  "chat.reorder_queued": "拖动调整顺序"
+  "chat.reorder_queued": "拖动调整顺序",
+  "chat.worker_loading": "正在加载 worker 流…"
 }

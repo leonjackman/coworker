@@ -897,5 +897,6 @@
   "chat.queue_section": "Очередь сообщений",
   "chat.remove_queued": "Убрать из очереди",
   "chat.edit_queued": "Изменить сообщение в очереди",
-  "chat.reorder_queued": "Перетащите для изменения порядка"
+  "chat.reorder_queued": "Перетащите для изменения порядка",
+  "chat.worker_loading": "Загрузка потока worker…"
 }

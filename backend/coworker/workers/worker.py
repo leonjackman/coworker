@@ -12,7 +12,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from coworker.logger import get_logger
 from coworker.workers.worker_config import TaskBrief, WorkerConfig, WorkerResult
+
+logger = get_logger(__name__)
 
 
 class WorkerAgent:
@@ -62,6 +65,8 @@ class WorkerAgent:
         work_mode: str = "",
         autonomy: str = "guarded",
         emit: Any | None = None,
+        worker_bus: Any | None = None,
+        worker_run_id: str = "",
     ):
         self.llm = llm
         self.brief = brief
@@ -83,6 +88,9 @@ class WorkerAgent:
         self.work_mode = work_mode or "build"
         self.autonomy = autonomy
         self.emit = emit or (lambda event: None)
+        self.worker_bus = worker_bus
+        self.worker_run_id = worker_run_id
+        self._thread_id: str = ""
         self._semaphore: asyncio.Semaphore | None = None
 
     def _get_semaphore(self) -> asyncio.Semaphore:
@@ -98,12 +106,20 @@ class WorkerAgent:
 
     async def _execute(self) -> WorkerResult:
         """执行子代理并处理结果。"""
-        # 发射 delegate_start 事件（给前端 UI 展示）
+        # 唯一 run id：既作为 worker 的 thread_id 一部分，也作为前端订阅
+        # /worker-events/{worker_run_id} 的键。delegate_start/end 摘要帧携带它，
+        # worker 内部流通过 worker_event_bus 独立发布（不进入主 SSE 流）。
+        worker_run_id = self.worker_run_id or uuid.uuid4().hex[:8]
+        self.worker_run_id = worker_run_id
+        self._thread_id = f"{self.session_id}::worker::{worker_run_id}"
+
+        # 发射 delegate_start 事件（给前端 UI 展示，仅摘要，不含内部流）
         self.emit({
             "type": "delegate_start",
             "from": self.caller_agent or "Coworker",
             "to": "Worker",
             "task": self.brief.task[:200],
+            "worker_run_id": worker_run_id,
         })
 
         # 1. 构建独立 graph
@@ -112,12 +128,74 @@ class WorkerAgent:
         # 2. 构建输入 state
         state = self._build_state()
 
-        # 3. 带超时执行（必须用 ainvoke：graph 的 middleware 仅实现 async 版本）
+        content_parts: list[str] = []
+        tool_state: dict[str, dict[str, Any]] = {}
+        parts: list[dict[str, Any]] = []
+        run_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+
+        def _publish(event: dict[str, Any]) -> None:
+            if self.worker_bus is None:
+                return
+            try:
+                self.worker_bus.publish(worker_run_id, {**event, "worker_run_id": worker_run_id})
+            except Exception:  # noqa: BLE001 - a publish hiccup must never kill the worker
+                logger.warning("worker event publish failed for %s", worker_run_id, exc_info=True)
+
+        def _close_stream(error: str | None = None) -> None:
+            if error:
+                _publish({"type": "error", "error": error})
+            if self.worker_bus is not None:
+                try:
+                    self.worker_bus.close(worker_run_id)
+                except Exception:  # noqa: BLE001 - best-effort close
+                    pass
+
+        # 3. 带超时执行：与主流一致用 astream 流式捕获内部 delta/tool/reasoning，
+        #    并发布到 worker bus；worker 的 ainvoke 等价结果（最终 messages）通过
+        #    stream_mode="values" 的最后一块取得。
         try:
-            result = await asyncio.wait_for(
-                graph.ainvoke(state, self._run_config),
-                timeout=self.config.timeout,
-            )
+            async def _consume() -> dict[str, Any]:
+                from coworker.agents import _message_chunk_events, _normalize_usage
+
+                final_state: dict[str, Any] | None = None
+                async for stream_mode, chunk in graph.astream(
+                    state,
+                    config=self._run_config,
+                    stream_mode=["messages", "custom", "updates", "values"],
+                ):
+                    if stream_mode == "values":
+                        final_state = chunk if isinstance(chunk, dict) else None
+                    elif stream_mode == "messages":
+                        msg, _meta = chunk
+                        for event in _message_chunk_events(
+                            msg, content_parts, tool_state, parts,
+                            session_id=worker_run_id, real_file_changes=None,
+                        ):
+                            _publish(event)
+                    elif stream_mode == "custom":
+                        if isinstance(chunk, dict):
+                            event_type = chunk.get("type", "")
+                            if event_type == "context_usage":
+                                _publish(chunk)
+                            elif event_type in ("plan_start", "plan_delta", "plan_end"):
+                                parts.append(chunk)
+                                _publish(chunk)
+                    elif stream_mode == "updates":
+                        for _node_name, node_update in chunk.items():
+                            if isinstance(node_update, dict) and "todos" in node_update:
+                                _publish({"type": "todos", "todos": node_update.get("todos") or []})
+                            if isinstance(node_update, dict):
+                                node_messages = node_update.get("messages")
+                                if isinstance(node_messages, list) and node_messages:
+                                    last_msg = node_messages[-1]
+                                    usage = getattr(last_msg, "usage_metadata", None) or {}
+                                    if isinstance(usage, dict):
+                                        p, c = _normalize_usage(usage)
+                                        run_usage["prompt_tokens"] += p
+                                        run_usage["completion_tokens"] += c
+                return final_state or {}
+
+            result = await asyncio.wait_for(_consume(), timeout=self.config.timeout)
         except asyncio.TimeoutError:
             self.emit({
                 "type": "delegate_end",
@@ -125,7 +203,9 @@ class WorkerAgent:
                 "to": "Worker",
                 "error": "timeout",
                 "parallel": False,
+                "worker_run_id": worker_run_id,
             })
+            _close_stream(error="timeout")
             return WorkerResult(
                 content=f"Worker 超时（{self.config.timeout}s）。子代理执行超时。",
                 success=False,
@@ -140,7 +220,9 @@ class WorkerAgent:
                 "to": "Worker",
                 "error": str(exc)[:200],
                 "parallel": False,
+                "worker_run_id": worker_run_id,
             })
+            _close_stream(error=str(exc)[:400])
             return WorkerResult(
                 content=f"Worker 执行失败：{exc}",
                 success=False,
@@ -158,7 +240,9 @@ class WorkerAgent:
                 "to": "Worker",
                 "error": "interrupted",
                 "parallel": False,
+                "worker_run_id": worker_run_id,
             })
+            _close_stream(error="interrupted")
             return WorkerResult(
                 content="（子代理需要审批，已中止）",
                 success=False,
@@ -172,6 +256,16 @@ class WorkerAgent:
         # 5. 摘要/截断
         content = await self._maybe_summarize(raw_text)
 
+        # 5.5 向 worker bus 发布最终的 done（含权威 parts），并关闭 run
+        try:
+            from coworker.agents import _merge_event_parts, _terminate_stray_tools
+
+            merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
+            _publish({"type": "done", "content": content, "parts": merged_parts, "usage": run_usage})
+            _close_stream()
+        except Exception:  # noqa: BLE001 - terminal publish is best-effort
+            _close_stream()
+
         # 6. 发射 delegate_end 事件
         self.emit({
             "type": "delegate_end",
@@ -180,6 +274,7 @@ class WorkerAgent:
             "ok": True,
             "chars": len(content),
             "parallel": False,
+            "worker_run_id": worker_run_id,
         })
 
         return WorkerResult(
@@ -221,11 +316,14 @@ class WorkerAgent:
             prompt += "\n\n约束条件：\n" + "\n".join(f"- {c}" for c in self.brief.constraints)
 
         messages = prepare_agent_messages([{"role": "user", "content": prompt}])
+        # 只读 worker 以 discuss 阶段运行：其自身的 PhaseToolGateMiddleware 会把
+        # 工具集过滤成 read-only + memory + plan（与主 agent 的讨论阶段一致），
+        # 确保读写的双重保障（工具不挂 + gate 兜底）。
         return {
             "messages": messages,
             "work_mode": self.work_mode,
             "language": self.config.language,
-            "phase": "execute",  # 子代理直接执行
+            "phase": "discuss" if self.readonly else "execute",
             "autonomy": self.autonomy,
         }
 
@@ -235,13 +333,13 @@ class WorkerAgent:
         from coworker.agents import agent_run_config
 
         return agent_run_config(
-            session_id=f"{self.session_id}::worker::{uuid.uuid4().hex[:8]}",
+            session_id=self._thread_id or f"{self.session_id}::worker::{uuid.uuid4().hex[:8]}",
             provider=self.provider_name,
             model=self.llm.model_name if hasattr(self.llm, "model_name") else "",
             language=self.config.language,
             work_mode=self.work_mode,
             autonomy=self.autonomy,
-            streaming=False,
+            streaming=True,
         )
 
     def _coerce_message_content(self, msg: Any) -> str:

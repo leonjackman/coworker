@@ -130,6 +130,7 @@ export interface ChatService {
   listCommandApprovals: () => Promise<CommandApprovalsResponse>;
   resolveCommandApproval: (approvalId: string, decision: ApprovalDecisionPayload) => Promise<CommandApprovalResponse>;
   subscribeApprovalEvents: (resumeId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
+  subscribeWorkerStream: (workerRunId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
   getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
   getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
@@ -705,6 +706,26 @@ class ElectronChatService implements ChatService {
     }
   }
 
+  async subscribeWorkerStream(workerRunId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    const requestId = `worker-${workerRunId}-${Date.now()}`;
+    const abortStream = () => window.electronAPI?.abortChatStream(requestId);
+    const detachAbortListener = attachAbortListener(signal, abortStream);
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => abortStream(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
+    const wrappedEvent: StreamEventCallback = (event) => { resetIdle(); onEvent(event); };
+    try {
+      await window.electronAPI.streamWorkerEvents(requestId, workerRunId, wrappedEvent);
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      detachAbortListener();
+    }
+  }
+
   async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike, options?: { assistantMessageId?: string }): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     if (signal?.aborted) {
@@ -1153,6 +1174,57 @@ class HttpChatService implements ChatService {
           buffer = frames.pop() ?? '';
           for (const frame of frames) {
             // SSE multi-line `data:` — collect ALL lines and join
+            const dataLines = frame.split('\n').filter((item) => item.startsWith('data:'));
+            if (dataLines.length === 0) continue;
+            const raw = dataLines.map((item) => item.slice(5).trim()).join('\n');
+            if (!raw) continue;
+            try {
+              onEvent(JSON.parse(raw) as StreamEvent);
+            } catch {
+              // skip malformed frames
+            }
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+      detachExternal();
+    }
+  }
+
+  async subscribeWorkerStream(workerRunId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike): Promise<void> {
+    // Worker sub-agent streams are GET SSE channels that replay persisted
+    // history then follow live events. Same watchdog pattern as other streams.
+    const internal = new AbortController();
+    const detachExternal = attachAbortListener(signal, () => internal.abort());
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => internal.abort(), STREAM_IDLE_TIMEOUT_MS);
+    };
+    resetIdle();
+    try {
+      const response = await fetch(`${BACKEND_URL}/worker-events/${encodeURIComponent(workerRunId)}`, {
+        signal: internal.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Backend returned ${response.status}`);
+      }
+      if (!response.body) return;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          resetIdle();
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop() ?? '';
+          for (const frame of frames) {
             const dataLines = frame.split('\n').filter((item) => item.startsWith('data:'));
             if (dataLines.length === 0) continue;
             const raw = dataLines.map((item) => item.slice(5).trim()).join('\n');

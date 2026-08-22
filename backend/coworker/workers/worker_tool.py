@@ -43,6 +43,7 @@ class UseWorkerTool:
         language: str = "zh",
         max_concurrent: int = 4,
         delegation_emit: Any | None = None,
+        worker_bus: Any | None = None,
     ):
         self.llm = llm
         self.workspace = workspace
@@ -60,6 +61,7 @@ class UseWorkerTool:
         self.language = language
         self.max_concurrent = max_concurrent
         self.delegation_emit = delegation_emit or (lambda event: None)
+        self.worker_bus = worker_bus
 
     def create_tool(self) -> Any:
         """创建 langchain @tool 装饰的函数。"""
@@ -95,6 +97,12 @@ class UseWorkerTool:
                 max_concurrent=self.max_concurrent,
             )
 
+            # Worker 与主 agent 保持一致的读写权限：主 agent 处于 discuss（只读）
+            # 阶段时，worker 也以只读模式运行（仅研究/分析，不改文件系统）。
+            # phase 由 PhaseToolGateMiddleware 在每次模型调用时记录到 workspace。
+            caller_phase = getattr(self.workspace, "_current_phase", "execute")
+            worker_readonly = caller_phase != "execute"
+
             worker = WorkerAgent(
                 llm=self.llm,
                 brief=brief,
@@ -111,7 +119,9 @@ class UseWorkerTool:
                 session_id=self.session_id,
                 work_mode=self.work_mode,
                 autonomy=self.autonomy,
+                readonly=worker_readonly,
                 emit=self.delegation_emit,
+                worker_bus=self.worker_bus,
             )
 
             # 异步调用：LangGraph 在 async 上下文中 await 此工具

@@ -31,6 +31,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeListener('approval-stream-event', listener);
     });
   },
+  streamWorkerEvents: (requestId, workerRunId, onEvent) => {
+    const listener = (_event, data) => {
+      if (data.requestId !== requestId) return;
+      onEvent(data.event);
+    };
+    ipcRenderer.on('worker-stream-event', listener);
+    return ipcRenderer.invoke('start-worker-stream', { requestId, worker_run_id: workerRunId }).finally(() => {
+      ipcRenderer.removeListener('worker-stream-event', listener);
+    });
+  },
   listProviders: () => ipcRenderer.invoke('list-providers'),
   createProvider: (payload) => ipcRenderer.invoke('create-provider', payload),
   updateProvider: (providerId, params) => ipcRenderer.invoke('update-provider', { provider_id: providerId, params }),

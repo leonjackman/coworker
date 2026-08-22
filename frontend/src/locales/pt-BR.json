@@ -897,5 +897,6 @@
   "chat.queue_section": "Mensagens na fila",
   "chat.remove_queued": "Remover da fila",
   "chat.edit_queued": "Editar mensagem na fila",
-  "chat.reorder_queued": "Arrastar para reordenar"
+  "chat.reorder_queued": "Arrastar para reordenar",
+  "chat.worker_loading": "Carregando fluxo do worker…"
 }

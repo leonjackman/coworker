@@ -63,6 +63,7 @@ class Delegator:
         mcp_session_manager: Any | None = None,
         skill_manager: Any | None = None,
         emit: Any | None = None,  # optional callback for delegation SSE frames
+        worker_bus: Any | None = None,  # WorkerEventBus for sub-agent internal streams
     ):
         self.org_store = org_store
         self.memory_manager = memory_manager
@@ -85,6 +86,7 @@ class Delegator:
         self.mcp_session_manager = mcp_session_manager
         self.skill_manager = skill_manager
         self.emit = emit or (lambda event: None)
+        self.worker_bus = worker_bus
         self._lock = threading.Lock()
 
     # -- validation --------------------------------------------------------
@@ -119,6 +121,7 @@ class Delegator:
         except DelegationError as exc:
             return f"Delegation rejected: {exc}"
         readonly = self._readonly_role(target.role)
+        worker_run_id = uuid.uuid4().hex[:8]
         try:
             self.emit(
                 {
@@ -126,9 +129,10 @@ class Delegator:
                     "from": self.caller_agent,
                     "to": agent,
                     "task": task[:200],
+                    "worker_run_id": worker_run_id,
                 }
             )
-            result = self._run_sub_turn(target.id, task, context, readonly)
+            result = self._run_sub_turn(target.id, task, context, readonly, worker_run_id)
             self.emit(
                 {
                     "type": "delegate_end",
@@ -136,6 +140,7 @@ class Delegator:
                     "to": self.caller_agent,
                     "ok": True,
                     "chars": len(result),
+                    "worker_run_id": worker_run_id,
                 }
             )
             return result
@@ -148,6 +153,7 @@ class Delegator:
                     "to": self.caller_agent,
                     "ok": False,
                     "error": str(exc)[:200],
+                    "worker_run_id": worker_run_id,
                 }
             )
             return f"Delegation to {agent} failed: {exc}"
@@ -171,34 +177,36 @@ class Delegator:
             limit = max(1, min(max_concurrent, len(tasks)))
         if limit < 1:
             return json.dumps({"error": "no tasks"}, ensure_ascii=False)
-        try:
-            self.emit(
-                {
-                    "type": "delegate_start",
-                    "from": self.caller_agent,
-                    "to": [t.get("agent", "") for t in tasks],
-                    "parallel": True,
-                    "task": "并行委托",
-                }
-            )
-        except Exception:  # noqa: BLE001
-            pass
 
         def _run_one(item: dict[str, Any]) -> dict[str, Any]:
             agent = str(item.get("agent", ""))
             task = str(item.get("task", ""))
             context = str(item.get("context", ""))
+            worker_run_id = uuid.uuid4().hex[:8]
+            # 每个并行的 worker 拥有独立 run id 与独立的 delegate block。
+            self.emit(
+                {
+                    "type": "delegate_start",
+                    "from": self.caller_agent,
+                    "to": agent,
+                    "task": task[:200],
+                    "parallel": True,
+                    "worker_run_id": worker_run_id,
+                }
+            )
             try:
                 org, target = self._resolve_target(agent)
                 readonly = self._readonly_role(target.role)
-                result = self._run_sub_turn(target.id, task, context, readonly)
+                result = self._run_sub_turn(target.id, task, context, readonly, worker_run_id)
                 self.emit(
                     {
-                        "type": "delegate_progress",
+                        "type": "delegate_end",
                         "from": agent,
                         "to": self.caller_agent,
                         "status": "done",
                         "chars": len(result),
+                        "parallel": True,
+                        "worker_run_id": worker_run_id,
                     }
                 )
                 return {"agent": agent, "ok": True, "result": result}
@@ -206,11 +214,13 @@ class Delegator:
                 logger.warning("delegate_parallel task for %s failed: %s", agent, exc)
                 self.emit(
                     {
-                        "type": "delegate_progress",
+                        "type": "delegate_end",
                         "from": agent,
                         "to": self.caller_agent,
                         "status": "error",
                         "error": str(exc)[:200],
+                        "parallel": True,
+                        "worker_run_id": worker_run_id,
                     }
                 )
                 return {"agent": agent, "ok": False, "error": str(exc)}
@@ -223,19 +233,6 @@ class Delegator:
             futures = [pool.submit(_run_one, item) for item in tasks]
             for future in futures:
                 results.append(future.result())
-        try:
-            self.emit(
-                {
-                    "type": "delegate_end",
-                    "from": [t.get("agent", "") for t in tasks],
-                    "to": self.caller_agent,
-                    "parallel": True,
-                    "ok": sum(1 for r in results if r.get("ok")),
-                    "failed": [r["agent"] for r in results if not r.get("ok")],
-                }
-            )
-        except Exception:  # noqa: BLE001
-            pass
         return json.dumps(results, ensure_ascii=False)
 
     # -- team creation -----------------------------------------------------
@@ -309,7 +306,7 @@ class Delegator:
 
     # -- nested graph ------------------------------------------------------
 
-    def _run_sub_turn(self, agent: str, task: str, context: str, readonly: bool) -> str:
+    def _run_sub_turn(self, agent: str, task: str, context: str, readonly: bool, worker_run_id: str = "") -> str:
         """Build and run a bounded nested graph for ``agent``; return final text."""
         from .agents import agent_run_config
         from .memory.memory_manager import DEFAULT_AGENT
@@ -421,6 +418,8 @@ class Delegator:
             readonly=readonly,
             work_mode=self.work_mode,
             autonomy=self.autonomy,
+            worker_bus=self.worker_bus,
+            worker_run_id=worker_run_id,
         )
 
         # 同步调用（delegation 目前是同步的）

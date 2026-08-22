@@ -232,16 +232,25 @@ export interface PartPlan {
   content: string;
 }
 
-export interface PartDelegate {
-  type: 'delegate';
+export interface PartAgent {
+  type: 'agent';
+  /** Unique worker run id; key for the dedicated `/worker-events/{id}` stream. */
+  workerRunId: string;
   from: string;
   to: string | string[];
+  agent?: string;
   task?: string | undefined;
   status: 'running' | 'done' | 'error';
   parallel?: boolean | undefined;
   chars?: number | undefined;
   failed?: string[] | undefined;
   error?: string | undefined;
+  /** Nested worker transcript, built lazily when the block is expanded. */
+  parts: MessagePart[];
+  /** True once the worker stream has been (or is being) fetched/subscribed. */
+  transcriptLoaded?: boolean;
+  /** True once the worker stream reached a terminal state (done/error/end). */
+  done?: boolean;
 }
 
 export interface PartText {
@@ -249,7 +258,7 @@ export interface PartText {
   content: string;
 }
 
-export type MessagePart = PartTool | PartReasoning | PartPlan | PartDelegate | PartText;
+export type MessagePart = PartTool | PartReasoning | PartPlan | PartAgent | PartText;
 
 export interface ChatMessage {
   id: string;
@@ -598,10 +607,11 @@ export interface PendingRequest {
       }
     | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
     | { type: 'error'; error: string; session_id?: string }
+    | { type: 'worker_stream_end'; worker_run_id?: string }
     | { type: 'todos'; todos: Todo[]; session_id?: string }
-    | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string }
-    | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string }
-    | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string }
+    | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string; worker_run_id?: string }
+    | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string; worker_run_id?: string }
+    | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string; worker_run_id?: string }
     | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; used_tokens: number; budget_tokens: number; active_budget_tokens: number; window_tokens: number; compacted: boolean; compact_count: number; window_source: string; window_warning?: string; session_id?: string }
     | { type: 'idle_warning'; seconds_idle: number; session_id?: string }
     | {

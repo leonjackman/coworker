@@ -36,6 +36,7 @@ except ImportError:  # pragma: no cover - non-POSIX platforms (e.g. Windows)
 from coworker.agents import AgentMode, AgentRuntimeRegistry, Language, format_user_message, normalize_autonomy, normalize_work_mode
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
+from coworker.events import WorkerEventBus, worker_event_bus
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
@@ -134,6 +135,17 @@ skill_manager = SkillManager(settings.data_dir, settings.workspace_dir)
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
+# Persist worker sub-agent streams under <data_dir>/worker_events/ so a
+# completed run can be replayed after the fact (and across restarts).
+worker_event_bus.configure(settings.data_dir)
+# Session event bus: decouples main-turn SSE delivery from the runtime generator.
+# The turn runs as a background task publishing every event here (keyed by a
+# per-turn key); /chat/stream, regenerate and edit endpoints subscribe to it
+# (replay + live). Because the task's bus fan-out is independent of the blocked
+# graph generator, tool/worker status transitions reach the frontend live —
+# exactly like opencode's session event bus. Memory-only (no configure); each
+# turn's buffer is purged when its subscription ends.
+session_event_bus = WorkerEventBus()
 memory_manager = MemoryManager(
     settings.data_dir,
     memory_dir=settings.memory_dir,
@@ -520,6 +532,43 @@ async def _sse_events(
 def _get_monotonic() -> float:
     """Monotonic clock (never goes backwards) for tracking idle time."""
     return time.monotonic()
+
+
+async def _publish_turn(
+    session_id: str,
+    turn_key: str,
+    stream_iter: Any,
+    on_event: Any = None,
+    on_end: Any = None,
+    on_error: Any = None,
+) -> None:
+    """Background task: consume a runtime stream and publish its events to the
+    session event bus (live, independent of the generator being blocked on a
+    long-running tool). Preserves the terminal semantics of ``_sse_events``:
+    the synthetic ``done``/error event is published, then the bus is closed so
+    the subscribing endpoint unblocks.
+
+    Invariant: this task ALWAYS closes the bus — on normal end, on error, and
+    even when the task itself is cancelled (client disconnect). Otherwise the
+    subscriber would hang waiting for a terminal ``worker_stream_end``.
+    """
+    try:
+        async for kind, payload in _sse_events(
+            _tracked_stream(stream_iter, session_id),
+            on_event=on_event,
+            on_end=on_end,
+            on_error=on_error,
+        ):
+            if kind == "event":
+                session_event_bus.publish(turn_key, payload)
+            elif kind == "error":
+                session_event_bus.publish(turn_key, payload)
+                session_event_bus.close(turn_key)
+            elif kind == "end":
+                session_event_bus.close(turn_key)
+    except BaseException:  # noqa: BLE001 - incl. cancellation; must close the bus
+        session_event_bus.close(turn_key)
+        raise
 
 
 class ChatRequest(BaseModel):
@@ -1899,6 +1948,11 @@ async def chat_stream(request: ChatStreamRequest):
 
         stream_iter = _locked_stream_iterator(_raw_stream_iter, None)
 
+        # Per-turn key for the session event bus: each turn is an independent
+        # replay/live channel, so a fresh turn never replays a previous turn's
+        # buffered events (and each turn's buffer is purged when it ends).
+        turn_key = f"{session_id}::{uuid.uuid4().hex[:8]}"
+
         def _on_event(event):
             event["session_id"] = session_id
             _handle_event(event)
@@ -1964,21 +2018,33 @@ async def chat_stream(request: ChatStreamRequest):
         snapshot_pre = await asyncio.to_thread(
             agent_registry.snapshot_manager.begin_turn, session_id, snapshot_user_message_id, resolved_workspace,
         )
+        # The turn runs as a background task that publishes to the session bus;
+        # this endpoint subscribes (replay + live). Decoupling delivery from the
+        # runtime generator means tool/worker status transitions reach the client
+        # the moment they happen — even while the graph is blocked awaiting a
+        # long-running tool (opencode-style session event bus).
+        subscription = session_event_bus.stream(turn_key)
+        turn_task = asyncio.create_task(
+            _publish_turn(session_id, turn_key, stream_iter, _on_event, _on_end, _on_error)
+        )
         try:
-            async for kind, payload in _sse_events(_tracked_stream(stream_iter, session_id), on_event=_on_event, on_end=_on_end, on_error=_on_error):
-                if kind == "heartbeat":
+            async for event in subscription:
+                if event is None:
                     # SSE comment line: keep the connection (and the client's idle
                     # watchdog) alive while the agent is busy thinking/working.
                     yield ": ping\n\n"
-                elif kind == "end":
+                elif event.get("type") == "worker_stream_end":
                     break
-                elif kind == "event" and payload.get("type") == "idle_warning":
-                    # Forward idle-warning to the frontend so it can show a countdown.
-                    payload["session_id"] = session_id
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 else:
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    event["session_id"] = session_id
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
+            # Lifecycle binding: the connection is over (normal end or client
+            # disconnect) ⟹ cancel the turn task. Its _publish_turn closes the
+            # bus even under cancellation, so a late subscribe can never hang.
+            turn_task.cancel()
+            await asyncio.gather(turn_task, return_exceptions=True)
+            session_event_bus.purge(turn_key)
             if snapshot_pre is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, snapshot_user_message_id, resolved_workspace,
@@ -2829,25 +2895,28 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
             snapshot_pre = await asyncio.to_thread(
                 agent_registry.snapshot_manager.begin_turn, session_id, user_message.id, snapshot_workspace,
             )
+        # Same bus-fed turn as /chat/stream: live delivery even while the graph
+        # is blocked on a long-running tool / worker.
+        stream_iter = agent_registry.rerun_stream(
+            history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
+        )
+        turn_key = f"{session_id}::{uuid.uuid4().hex[:8]}"
+        subscription = session_event_bus.stream(turn_key)
+        turn_task = asyncio.create_task(
+            _publish_turn(session_id, turn_key, stream_iter, _on_event, _on_end, _on_error)
+        )
         try:
-            async for kind, payload in _sse_events(
-                _tracked_stream(
-                    agent_registry.rerun_stream(
-                        history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
-                    ),
-                    session_id,
-                ),
-                on_event=_on_event,
-                on_end=_on_end,
-                on_error=_on_error,
-            ):
-                if kind == "heartbeat":
+            async for event in subscription:
+                if event is None:
                     yield ": ping\n\n"
-                elif kind == "end":
+                elif event.get("type") == "worker_stream_end":
                     break
                 else:
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
+            turn_task.cancel()
+            await asyncio.gather(turn_task, return_exceptions=True)
+            session_event_bus.purge(turn_key)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, user_message.id, snapshot_workspace,
@@ -3002,25 +3071,28 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             snapshot_pre = await asyncio.to_thread(
                 agent_registry.snapshot_manager.begin_turn, session_id, message_id, snapshot_workspace,
             )
+        # Same bus-fed turn as /chat/stream: live delivery even while the graph
+        # is blocked on a long-running tool / worker.
+        stream_iter = agent_registry.rerun_stream(
+            history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
+        )
+        turn_key = f"{session_id}::{uuid.uuid4().hex[:8]}"
+        subscription = session_event_bus.stream(turn_key)
+        turn_task = asyncio.create_task(
+            _publish_turn(session_id, turn_key, stream_iter, _on_event, _on_end, _on_error)
+        )
         try:
-            async for kind, payload in _sse_events(
-                _tracked_stream(
-                    agent_registry.rerun_stream(
-                        history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
-                    ),
-                    session_id,
-                ),
-                on_event=_on_event,
-                on_end=_on_end,
-                on_error=_on_error,
-            ):
-                if kind == "heartbeat":
+            async for event in subscription:
+                if event is None:
                     yield ": ping\n\n"
-                elif kind == "end":
+                elif event.get("type") == "worker_stream_end":
                     break
                 else:
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
+            turn_task.cancel()
+            await asyncio.gather(turn_task, return_exceptions=True)
+            session_event_bus.purge(turn_key)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, message_id, snapshot_workspace,
@@ -3654,6 +3726,39 @@ async def stream_approval_events(resume_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/worker-events/{worker_run_id}")
+async def stream_worker_events(worker_run_id: str):
+    """SSE stream of a worker sub-agent's internal run events.
+
+    Replays the persisted run history first, then follows live events, and
+    terminates with ``worker_stream_end`` once the run finishes. The main agent
+    stream only carries the ``delegate_*`` summary; the worker's detailed
+    delta/tool/reasoning stream lives here and is consumed on demand when the
+    user opens the worker block.
+    """
+    from fastapi.responses import StreamingResponse
+
+    async def event_stream():
+        try:
+            async for event in worker_event_bus.stream(worker_run_id):
+                if event is None:
+                    yield ": ping\n\n"
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a broken worker stream must never hang the client
+            logger.warning("worker event stream error for %s", worker_run_id, exc_info=True)
+            yield f"data: {json.dumps({'type': 'worker_stream_end'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 
 @app.get("/providers")
 def list_providers():

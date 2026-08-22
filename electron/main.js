@@ -1935,6 +1935,17 @@ ipcMain.handle('start-approval-stream', async (event, { requestId, resumeId }) =
   });
 });
 
+ipcMain.handle('start-worker-stream', async (event, { requestId, worker_run_id }) => {
+  return openSseStream({
+    requestId,
+    method: 'GET',
+    path: `/worker-events/${encodeURIComponent(worker_run_id)}`,
+    sender: event.sender,
+    eventName: 'worker-stream-event',
+    idleTimeoutMs: 300_000,
+  });
+});
+
 
 ipcMain.handle('list-sessions', async () => {
   return requestBackend('/sessions');

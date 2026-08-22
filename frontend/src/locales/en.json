@@ -899,5 +899,6 @@
   "chat.queue_section": "Queued messages",
   "chat.remove_queued": "Remove from queue",
   "chat.edit_queued": "Edit queued message",
-  "chat.reorder_queued": "Drag to reorder"
+  "chat.reorder_queued": "Drag to reorder",
+  "chat.worker_loading": "Loading worker stream…"
 }

@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from .checkpoints import CheckpointManager
 from .changes import ChangeStore
+from .events import worker_event_bus
 from .project_snapshot import ProjectSnapshotManager
 from .config import BackendSettings
 from .mcp.mcp import McpManager
@@ -546,6 +547,7 @@ def build_workspace_tools(
     worker_data_dir: Any | None = None,
     worker_mcp_session_manager: Any | None = None,
     delegation_emit: Any | None = None,  # optional callback for use_worker SSE frames
+    worker_bus: Any | None = None,  # WorkerEventBus for worker sub-agent internal streams
 ) -> list[Any]:
     from pathlib import Path as _Path
 
@@ -987,6 +989,7 @@ def build_workspace_tools(
             language=language,
             max_concurrent=max_concurrent,
             delegation_emit=delegation_emit,
+            worker_bus=worker_bus,
         )
         tools.append(worker_tool.create_tool())
     return tools
@@ -1594,6 +1597,121 @@ def _terminate_stray_tools(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return terminated
 
 
+def _message_chunk_events(
+    msg: Any,
+    content_parts: list[str],
+    tool_state: dict[str, dict[str, Any]],
+    parts: list[dict[str, Any]],
+    session_id: str = "",
+    real_file_changes: Callable[[str, dict[str, dict[str, Any]], str], list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Convert a LangGraph ``messages`` stream chunk into SSE events.
+
+    Shared by the main agent stream and worker sub-agent streams so both emit
+    the identical ``delta`` / ``reasoning_delta`` / ``tool_start`` /
+    ``tool_delta`` / ``tool_end`` vocabulary. ``real_file_changes`` is an
+    optional hook for the main runtime to claim real file changes; worker runs
+    fall back to the static estimator.
+    """
+    from langchain_core.messages import AIMessageChunk, ToolMessage
+
+    if real_file_changes is None:
+        real_file_changes = _estimate_file_changes  # type: ignore[assignment]
+
+    events: list[dict[str, Any]] = []
+
+    if isinstance(msg, AIMessageChunk):
+        reasoning = _extract_reasoning_from_chunk(msg)
+        if reasoning:
+            parts.append({"type": "reasoning_delta", "content": reasoning})
+            events.append({"type": "reasoning_delta", "content": reasoning})
+
+        text = getattr(msg, "content", "") or ""
+        if isinstance(text, str) and text:
+            content_parts.append(text)
+            parts.append({"type": "delta", "content": text})
+            events.append({"type": "delta", "content": text})
+
+        tool_call_chunks = getattr(msg, "tool_call_chunks", None) or []
+        for tc in tool_call_chunks:
+            if not isinstance(tc, dict):
+                continue
+            tc_id = tc.get("id") or ""
+            tc_name = tc.get("name") or ""
+            tc_args = tc.get("args") or ""
+
+            if not tc_id:
+                continue
+
+            if tc_name == "write_todos":
+                if tc_id in tool_state:
+                    tool_state.pop(tc_id, None)
+                    parts[:] = [
+                        p for p in parts
+                        if not (p.get("type") == "tool_start" and p.get("id") == tc_id)
+                    ]
+                continue
+
+            if tc_id not in tool_state:
+                tool_state[tc_id] = {"name": tc_name or "", "input": "", "status": "running", "started_at": time.time()}
+                parts.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
+                events.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
+            else:
+                tool_state[tc_id]["input"] = tool_state[tc_id].get("input", "") + tc_args
+                if tc_name:
+                    tool_state[tc_id]["name"] = tc_name
+                    for existing_part in parts:
+                        if existing_part.get("type") == "tool_start" and existing_part.get("id") == tc_id:
+                            existing_part["name"] = tc_name
+                            break
+                part = {"type": "tool_delta", "id": tc_id, "input": tc_args}
+                parts.append(part)
+                events.append(part)
+
+    elif isinstance(msg, ToolMessage):
+        msg_name = getattr(msg, "name", "") or ""
+        tc_id = getattr(msg, "tool_call_id", "") or ""
+        content = getattr(msg, "content", "") or ""
+        if msg_name == "write_todos":
+            if tc_id and tc_id in tool_state:
+                tool_state.pop(tc_id, None)
+                parts[:] = [p for p in parts if not (p.get("type") == "tool_start" and p.get("id") == tc_id)]
+            return events
+        tool_status = "success" if (getattr(msg, "status", "") or "success") == "success" else "error"
+        if tc_id in tool_state:
+            tool_state[tc_id]["status"] = tool_status
+            tool_state[tc_id]["output"] = str(content)[:2000]
+            started_at = tool_state[tc_id].get("started_at")
+            duration_ms = round((time.time() - started_at) * 1000) if started_at else None
+            files = real_file_changes(tc_id, tool_state, session_id)
+            part: dict[str, Any] = {
+                "type": "tool_end",
+                "id": tc_id,
+                "name": msg_name,
+                "output": str(content)[:2000],
+                "status": tool_status,
+                "input": str(tool_state[tc_id].get("input") or ""),
+            }
+            if duration_ms is not None:
+                part["duration_ms"] = duration_ms
+            if files:
+                part["files"] = files
+            parts.append(part)
+            events.append(part)
+        elif tc_id:
+            part = {
+                "type": "tool_end",
+                "id": tc_id,
+                "name": getattr(msg, "name", "") or "",
+                "output": str(content)[:2000],
+                "status": tool_status,
+            }
+            parts.append(part)
+            events.append(part)
+
+    return events
+
+
 def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     pending_text: list[str] = []
@@ -1662,6 +1780,48 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         **({"files": part["files"]} if part.get("files") is not None else {}),
                     }
                 )
+        elif part.get("type") in ("delegate_start", "delegate_progress", "delegate_end"):
+            run_id = str(part.get("worker_run_id") or "")
+            if not run_id:
+                # Legacy frames without a run id still coalesce by target.
+                targets = part.get("to") or part.get("from") or ""
+                run_id = "::".join(targets) if isinstance(targets, list) else str(targets)
+            existing = next((p for p in merged if p.get("type") == "agent" and p.get("worker_run_id") == run_id), None)
+            if existing is None:
+                existing = {
+                    "type": "agent",
+                    "worker_run_id": run_id,
+                    "from": part.get("from") or "",
+                    "to": part.get("to") or "",
+                    "task": part.get("task"),
+                    "status": "running",
+                    "parallel": bool(part.get("parallel")),
+                }
+                merged.append(existing)
+            if part.get("type") == "delegate_start":
+                if part.get("task") is not None:
+                    existing["task"] = part["task"]
+                if part.get("to") is not None:
+                    existing["to"] = part["to"]
+                if part.get("from") is not None:
+                    existing["from"] = part["from"]
+                existing["status"] = "running"
+                existing["parallel"] = bool(part.get("parallel"))
+            elif part.get("type") == "delegate_progress":
+                if part.get("status") == "error" or part.get("error"):
+                    existing["status"] = "error"
+                if part.get("error"):
+                    existing["error"] = part["error"]
+                if part.get("chars") is not None:
+                    existing["chars"] = part["chars"]
+            elif part.get("type") == "delegate_end":
+                existing["status"] = "error" if part.get("error") else "done"
+                if part.get("error"):
+                    existing["error"] = part["error"]
+                if part.get("chars") is not None:
+                    existing["chars"] = part["chars"]
+                if part.get("failed") is not None:
+                    existing["failed"] = part["failed"]
         else:
             merged.append(part)
 
@@ -2863,9 +3023,10 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     unknown tool calls without coupling this module to the MCP layer.
     """
 
-    def __init__(self, capabilities: str = "", mcp_tool_names_provider: Callable[[], set[str]] | None = None):
+    def __init__(self, capabilities: str = "", mcp_tool_names_provider: Callable[[], set[str]] | None = None, workspace: Any | None = None):
         self.capabilities = capabilities
         self.mcp_tool_names_provider = mcp_tool_names_provider
+        self.workspace = workspace
 
     def _allowed_tools(self, state: CoworkerAgentState) -> set[str]:
         work_mode = normalize_work_mode(state.get("work_mode"))
@@ -2874,6 +3035,9 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         allowed = set(_READ_ONLY_TOOLS) | _MEMORY_TOOLS
         if phase == "discuss":
             allowed |= _PLAN_TOOLS
+            # use_worker 在讨论（只读）阶段也开放：worker 以只读模式运行（与主
+            # agent 一致），专注研究/分析，不改动文件系统。
+            allowed |= {"use_worker"}
         else:
             allowed |= _CHANGE_TOOL_NAMES | _EXEC_TOOLS
             if autonomy != "autonomous":
@@ -2896,6 +3060,12 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         language = normalize_language(state.get("language"))
         phase = normalize_phase(state.get("phase"), state.get("work_mode"))
         autonomy = normalize_autonomy(state.get("autonomy"))
+        # 记录当前 phase，供 use_worker 工具在执行时判断 worker 是否只读。
+        if self.workspace is not None:
+            try:
+                setattr(self.workspace, "_current_phase", phase)
+            except Exception:  # noqa: BLE001 - phase tracking must never gate tools
+                pass
         prompt = phase_system_prompt(language, phase, autonomy)
         if self.capabilities:
             prompt = f"{prompt}\n\n{self.capabilities}"
@@ -3203,7 +3373,8 @@ def build_coworker_agent_graph(
     )
 
     phase_gate = PhaseToolGateMiddleware(
-        "\n\n".join(part for part in (web_capability, browser_capability) if part)
+        "\n\n".join(part for part in (web_capability, browser_capability) if part),
+        workspace=workspace,
     )
     # Cheap per-call layer: clear stale tool results (Anthropic-style context
     # editing) so the model never pays for long-dead tool output. Transient —
@@ -3535,6 +3706,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 worker_data_dir=self.data_dir,
                 worker_mcp_session_manager=self.mcp_session_manager,
                 delegation_emit=self._delegation_event,
+                worker_bus=worker_event_bus,
             ),
             work_mode=work_mode,
             language=language,
@@ -3871,6 +4043,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     worker_data_dir=self.data_dir,
                     worker_mcp_session_manager=self.mcp_session_manager,
                     delegation_emit=self._delegation_event,
+                    worker_bus=worker_event_bus,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -3913,6 +4086,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             for _attempt in range(2):
                 try:
                     async for stream_mode, chunk in graph.astream(inputs, config=config, stream_mode=["messages", "custom", "updates"]):
+                        # Drain any delegation SSE frames buffered by the delegate
+                        # tools on EVERY chunk so the worker block appears as soon
+                        # as a frame is available (not only on the next updates
+                        # superstep). Record them in `parts` so they persist and
+                        # round-trip through the authoritative `done.parts`.
+                        for delegate_event in self._drain_delegation_events():
+                            parts.append(delegate_event)
+                            yield delegate_event
                         if stream_mode == "messages":
                             msg, _meta = chunk
                             try:
@@ -3956,9 +4137,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                             p, c = _normalize_usage(usage)
                                             run_usage["prompt_tokens"] += p
                                             run_usage["completion_tokens"] += c
-                            # Drain any delegation SSE frames buffered by the delegate tools.
-                            for delegate_event in self._drain_delegation_events():
-                                yield delegate_event
                     break
                 except asyncio.CancelledError:
                     raise
@@ -3999,116 +4177,14 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     def _handle_message_chunk(
         self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]], session_id: str = "",
     ) -> list[dict[str, Any]]:
-        from langchain_core.messages import AIMessageChunk, ToolMessage
-
-        events: list[dict[str, Any]] = []
-
-        if isinstance(msg, AIMessageChunk):
-            reasoning = _extract_reasoning_from_chunk(msg)
-            if reasoning:
-                parts.append({"type": "reasoning_delta", "content": reasoning})
-                events.append({"type": "reasoning_delta", "content": reasoning})
-
-            text = getattr(msg, "content", "") or ""
-            if isinstance(text, str) and text:
-                content_parts.append(text)
-                # 文本 delta 也进入 parts 列表，_merge_event_parts 会把它按到达顺序
-                # 合并成交错排列的 text parts，从而在持久化/重载后保留 text 与 tool
-                # 的相对顺序（与 Anthropic content blocks 模型一致）。
-                parts.append({"type": "delta", "content": text})
-                events.append({"type": "delta", "content": text})
-
-            tool_call_chunks = getattr(msg, "tool_call_chunks", None) or []
-            for tc in tool_call_chunks:
-                if not isinstance(tc, dict):
-                    continue
-                tc_id = tc.get("id") or ""
-                tc_name = tc.get("name") or ""
-                tc_args = tc.get("args") or ""
-
-                if not tc_id:
-                    continue
-
-                if tc_name == "write_todos":
-                    # write_todos is a task-list control rendered via the `todos`
-                    # event, not a tool card. If the tool-call name arrived EMPTY in
-                    # an earlier chunk, a stray tool_start part was created before we
-                    # knew what it was — drop it so it never persists as a "Used
-                    # tool:" error card.
-                    if tc_id in tool_state:
-                        tool_state.pop(tc_id, None)
-                        parts[:] = [
-                            p for p in parts
-                            if not (p.get("type") == "tool_start" and p.get("id") == tc_id)
-                        ]
-                    continue
-
-                if tc_id not in tool_state:
-                    tool_state[tc_id] = {"name": tc_name or "", "input": "", "status": "running", "started_at": time.time()}
-                    parts.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
-                    events.append({"type": "tool_start", "id": tc_id, "name": tc_name, "input": tc_args})
-                else:
-                    tool_state[tc_id]["input"] = tool_state[tc_id].get("input", "") + tc_args
-                    if tc_name:
-                        tool_state[tc_id]["name"] = tc_name
-                        # 名字可能在后续流式 chunk 才到达，回填已推送的 tool_start part，
-                        # 避免持久化后 tool 名称为空（显示 "Used tool:"）。
-                        for existing_part in parts:
-                            if existing_part.get("type") == "tool_start" and existing_part.get("id") == tc_id:
-                                existing_part["name"] = tc_name
-                                break
-                    part = {"type": "tool_delta", "id": tc_id, "input": tc_args}
-                    parts.append(part)
-                    events.append(part)
-
-        elif isinstance(msg, ToolMessage):
-            msg_name = getattr(msg, "name", "") or ""
-            tc_id = getattr(msg, "tool_call_id", "") or ""
-            content = getattr(msg, "content", "") or ""
-            if msg_name == "write_todos":
-                # Todo progress is streamed via the `todos` event; no tool card.
-                if tc_id and tc_id in tool_state:
-                    tool_state.pop(tc_id, None)
-                    parts[:] = [p for p in parts if not (p.get("type") == "tool_start" and p.get("id") == tc_id)]
-                return events
-            # The real outcome: HITL rejections/errors carry status "error",
-            # only genuine completions are "success".
-            tool_status = "success" if (getattr(msg, "status", "") or "success") == "success" else "error"
-            if tc_id in tool_state:
-                tool_state[tc_id]["status"] = tool_status
-                tool_state[tc_id]["output"] = str(content)[:2000]
-                started_at = tool_state[tc_id].get("started_at")
-                duration_ms = round((time.time() - started_at) * 1000) if started_at else None
-                files = self._real_file_changes(tc_id, tool_state, session_id)
-                # Backfill the authoritative full args so the UI can replace any
-                # streamed fragments (which may be dropped/incomplete mid-stream)
-                # with the final, valid JSON the tool actually executed.
-                part: dict[str, Any] = {
-                    "type": "tool_end",
-                    "id": tc_id,
-                    "name": msg_name,
-                    "output": str(content)[:2000],
-                    "status": tool_status,
-                    "input": str(tool_state[tc_id].get("input") or ""),
-                }
-                if duration_ms is not None:
-                    part["duration_ms"] = duration_ms
-                if files:
-                    part["files"] = files
-                parts.append(part)
-                events.append(part)
-            elif tc_id:
-                part = {
-                    "type": "tool_end",
-                    "id": tc_id,
-                    "name": getattr(msg, "name", "") or "",
-                    "output": str(content)[:2000],
-                    "status": tool_status,
-                }
-                parts.append(part)
-                events.append(part)
-
-        return events
+        return _message_chunk_events(
+            msg,
+            content_parts,
+            tool_state,
+            parts,
+            session_id=session_id,
+            real_file_changes=self._real_file_changes,
+        )
 
     def _real_file_changes(self, tc_id: str, tool_state: dict[str, dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
         state = tool_state.get(tc_id) or {}
@@ -4193,6 +4269,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         worker_data_dir=self.data_dir,
                         worker_mcp_session_manager=self.mcp_session_manager,
                         delegation_emit=self._delegation_event,
+                        worker_bus=worker_event_bus,
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -4229,6 +4306,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             tool_state: dict[str, dict[str, Any]] = {}
             try:
                 async for stream_mode, chunk in graph.astream(Command(resume=resume_map), config=config, stream_mode=["messages", "custom", "updates"]):
+                    for delegate_event in self._drain_delegation_events():
+                        parts.append(delegate_event)
+                        yield delegate_event
                     if stream_mode == "messages":
                         msg, _meta = chunk
                         try:

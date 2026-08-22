@@ -345,6 +345,10 @@ class Workspace:
         # Only one tool executes per resume step, so a plain instance variable
         # is safe against concurrent access.
         self._allow_external_write: bool = False
+        # Current phase ("discuss" | "execute") tracked by PhaseToolGateMiddleware
+        # per model call. Used by use_worker to decide whether a spawned worker
+        # runs read-only (same as the main agent in discuss phase).
+        self._current_phase: str = "execute"
 
     def _resolve(self, file_path: str) -> Path:
         """Resolve a path against workspace root without boundary check."""

@@ -897,5 +897,6 @@
   "chat.queue_section": "대기 중인 메시지",
   "chat.remove_queued": "대기열에서 제거",
   "chat.edit_queued": "대기 중인 메시지 편집",
-  "chat.reorder_queued": "드래그하여 순서 변경"
+  "chat.reorder_queued": "드래그하여 순서 변경",
+  "chat.worker_loading": "워커 스트림 로드 중…"
 }

@@ -897,5 +897,6 @@
   "chat.queue_section": "排隊傳送",
   "chat.remove_queued": "取消排隊",
   "chat.edit_queued": "編輯排隊訊息",
-  "chat.reorder_queued": "拖動調整順序"
+  "chat.reorder_queued": "拖動調整順序",
+  "chat.worker_loading": "正在載入 worker 流…"
 }

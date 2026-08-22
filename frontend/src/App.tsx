@@ -26,7 +26,7 @@ import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartDelegate, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -59,6 +59,24 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
       } else {
         merged.push(part);
       }
+    } else if (part.type === 'agent') {
+      // Worker blocks are coalesced by worker_run_id: an authoritative `done.parts`
+      // from the backend must not stack a duplicate block on the streaming one.
+      const index = merged.findIndex(
+        (p) => p.type === 'agent' && (p as Extract<MessagePart, { type: 'agent' }>).workerRunId === part.workerRunId,
+      );
+      if (index >= 0) {
+        const prev = merged[index] as Extract<MessagePart, { type: 'agent' }>;
+        // Keep the live-built nested transcript; adopt the authoritative summary.
+        merged[index] = {
+          ...prev,
+          ...part,
+          parts: prev.parts ?? part.parts,
+          ...((prev.transcriptLoaded || part.transcriptLoaded) ? { transcriptLoaded: true } : {}),
+        };
+      } else {
+        merged.push(part);
+      }
     } else if (part.type === 'text') {
       // 各次 resume 会重放同一轮执行（工具按 id 去重），文本同样按内容去重，
       // 避免重放时 text part 重复叠加；多轮文本内容各不相同，天然追加。
@@ -71,6 +89,61 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
     }
   }
   return merged;
+}
+
+/**
+ * Shared SSE→parts reducer for BOTH the main agent stream and worker sub-agent
+ * streams, so a worker transcript renders with the exact same blocks
+ * (text/reasoning/tool/plan) as the main message. Terminal/status handling
+ * (done/error/approvals/todos) stays in each caller.
+ */
+function applyStreamEventToParts(parts: MessagePart[], event: StreamEvent): MessagePart[] {
+  switch (event.type) {
+    case 'delta': {
+      const last = parts[parts.length - 1];
+      if (last && last.type === 'text') {
+        const next = [...parts];
+        next[next.length - 1] = { ...last, content: last.content + event.content };
+        return next;
+      }
+      return [...parts, { type: 'text', content: event.content }];
+    }
+    case 'reasoning_delta': {
+      const last = parts[parts.length - 1];
+      if (last && last.type === 'reasoning') {
+        const next = [...parts];
+        next[next.length - 1] = { ...last, content: event.content };
+        return next;
+      }
+      return [...parts, { type: 'reasoning', content: event.content }];
+    }
+    case 'tool_start':
+      return upsertToolPart(parts, event.id, event.name, event.input || '');
+    case 'tool_delta':
+      return parts.map((p) =>
+        p.type === 'tool' && p.id === event.id ? { ...p, input: (p.input || '') + (event.input || '') } : p,
+      );
+    case 'tool_end':
+      return parts.map((p) => {
+        if (p.type !== 'tool' || p.id !== event.id) return p;
+        return {
+          ...p,
+          status: event.status === 'success' ? 'success' : 'error',
+          ...(event.input !== undefined ? { input: event.input } : {}),
+          ...(event.output ? { output: event.output } : {}),
+          ...(event.duration_ms !== undefined ? { duration_ms: event.duration_ms } : {}),
+          ...(event.files !== undefined ? { files: event.files } : {}),
+        };
+      });
+    case 'plan_start':
+      return [...parts, { type: 'plan', content: '' }];
+    case 'plan_delta':
+      return parts.map((p) => (p.type === 'plan' ? { ...p, content: p.content + event.content } : p));
+    case 'plan_end':
+      return parts.map((p) => (p.type === 'plan' ? { ...p, content: event.content || p.content } : p));
+    default:
+      return parts;
+  }
 }
 
 function settleRunningTools(parts: MessagePart[]): MessagePart[] {
@@ -396,6 +469,70 @@ function App() {
   const streamControllersRef = useRef<Record<string, AbortController>>({});
   const activeAssistantMessageIdsRef = useRef<Record<string, string>>({});
   const streamStartAtsRef = useRef<Record<string, number>>({});
+  // Worker sub-agent streams: one AbortController per worker_run_id so a worker
+  // transcript can be subscribed on demand (block expanded) and aborted when the
+  // message/component is torn down.
+  const workerStreamControllersRef = useRef<Record<string, AbortController>>({});
+
+  /**
+   * Subscribe to a worker sub-agent's dedicated SSE stream and fold its events
+   * into the owning assistant message's `PartAgent.parts` (lazy, on expand).
+   * Replays persisted history first (so a finished worker is still readable),
+   * then follows live deltas. Terminal events (done/error/worker_stream_end)
+   * settle the block.
+   */
+  const subscribeWorkerTranscript = useCallback((messageId: string, part: PartAgent) => {
+    const workerRunId = part.workerRunId;
+    if (!workerRunId) return;
+    if (workerStreamControllersRef.current[workerRunId]) return;
+    const controller = new AbortController();
+    workerStreamControllersRef.current[workerRunId] = controller;
+    // Mark loaded immediately so a re-render cannot double-subscribe.
+    setMessages((current) =>
+      current.map((m) => {
+        if (m.id !== messageId || !m.parts) return m;
+        const nextParts = m.parts.map((p) =>
+          p.type === 'agent' && p.workerRunId === workerRunId ? { ...p, transcriptLoaded: true } : p,
+        );
+        return { ...m, parts: nextParts };
+      }),
+    );
+    void chatService
+      .subscribeWorkerStream(workerRunId, (event) => {
+        setMessages((current) =>
+          current.map((m) => {
+            if (m.id !== messageId || !m.parts) return m;
+            const parts = m.parts.map((p) => {
+              if (p.type !== 'agent' || p.workerRunId !== workerRunId) return p;
+              if (event.type === 'done') {
+                const transcript =
+                  event.parts && event.parts.length > 0
+                    ? mergeMessageParts(p.parts, event.parts)
+                    : applyStreamEventToParts(p.parts, event);
+                return { ...p, parts: settleRunningTools(transcript), done: true };
+              }
+              if (event.type === 'error') {
+                return { ...p, error: event.error, done: true };
+              }
+              if (event.type === 'worker_stream_end') {
+                return { ...p, done: true };
+              }
+              return { ...p, parts: applyStreamEventToParts(p.parts, event) };
+            });
+            return { ...m, parts };
+          }),
+        );
+      }, controller.signal)
+      .catch(() => {
+        // Best-effort: a failed worker stream leaves the block with whatever
+        // transcript it already has.
+      })
+      .finally(() => {
+        if (workerStreamControllersRef.current[workerRunId] === controller) {
+          delete workerStreamControllersRef.current[workerRunId];
+        }
+      });
+  }, []);
 
   // Codex-style "queue while streaming": per-session FIFO of messages typed
   // while the agent is replying. Each entry auto-sends as the next request once
@@ -1074,34 +1211,22 @@ function App() {
         void refreshSessions();
       } else if (event.type === 'delta') {
         streamedContent += event.content;
-        // 文本增量追加到最后一个 text part；若最后不是 text part（例如工具/推理
-        // 之后重新开始说话），则新建 text part。这样 text 与 tool 在 parts 数组
-        // 中按流式到达顺序交错，渲染时按数组顺序即可还原 LLM 的真实输出顺序。
-        const last = localParts[localParts.length - 1];
-        if (last && last.type === 'text') {
-          last.content += event.content;
-        } else {
-          localParts.push({ type: 'text', content: event.content });
-        }
+        // 与 worker 流共用同一 reducer，保证主流与 worker 转录用相同方式渲染。
+        localParts = applyStreamEventToParts(localParts, event);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'reasoning_delta') {
-        const last = localParts[localParts.length - 1];
-        if (last && last.type === 'reasoning') {
-          last.content = event.content;
-        } else {
-          localParts.push({ type: 'reasoning', content: event.content });
-        }
+        localParts = applyStreamEventToParts(localParts, event);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'tool_start') {
-        localParts = upsertToolPart(localParts, event.id, event.name, event.input || '');
+        localParts = applyStreamEventToParts(localParts, event);
         // Built-in browser: auto-open the right-side browser tab so the user
         // watches the agent browse live.
         if (event.name === 'browser') {
@@ -1120,92 +1245,85 @@ function App() {
           ),
         );
       } else if (event.type === 'tool_delta') {
-        const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
-        if (toolPart) {
-          toolPart.input = (toolPart.input || '') + (event.input || '');
-        }
+        localParts = applyStreamEventToParts(localParts, event);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'tool_end') {
-        const toolPart = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
-        if (toolPart) {
-          toolPart.status = event.status === 'success' ? 'success' : 'error';
-          if (event.input !== undefined) toolPart.input = event.input;
-          if (event.output) toolPart.output = event.output;
-          if (event.duration_ms !== undefined) toolPart.duration_ms = event.duration_ms;
-          if (event.files !== undefined) toolPart.files = event.files;
-        }
+        localParts = applyStreamEventToParts(localParts, event);
         // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
-        if (toolPart?.name === 'install_skill') void refreshSkills();
+        const finishedTool = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
+        if (finishedTool?.name === 'install_skill') void refreshSkills();
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'plan_start') {
-        localParts.push({ type: 'plan', content: '' });
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
-      } else if (event.type === 'plan_delta') {
-        const planPart = localParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
-        if (planPart) {
-          planPart.content += event.content;
-        }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
-      } else if (event.type === 'plan_end') {
-        const planPart = localParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
-        if (planPart && event.content) {
-          planPart.content = event.content;
-        }
+      } else if (event.type === 'plan_start' || event.type === 'plan_delta' || event.type === 'plan_end') {
+        localParts = applyStreamEventToParts(localParts, event);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'delegate_start') {
-        const delegatePart: PartDelegate = {
-          type: 'delegate',
+        // 每个 worker run 一个独立 PartAgent block。worker_run_id 作为订阅
+        // /worker-events/{id} 的键；缺失时（旧后端）生成一个稳定的 fallback key。
+        const runId = event.worker_run_id || `delegate-${Date.now()}-${localParts.length}-${Math.random().toString(16).slice(2)}`;
+        const existingIdx = localParts.findIndex(
+          (p) => p.type === 'agent' && p.workerRunId === runId,
+        );
+        const delegatePart: PartAgent = {
+          type: 'agent',
+          workerRunId: runId,
           from: event.from || '',
           to: event.to || '',
           task: event.task,
           status: 'running',
           parallel: event.parallel,
+          parts: [],
         };
-        localParts.push(delegatePart);
+        if (existingIdx >= 0) {
+          localParts = localParts.map((p, i) => (i === existingIdx ? { ...delegatePart, parts: (p as PartAgent).parts } : p));
+        } else {
+          localParts = [...localParts, delegatePart];
+        }
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'delegate_progress') {
-        const delegatePart = localParts.find((p): p is Extract<MessagePart, { type: 'delegate' }> => p.type === 'delegate');
-        if (delegatePart) {
-          delegatePart.status = event.status === 'error' ? 'error' : delegatePart.status;
-          if (event.error) delegatePart.error = event.error;
-        }
+        const runId = event.worker_run_id || '';
+        localParts = localParts.map((p) => {
+          if (p.type !== 'agent') return p;
+          if (runId && p.workerRunId !== runId) return p;
+          return {
+            ...p,
+            status: event.status === 'error' || event.error ? ('error' as const) : p.status,
+            ...(event.error ? { error: event.error } : {}),
+          };
+        });
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
       } else if (event.type === 'delegate_end') {
-        const delegatePart = localParts.find((p): p is Extract<MessagePart, { type: 'delegate' }> => p.type === 'delegate');
-        if (delegatePart) {
-          delegatePart.status = event.error ? 'error' : 'done';
-          delegatePart.chars = typeof event.chars === 'number' ? event.chars : delegatePart.chars;
-          delegatePart.failed = event.failed;
-          delegatePart.error = event.error;
-        }
+        const runId = event.worker_run_id || '';
+        localParts = localParts.map((p) => {
+          if (p.type !== 'agent') return p;
+          if (runId && p.workerRunId !== runId) return p;
+          return {
+            ...p,
+            status: event.error ? ('error' as const) : ('done' as const),
+            ...(typeof event.chars === 'number' ? { chars: event.chars } : {}),
+            ...(event.failed !== undefined ? { failed: event.failed } : {}),
+            ...(event.error ? { error: event.error } : {}),
+          };
+        });
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -3134,6 +3252,7 @@ function App() {
                         onEditMessage={(messageId, content) => beginEditMessage(messageId, content)}
                         onRegenerateMessage={(messageId) => void handleRegenerateMessage(messageId)}
                         onRedoMessage={(messageId) => void handleRedoMessage(messageId)}
+                        onSubscribeWorker={(messageId, part) => subscribeWorkerTranscript(messageId, part)}
                       />
                       {streamIdleWarning && (
                         <div className="stream-idle-warning">

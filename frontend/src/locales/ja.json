@@ -897,5 +897,6 @@
   "chat.queue_section": "キュー中のメッセージ",
   "chat.remove_queued": "キューから削除",
   "chat.edit_queued": "キュー内メッセージを編集",
-  "chat.reorder_queued": "ドラッグで並べ替え"
+  "chat.reorder_queued": "ドラッグで並べ替え",
+  "chat.worker_loading": "ワーカーのストリームを読み込み中…"
 }

@@ -1,20 +1,19 @@
-import { Bot, CheckIcon, ChevronDown, Hammer, ListChecks, Paperclip, Shield, ShieldCheck, Users } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Bot, CheckIcon, ChevronDown, Hammer, ListChecks, Paperclip, Shield, ShieldCheck } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../lib/i18n';
-import type { ChatMessage, MessagePart, PartDelegate, PartFileChange } from '../types';
+import type { ChatMessage, MessagePart, PartFileChange, PartAgent } from '../types';
 import { ScrollArea } from './ui/scroll-area';
 import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
-import { ToolCallCard } from './ToolCallCard';
 import { FileChangesCard } from './FileChangesCard';
 import { AgentActivity } from './AgentActivity';
 import { MessageActions } from './MessageActions';
-import { ToolGroup, ToolGroupTrigger, ToolGroupContent } from './assistant-ui/tool-group';
+import { OrderedParts, ToolChain } from './part-renderers';
+import { AgentBlock } from './AgentBlock';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
 
 const STICK_THRESHOLD = 80;
-const IGNORED_TOOLS = new Set(['ask_user']);
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -22,9 +21,8 @@ interface MessageListProps {
   onEditMessage?: (messageId: string, content: string) => void;
   onRegenerateMessage?: (messageId: string) => void;
   onRedoMessage?: (messageId: string) => void;
+  onSubscribeWorker?: (messageId: string, part: PartAgent) => void;
 }
-
-const CONTEXT_TOOLS = new Set(['read_file', 'search_files']);
 
 function formatTime(timestamp: number): string {
   if (!timestamp) return '';
@@ -45,151 +43,8 @@ function groupParts(parts: MessagePart[]) {
   const planParts = parts.filter((p) => p.type === 'plan');
   const reasoningParts = parts.filter((p) => p.type === 'reasoning');
   const toolParts = parts.filter((p) => p.type === 'tool');
-  const delegateParts = parts.filter((p) => p.type === 'delegate');
-  return { planParts, reasoningParts, toolParts, delegateParts };
-}
-
-function DelegateBlock({ delegate }: { delegate: PartDelegate }) {
-  const { from, to, task, status, parallel, chars, failed } = delegate;
-  const targets = Array.isArray(to) ? to : [to];
-  const label = parallel
-    ? `${from || ''} → ${targets.join(', ')}`
-    : `${from || ''} → ${targets[0] || ''}`;
-  return (
-    <div className={`delegate-block delegate-block--${status}`}>
-      <span className="delegate-block-icon"><Users size={14} /></span>
-      <div className="delegate-block-body">
-        <div className="delegate-block-title">
-          {label}
-          {status === 'running' && <span className="delegate-block-status">{t('chat.delegate_running')}</span>}
-          {status === 'done' && chars !== undefined && <span className="delegate-block-status">· {chars} chars</span>}
-          {status === 'error' && delegate.error && <span className="delegate-block-status">{delegate.error}</span>}
-        </div>
-        {task && <div className="delegate-block-task">{task}</div>}
-        {failed && failed.length > 0 && (
-          <div className="delegate-block-failed">{t('chat.delegate_failed')}: {failed.join(', ')}</div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-interface ToolGroupNode {
-  key: string;
-  tools: Extract<MessagePart, { type: 'tool' }>[];
-}
-
-function buildToolGroups(toolParts: Extract<MessagePart, { type: 'tool' }>[]): { groups: ToolGroupNode[]; ignored: Extract<MessagePart, { type: 'tool' }>[] } {
-  const groups: ToolGroupNode[] = [];
-  const ignored: Extract<MessagePart, { type: 'tool' }>[] = [];
-  let current: Extract<MessagePart, { type: 'tool' }>[] = [];
-  const flush = () => {
-    if (current.length > 0) {
-      groups.push({ key: current[0]!.id, tools: current });
-      current = [];
-    }
-  };
-  for (const part of toolParts) {
-    if (IGNORED_TOOLS.has(part.name)) {
-      ignored.push(part);
-    } else if (CONTEXT_TOOLS.has(part.name)) {
-      current.push(part);
-    } else {
-      flush();
-      groups.push({ key: part.id, tools: [part] });
-    }
-  }
-  flush();
-  return { groups, ignored };
-}
-
-function ToolChain({ toolParts, running }: { toolParts: Extract<MessagePart, { type: 'tool' }>[]; running?: boolean }) {
-  // After the turn completes, fold EVERY tool into a single collapsible group
-  // ("big fold containing small folds"): each tool keeps its own inner card.
-  // While streaming, render individual live cards so the user can follow which
-  // tool is executing right now.
-  if (!running) {
-    const visibleTools = toolParts.filter((t) => !IGNORED_TOOLS.has(t.name));
-    const active = toolParts.some((part) => part.status === 'running');
-    return (
-      <div className="tool-chain">
-        {toolParts.filter((part) => IGNORED_TOOLS.has(part.name)).map((part) => (
-          <ToolCallCard key={part.id} tool={part} />
-        ))}
-        {visibleTools.length > 0 && (
-          <ToolGroup.Root variant="ghost">
-            <ToolGroupTrigger count={visibleTools.length} active={active} />
-            <ToolGroupContent>
-              {visibleTools.map((part) => (
-                <ToolCallCard key={part.id} tool={part} />
-              ))}
-            </ToolGroupContent>
-          </ToolGroup.Root>
-        )}
-      </div>
-    );
-  }
-  const { groups, ignored } = buildToolGroups(toolParts);
-  return (
-    <div className="tool-chain">
-      {ignored.map((part) => (
-        <ToolCallCard key={part.id} tool={part} />
-      ))}
-      {groups.map((group) => {
-        if (group.tools.length === 1) {
-          const single = group.tools[0]!;
-          return <ToolCallCard key={single.id} tool={single} />;
-        }
-        const active = group.tools.some((part) => part.status === 'running');
-        return (
-          <ToolGroup.Root key={group.key} variant="ghost">
-            <ToolGroupTrigger count={group.tools.length} active={active} />
-            <ToolGroupContent>
-              {group.tools.map((part) => (
-                <ToolCallCard key={part.id} tool={part} />
-              ))}
-            </ToolGroupContent>
-          </ToolGroup.Root>
-        );
-      })}
-    </div>
-  );
-}
-
-/** 把有序的 MessagePart[] 渲染成一组 JSX 节点，text/tool/reasoning/plan 按数组顺序交错。 */
-function OrderedParts({ parts, running, isError, isStopped }: { parts: MessagePart[]; running: boolean; isError: boolean; isStopped: boolean }) {
-  const nodes: ReactNode[] = [];
-  let toolRun: Extract<MessagePart, { type: 'tool' }>[] = [];
-  const flushTools = (key: string) => {
-    if (toolRun.length > 0) {
-      nodes.push(<ToolChain key={key} toolParts={toolRun} running={running} />);
-      toolRun = [];
-    }
-  };
-  parts.forEach((part, index) => {
-    if (part.type === 'tool') {
-      toolRun.push(part);
-      return;
-    }
-    flushTools(`tools-${index}`);
-    if (part.type === 'text') {
-      if (isError || isStopped) return;
-      nodes.push(
-        <Suspense key={`text-${index}`} fallback={<div className="markdown-body">{part.content}</div>}>
-          <MarkdownContent content={part.content} />
-        </Suspense>,
-      );
-    } else if (part.type === 'reasoning') {
-      nodes.push(<ThinkingBlock key={`reasoning-${index}`} reasoningParts={[part]} working={running} />);
-    } else if (part.type === 'plan') {
-      nodes.push(<PlanBlock key={`plan-${index}`} planParts={[part]} working={running} />);
-    } else if (part.type === 'delegate') {
-      nodes.push(<DelegateBlock key={`delegate-${index}`} delegate={part} />);
-    }
-  });
-  flushTools(`tools-end`);
-  if (nodes.length === 0) return null;
-  return <>{nodes}</>;
+  const agentParts = parts.filter((p) => p.type === 'agent');
+  return { planParts, reasoningParts, toolParts, agentParts };
 }
 
 function collectFileChanges(toolParts: Extract<MessagePart, { type: 'tool' }>[]): PartFileChange[] {
@@ -269,7 +124,7 @@ function UserMessage({ message, onEdit, onRedo }: { message: ChatMessage; onEdit
   );
 }
 
-function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { message: ChatMessage; onRegenerate?: () => void; actionsDisabled?: boolean }) {
+function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSubscribeWorker }: { message: ChatMessage; onRegenerate?: () => void; actionsDisabled?: boolean; onSubscribeWorker?: (messageId: string, part: PartAgent) => void }) {
   const isError = message.status === 'error';
   const isStopped = message.status === 'stopped' || message.status === 'interrupted';
   const isInterrupted = message.status === 'interrupted';
@@ -289,7 +144,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
   // 新格式：parts 内包含 text part（text 与 tool 交错）。旧会话没有 text part，
   // 走分组渲染 + content 兜底。
   const hasTextParts = msgParts.some((p) => p.type === 'text');
-  const { planParts, reasoningParts, toolParts } = groupParts(msgParts);
+  const { planParts, reasoningParts, toolParts, agentParts } = groupParts(msgParts);
   const fileChanges = collectFileChanges(toolParts);
   const hasRunningTools = isRunning && toolParts.some((part) => part.status === 'running');
   const summaryData = getTurnSummaryData(toolParts, fileChanges);
@@ -339,12 +194,28 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
         )}
 
         {hasTextParts ? (
-          <OrderedParts parts={msgParts} running={isRunning} isError={isError} isStopped={isStopped} />
+          <OrderedParts
+            parts={msgParts}
+            running={isRunning}
+            isError={isError}
+            isStopped={isStopped}
+            messageId={message.id}
+            {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
+            renderAgentBlock={AgentBlock}
+          />
         ) : (
           <>
             {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
             {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
             {toolParts.length > 0 && <ToolChain toolParts={toolParts} running={isRunning} />}
+            {agentParts.map((part) => (
+              <AgentBlock
+                key={`agent-${part.workerRunId}`}
+                part={part}
+                messageId={message.id}
+                {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
+              />
+            ))}
           </>
         )}
 
@@ -424,7 +295,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false }: { 
   );
 }
 
-function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRedoMessage }: MessageListProps) {
+function MessageListView({ messages, isThinking = false, onEditMessage, onRegenerateMessage, onRedoMessage, onSubscribeWorker }: MessageListProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const lastUserMessageIdRef = useRef<string | undefined>(undefined);
@@ -494,6 +365,7 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
               message={message}
               {...(onRegenerateMessage ? { onRegenerate: () => onRegenerateMessage(message.id) } : {})}
               actionsDisabled={isThinking}
+              {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
             />
           ),
         )}
@@ -513,7 +385,7 @@ function MessageListView({ messages, isThinking = false, onEditMessage, onRegene
 }
 
 export function MessageList(props: MessageListProps) {
-  const { messages, isThinking, onEditMessage, onRegenerateMessage, onRedoMessage } = props;
+  const { messages, isThinking, onEditMessage, onRegenerateMessage, onRedoMessage, onSubscribeWorker } = props;
   return (
     <MessageListView
       messages={messages}
@@ -521,6 +393,7 @@ export function MessageList(props: MessageListProps) {
       {...(onEditMessage ? { onEditMessage } : {})}
       {...(onRegenerateMessage ? { onRegenerateMessage } : {})}
       {...(onRedoMessage ? { onRedoMessage } : {})}
+      {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
     />
   );
 }
