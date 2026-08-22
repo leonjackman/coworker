@@ -4,6 +4,7 @@ import operator
 import os
 import re
 import sqlite3
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -3775,7 +3776,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None, checkpoint_manager: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.settings = settings
         self.provider_id = provider.id
@@ -3786,6 +3787,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.approval_store = approval_store
         self.trace_store = trace_store
         self.checkpoint_path = checkpoint_path
+        self.checkpoint_manager = checkpoint_manager
         self.change_store = change_store
         self.session_store = session_store
         self.referenced_sessions = set(referenced_sessions or set())
@@ -4099,6 +4101,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
                 language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
             )
+            if self.checkpoint_manager is not None and self.checkpoint_manager.has_reset_pending(session_id):
+                # A deferred checkpoint delete means LangGraph would otherwise
+                # resume the stale mid-task checkpoint (ignoring the rebuilt
+                # history). Point at a non-existent checkpoint so the run starts
+                # fresh from the input messages.
+                config.setdefault("configurable", {})["checkpoint_id"] = str(uuid.uuid4())
 
             content_parts: list[str] = []
             tool_state: dict[str, dict[str, Any]] = {}
@@ -4499,6 +4507,10 @@ class AgentRuntimeRegistry:
         return SqliteSaver(conn), conn
 
     def has_runtime_checkpoint(self, session_id: str) -> bool:
+        if self.checkpoint_manager.has_reset_pending(session_id):
+            # A deferred checkpoint delete means the stored rows are stale; the
+            # graph must rebuild from session history, not resume them.
+            return False
         try:
             saver, conn = self._open_sync_checkpointer()
         except sqlite3.OperationalError:
@@ -4517,9 +4529,44 @@ class AgentRuntimeRegistry:
             finally:
                 conn.close()
 
-    def forget_runtime_checkpoint(self, session_id: str) -> None:
-        # Delegate to the manager so the delete also reclaims disk space.
-        self.checkpoint_manager.delete_thread(session_id)
+    def forget_runtime_checkpoint(self, session_id: str) -> bool:
+        """Best-effort checkpoint reset; returns whether the delete completed.
+
+        Runs on the request critical path via ``to_thread``. A writer lock held
+        by a sibling stream must never stall the caller (previously a 30s busy
+        wait x retries = ~1min of no LLM activity). On failure the session is
+        marked reset-pending (so the next run starts fresh instead of resuming
+        stale state) and the rows are cleaned up by a bounded background retry.
+        """
+        if self.checkpoint_manager.delete_thread(session_id):
+            return True
+        self.checkpoint_manager._mark_reset_pending(session_id)
+        self._schedule_checkpoint_delete_retry(session_id)
+        return False
+
+    def _schedule_checkpoint_delete_retry(self, session_id: str) -> None:
+        """Retry a deferred checkpoint delete off the request path.
+
+        Bounded (~1 minute) and skips the session while a stream is writing its
+        checkpoint. If it still cannot acquire the lock the session is left
+        reset-pending, which keeps graph runs correct (fresh start) and lets a
+        later forget/sweep reclaim the rows.
+        """
+
+        def _retry() -> None:
+            for _ in range(12):
+                time.sleep(5.0)
+                if session_id in self.checkpoint_manager.active_sessions():
+                    continue
+                try:
+                    if self.checkpoint_manager.delete_thread(session_id):
+                        self.checkpoint_manager._clear_reset_pending(session_id)
+                        return
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
+            logger.warning("checkpoint delete retry gave up for %s", session_id)
+
+        threading.Thread(target=_retry, daemon=True).start()
 
     def _provider_for_request(self, provider_id: str | None, model: str | None) -> ProviderEntry | None:
         if provider_id:
@@ -4566,7 +4613,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings, checkpoint_manager=self.checkpoint_manager)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:

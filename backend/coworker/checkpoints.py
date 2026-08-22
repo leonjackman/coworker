@@ -35,6 +35,13 @@ logger = get_logger(__name__)
 _DEFAULT_CAP_PER_SESSION = 500
 _DEFAULT_MAX_BYTES_PER_THREAD = 32 * 1024 * 1024  # 32 MB
 
+# Whole-thread deletion is on the user-request critical path (edit /
+# regenerate / interrupted re-run). SQLite's busy handler can otherwise wait
+# 30s+ per attempt, stalling the request with no LLM call in flight. Fail fast
+# instead and let callers retry in the background.
+_DELETE_BUSY_TIMEOUT_MS = 2000
+_DELETE_CONNECT_TIMEOUT = 2.0
+
 _AUTO_VACUUM_INCREMENTAL = 2
 _AUTO_VACUUM_FULL = 1
 
@@ -69,6 +76,11 @@ class CheckpointManager:
         self._lock = threading.Lock()
         # Session ids with an in-flight stream; the sweep must never touch them.
         self._active: set[str] = set()
+        # Sessions whose checkpoint delete was deferred (writer lock). While a
+        # session is pending, the next graph run must NOT resume from its stale
+        # checkpoint (see ``has_reset_pending`` / fresh-start handling in the
+        # agent runtime), so a slow background delete never replays old state.
+        self._reset_pending: set[str] = set()
 
     # ------------------------------------------------------------------ #
     # Connection helpers
@@ -119,6 +131,21 @@ class CheckpointManager:
     def active_sessions(self) -> set[str]:
         """Public snapshot of session ids with an in-flight stream."""
         return self._active_set()
+
+    def has_reset_pending(self, session_id: str) -> bool:
+        """Whether a checkpoint delete for ``session_id`` was deferred and is
+        still waiting for its background retry. While pending, graph runs for
+        this session must start fresh instead of resuming stale state."""
+        with self._lock:
+            return session_id in self._reset_pending
+
+    def _mark_reset_pending(self, session_id: str) -> None:
+        with self._lock:
+            self._reset_pending.add(session_id)
+
+    def _clear_reset_pending(self, session_id: str) -> None:
+        with self._lock:
+            self._reset_pending.discard(session_id)
 
     def _has_checkpoints_table(self, conn: sqlite3.Connection) -> bool:
         """The LangGraph schema tables are created lazily by the first
@@ -300,26 +327,25 @@ class CheckpointManager:
     # ------------------------------------------------------------------ #
     # Whole-thread deletion (session deleted / rolled back / re-run)
     # ------------------------------------------------------------------ #
-    def delete_thread(self, session_id: str) -> None:
+    def delete_thread(self, session_id: str) -> bool:
         """Delete one session's checkpoint thread. Also calls incremental_vacuum
         to reclaim disk space after deletions.
 
-        Uses a generous busy timeout (matching the writer side) and several
-        retries with back-off so transient writer locks do not cause silent
-        skips.
+        Best-effort with a SHORT busy timeout: deletion runs on the user-request
+        critical path (edit / regenerate / interrupted re-run), so a writer lock
+        held by a sibling stream must never block the request for the old 30s
+        busy-wait. Returns whether the delete actually completed so the caller
+        can mark the session reset-pending and schedule a background retry.
         """
-        for attempt in range(5):
-            try:
-                self._delete_thread_once(session_id)
-                return
-            except sqlite3.OperationalError as exc:
-                if attempt >= 4:
-                    logger.warning("delete_thread(%s) failed (writer lock): %s", session_id, exc)
-                    return
-                time.sleep(0.5 * (attempt + 1))
+        try:
+            self._delete_thread_once(session_id)
+            return True
+        except sqlite3.OperationalError as exc:
+            logger.warning("delete_thread(%s) deferred (writer lock): %s", session_id, exc)
+            return False
 
     def _delete_thread_once(self, session_id: str) -> None:
-        conn = self._connect(timeout=5.0, busy_timeout_ms=30000)
+        conn = self._connect(timeout=_DELETE_CONNECT_TIMEOUT, busy_timeout_ms=_DELETE_BUSY_TIMEOUT_MS)
         try:
             if not self._has_checkpoints_table(conn):
                 return
@@ -336,6 +362,6 @@ class CheckpointManager:
                 except sqlite3.OperationalError:
                     if v_attempt >= 2:
                         break
-                    time.sleep(0.2)
+                    time.sleep(0.1)
         finally:
             conn.close()

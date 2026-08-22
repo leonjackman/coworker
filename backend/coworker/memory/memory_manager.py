@@ -13,6 +13,7 @@ feeds the nudge trigger, and extraction itself lives in ``auto_extract``.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,26 @@ logger = get_logger(__name__)
 DEFAULT_AGENT = "default_agent"
 
 
+def _transcript_fingerprint(messages: list[dict[str, Any]] | None) -> str:
+    """Cheap content fingerprint of a transcript for dream de-duplication.
+
+    Two turns with identical message content must not re-trigger extraction; a
+    length + tail hash is enough (content only ever grows between turns).
+    """
+    if not messages:
+        return ""
+    total = 0
+    tail = ""
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = str(msg.get("content") or "")
+        total += len(content)
+        if len(tail) < 2000:
+            tail += content
+    return f"{len(messages)}:{total}:{tail[-2000:]}"
+
+
 @dataclass(frozen=True)
 class MemoryConfig:
     enabled: bool = True
@@ -41,6 +62,15 @@ class MemoryConfig:
     extract_model: str = ""
     max_prior_loss: float = 0.25  # dream rewrite must preserve >= 75% of prior entries
     dream_idle_seconds: int = 30  # session-end idle window before dreaming
+    # Minimum gap between dreams for the SAME session. A session that settles
+    # many turns in a row (e.g. rapid edits / approvals) would otherwise fire a
+    # dream after every turn, hammering the model with extract+summarize calls
+    # that compete with the user's actual requests.
+    dream_min_interval_seconds: int = 60
+    # Global cap on concurrently-running dreams. Dreams run off the main turn
+    # path but still consume the SAME provider; bounding concurrency guarantees
+    # they never starve an active conversation.
+    max_concurrent_dreams: int = 1
 
     # Backwards-compatible alias for ``inject_char_limit`` (older call sites /
     # selftests may still read ``config.char_limit``).
@@ -78,6 +108,12 @@ class MemoryManager:
         # Injected extractor dependencies (set via configure_extractor).
         self._llm_factory: Any | None = None
         self._transcript_provider: Any | None = None
+        # Dream throttling: a global concurrency cap plus per-session cooldown
+        # and transcript fingerprint, so background extraction never spams the
+        # provider or competes with the user's active turns.
+        self._dream_semaphore = threading.Semaphore(max(1, int(getattr(config, "max_concurrent_dreams", 1) or 1)))
+        self._last_dream_at: dict[str, float] = {}
+        self._last_dream_fingerprint: dict[str, str] = {}
 
     # -- config helpers -----------------------------------------------------
 
@@ -187,6 +223,9 @@ class MemoryManager:
         view._session_summarized = self._session_summarized
         view._llm_factory = self._llm_factory
         view._transcript_provider = self._transcript_provider
+        view._dream_semaphore = self._dream_semaphore
+        view._last_dream_at = self._last_dream_at
+        view._last_dream_fingerprint = self._last_dream_fingerprint
         view._project_dir = project_dir
         view._agent = agent or DEFAULT_AGENT
         return view
@@ -316,19 +355,41 @@ class MemoryManager:
             cancelled.set()
 
     async def _dream_async(self, session_id: str) -> None:
-        """Run the full background memory pass: extract, then consolidate."""
+        """Run the full background memory pass: extract, then consolidate.
+
+        Throttled three ways so background extraction never starves the user's
+        turns: a global concurrency cap, a per-session cooldown, and skipping
+        when the transcript is unchanged since the last dream.
+        """
         if self._llm_factory is None or self._transcript_provider is None:
             logger.debug("dream skipped for %s: extractor not configured", session_id)
             return
+        if not self._dream_semaphore.acquire(blocking=False):
+            logger.debug("dream skipped for %s: at global dream cap", session_id)
+            return
+        ran = False
+        fingerprint = ""
         try:
             from .auto_extract import run_auto_extract, run_session_summary
+
+            messages = list(self._transcript_provider(session_id) or [])
+            fingerprint = _transcript_fingerprint(messages)
+            with self._lock:
+                last_at = self._last_dream_at.get(session_id, 0.0)
+                last_fp = self._last_dream_fingerprint.get(session_id)
+            if fingerprint and fingerprint == last_fp:
+                logger.debug("dream skipped for %s: transcript unchanged", session_id)
+                return
+            min_interval = int(getattr(self.config, "dream_min_interval_seconds", 60) or 60)
+            if time.monotonic() - last_at < min_interval:
+                logger.debug("dream skipped for %s: inside per-session cooldown", session_id)
+                return
 
             llm = self._llm_factory()
             if llm is None:
                 logger.info("dream skipped for %s: no provider configured", session_id)
                 return
             model_label = getattr(llm, "model_name", "") or self.config.extract_model
-            messages = self._transcript_provider(session_id)
             result = await run_auto_extract(
                 llm=llm,
                 messages=messages,
@@ -356,8 +417,16 @@ class MemoryManager:
                 "dream done for %s: added=%d transcript=%d chars %s summary=%s",
                 session_id, added, len(transcript), note, summary_note,
             )
+            ran = True
         except Exception as exc:  # noqa: BLE001 - defensive
             logger.warning("dream failed for %s: %s", session_id, exc)
+        finally:
+            with self._lock:
+                if ran:
+                    self._last_dream_at[session_id] = time.monotonic()
+                if fingerprint:
+                    self._last_dream_fingerprint[session_id] = fingerprint
+            self._dream_semaphore.release()
 
     def _stage_candidates(self, session_id: str, candidates: list[str]) -> int:
         """Extract step: stage candidates for the consolidation pass (and fall
