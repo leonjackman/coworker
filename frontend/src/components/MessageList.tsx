@@ -3,12 +3,13 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart, PartFileChange, PartAgent } from '../types';
 import { ScrollArea } from './ui/scroll-area';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from './ui/collapsible';
 import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
 import { FileChangesCard } from './FileChangesCard';
 import { AgentActivity } from './AgentActivity';
 import { MessageActions } from './MessageActions';
-import { OrderedParts, ToolChain } from './part-renderers';
+import { OrderedParts, ToolChain, HIDDEN_TOOLS } from './part-renderers';
 import { AgentBlock } from './AgentBlock';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
@@ -55,6 +56,51 @@ function collectFileChanges(toolParts: Extract<MessagePart, { type: 'tool' }>[])
     }
   }
   return files;
+}
+
+function splitDoneParts(parts: MessagePart[]): { process: MessagePart[]; finalReply: string | null } {
+  let lastTextIdx = -1;
+  for (let i = 0; i < parts.length; i += 1) {
+    if (parts[i]!.type === 'text') lastTextIdx = i;
+  }
+  if (lastTextIdx < 0) return { process: parts, finalReply: null };
+  const finalReply = (parts[lastTextIdx] as Extract<MessagePart, { type: 'text' }>).content;
+  const process = parts.slice(0, lastTextIdx);
+  return { process, finalReply: finalReply || null };
+}
+
+function ProcessCollapsible({
+  parts,
+  messageId,
+  onSubscribeWorker,
+}: {
+  parts: MessagePart[];
+  messageId: string;
+  onSubscribeWorker?: (messageId: string, part: PartAgent) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const toolCount = parts.filter((p) => p.type === 'tool' && !HIDDEN_TOOLS.has(p.name)).length;
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="process-fold">
+      <CollapsibleTrigger className="process-fold__trigger">
+        <ChevronDown size={14} className={`process-fold__chevron${open ? ' process-fold__chevron--open' : ''}`} />
+        <span className="process-fold__label">{t('chat.thinking_process')}</span>
+        {toolCount > 0 && (
+          <span className="process-fold__badge">{toolCount} tool{toolCount > 1 ? 's' : ''}</span>
+        )}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="process-fold__content">
+        <OrderedParts
+          parts={parts}
+          running={false}
+          isError={false}
+          messageId={messageId}
+          {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
+          renderAgentBlock={AgentBlock}
+        />
+      </CollapsibleContent>
+    </Collapsible>
+  );
 }
 
 function UserMessage({ message, onEdit, onRedo }: { message: ChatMessage; onEdit?: (content: string) => void; onRedo?: () => void }) {
@@ -125,6 +171,8 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
   const { planParts, reasoningParts, toolParts, agentParts } = groupParts(msgParts);
   const fileChanges = collectFileChanges(toolParts);
   const hasRunningTools = isRunning && toolParts.some((part) => part.status === 'running');
+  const isDone = message.status === 'done';
+  const { process: processParts, finalReply } = splitDoneParts(msgParts);
 
   // Build the meta text (Plan/Build · autonomy · model · duration)
   const metaParts: string[] = [];
@@ -172,7 +220,22 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
           </div>
         )}
 
-        {hasTextParts ? (
+        {isDone ? (
+          <>
+            {processParts.length > 0 && (
+              <ProcessCollapsible
+                parts={processParts}
+                messageId={message.id}
+                {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
+              />
+            )}
+            {(finalReply ?? message.content) && (
+              <Suspense fallback={<div className="markdown-body">{finalReply ?? message.content}</div>}>
+                <MarkdownContent content={finalReply ?? message.content} />
+              </Suspense>
+            )}
+          </>
+        ) : hasTextParts ? (
           <OrderedParts
             parts={msgParts}
             running={isRunning}
@@ -199,7 +262,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
 
         {isRunning && hasRunningTools && <AgentActivity working={isRunning} />}
 
-        {!hasTextParts && !isError && !isRunningEmpty && !isWaiting && (
+        {!isDone && !hasTextParts && !isError && !isRunningEmpty && !isWaiting && (
           <Suspense fallback={<div className="markdown-body">{message.content}</div>}>
             <MarkdownContent content={message.content} />
           </Suspense>

@@ -95,6 +95,7 @@
   "chat.stopped": "Aguardando esta resposta foi interrompido. Se o serviço já começou a processar, o resultado será ignorado.",
   "chat.meta_stopped": "Interrompido",
   "chat.meta_interrupted": "Interrompida",
+  "chat.thinking_process": "Processo de pensamento",
   "chat.stream_interrupted": "Conexão interrompida; a resposta pode estar incompleta. Você pode regenerá-la.",
   "chat.slash_tooltip": "Inserir comando /",
   "chat.new_chat_tooltip": "Iniciar uma nova conversa",

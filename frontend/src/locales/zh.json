@@ -103,6 +103,7 @@
   "chat.stopped": "已停止等待本次回复。若服务已在处理，其结果将被忽略。",
   "chat.meta_stopped": "已停止",
   "chat.meta_interrupted": "已打断",
+  "chat.thinking_process": "思考過程",
   "chat.stream_interrupted": "连接中断，回复可能不完整。可点击重新生成。",
   "chat.slash_tooltip": "插入 / 命令",
   "chat.new_chat_tooltip": "开始新对话",

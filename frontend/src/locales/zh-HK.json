@@ -123,6 +123,7 @@
   "chat.stopped": "已停止等呢次回覆。如果服務已經開始處理，結果會被忽略。",
   "chat.meta_stopped": "已停止",
   "chat.meta_interrupted": "已中斷",
+  "chat.thinking_process": "思考過程",
   "chat.stream_interrupted": "連線中斷；回覆可能唔完整。你可以重新生成。",
   "chat.slash_tooltip": "插入 / 指令",
   "chat.new_chat_tooltip": "開始新對話",

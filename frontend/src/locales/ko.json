@@ -140,6 +140,7 @@
   "chat.stopped": "이 답변에 대한 대기를 중지했습니다. 서비스가 이미 처리를 시작한 경우 결과는 무시됩니다.",
   "chat.meta_stopped": "중지됨",
   "chat.meta_interrupted": "중단됨",
+  "chat.thinking_process": "思考 과정",
   "chat.stream_error": "스트림이 중단되었습니다. 다시 시도하세요.",
   "chat.stream_interrupted": "연결이 중단되었습니다. 답변이 불완전할 수 있습니다. 다시 생성할 수 있습니다.",
   "chat.toggle_autonomy": "자율성 전환",

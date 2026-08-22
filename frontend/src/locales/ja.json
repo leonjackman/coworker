@@ -95,6 +95,7 @@
   "chat.stopped": "この返信の待機を停止しました。処理が既に開始されている場合、その結果は無視されます。",
   "chat.meta_stopped": "停止",
   "chat.meta_interrupted": "中断",
+  "chat.thinking_process": "思考プロセス",
   "chat.stream_interrupted": "接続が中断されました。応答が不完全な場合があります。再生成できます。",
   "chat.slash_tooltip": "/ コマンドを挿入",
   "chat.new_chat_tooltip": "新規チャットを開始",

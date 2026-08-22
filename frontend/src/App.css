@@ -10196,6 +10196,58 @@ body.bottom-panel-resizing {
   font-size: 12px;
 }
 
+/* done 态「思考过程」大折叠：把推理/计划/中间文字/工具按原始顺序收进一个
+   可展开块，只留下 final reply 平铺展示。 */
+.process-fold {
+  margin: 8px 0;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 8px;
+  background: var(--color-panel, transparent);
+  overflow: hidden;
+}
+.process-fold__trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 13px;
+}
+.process-fold__trigger:hover {
+  background: color-mix(in srgb, var(--color-accent, #3b82f6) 8%, transparent);
+}
+.process-fold__chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+.process-fold__chevron--open {
+  transform: rotate(90deg);
+}
+.process-fold__label {
+  font-weight: 600;
+  color: var(--foreground);
+}
+.process-fold__badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 12px;
+  opacity: 0.75;
+  background: var(--material-control);
+  border: 1px solid var(--material-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.process-fold__content {
+  border-top: 1px solid var(--color-border, #333);
+  padding: 8px 10px 10px;
+}
+
 /* Worker 子代理 block：可折叠，展开后展示 worker 自己的内部流 */
 .agent-block {
   display: flex;

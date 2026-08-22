@@ -103,6 +103,7 @@
   "chat.stopped": "Stopped waiting for this reply. If the service already began processing, its result will be ignored.",
   "chat.meta_stopped": "Stopped",
   "chat.meta_interrupted": "Interrupted",
+  "chat.thinking_process": "Thinking process",
   "chat.stream_interrupted": "Connection interrupted; the reply may be incomplete. You can regenerate it.",
   "chat.slash_tooltip": "Insert / command",
   "chat.new_chat_tooltip": "Start a new chat",
