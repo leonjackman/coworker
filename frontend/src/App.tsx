@@ -176,6 +176,60 @@ function settleRunningTools(parts: MessagePart[]): MessagePart[] {
   );
 }
 
+/**
+ * Apply a delegation frame (delegate_start / delegate_progress / delegate_end)
+ * to a parts array: creates the worker PartAgent block on start, updates its
+ * status/error/chars on progress/end. Shared by the main stream, edit/rerun and
+ * resume paths so the worker block renders in every turn-start mode.
+ */
+function applyDelegateEventToParts(parts: MessagePart[], event: StreamEvent): MessagePart[] {
+  if (event.type === 'delegate_start') {
+    const runId =
+      event.worker_run_id ||
+      `delegate-${Date.now()}-${parts.length}-${Math.random().toString(16).slice(2)}`;
+    const existingIdx = parts.findIndex((p) => p.type === 'agent' && p.workerRunId === runId);
+    const delegatePart: PartAgent = {
+      type: 'agent',
+      workerRunId: runId,
+      from: event.from || '',
+      to: event.to || '',
+      task: event.task,
+      status: 'running',
+      parallel: event.parallel,
+      parts: [],
+    };
+    if (existingIdx >= 0) {
+      return parts.map((p, i) =>
+        i === existingIdx ? { ...delegatePart, parts: (p as PartAgent).parts } : p,
+      );
+    }
+    return [...parts, delegatePart];
+  }
+  if (event.type !== 'delegate_progress' && event.type !== 'delegate_end') return parts;
+  const runId = event.worker_run_id || '';
+  return parts.map((p) => {
+    if (p.type !== 'agent') return p;
+    if (runId && p.workerRunId !== runId) return p;
+    if (event.type === 'delegate_progress') {
+      return {
+        ...p,
+        status: event.status === 'error' || event.error ? ('error' as const) : p.status,
+        ...(event.error ? { error: event.error } : {}),
+      };
+    }
+    if (event.type === 'delegate_end') {
+      return {
+        ...p,
+        status: event.error ? ('error' as const) : ('done' as const),
+        ...(typeof event.chars === 'number' ? { chars: event.chars } : {}),
+        ...(event.failed !== undefined ? { failed: event.failed } : {}),
+        ...(event.error ? { error: event.error } : {}),
+      };
+    }
+    return p;
+  });
+}
+
 function upsertToolPart(parts: MessagePart[], id: string, name: string, input: string): MessagePart[] {
   // Dedupe by tool call id: a resumed graph re-emits the same tool, so update
   // the existing part instead of stacking a duplicate card.
@@ -1290,62 +1344,10 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
-      } else if (event.type === 'delegate_start') {
+      } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
         // 每个 worker run 一个独立 PartAgent block。worker_run_id 作为订阅
         // /worker-events/{id} 的键；缺失时（旧后端）生成一个稳定的 fallback key。
-        const runId = event.worker_run_id || `delegate-${Date.now()}-${localParts.length}-${Math.random().toString(16).slice(2)}`;
-        const existingIdx = localParts.findIndex(
-          (p) => p.type === 'agent' && p.workerRunId === runId,
-        );
-        const delegatePart: PartAgent = {
-          type: 'agent',
-          workerRunId: runId,
-          from: event.from || '',
-          to: event.to || '',
-          task: event.task,
-          status: 'running',
-          parallel: event.parallel,
-          parts: [],
-        };
-        if (existingIdx >= 0) {
-          localParts = localParts.map((p, i) => (i === existingIdx ? { ...delegatePart, parts: (p as PartAgent).parts } : p));
-        } else {
-          localParts = [...localParts, delegatePart];
-        }
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
-      } else if (event.type === 'delegate_progress') {
-        const runId = event.worker_run_id || '';
-        localParts = localParts.map((p) => {
-          if (p.type !== 'agent') return p;
-          if (runId && p.workerRunId !== runId) return p;
-          return {
-            ...p,
-            status: event.status === 'error' || event.error ? ('error' as const) : p.status,
-            ...(event.error ? { error: event.error } : {}),
-          };
-        });
-        setMessages((current) =>
-          current.map((item) =>
-            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
-          ),
-        );
-      } else if (event.type === 'delegate_end') {
-        const runId = event.worker_run_id || '';
-        localParts = localParts.map((p) => {
-          if (p.type !== 'agent') return p;
-          if (runId && p.workerRunId !== runId) return p;
-          return {
-            ...p,
-            status: event.error ? ('error' as const) : ('done' as const),
-            ...(typeof event.chars === 'number' ? { chars: event.chars } : {}),
-            ...(event.failed !== undefined ? { failed: event.failed } : {}),
-            ...(event.error ? { error: event.error } : {}),
-          };
-        });
+        localParts = applyDelegateEventToParts(localParts, event);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -1805,6 +1807,13 @@ function App() {
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
           ),
         );
+      } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
+        localParts = applyDelegateEventToParts(localParts, event);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
@@ -2040,6 +2049,13 @@ function App() {
             else if (event.type === 'plan_end' && event.content) planPart.content = event.content;
           }
         }
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
+          ),
+        );
+      } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
+        localParts = applyDelegateEventToParts(localParts, event);
         setMessages((current) =>
           current.map((item) =>
             item.id === assistantMessageId ? { ...item, content: streamedContent, parts: [...localParts] } : item,
@@ -2355,6 +2371,9 @@ function App() {
           } else if (event.type === 'plan_end') {
             const pp = resumeParts.find((p): p is Extract<MessagePart, { type: 'plan' }> => p.type === 'plan');
             if (pp && event.content) pp.content = event.content;
+            applyResume('running');
+          } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
+            resumeParts = applyDelegateEventToParts(resumeParts, event);
             applyResume('running');
           } else if (event.type === 'stage') {
             setMessages((current) =>
