@@ -16,6 +16,7 @@ fail()  { echo -e "  ${RED}✗${NC} $1" 1>&2; }
 echo -e "${CYAN}=== Coworker Desktop ===${NC}\n"
 
 echo "[0/6] Killing existing Coworker processes..."
+lsof -ti:9527 | xargs kill -9 2>/dev/null || true
 ok "Killed existing Coworker processes"
 
 echo "[1/6] Preparing Python backend..."
