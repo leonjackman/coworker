@@ -1,4 +1,4 @@
-import { Bot, CheckIcon, ChevronDown, Hammer, ListChecks, Paperclip, Shield, ShieldCheck } from 'lucide-react';
+import { Bot, ChevronDown, Hammer, ListChecks, Paperclip, Shield, ShieldCheck } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../lib/i18n';
 import type { ChatMessage, MessagePart, PartFileChange, PartAgent } from '../types';
@@ -55,27 +55,6 @@ function collectFileChanges(toolParts: Extract<MessagePart, { type: 'tool' }>[])
     }
   }
   return files;
-}
-
-function getTurnSummaryData(toolParts: Extract<MessagePart, { type: 'tool' }>[], fileChanges: PartFileChange[]) {
-  const count = toolParts.length;
-  if (count === 0 && fileChanges.length === 0) return null;
-
-  const distinctTools = [...new Set(toolParts.map((p) => p.name))];
-  const addedLines = fileChanges.reduce((s, f) => s + f.added, 0);
-  const removedLines = fileChanges.reduce((s, f) => s + f.removed, 0);
-  const durationMs = toolParts.reduce((s, p) => s + (p.duration_ms ?? 0), 0);
-  const fileCount = fileChanges.length;
-
-  return { count, distinctTools, fileCount, addedLines, removedLines, durationMs };
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return '<1s';
-  const totalSeconds = Math.floor(ms / 1000);
-  if (totalSeconds < 10) return `${(ms / 1000).toFixed(1)}s`;
-  if (totalSeconds < 60) return `${totalSeconds}s`;
-  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
 function UserMessage({ message, onEdit, onRedo }: { message: ChatMessage; onEdit?: (content: string) => void; onRedo?: () => void }) {
@@ -146,8 +125,6 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
   const { planParts, reasoningParts, toolParts, agentParts } = groupParts(msgParts);
   const fileChanges = collectFileChanges(toolParts);
   const hasRunningTools = isRunning && toolParts.some((part) => part.status === 'running');
-  const summaryData = getTurnSummaryData(toolParts, fileChanges);
-  const hasToolsOrFiles = summaryData !== null;
 
   // Build the meta text (Plan/Build · autonomy · model · duration)
   const metaParts: string[] = [];
@@ -229,37 +206,6 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
         )}
 
         {fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
-
-        {hasToolsOrFiles && (
-          <div className="turn-summary">
-            <CheckIcon size={12} className="turn-summary__check" />
-            <span className="turn-summary__text">
-              {summaryData.count > 0 && (
-                <>
-                  {summaryData.count} tool{summaryData.count > 1 ? 's' : ''}
-                  {summaryData.distinctTools.length > 0 && (
-                    <> · <span className="turn-summary__tools">{summaryData.distinctTools.join(', ')}</span></>
-                  )}
-                </>
-              )}
-              {summaryData.fileCount > 0 && (
-                <>
-                  {summaryData.count > 0 && ' · '}
-                  {summaryData.fileCount} file{summaryData.fileCount > 1 ? 's' : ''}
-                  {summaryData.addedLines > 0 && (
-                    <span className="file-counts__add"> +{summaryData.addedLines}</span>
-                  )}
-                  {summaryData.removedLines > 0 && (
-                    <span className="file-counts__del"> -{summaryData.removedLines}</span>
-                  )}
-                </>
-              )}
-              {summaryData.durationMs > 0 && (
-                <> · {formatDuration(summaryData.durationMs)}</>
-              )}
-            </span>
-          </div>
-        )}
 
         {isError ? (
           <div>

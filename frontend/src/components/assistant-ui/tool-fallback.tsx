@@ -150,14 +150,14 @@ function ToolFallbackTrigger({
   return (
     <CollapsibleTrigger data-slot="tool-fallback-trigger"className={cn("aui-tool-fallback-trigger group/trigger text-muted-foreground hover:text-foreground flex w-full origin-left items-center gap-2 py-1.5 text-sm transition-[color,scale] active:scale-[0.98]",className,)}{...props}>
       <Icon data-slot="tool-fallback-trigger-icon"className={cn("aui-tool-fallback-trigger-icon size-4 shrink-0",isCancelled && "text-muted-foreground",isRunning && "animate-spin [animation-duration:0.6s]",)}/>
-      <span data-slot="tool-fallback-trigger-label"className={cn("aui-tool-fallback-trigger-label-wrapper relative inline-block text-start leading-none",isCancelled && "text-muted-foreground line-through",)}>
+      <span data-slot="tool-fallback-trigger-label"className={cn("aui-tool-fallback-trigger-label-wrapper relative inline-block shrink-0 whitespace-nowrap text-start leading-none",isCancelled && "text-muted-foreground line-through",)}>
         <span>{label}: <b>{toolName}</b></span>
         {isRunning && (<span aria-hidden data-slot="tool-fallback-trigger-shimmer" className="aui-tool-fallback-trigger-shimmer shimmer pointer-events-none absolute inset-0 motion-reduce:animate-none">{label}: <b>{toolName}</b></span>)}
       </span>
       {preview && (
         <span
           data-slot="tool-fallback-trigger-preview"
-          className={cn("aui-tool-fallback-trigger-preview text-muted-foreground/70 min-w-0 max-w-full shrink-0 flex-[0_0_70%] truncate font-mono text-xs text-left",isCancelled && "opacity-60 line-through",)}>
+          className={cn("aui-tool-fallback-trigger-preview text-muted-foreground/70 min-w-0 max-w-full flex-1 truncate font-mono text-xs text-left",isCancelled && "opacity-60 line-through",)}>
           {preview}
         </span>
       )}

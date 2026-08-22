@@ -128,7 +128,7 @@ function ToolGroupTrigger({
       <span
         data-slot="tool-group-trigger-label"
         className={cn(
-          "aui-tool-group-trigger-label-wrapper relative inline-block text-start leading-none font-medium",
+          "aui-tool-group-trigger-label-wrapper relative inline-block shrink-0 whitespace-nowrap text-start leading-none font-medium",
           "group-data-[variant=ghost]/tool-group-root:font-normal",
           "group-data-[variant=outline]/tool-group-root:grow",
           "group-data-[variant=muted]/tool-group-root:grow",
@@ -155,7 +155,7 @@ function ToolGroupTrigger({
         <span
           data-slot="tool-group-trigger-preview"
           className={cn(
-            "aui-tool-group-trigger-preview text-muted-foreground/70 min-w-0 max-w-full shrink-0 flex-[0_0_55%] truncate font-mono text-xs text-left",
+            "aui-tool-group-trigger-preview text-muted-foreground/70 min-w-0 max-w-full flex-1 truncate font-mono text-xs text-left",
             !active && "opacity-60",
           )}
         >
