@@ -99,15 +99,18 @@ class CheckpointManager:
         return conn
 
     def _ensure_autovacuum(self, conn: sqlite3.Connection) -> bool:
-        """Migrate a legacy DB to an auto-recycling mode. Returns True if a
-        full VACUUM was run (so callers can log it)."""
+        """Migrate a legacy DB to INCREMENTAL auto-vacuum. Returns True if a
+        full VACUUM was run (so callers can log it).
+
+        Handles both NONE (0) and the historical FULL (1) modes. FULL is the
+        root cause of "database is locked" under load (it reorganizes the file
+        on every commit), so it must be migrated away rather than left as-is.
+        """
         mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
         if mode == _AUTO_VACUUM_INCREMENTAL:
             return False
-        if mode == _AUTO_VACUUM_FULL:
-            return False
-        # Requires no open transaction and rewrites the whole file — only safe
-        # on the startup/idle sweep path.
+        # NONE or FULL: changing the persistent property requires a VACUUM that
+        # rewrites the whole file — only safe on the startup/idle sweep path.
         conn.execute("VACUUM")
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         conn.commit()  # writes the PRAGMA change into the new file header
