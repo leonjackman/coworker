@@ -311,15 +311,11 @@ class Delegator:
 
     def _run_sub_turn(self, agent: str, task: str, context: str, readonly: bool) -> str:
         """Build and run a bounded nested graph for ``agent``; return final text."""
-        from .agents import (
-            agent_run_config,
-            build_coworker_agent_graph,
-            build_workspace_tools,
-            coerce_message_content,
-            prepare_agent_messages,
-        )
+        from .agents import agent_run_config
         from .memory.memory_manager import DEFAULT_AGENT
         from .org import AGENT_STATUS_ACTIVE
+        from .workers.worker_config import TaskBrief, WorkerConfig
+        from .workers.worker import WorkerAgent
 
         _ = DEFAULT_AGENT  # (referenced for clarity in the thread id below)
 
@@ -364,6 +360,7 @@ class Delegator:
             except Exception:  # noqa: BLE001 - delegation must never break on a browser misconfig
                 browser_tool = None
                 browser_capability = ""
+        # 复用 build_workspace_tools 构建工具集
         tools = build_workspace_tools(
             self.workspace,
             audit_context,
@@ -379,49 +376,64 @@ class Delegator:
             readonly=readonly,
             web_tools=web_tools,
             browser_tool=browser_tool,
-        )
-        graph = build_coworker_agent_graph(
-            self.llm,
-            tools,
-            work_mode=self.work_mode,
+            # WorkerAgent 集成（不启用 use_worker tool，只复用工具构建逻辑）
+            use_worker_enabled=False,
             language=self.language,
-            autonomy="autonomous" if readonly else self.autonomy,
-            checkpointer=None,
+            max_concurrent=4,
+            worker_llm=self.llm,
+            worker_session_id=self.session_id,
+            worker_work_mode=self.work_mode,
+            worker_autonomy=self.autonomy,
+            worker_provider_name=self.provider_name,
+            worker_approval_store=self.approval_store,
+            worker_data_dir=self.data_dir,
+            worker_mcp_session_manager=self.mcp_session_manager,
+        )
+        # 构建任务简报（含 hierarchy prompt）
+        hierarchy = self._hierarchy_prompt(agent)
+        brief = TaskBrief(
+            task=f"{hierarchy}\n\n任务：{task}\n\n{context}".strip(),
+            context=context,
+        )
+        config = WorkerConfig.for_delegation(
+            memory_manager=view,
+            memory_rel=memory_rel,
+            language=self.language,
+        )
+
+        worker = WorkerAgent(
+            llm=self.llm,
+            brief=brief,
+            config=config,
+            workspace=self.workspace,
+            tools=tools,
             approval_store=self.approval_store,
+            change_store=self.change_store,
+            session_store=self.session_store,
             data_dir=self.data_dir,
             mcp_session_manager=self.mcp_session_manager,
             skill_manager=self.skill_manager,
+            provider_name=self.provider_name,
             memory_manager=view,
-            workspace=self.workspace,
-            web_capability=web_capability,
-            browser_capability=browser_capability,
+            project_dir=project_dir,
+            session_id=self.session_id,
+            caller_agent=agent,
+            readonly=readonly,
+            work_mode=self.work_mode,
+            autonomy=self.autonomy,
         )
-        hierarchy = self._hierarchy_prompt(agent)
-        messages = prepare_agent_messages(
-            [{"role": "user", "content": f"{hierarchy}\n\n任务：{task}\n\n{context}".strip()}]
-        )
-        result = graph.invoke(
-            {
-                "messages": messages,
-                "work_mode": self.work_mode,
-                "language": self.language,
-                "phase": "execute" if not readonly else "discuss",
-                "autonomy": self.autonomy,
-            },
-            config=agent_run_config(
-                session_id=f"{self.session_id}::delegate::{agent}::{uuid.uuid4().hex[:8]}",
-                provider=self.provider_name,
-                model=self.model_name,
-                language=self.language,
-                work_mode=self.work_mode,
-                autonomy=self.autonomy,
-                streaming=False,
-            ),
-        )
-        msgs = result.get("messages", []) if isinstance(result, dict) else []
-        if "__interrupt__" in result:
-            return "（委托任务需要审批，已中止）"
-        return coerce_message_content(msgs[-1]) if msgs else "（子 agent 无输出）"
+
+        # 同步调用（delegation 目前是同步的）
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        result = loop.run_until_complete(worker.arun())
+
+        if not result.success:
+            return f"（子代理失败：{result.error}）"
+        if result.was_truncated:
+            return f"{result.content}\n\n[子代理输出已截断]"
+        return result.content
 
     def _hierarchy_prompt(self, agent: str) -> str:
         """The system-style context block telling the target who it is."""

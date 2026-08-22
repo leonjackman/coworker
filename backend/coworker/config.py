@@ -42,6 +42,7 @@ class BackendSettings:
     log_max_bytes: int
     log_backup_count: int
     json_log: bool
+    max_concurrent_workers: int  # 最大并发 worker 数量
 
 
 def load_settings() -> BackendSettings:
@@ -78,6 +79,7 @@ def load_settings() -> BackendSettings:
     json_log = os.getenv("COWORKER_JSON_LOG", "1").strip().lower() not in {
         "0", "false", "no", "off",
     }
+    max_concurrent_workers = max(1, min(8, _env_int("COWORKER_MAX_CONCURRENT_WORKERS", 4)))
 
     data_dir.mkdir(parents=True, exist_ok=True)
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -103,4 +105,5 @@ def load_settings() -> BackendSettings:
         log_max_bytes=log_max_bytes,
         log_backup_count=log_backup_count,
         json_log=json_log,
+        max_concurrent_workers=max_concurrent_workers,
     )

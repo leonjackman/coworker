@@ -11,6 +11,7 @@ const TOOL_LABELS: Record<string, string> = {
   web_search: 'Web',
   web_fetch: 'Fetch',
   browser: 'Browser',
+  use_worker: 'Worker',
 };
 
 export function toolLabel(name: string): string {
@@ -61,6 +62,9 @@ export function toolPreview(name: string, input: string): string {
     for (const key of PATH_KEYS) {
       if (args[key]) return stringify(args[key]);
     }
+  }
+  if (name === 'use_worker') {
+    return stringify(args.task ?? args.context ?? '');
   }
   const entries = Object.entries(args).slice(0, 2);
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v.slice(0, 40) : stringify(v).slice(0, 40)}`).join(', ');

@@ -533,6 +533,19 @@ def build_workspace_tools(
     readonly: bool = False,
     web_tools: list | None = None,
     browser_tool: Any | None = None,
+    # WorkerAgent 集成（单 agent 模式）
+    use_worker_enabled: bool = False,
+    language: str = "zh",
+    max_concurrent: int = 4,
+    worker_llm: Any | None = None,
+    worker_session_id: str = "",
+    worker_work_mode: str = "build",
+    worker_autonomy: str = "guarded",
+    worker_provider_name: str = "",
+    worker_approval_store: Any | None = None,
+    worker_data_dir: Any | None = None,
+    worker_mcp_session_manager: Any | None = None,
+    delegation_emit: Any | None = None,  # optional callback for use_worker SSE frames
 ) -> list[Any]:
     from pathlib import Path as _Path
 
@@ -952,6 +965,30 @@ def build_workspace_tools(
         tools.append(delegate_parallel)
         tools.append(create_team_member)
         tools.append(create_team)
+    # WorkerAgent 集成（单 agent 模式）：use_worker 是只读-safe 的，
+    # 但 worker 本身可以有写权限（由 WorkerConfig 控制），所以 use_worker tool 始终可挂载。
+    if use_worker_enabled and worker_llm is not None:
+        from coworker.workers.worker_tool import UseWorkerTool
+
+        worker_tool = UseWorkerTool(
+            llm=worker_llm,
+            workspace=workspace,
+            tools=tools,  # 让 worker 能看到完整工具目录（worker 自己决定是否使用）
+            approval_store=worker_approval_store,
+            change_store=change_store,
+            session_store=session_store,
+            data_dir=worker_data_dir,
+            mcp_session_manager=worker_mcp_session_manager or None,
+            skill_manager=skill_manager,
+            provider_name=worker_provider_name,
+            session_id=worker_session_id,
+            work_mode=worker_work_mode,
+            autonomy=worker_autonomy,
+            language=language,
+            max_concurrent=max_concurrent,
+            delegation_emit=delegation_emit,
+        )
+        tools.append(worker_tool.create_tool())
     return tools
 
 
@@ -3287,8 +3324,9 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
+        self.settings = settings
         self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
@@ -3484,6 +3522,19 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 caller_agent=self.agent,
                 web_tools=self._web_tools,
                 browser_tool=self._browser_tool,
+                # WorkerAgent 集成
+                use_worker_enabled=True,
+                language=language,
+                max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
+                worker_llm=self.llm,
+                worker_session_id=session_id,
+                worker_work_mode=work_mode,
+                worker_autonomy=autonomy,
+                worker_provider_name=self.provider_name,
+                worker_approval_store=self.approval_store,
+                worker_data_dir=self.data_dir,
+                worker_mcp_session_manager=self.mcp_session_manager,
+                delegation_emit=self._delegation_event,
             ),
             work_mode=work_mode,
             language=language,
@@ -3545,8 +3596,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
+        self.settings = settings
         self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
@@ -3806,6 +3858,19 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     caller_agent=self.agent,
                     web_tools=self._web_tools,
                     browser_tool=self._browser_tool,
+                    # WorkerAgent 集成
+                    use_worker_enabled=True,
+                    language=language,
+                    max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
+                    worker_llm=self.llm,
+                    worker_session_id=session_id,
+                    worker_work_mode=work_mode,
+                    worker_autonomy=autonomy,
+                    worker_provider_name=self.provider_name,
+                    worker_approval_store=self.approval_store,
+                    worker_data_dir=self.data_dir,
+                    worker_mcp_session_manager=self.mcp_session_manager,
+                    delegation_emit=self._delegation_event,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -4115,6 +4180,19 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         memory_rel=memory_rel,
                         web_tools=self._web_tools,
                         browser_tool=self._browser_tool,
+                        # WorkerAgent 集成
+                        use_worker_enabled=True,
+                        language=language,
+                        max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
+                        worker_llm=self.llm,
+                        worker_session_id=session_id,
+                        worker_work_mode=work_mode,
+                        worker_autonomy=autonomy,
+                        worker_provider_name=self.provider_name,
+                        worker_approval_store=self.approval_store,
+                        worker_data_dir=self.data_dir,
+                        worker_mcp_session_manager=self.mcp_session_manager,
+                        delegation_emit=self._delegation_event,
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -4339,10 +4417,10 @@ class AgentRuntimeRegistry:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings)
         if self.settings.agent_provider == "openai":
             env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id)
+            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings)
         if self.settings.agent_provider == "simulated":
             return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
         raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
@@ -4365,7 +4443,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
