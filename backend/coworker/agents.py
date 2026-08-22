@@ -1002,7 +1002,7 @@ def build_workspace_tools(
             worker_bus=worker_bus,
             depth=0,
         )
-        tools.append(worker_tool.create_tool())
+        tools.extend(worker_tool.create_tools())
     return tools
 
 
@@ -1012,12 +1012,12 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
-_EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker"}
+_EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers"}
 
 # 子代理（worker）工具集在构造期就排除的委派/spawn 工具。把这些工具塞给子代理，
 # 会允许 worker 无限嵌套 spawn 更多 worker/team（单 agent 模式没有 org.max_depth
 # 约束）。见 build_workspace_tools 中 UseWorkerTool 的 tools= 传参。
-_CHILD_EXCLUDED_TOOLS = {"use_worker", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}
+_CHILD_EXCLUDED_TOOLS = {"use_worker", "use_workers", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}
 
 
 def _path_from_tool_input(tool_name: str, input_raw: str) -> str:
@@ -2052,7 +2052,7 @@ class ReasonPreservingChatOpenAI:
     """
 
     @staticmethod
-    def create(model: str, temperature: float, api_key: str, base_url: str | None, *, max_tokens: int = 0, repetition_penalty: float | None = None) -> Any:
+    def create(model: str, temperature: float, api_key: str, base_url: str | None, *, max_tokens: int = 0, repetition_penalty: float | None = None, parallel_tool_calls: bool | None = None) -> Any:
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import AIMessageChunk
 
@@ -2109,6 +2109,10 @@ class ReasonPreservingChatOpenAI:
             # greedy decoding. vLLM/Ollama accept `repetition_penalty` in the body;
             # only self-hosted providers opt in (callers gate this).
             kwargs["extra_body"] = {"repetition_penalty": float(repetition_penalty)}
+        if parallel_tool_calls is not None:
+            # Allow the model to emit multiple tool calls in one response — the
+            # precondition for parallel use_worker / use_workers fan-out.
+            kwargs["parallel_tool_calls"] = parallel_tool_calls
         return ChatOpenAI(**kwargs)
 
 
@@ -2127,6 +2131,11 @@ def _provider_llm_kwargs(model_name: str, provider: ProviderEntry, temperature: 
         api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
         base_url=base_url,
         max_tokens=max_tokens,
+        # 允许模型在同一条回复里发出多个 tool call（并行工具调用）。这是
+        # use_worker 并发的前提：只有模型能一次发 N 个 use_worker，LangGraph 的
+        # ToolNode 才会用 asyncio.gather 让 N 个 worker 并行执行。只放宽上限、
+        # 不强制——模型仍可单发。
+        parallel_tool_calls=True,
         repetition_penalty=DEFAULT_REPETITION_PENALTY if use_penalty else None,
     )
 
@@ -3491,7 +3500,10 @@ def build_coworker_agent_graph(
         f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
         "Use workspace tools only when they are needed and keep answers concise. "
         "If a tool call fails, do NOT re-run the exact same call; analyze the error and "
-        "change approach (narrow the scope, pick a different tool) or summarize and answer directly."
+        "change approach (narrow the scope, pick a different tool) or summarize and answer directly. "
+        "When you delegate independent research/analysis to sub-agent workers, run them in PARALLEL: "
+        "for 2+ independent tasks call use_workers with all tasks at once (or issue multiple use_worker "
+        "calls in the same response) instead of calling one at a time and waiting."
     )
 
     kwargs: dict[str, Any] = {

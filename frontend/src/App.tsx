@@ -171,9 +171,20 @@ function settleRunningTools(parts: MessagePart[]): MessagePart[] {
   // A tool that is still 'running' when the turn reaches a terminal state was
   // interrupted (awaiting approval) or aborted — never finish with a live
   // spinner. Demote it to 'pending' (static, non-spinning).
-  return parts.map((part) =>
-    part.type === 'tool' && part.status === 'running' ? { ...part, status: 'pending' as const } : part,
-  );
+  return parts.map((part) => {
+    if (part.type === 'tool' && part.status === 'running') {
+      return { ...part, status: 'pending' as const };
+    }
+    // A worker (agent part) still 'running' when the turn terminates means the
+    // turn was stopped/interrupted before delegate_end arrived — the main
+    // stream is aborted client-side, so the backend's delegate_end never
+    // reaches us. Settle it to a stopped/error state so the "Delegating…"
+    // spinner stops instead of spinning forever.
+    if (part.type === 'agent' && part.status === 'running') {
+      return { ...part, status: 'error' as const, error: t('chat.meta_stopped'), done: true };
+    }
+    return part;
+  });
 }
 
 /**
@@ -1630,6 +1641,16 @@ function App() {
     const assistantMessageId = activeAssistantMessageIdsRef.current[key];
     const streamStartAt = streamStartAtsRef.current[key];
     abortStreamFor(sessionIdRef.current);
+    // Also abort every worker transcript subscription for this session: the
+    // worker blocks are being stopped, so their SSE streams (/worker-events)
+    // must close too — otherwise the "Delegating…" spinner and any open
+    // transcript keep running. The backend also closes each worker run on
+    // cancellation (see WorkerAgent._execute CancelledError), so a later
+    // re-expand replays the partial transcript from disk.
+    for (const workerRunId of Object.keys(workerStreamControllersRef.current)) {
+      workerStreamControllersRef.current[workerRunId]?.abort();
+      delete workerStreamControllersRef.current[workerRunId];
+    }
     if (assistantMessageId) {
       setMessages((current) =>
         current.map((item) =>

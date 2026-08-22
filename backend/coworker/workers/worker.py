@@ -240,6 +240,22 @@ class WorkerAgent:
                 raw_length=0,
                 was_truncated=False,
             )
+        except asyncio.CancelledError:
+            # 主回合被停止/客户端断开：取消会经 asyncio.gather / wait_for 传播到
+            # 每个 worker。必须在这里发出 delegate_end 并关闭 worker bus，否则
+            # 前端 worker 块的「Delegating…」转圈永不结束、/worker-events SSE 也
+            # 永不终止（run 一直挂在内存里）。清理后重新抛出，保持取消语义，
+            # 让主回合的取消正常向上传播。
+            self.emit({
+                "type": "delegate_end",
+                "from": self.caller_agent or "Coworker",
+                "to": "Worker",
+                "error": "cancelled",
+                "parallel": False,
+                "worker_run_id": worker_run_id,
+            })
+            _close_stream(error="cancelled")
+            raise
         except Exception as exc:  # noqa: BLE001
             self.emit({
                 "type": "delegate_end",
