@@ -4,6 +4,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolGroup, ToolGroupTrigger, ToolGroupContent } from './assistant-ui/tool-group';
+import { FileChangesInline } from './FileChangesCard';
 import { toolLabel, toolPreview } from './toolMeta';
 
 const MarkdownContent = lazy(() => import('./MarkdownContent').then((module) => ({ default: module.MarkdownContent })));
@@ -65,6 +66,7 @@ export function OrderedParts({
   messageId,
   onSubscribeWorker,
   renderAgentBlock,
+  showFileChanges = true,
 }: {
   parts: MessagePart[];
   running: boolean;
@@ -72,12 +74,20 @@ export function OrderedParts({
   messageId?: string;
   onSubscribeWorker?: (messageId: string, part: PartAgent) => void;
   renderAgentBlock?: AgentBlockRenderer;
+  /** When true, render the inline file-change summary right after each tool batch. */
+  showFileChanges?: boolean;
 }) {
   const nodes: ReactNode[] = [];
   let toolRun: Extract<MessagePart, { type: 'tool' }>[] = [];
   const flushTools = (key: string) => {
     if (toolRun.length > 0) {
       nodes.push(<ToolChain key={key} toolParts={toolRun} />);
+      if (showFileChanges) {
+        const files = toolRun.flatMap((t) => t.files ?? []);
+        if (files.length > 0) {
+          nodes.push(<FileChangesInline key={`${key}-files`} files={files} />);
+        }
+      }
       toolRun = [];
     }
   };

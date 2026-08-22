@@ -6,7 +6,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from './ui/collapsible';
 import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
-import { FileChangesCard } from './FileChangesCard';
+import { FileChangesCard, FileChangesInline } from './FileChangesCard';
 import { AgentActivity } from './AgentActivity';
 import { MessageActions } from './MessageActions';
 import { OrderedParts, ToolChain, HIDDEN_TOOLS } from './part-renderers';
@@ -97,6 +97,7 @@ function ProcessCollapsible({
           messageId={messageId}
           {...(onSubscribeWorker ? { onSubscribeWorker } : {})}
           renderAgentBlock={AgentBlock}
+          showFileChanges={false}
         />
       </CollapsibleContent>
     </Collapsible>
@@ -234,6 +235,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
                 <MarkdownContent content={finalReply ?? message.content} />
               </Suspense>
             )}
+            {fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
           </>
         ) : hasTextParts ? (
           <OrderedParts
@@ -249,6 +251,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
             {planParts.length > 0 && <PlanBlock planParts={planParts} working={isRunning} />}
             {reasoningParts.length > 0 && <ThinkingBlock reasoningParts={reasoningParts} working={isRunning} />}
             {toolParts.length > 0 && <ToolChain toolParts={toolParts} />}
+            {!isDone && fileChanges.length > 0 && <FileChangesInline files={fileChanges} />}
             {agentParts.map((part) => (
               <AgentBlock
                 key={`agent-${part.workerRunId}`}
@@ -267,8 +270,6 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
             <MarkdownContent content={message.content} />
           </Suspense>
         )}
-
-        {fileChanges.length > 0 && <FileChangesCard files={fileChanges} />}
 
         {isError ? (
           <div>

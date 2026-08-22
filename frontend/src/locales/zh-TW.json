@@ -901,5 +901,7 @@
   "chat.remove_queued": "取消排隊",
   "chat.edit_queued": "編輯排隊訊息",
   "chat.reorder_queued": "拖動調整順序",
-  "chat.worker_loading": "正在載入 worker 流…"
+  "chat.worker_loading": "正在載入 worker 流…",
+  "files.expand_all": "展開全部（剩餘 {count} 個）",
+  "files.collapse": "收起"
 }

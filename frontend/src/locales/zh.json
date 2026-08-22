@@ -903,5 +903,7 @@
   "chat.remove_queued": "取消排队",
   "chat.edit_queued": "编辑排队消息",
   "chat.reorder_queued": "拖动调整顺序",
-  "chat.worker_loading": "正在加载 worker 流…"
+  "chat.worker_loading": "正在加载 worker 流…",
+  "files.expand_all": "展开全部（剩余 {count} 个）",
+  "files.collapse": "收起"
 }

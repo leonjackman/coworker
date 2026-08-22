@@ -3,6 +3,9 @@ import { ChevronDown, ChevronRight, FilePenLine } from 'lucide-react';
 import type { PartFileChange } from '../types';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import { FileDiffViewer } from './FileDiffViewer';
+import { t } from '../lib/i18n';
+
+const DEFAULT_VISIBLE_FILES = 10;
 
 function FileCounts({ added, removed }: { added: number; removed: number }) {
   return (
@@ -69,15 +72,29 @@ function SingleFileChangesCard({ file }: { file: PartFileChange }) {
 }
 
 export function FileChangesCard({ files }: { files: PartFileChange[] }) {
+  const [expanded, setExpanded] = useState(false);
   if (!files.length) return null;
+
+  const hiddenCount = files.length - DEFAULT_VISIBLE_FILES;
+  const hasMore = hiddenCount > 0;
+  const visibleFiles = expanded ? files : files.slice(0, DEFAULT_VISIBLE_FILES);
 
   return (
     <div className="file-changes-card" role="region" aria-label="Files modified">
       <div className="file-changes-card__header">
         <span className="file-changes-card__title">{files.length} file{files.length > 1 ? 's' : ''} modified</span>
+        {hasMore && (
+          <button
+            type="button"
+            className="file-changes-card__toggle"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? t('files.collapse') : t('files.expand_all', { count: hiddenCount })}
+          </button>
+        )}
       </div>
       <div className="file-changes-card__list">
-        {files.map((file) => (
+        {visibleFiles.map((file) => (
           <SingleFileChangesCard key={`${file.kind}-${file.path}`} file={file} />
         ))}
       </div>

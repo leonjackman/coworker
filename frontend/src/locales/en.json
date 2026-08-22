@@ -903,5 +903,7 @@
   "chat.remove_queued": "Remove from queue",
   "chat.edit_queued": "Edit queued message",
   "chat.reorder_queued": "Drag to reorder",
-  "chat.worker_loading": "Loading worker stream…"
+  "chat.worker_loading": "Loading worker stream…",
+  "files.expand_all": "Expand all ({count} more)",
+  "files.collapse": "Collapse"
 }

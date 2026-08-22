@@ -901,5 +901,7 @@
   "chat.remove_queued": "대기열에서 제거",
   "chat.edit_queued": "대기 중인 메시지 편집",
   "chat.reorder_queued": "드래그하여 순서 변경",
-  "chat.worker_loading": "워커 스트림 로드 중…"
+  "chat.worker_loading": "워커 스트림 로드 중…",
+  "files.expand_all": "전체 펼치기（{count}개 더）",
+  "files.collapse": "접기"
 }

@@ -1,7 +1,6 @@
 import type { PartTool } from '../types';
 import type { ToolCallMessagePartStatus } from '@assistant-ui/react';
 import { ToolFallback } from './assistant-ui/tool-fallback';
-import { FileChangesInline } from './FileChangesCard';
 import { toolLabel, toolPreview } from './toolMeta';
 
 function mapStatus(tool: PartTool): ToolCallMessagePartStatus {
@@ -60,7 +59,6 @@ export function ToolCallCard({ tool }: { tool: PartTool }) {
         </div>
         <div className="tool-call-card__body">
           {renderQuestionAnswer(tool)}
-          {tool.files && tool.files.length > 0 && <FileChangesInline files={tool.files} />}
         </div>
       </div>
     );
@@ -76,7 +74,6 @@ export function ToolCallCard({ tool }: { tool: PartTool }) {
       />
       <ToolFallback.Content>
         <ToolFallback.Args argsText={argsText} />
-        {tool.files && tool.files.length > 0 && <FileChangesInline files={tool.files} />}
         {done && tool.output ? <ToolFallback.Result result={tool.output} /> : null}
       </ToolFallback.Content>
     </ToolFallback.Root>

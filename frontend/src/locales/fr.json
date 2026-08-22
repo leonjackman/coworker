@@ -901,5 +901,7 @@
   "chat.remove_queued": "Retirer de la file",
   "chat.edit_queued": "Modifier le message en attente",
   "chat.reorder_queued": "Glisser pour réordonner",
-  "chat.worker_loading": "Chargement du flux du worker…"
+  "chat.worker_loading": "Chargement du flux du worker…",
+  "files.expand_all": "Tout déplier ({count} de plus)",
+  "files.collapse": "Réduire"
 }

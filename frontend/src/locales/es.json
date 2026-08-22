@@ -901,5 +901,7 @@
   "chat.remove_queued": "Quitar de la cola",
   "chat.edit_queued": "Editar mensaje en cola",
   "chat.reorder_queued": "Arrastrar para reordenar",
-  "chat.worker_loading": "Cargando flujo del worker…"
+  "chat.worker_loading": "Cargando flujo del worker…",
+  "files.expand_all": "Expandir todo ({count} más)",
+  "files.collapse": "Contraer"
 }

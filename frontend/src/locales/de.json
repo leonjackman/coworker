@@ -901,5 +901,7 @@
   "chat.remove_queued": "Aus der Warteschlange entfernen",
   "chat.edit_queued": "Nachricht in Warteschlange bearbeiten",
   "chat.reorder_queued": "Ziehen zum Sortieren",
-  "chat.worker_loading": "Worker-Stream wird geladen…"
+  "chat.worker_loading": "Worker-Stream wird geladen…",
+  "files.expand_all": "Alle aufklappen ({count} weitere)",
+  "files.collapse": "Einklappen"
 }

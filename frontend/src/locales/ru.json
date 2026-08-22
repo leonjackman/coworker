@@ -901,5 +901,7 @@
   "chat.remove_queued": "Убрать из очереди",
   "chat.edit_queued": "Изменить сообщение в очереди",
   "chat.reorder_queued": "Перетащите для изменения порядка",
-  "chat.worker_loading": "Загрузка потока worker…"
+  "chat.worker_loading": "Загрузка потока worker…",
+  "files.expand_all": "Развернуть все (ещё {count})",
+  "files.collapse": "Свернуть"
 }
