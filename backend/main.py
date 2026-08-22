@@ -36,7 +36,7 @@ except ImportError:  # pragma: no cover - non-POSIX platforms (e.g. Windows)
 from coworker.agents import AgentMode, AgentRuntimeRegistry, Language, format_user_message, normalize_autonomy, normalize_work_mode
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
-from coworker.events import WorkerEventBus, worker_event_bus
+from coworker.events import WorkerEventBus, session_event_bus, worker_event_bus
 from coworker.projects import ProjectStore
 from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
@@ -138,14 +138,6 @@ command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROV
 # Persist worker sub-agent streams under <data_dir>/worker_events/ so a
 # completed run can be replayed after the fact (and across restarts).
 worker_event_bus.configure(settings.data_dir)
-# Session event bus: decouples main-turn SSE delivery from the runtime generator.
-# The turn runs as a background task publishing every event here (keyed by a
-# per-turn key); /chat/stream, regenerate and edit endpoints subscribe to it
-# (replay + live). Because the task's bus fan-out is independent of the blocked
-# graph generator, tool/worker status transitions reach the frontend live —
-# exactly like opencode's session event bus. Memory-only (no configure); each
-# turn's buffer is purged when its subscription ends.
-session_event_bus = WorkerEventBus()
 memory_manager = MemoryManager(
     settings.data_dir,
     memory_dir=settings.memory_dir,
@@ -536,7 +528,6 @@ def _get_monotonic() -> float:
 
 async def _publish_turn(
     session_id: str,
-    turn_key: str,
     stream_iter: Any,
     on_event: Any = None,
     on_end: Any = None,
@@ -560,14 +551,14 @@ async def _publish_turn(
             on_error=on_error,
         ):
             if kind == "event":
-                session_event_bus.publish(turn_key, payload)
+                session_event_bus.publish(session_id, payload)
             elif kind == "error":
-                session_event_bus.publish(turn_key, payload)
-                session_event_bus.close(turn_key)
+                session_event_bus.publish(session_id, payload)
+                session_event_bus.close(session_id)
             elif kind == "end":
-                session_event_bus.close(turn_key)
+                session_event_bus.close(session_id)
     except BaseException:  # noqa: BLE001 - incl. cancellation; must close the bus
-        session_event_bus.close(turn_key)
+        session_event_bus.close(session_id)
         raise
 
 
@@ -1948,10 +1939,10 @@ async def chat_stream(request: ChatStreamRequest):
 
         stream_iter = _locked_stream_iterator(_raw_stream_iter, None)
 
-        # Per-turn key for the session event bus: each turn is an independent
-        # replay/live channel, so a fresh turn never replays a previous turn's
-        # buffered events (and each turn's buffer is purged when it ends).
-        turn_key = f"{session_id}::{uuid.uuid4().hex[:8]}"
+        # Purge any previous turn's buffered events for this session so the new
+        # subscription starts clean (the concurrency guard already serialized
+        # turns, so no live subscriber is affected).
+        session_event_bus.purge(session_id)
 
         def _on_event(event):
             event["session_id"] = session_id
@@ -2023,9 +2014,9 @@ async def chat_stream(request: ChatStreamRequest):
         # runtime generator means tool/worker status transitions reach the client
         # the moment they happen — even while the graph is blocked awaiting a
         # long-running tool (opencode-style session event bus).
-        subscription = session_event_bus.stream(turn_key)
+        subscription = session_event_bus.stream(session_id)
         turn_task = asyncio.create_task(
-            _publish_turn(session_id, turn_key, stream_iter, _on_event, _on_end, _on_error)
+            _publish_turn(session_id, stream_iter, _on_event, _on_end, _on_error)
         )
         try:
             async for event in subscription:
@@ -2044,7 +2035,7 @@ async def chat_stream(request: ChatStreamRequest):
             # bus even under cancellation, so a late subscribe can never hang.
             turn_task.cancel()
             await asyncio.gather(turn_task, return_exceptions=True)
-            session_event_bus.purge(turn_key)
+            session_event_bus.purge(session_id)
             if snapshot_pre is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, snapshot_user_message_id, resolved_workspace,
@@ -2900,10 +2891,13 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         stream_iter = agent_registry.rerun_stream(
             history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
         )
-        turn_key = f"{session_id}::{uuid.uuid4().hex[:8]}"
-        subscription = session_event_bus.stream(turn_key)
+        # Purge any previous turn's buffered events for this session so the new
+        # subscription starts clean (the concurrency guard already serialized
+        # turns, so no live subscriber is affected).
+        session_event_bus.purge(session_id)
+        subscription = session_event_bus.stream(session_id)
         turn_task = asyncio.create_task(
-            _publish_turn(session_id, turn_key, stream_iter, _on_event, _on_end, _on_error)
+            _publish_turn(session_id, stream_iter, _on_event, _on_end, _on_error)
         )
         try:
             async for event in subscription:
@@ -2916,7 +2910,7 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         finally:
             turn_task.cancel()
             await asyncio.gather(turn_task, return_exceptions=True)
-            session_event_bus.purge(turn_key)
+            session_event_bus.purge(session_id)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, user_message.id, snapshot_workspace,
@@ -3076,10 +3070,13 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         stream_iter = agent_registry.rerun_stream(
             history, session_id, language, work_mode, autonomy, provider_id=provider_id, model=model, referenced_sessions=referenced_ids, workspace_path=workspace_path, agent=session.agent_id or DEFAULT_AGENT, project_id=session.project_id or None,
         )
-        turn_key = f"{session_id}::{uuid.uuid4().hex[:8]}"
-        subscription = session_event_bus.stream(turn_key)
+        # Purge any previous turn's buffered events for this session so the new
+        # subscription starts clean (the concurrency guard already serialized
+        # turns, so no live subscriber is affected).
+        session_event_bus.purge(session_id)
+        subscription = session_event_bus.stream(session_id)
         turn_task = asyncio.create_task(
-            _publish_turn(session_id, turn_key, stream_iter, _on_event, _on_end, _on_error)
+            _publish_turn(session_id, stream_iter, _on_event, _on_end, _on_error)
         )
         try:
             async for event in subscription:
@@ -3092,7 +3089,7 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         finally:
             turn_task.cancel()
             await asyncio.gather(turn_task, return_exceptions=True)
-            session_event_bus.purge(turn_key)
+            session_event_bus.purge(session_id)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, message_id, snapshot_workspace,

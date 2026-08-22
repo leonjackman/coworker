@@ -60,22 +60,25 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
         merged.push(part);
       }
     } else if (part.type === 'agent') {
-      // Worker blocks are coalesced by worker_run_id: an authoritative `done.parts`
-      // from the backend must not stack a duplicate block on the streaming one.
+      // The backend persists agent parts with `worker_run_id` (snake_case), but
+      // the frontend PartAgent uses `workerRunId`. Normalize so the coalescing
+      // key matches the streaming part — otherwise `done.parts` stacks a second
+      // block and the reloaded block cannot subscribe to the worker stream.
+      const authoritative = normalizeAgentPart(part) as Extract<MessagePart, { type: 'agent' }>;
       const index = merged.findIndex(
-        (p) => p.type === 'agent' && (p as Extract<MessagePart, { type: 'agent' }>).workerRunId === part.workerRunId,
+        (p) => p.type === 'agent' && (p as Extract<MessagePart, { type: 'agent' }>).workerRunId === authoritative.workerRunId,
       );
       if (index >= 0) {
         const prev = merged[index] as Extract<MessagePart, { type: 'agent' }>;
         // Keep the live-built nested transcript; adopt the authoritative summary.
         merged[index] = {
           ...prev,
-          ...part,
-          parts: prev.parts ?? part.parts,
-          ...((prev.transcriptLoaded || part.transcriptLoaded) ? { transcriptLoaded: true } : {}),
+          ...authoritative,
+          parts: prev.parts ?? authoritative.parts,
+          ...((prev.transcriptLoaded || authoritative.transcriptLoaded) ? { transcriptLoaded: true } : {}),
         };
       } else {
-        merged.push(part);
+        merged.push(authoritative);
       }
     } else if (part.type === 'text') {
       // 各次 resume 会重放同一轮执行（工具按 id 去重），文本同样按内容去重，
@@ -89,6 +92,24 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
     }
   }
   return merged;
+}
+
+/**
+ * Map a backend agent part's snake_case `worker_run_id` to the frontend
+ * `workerRunId`. Backend `done.parts` / persisted session parts use the raw
+ * JSON shape; without this the coalescing key mismatches the streaming part
+ * (duplicate blocks) and the reloaded block cannot subscribe to its stream.
+ */
+function normalizeAgentPart(part: MessagePart): MessagePart {
+  if (part.type !== 'agent') return part;
+  const raw = part as Extract<MessagePart, { type: 'agent' }> & { worker_run_id?: string };
+  const { worker_run_id, ...rest } = raw;
+  return { ...rest, workerRunId: rest.workerRunId || worker_run_id || '', parts: rest.parts ?? [] };
+}
+
+/** Normalize a whole parts array (backend JSON → frontend MessagePart shapes). */
+function normalizeParts(parts: MessagePart[]): MessagePart[] {
+  return parts.map(normalizeAgentPart);
 }
 
 /**
@@ -206,7 +227,7 @@ async function findCommittedAssistantMessage(
     if (committed) {
       return {
         content: committed.content ?? '',
-        parts: (committed.parts as MessagePart[] | undefined) ?? [],
+        parts: normalizeParts((committed.parts as MessagePart[] | undefined) ?? []),
       };
     }
   } catch {
@@ -2546,7 +2567,7 @@ function App() {
           ...(record.provider ? { provider: record.provider } : {}),
           ...(record.model ? { model: record.model } : {}),
           ...(record.attachments?.length ? { attachments: record.attachments } : {}),
-          ...(record.parts?.length ? { parts: record.parts as MessagePart[] } : {}),
+          ...(record.parts?.length ? { parts: normalizeParts(record.parts as MessagePart[]) } : {}),
           ...(record.references?.length ? { references: record.references } : {}),
           timestamp: new Date(record.created_at).getTime(),
         }),

@@ -199,3 +199,12 @@ class WorkerEventBus:
 
 
 worker_event_bus = WorkerEventBus()
+
+# Session event bus: decouples main-turn SSE delivery from the runtime generator.
+# The turn runs as a background task publishing every event here (keyed by
+# session_id); /chat/stream, regenerate and edit endpoints subscribe to it
+# (replay + live). Because the bus fan-out is independent of the graph generator
+# being blocked on a long-running tool, tool/worker status transitions reach the
+# frontend live — exactly like opencode's session event bus. Memory-only (no
+# configure); each turn's buffer is purged when its subscription ends.
+session_event_bus = WorkerEventBus()

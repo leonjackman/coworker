@@ -1911,6 +1911,10 @@ ipcMain.handle('start-chat-stream', async (event, { requestId, payload }) => {
     payload,
     sender: event.sender,
     eventName: 'chat-stream-event',
+    // A worker/tool sub-agent can occupy the shared LLM for minutes; the main
+    // stream then only carries `: ping` heartbeats. 60s default is too tight —
+    // match the renderer watchdog (300s) and the approval/worker streams.
+    idleTimeoutMs: 300_000,
   });
 });
 
@@ -1988,7 +1992,9 @@ ipcMain.handle('generate-title', async (event, payload) => {
 });
 
 function startStreamingRequest(requestId, path, payload, sender, eventName = 'chat-stream-event') {
-  return openSseStream({ requestId, method: 'POST', path, payload, sender, eventName });
+  // Same generous idle window as the chat stream: a sub-agent (worker) sharing
+  // the LLM can leave the main stream silent (heartbeats only) for minutes.
+  return openSseStream({ requestId, method: 'POST', path, payload, sender, eventName, idleTimeoutMs: 300_000 });
 }
 
 ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language, assistant_message_id }) => {

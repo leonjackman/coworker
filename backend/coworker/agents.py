@@ -42,7 +42,7 @@ from pydantic import BaseModel, Field
 
 from .checkpoints import CheckpointManager
 from .changes import ChangeStore
-from .events import worker_event_bus
+from .events import session_event_bus, worker_event_bus
 from .project_snapshot import ProjectSnapshotManager
 from .config import BackendSettings
 from .mcp.mcp import McpManager
@@ -1616,7 +1616,13 @@ def _message_chunk_events(
     from langchain_core.messages import AIMessageChunk, ToolMessage
 
     if real_file_changes is None:
-        real_file_changes = _estimate_file_changes  # type: ignore[assignment]
+        # Worker runs use the static estimator. It takes (tool_name, input_raw),
+        # so adapt the shared (tc_id, tool_state, session_id) call signature.
+        def _estimate_fallback(tc_id: str, tool_state: dict[str, dict[str, Any]], session_id: str) -> list[dict[str, Any]]:
+            st = tool_state.get(tc_id) or {}
+            return _estimate_file_changes(str(st.get("name") or ""), str(st.get("input") or ""))
+
+        real_file_changes = _estimate_fallback  # type: ignore[assignment]
 
     events: list[dict[str, Any]] = []
 
@@ -3652,6 +3658,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 mcp_session_manager=self.mcp_session_manager,
                 skill_manager=self.skill_manager,
                 emit=self._delegation_event,
+                worker_bus=worker_event_bus,
             )
         except Exception:  # noqa: BLE001 - delegation must never break a turn
             logger.warning("delegation disabled", exc_info=True)
@@ -3705,7 +3712,7 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 worker_approval_store=self.approval_store,
                 worker_data_dir=self.data_dir,
                 worker_mcp_session_manager=self.mcp_session_manager,
-                delegation_emit=self._delegation_event,
+                delegation_emit=self._delegation_emit_live(session_id),
                 worker_bus=worker_event_bus,
             ),
             work_mode=work_mode,
@@ -3925,7 +3932,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 data_dir=self.data_dir,
                 mcp_session_manager=self.mcp_session_manager,
                 skill_manager=self.skill_manager,
-                emit=self._delegation_event,
+                emit=self._delegation_emit_live(session_id),
+                worker_bus=worker_event_bus,
             )
         except Exception:  # noqa: BLE001 - delegation must never break a turn
             logger.warning("delegation disabled", exc_info=True)
@@ -3937,6 +3945,26 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             self._delegation_buffer.append(event)
         except Exception:  # noqa: BLE001 - never break on buffer append
             pass
+
+    def _delegation_emit_live(self, session_id: str):
+        """Delegation emit callback that buffers for persistence AND publishes
+        live to the session event bus.
+
+        The parent graph is BLOCKED awaiting the worker tool, so the buffered
+        frames can only be drained (and reached the SSE) once the tool finishes.
+        Publishing them to the session bus here means ``delegate_start`` / tool
+        status reaches the frontend the moment it happens — the bus fan-out runs
+        independently of the blocked generator.
+        """
+
+        def _emit(event: dict[str, Any]) -> None:
+            self._delegation_event(event)
+            try:
+                session_event_bus.publish(session_id, event)
+            except Exception:  # noqa: BLE001 - never break on a publish hiccup
+                pass
+
+        return _emit
 
     def _drain_delegation_events(self) -> list[dict[str, Any]]:
         try:
@@ -4042,7 +4070,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     worker_approval_store=self.approval_store,
                     worker_data_dir=self.data_dir,
                     worker_mcp_session_manager=self.mcp_session_manager,
-                    delegation_emit=self._delegation_event,
+                    delegation_emit=self._delegation_emit_live(session_id),
                     worker_bus=worker_event_bus,
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
@@ -4087,15 +4115,23 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 try:
                     async for stream_mode, chunk in graph.astream(inputs, config=config, stream_mode=["messages", "custom", "updates"]):
                         # Drain any delegation SSE frames buffered by the delegate
-                        # tools on EVERY chunk so the worker block appears as soon
-                        # as a frame is available (not only on the next updates
-                        # superstep). Record them in `parts` so they persist and
-                        # round-trip through the authoritative `done.parts`.
+                        # tools. They were ALREADY published live to the session
+                        # bus by _delegation_emit_live, so here we only record them
+                        # in `parts` so they persist and round-trip through the
+                        # authoritative `done.parts`.
                         for delegate_event in self._drain_delegation_events():
                             parts.append(delegate_event)
-                            yield delegate_event
                         if stream_mode == "messages":
                             msg, _meta = chunk
+                            # LangGraph's "messages" stream mode also captures the
+                            # model stream of nested sub-agents (worker / delegation)
+                            # because they share the parent LLM instance. Those chunks
+                            # belong on the worker bus (see WorkerAgent._execute), so
+                            # drop them here — otherwise the worker's deltas/tool calls
+                            # leak into the main SSE stream and double-persist.
+                            _meta_sid = (_meta or {}).get("coworker.session_id") if isinstance(_meta, dict) else None
+                            if _meta_sid and _meta_sid != session_id:
+                                continue
                             try:
                                 for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
                                     yield event
@@ -4268,7 +4304,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         worker_approval_store=self.approval_store,
                         worker_data_dir=self.data_dir,
                         worker_mcp_session_manager=self.mcp_session_manager,
-                        delegation_emit=self._delegation_event,
+                        delegation_emit=self._delegation_emit_live(session_id),
                         worker_bus=worker_event_bus,
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
@@ -4306,11 +4342,18 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             tool_state: dict[str, dict[str, Any]] = {}
             try:
                 async for stream_mode, chunk in graph.astream(Command(resume=resume_map), config=config, stream_mode=["messages", "custom", "updates"]):
+                    # Delegation frames are published live to the session bus by
+                    # _delegation_emit_live; record them in parts for persistence.
                     for delegate_event in self._drain_delegation_events():
                         parts.append(delegate_event)
-                        yield delegate_event
                     if stream_mode == "messages":
                         msg, _meta = chunk
+                        # Same nested-sub-agent filter as _stream: worker / delegation
+                        # chunks captured by the parent stream must not leak into the
+                        # resumed session's SSE.
+                        _meta_sid = (_meta or {}).get("coworker.session_id") if isinstance(_meta, dict) else None
+                        if _meta_sid and _meta_sid != session_id:
+                            continue
                         try:
                             for event in self._handle_message_chunk(msg, content_parts, tool_state, parts, session_id):
                                 yield event
