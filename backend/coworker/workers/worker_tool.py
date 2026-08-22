@@ -65,7 +65,7 @@ class UseWorkerTool:
         """创建 langchain @tool 装饰的函数。"""
 
         @tool(args_schema=UseWorkerArgs)
-        def use_worker(
+        async def use_worker(
             task: str, context: str = "", expected_output: str = ""
         ) -> str:
             """Spawn a short-lived worker agent to do focused research or analysis.
@@ -114,11 +114,8 @@ class UseWorkerTool:
                 emit=self.delegation_emit,
             )
 
-            # 同步调用：在工具执行上下文中运行（LangGraph 已提供并发保障）
-            import asyncio
-
-            loop = asyncio.get_running_loop()
-            result: WorkerResult = loop.run_until_complete(worker.arun())
+            # 异步调用：LangGraph 在 async 上下文中 await 此工具
+            result: WorkerResult = await worker.arun()
 
             output = result.content
             if result.was_truncated:

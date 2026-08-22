@@ -112,12 +112,10 @@ class WorkerAgent:
         # 2. 构建输入 state
         state = self._build_state()
 
-        # 3. 带超时执行
+        # 3. 带超时执行（必须用 ainvoke：graph 的 middleware 仅实现 async 版本）
         try:
             result = await asyncio.wait_for(
-                asyncio.get_running_loop().run_in_executor(
-                    None, lambda: graph.invoke(state, self._run_config)
-                ),
+                graph.ainvoke(state, self._run_config),
                 timeout=self.config.timeout,
             )
         except asyncio.TimeoutError:

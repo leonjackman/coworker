@@ -8,7 +8,7 @@ from typing import Any, Optional
 class WorkerConfig:
     """Worker 运行配置。"""
 
-    timeout: int = 120                      # 超时（秒）
+    timeout: int = 600                      # 超时（秒）
     max_output_chars: int = 2000            # 结果截断/摘要阈值
     max_concurrent: int = 4                 # 最大并发数
     language: str = "zh"                    # 摘要语言（zh/en）
@@ -21,7 +21,7 @@ class WorkerConfig:
     ) -> "WorkerConfig":
         """单 agent 模式的默认配置。"""
         return cls(
-            timeout=120,
+            timeout=600,
             max_output_chars=2000,
             max_concurrent=max_concurrent or 4,
             language=language,
@@ -36,7 +36,7 @@ class WorkerConfig:
     ) -> "WorkerConfig":
         """多 agent 委派模式的默认配置。"""
         return cls(
-            timeout=120,
+            timeout=600,
             max_output_chars=2000,
             max_concurrent=4,
             language=kwargs.pop("language", "zh"),
