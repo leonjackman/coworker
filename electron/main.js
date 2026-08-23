@@ -982,21 +982,32 @@ class BrowserController {
     const g = this.guest;
     if (!g) throw new Error('browser_not_attached');
     const image = await g.capturePage();
-    return this._shotDataUrl(image);
+    const url = this._shotDataUrl(image);
+    if (!url) throw new Error('screenshot_empty');
+    return url;
   }
 
   // Downscale + JPEG-encode a captured frame. A full-size PNG of a busy page is
   // ~100-300KB of base64 (≈ 25-75k tokens in a tool result) — a huge share of
   // the model context window per screenshot. 720px JPEG is ~3-4x smaller while
   // staying readable for the agent's visual click workflow.
+  //
+  // Returns null when the capture is empty/invalid (hidden webview, panel
+  // collapsed, page not painted): an empty NativeImage would otherwise produce
+  // a `data:image/jpeg;base64,` data URL with an empty body, which vision
+  // providers reject with "Failed to load image: cannot identify image file".
   _shotDataUrl(image, maxWidth = 720, quality = 70) {
+    if (!image) return null;
+    if (typeof image.isEmpty === 'function' && image.isEmpty()) return null;
     const size = image.getSize();
+    if (!size || !size.width || !size.height) return null;
     const scale = size.width > maxWidth ? maxWidth / size.width : 1;
     let out = image;
     if (scale < 1) {
       out = image.resize({ width: Math.round(size.width * scale) });
     }
     const jpeg = out.toJPEG(quality);
+    if (!jpeg || jpeg.length === 0) return null;
     return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
   }
 

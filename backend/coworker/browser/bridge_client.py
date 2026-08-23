@@ -30,6 +30,35 @@ logger = logging.getLogger(__name__)
 _DATA_URL_SPLIT_RE = re.compile(r"^data:(?P<mime>[\w.+:-]+/[\w.+:-]+);base64,(?P<body>.*)$", re.S)
 _SCREENSHOTS_DIRNAME = "screenshots"
 
+#: Magic bytes of the image formats we accept for screenshots (dependency-free
+#: validation — no PIL in the backend). A "data:image/jpeg;base64," URL with an
+#: empty body (hidden webview / collapsed panel) would otherwise be forwarded to
+#: a vision provider and 400 with "cannot identify image file".
+_IMAGE_MAGIC: list[tuple[str, bytes]] = [
+    ("jpeg", b"\xff\xd8\xff"),
+    ("png", b"\x89PNG\r\n\x1a\n"),
+    ("gif", b"GIF8"),
+    ("webp", b"RIFF"),
+]
+
+
+def _looks_like_image_data_url(data_url: str) -> bool:
+    """True when ``data_url`` carries a non-empty base64 body that decodes to
+    bytes with a recognizable image header (JPEG/PNG/GIF/WebP)."""
+    match = _DATA_URL_SPLIT_RE.match(data_url or "")
+    if not match:
+        return False
+    body = match.group("body")
+    if not body:
+        return False
+    try:
+        raw = base64.b64decode(body, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    if not raw:
+        return False
+    return any(raw.startswith(magic) for _, magic in _IMAGE_MAGIC)
+
 
 def screenshots_dir_for(data_dir: Path | str | None, session_id: str) -> Path | None:
     """Per-session directory holding externalized screenshots (cleaned up with
@@ -50,6 +79,14 @@ def _save_screenshot(data_url: str, data_dir: Path | str | None, session_id: str
     match = _DATA_URL_SPLIT_RE.match(data_url or "")
     if not match:
         return None
+    try:
+        raw = base64.b64decode(match.group("body"), validate=True)
+    except (binascii.Error, ValueError):
+        logger.warning("screenshot save failed: invalid base64 body")
+        return None
+    if not raw:
+        logger.warning("screenshot save failed: empty image body")
+        return None
     target_dir = screenshots_dir_for(data_dir, session_id)
     if target_dir is None:
         return None
@@ -57,7 +94,7 @@ def _save_screenshot(data_url: str, data_dir: Path | str | None, session_id: str
         target_dir.mkdir(parents=True, exist_ok=True)
         ext = "jpg" if "jpeg" in match.group("mime") else "png"
         target = target_dir / f"shot-{int(time.time() * 1000)}.{ext}"
-        target.write_bytes(base64.b64decode(match.group("body")))
+        target.write_bytes(raw)
         return str(target)
     except (OSError, binascii.Error, ValueError):
         logger.warning("screenshot save failed", exc_info=True)
@@ -271,6 +308,16 @@ def _render_error(result: dict[str, Any], action: str) -> str:
             },
             ensure_ascii=False,
         )
+    if code == "screenshot_empty":
+        return json.dumps(
+            {
+                "error": result.get("error", "screenshot came back empty or invalid"),
+                "error_code": code,
+                "hint": "Tell the user the right-side browser panel is hidden or the page is not rendered, "
+                        "and to open the browser panel (or wait for the page to finish painting) before retrying.",
+            },
+            ensure_ascii=False,
+        )
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -370,10 +417,20 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
             data_url = str(result.get("image") or "")
             if data_url:
                 if vision:
-                    return [
-                        {"type": "text", "text": "Screenshot of the current browser page."},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ]
+                    if _looks_like_image_data_url(data_url):
+                        return [
+                            {"type": "text", "text": "Screenshot of the current browser page."},
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ]
+                    return json.dumps(
+                        {
+                            "error": "Screenshot came back empty or invalid — the browser view is likely hidden "
+                                    "or not rendered (the right-side browser panel may be collapsed). Ask the user "
+                                    "to open the browser panel and retry.",
+                            "error_code": "screenshot_empty",
+                        },
+                        ensure_ascii=False,
+                    )
                 saved = _save_screenshot(data_url, data_dir, session_id)
                 if saved:
                     return json.dumps(
