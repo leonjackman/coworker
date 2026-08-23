@@ -70,10 +70,23 @@ fi
 if [[ "$SKIP_BACKEND" == "1" ]]; then
   echo "[2/4] Skipping backend build (reusing backend/dist)"
 else
-  echo "[2/4] Building Python backend (PyInstaller)..."
-  [[ -x "$PYTHON_BIN" ]] || fail "Python venv not found at $PYTHON_BIN (run: cd backend && python3 -m venv venv)"
-  (cd "$ROOT_DIR/backend" && rm -rf dist build && "$PYTHON_BIN" -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20)
-  ok "Backend bundled"
+   echo "[2/4] Building Python backend (PyInstaller)..."
+   [[ -x "$PYTHON_BIN" ]] || fail "Python venv not found at $PYTHON_BIN (run: cd backend && python3 -m venv venv)"
+   (cd "$ROOT_DIR/backend" && rm -rf dist build && "$PYTHON_BIN" -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20)
+   ok "Backend bundled"
+
+  # Sanity check: the frozen backend MUST contain the current source symbols.
+  # Catches the exact failure mode where PyInstaller freezes a stale `coworker`
+  # package — which would ship outdated behaviour (e.g. the pre-fix 252k window
+  # instead of the configured 200k → ~192k). Fail loud here, not in production.
+  if [[ -d "$ROOT_DIR/backend/build/pybackend/localpycs" ]]; then
+    if ! grep -rlq "ContextGuardMiddleware" "$ROOT_DIR/backend/build/pybackend/localpycs" 2>/dev/null; then
+      fail "Frozen backend is missing current source symbols (ContextGuardMiddleware) — PyInstaller did not pick up backend/coworker changes. Aborting before packaging."
+    fi
+    ok "Frozen backend contains current source symbols"
+  else
+    warn "PyInstaller localpycs not found; skipping frozen-symbol sanity check"
+  fi
 fi
 
 echo "[3/4] Packaging app (electron-builder --dir)..."
@@ -94,13 +107,19 @@ fi
 
 echo "[4/4] Result: $APP_PATH"
 if [[ "$OPEN_APP" == "1" ]]; then
-  # If a previous instance is running, quit it first so the fresh build loads.
-  if pgrep -f "CoWorker.app/Contents/MacOS/CoWorker" >/dev/null 2>&1; then
-    osascript -e 'quit app "CoWorker"' 2>/dev/null || true
-    sleep 1
-  fi
+  # Fully terminate any running CoWorker instance (main + helpers + bundled
+  # backend) BEFORE opening the fresh build. A graceful `osascript quit` can
+  # leave helper processes alive, causing `open` to reactivate the OLD (stale)
+  # binary — which would show outdated behaviour (e.g. the pre-fix 252k window
+  # instead of the configured 200k). Kill the whole process tree, then wait
+  # until it is truly gone.
+  pkill -9 -f "CoWorker.app/Contents" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    pgrep -f "CoWorker.app/Contents" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
   open "$APP_PATH"
-  ok "Launched CoWorker.app"
+  ok "Launched CoWorker.app (fresh build)"
 else
   echo "  Skipped launch (--no-open)."
 fi
