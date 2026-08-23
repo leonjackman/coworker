@@ -120,6 +120,7 @@ export interface ChatService {
   createSession: (request: CreateSessionRequest) => Promise<SessionResponse>;
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
+  stopSessionStream: (sessionId: string) => Promise<void>;
   getSession: (sessionId: string) => Promise<SessionDetailResponse>;
   getContextUsage: (sessionId: string, providerId: string, model: string) => Promise<SessionContextUsageResponse>;
   generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string) => Promise<string>;
@@ -290,6 +291,27 @@ class ElectronChatService implements ChatService {
   async renameSession(sessionId: string, title: string): Promise<SessionResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.renameSession(sessionId, title);
+  }
+
+  async stopSessionStream(sessionId: string): Promise<void> {
+    // Explicit Stop: the backend force-cancels the session's in-flight stream
+    // and releases it so a following edit/regenerate is not rejected with
+    // 409 "session is still generating" (the passive socket-disconnect teardown
+    // can be too slow). Best-effort: if the request fails the stream will be
+    // torn down by the disconnect path anyway.
+    try {
+      if (window.electronAPI?.stopSessionStream) {
+        await window.electronAPI.stopSessionStream(sessionId);
+        return;
+      }
+      const response = await fetch(`${BACKEND_URL}/sessions/${encodeURIComponent(sessionId)}/stop`, { method: 'POST' });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        console.warn('stopSessionStream:', body?.detail || `Backend returned ${response.status}`);
+      }
+    } catch (error) {
+      console.warn('stopSessionStream failed:', error);
+    }
   }
 
   async getSession(sessionId: string): Promise<SessionDetailResponse> {
@@ -1023,6 +1045,10 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
     });
+  }
+
+  async stopSessionStream(sessionId: string): Promise<void> {
+    await this.request(`/sessions/${sessionId}/stop`, { method: 'POST' });
   }
 
   async getSession(sessionId: string): Promise<SessionDetailResponse> {

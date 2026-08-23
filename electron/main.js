@@ -1988,6 +1988,13 @@ ipcMain.handle('delete-session', async (event, sessionId) => {
   return requestBackend(`/sessions/${encodeURIComponent(sessionId)}`, 'DELETE', undefined, 60_000);
 });
 
+ipcMain.handle('stop-session-stream', async (event, sessionId) => {
+  // Explicit Stop: ask the backend to force-cancel the session's in-flight
+  // generation and release it, so a following edit/regenerate is not rejected
+  // with 409 "session is still generating". Best-effort (idempotent).
+  return requestBackend(`/sessions/${encodeURIComponent(sessionId)}/stop`, 'POST', undefined, 10_000);
+});
+
 ipcMain.handle('rename-session', async (event, payload) => {
   return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/rename`, 'POST', { title: payload.title });
 });

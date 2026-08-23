@@ -1663,6 +1663,13 @@ function App() {
     const assistantMessageId = activeAssistantMessageIdsRef.current[key];
     const streamStartAt = streamStartAtsRef.current[key];
     abortStreamFor(sessionIdRef.current);
+    // Explicitly tell the backend to stop this session's generation. Aborting
+    // the local stream alone can leave the session "active" on the backend for
+    // a while (the disconnect teardown can stall), which would make the next
+    // edit/regenerate fail with 409 "session is still generating".
+    if (sessionIdRef.current) {
+      void chatService.stopSessionStream(sessionIdRef.current);
+    }
     // Also abort every worker transcript subscription for this session: the
     // worker blocks are being stopped, so their SSE streams (/worker-events)
     // must close too — otherwise the "Delegating…" spinner and any open
@@ -1788,6 +1795,13 @@ function App() {
     // 否则后端 _guard_session_not_streaming 会拒绝这次 /edit（409），且旧流的
     // 事件会被陈旧守卫丢弃，气泡悬在 running 计秒。
     abortStreamFor(currentSessionId);
+    // 显式通知后端停止该会话的在跑流：仅靠本地 abort（socket 断开）时后端清理
+    // 可能滞后，导致紧接着的 /edit 仍被 409 拒绝。等待其完成，确保旧流已释放。
+    try {
+      await chatService.stopSessionStream(currentSessionId);
+    } catch {
+      // 幂等接口；失败时由 socket 断开路径兜底清理。
+    }
 
     // 编辑模式下，如果内容包含斜杠命令，走 sendMessage 路径
     if (trimmed.startsWith('/')) {
@@ -2040,6 +2054,12 @@ function App() {
     const myRequestSeq = getSessionSeq(currentSessionId);
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     abortStreamFor(currentSessionId);
+    // 显式通知后端停止该会话的在跑流（理由同上：避免 /regenerate 被 409 拒绝）。
+    try {
+      await chatService.stopSessionStream(currentSessionId);
+    } catch {
+      // 幂等接口；失败时由 socket 断开路径兜底清理。
+    }
     setMessages((current) => {
       // 只截断「当前会话」的消息历史，保留其它会话仍在后台运行的消息。
       const others = current.filter((m) => m.sessionId && m.sessionId !== currentSessionId);

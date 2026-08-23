@@ -89,6 +89,7 @@ declare global {
       createSession: (payload: CreateSessionRequest) => Promise<SessionResponse>;
       deleteSession: (sessionId: string) => Promise<{ status: string }>;
       renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
+      stopSessionStream: (sessionId: string) => Promise<{ status: string }>;
       getSession: (sessionId: string) => Promise<SessionDetailResponse>;
       getContextUsage: (sessionId: string, providerId: string, model: string) => Promise<SessionContextUsageResponse>;
       generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string, language?: string) => Promise<{ status: string; title: string }>;

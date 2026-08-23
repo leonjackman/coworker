@@ -2056,7 +2056,18 @@ async def chat_stream(request: ChatStreamRequest):
             # disconnect) ⟹ cancel the turn task. Its _publish_turn closes the
             # bus even under cancellation, so a late subscribe can never hang.
             turn_task.cancel()
+            # Safety net: the client is gone, so force-terminate the underlying
+            # stream consumer and release the session. Graceful cancellation can
+            # stall behind a checkpoint DB lock (or a provider that ignores
+            # cancellation), which would otherwise leave the session "active" and
+            # reject the next edit/regenerate with 409 "session is still
+            # generating". Both calls are idempotent. (The interrupted marker for
+            # a client abort is set by _on_error in the producer's cancellation
+            # handler — NOT here — so a normally-completed turn is never mistaken
+            # for an interrupted one.)
+            _hard_stop_session_stream(session_id)
             await asyncio.gather(turn_task, return_exceptions=True)
+            agent_registry.checkpoint_manager.mark_idle(session_id)
             session_event_bus.purge(session_id)
             if snapshot_pre is not None:
                 await asyncio.to_thread(
@@ -2442,6 +2453,20 @@ def _cleanup_session_screenshots(session_id: str) -> None:
     except Exception:  # noqa: BLE001 - cleanup must never break a delete
         logger.debug("screenshot cleanup failed for %s", session_id, exc_info=True)
 
+@app.post("/sessions/{session_id}/stop")
+async def stop_session_stream(session_id: str):
+    """Explicitly stop the session's in-flight generation (user pressed Stop).
+
+    A client abort alone is not enough to free the session: uvicorn/Starlette
+    can fail to propagate the disconnect promptly, so the stream keeps running
+    and the session stays marked "active" — which makes the next edit or
+    regenerate fail with ``409 session is still generating``. Force-cancelling
+    the stream task (and marking the session idle) makes Stop deterministic and
+    idempotent: stopping an idle session is a no-op.
+    """
+    _force_stop_session_stream(session_id)
+    return {"status": "ok", "session_id": session_id}
+
 @app.post("/sessions/{session_id}/rename")
 async def rename_session(session_id: str, request: SessionRenameRequest):
     try:
@@ -2525,6 +2550,29 @@ def _hard_stop_session_stream(session_id: str) -> None:
     task = _stream_tasks.pop(session_id, None)
     if task is not None and not task.done():
         task.cancel()
+
+
+def _force_stop_session_stream(session_id: str) -> None:
+    """Force-stop a session's in-flight generation and release it for new work.
+
+    A client abort (Stop button) is only observable to the backend as a socket
+    disconnect, which uvicorn/Starlette can fail to propagate promptly — the
+    SSE generator keeps running (heartbeats into a dead socket) and the runtime
+    graph can stall behind a checkpoint DB lock, so ``mark_idle`` (inside the
+    stream consumer's ``finally``) may never run. The session then stays marked
+    "active" forever and every later edit/regenerate for it is rejected with
+    ``409 session is still generating``.
+
+    Cancelling the stream-consuming task directly (``_hard_stop_session_stream``)
+    makes Stop deterministic: the task's cancellation closes the tracked stream,
+    which runs ``mark_idle``, and the explicit ``mark_idle`` below is an
+    idempotent safety net for the case where the graph never unwinds. Marking the
+    session interrupted (same as the client-abort path) makes the NEXT run rebuild
+    from the session history instead of resuming the dirty runtime checkpoint.
+    """
+    _hard_stop_session_stream(session_id)
+    agent_registry.checkpoint_manager.mark_idle(session_id)
+    _interrupted_sessions.add(session_id)
 
 
 async def _guard_session_not_streaming(session_id: str) -> None:
@@ -3102,7 +3150,13 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
             turn_task.cancel()
+            # Safety net (see /chat/stream): the client is gone — force-stop the
+            # underlying stream consumer and release the session so the next
+            # edit/regenerate isn't rejected with 409 "session is still generating".
+            # Idempotent; the interrupted marker is set by _on_error, not here.
+            _hard_stop_session_stream(session_id)
             await asyncio.gather(turn_task, return_exceptions=True)
+            agent_registry.checkpoint_manager.mark_idle(session_id)
             session_event_bus.purge(session_id)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(
@@ -3281,7 +3335,13 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         finally:
             turn_task.cancel()
+            # Safety net (see /chat/stream): the client is gone — force-stop the
+            # underlying stream consumer and release the session so the next
+            # edit/regenerate isn't rejected with 409 "session is still generating".
+            # Idempotent; the interrupted marker is set by _on_error, not here.
+            _hard_stop_session_stream(session_id)
             await asyncio.gather(turn_task, return_exceptions=True)
+            agent_registry.checkpoint_manager.mark_idle(session_id)
             session_event_bus.purge(session_id)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(

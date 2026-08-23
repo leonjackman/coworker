@@ -54,6 +54,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createSession: (payload) => ipcRenderer.invoke('create-session', payload),
   deleteSession: (sessionId) => ipcRenderer.invoke('delete-session', sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke('rename-session', { session_id: sessionId, title }),
+  stopSessionStream: (sessionId) => ipcRenderer.invoke('stop-session-stream', sessionId),
   generateTitle: (sessionId, firstUserMessage, assistantResponse, language) =>
     ipcRenderer.invoke('generate-title', {
       session_id: sessionId,
