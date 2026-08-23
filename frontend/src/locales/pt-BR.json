@@ -907,5 +907,8 @@
   "chat.reorder_queued": "Arrastar para reordenar",
   "chat.worker_loading": "Carregando fluxo do worker…",
   "files.expand_all": "Expandir tudo ({count} a mais)",
-  "files.collapse": "Recolher"
+  "files.collapse": "Recolher",
+  "providers.temperature": "Temperatura de amostragem",
+  "providers.temperature_placeholder": "0 = automático (padrão da família)",
+  "providers.temperature_hint": "Substitui o padrão do modelo; 0 escolhe automaticamente (ex.: 0.55 para qwen) ou deixa com o provedor"
 }

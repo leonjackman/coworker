@@ -459,7 +459,7 @@ def main() -> int:
         check("delete_by_agent scoped to project", other_titles == {"s4"}, str(other_titles))
 
         # --- write-side discipline: raw-paste guard ---------------------------
-        from coworker.agents import _looks_like_raw_paste
+        from coworker.agent.core import _looks_like_raw_paste
 
         check("paste guard rejects long quoted paste", _looks_like_raw_paste("> 引用\n\n> 更多\n\n" + "长文本" * 200))
         check("paste guard rejects very long block", _looks_like_raw_paste("x" * 1300))
@@ -642,7 +642,7 @@ def main() -> int:
             check("session summary deduped", note2 == "skip (already summarized today)", note2)
 
         # --- memory tool SESSIONS target resolution -----------------------------
-        from coworker.agents import _resolve_memory_target
+        from coworker.agent.core import _resolve_memory_target
 
         base_rel = f"20260812100000/{DEFAULT_AGENT}/BASE/MEMORY.md"
         ok_sess, rel_sess = _resolve_memory_target(base_rel, "agent", "SESSIONS/2026-08-19.md")
@@ -745,7 +745,7 @@ def main() -> int:
             check("sessions current kept", (sess_dir / f"{cur_day2}.md").exists(), str(sorted(p.name for p in sess_dir.iterdir())))
 
         # --- context budget: table resolution + conversion ----------------------
-        from coworker.agents import _estimate_tokens, _message_text, _msg_chars, context_budget_chars, is_context_overflow_error
+        from coworker.agent.core import _estimate_tokens, _message_text, _msg_chars, context_budget_chars, is_context_overflow_error
         from coworker.providers import DEFAULT_CONTEXT_WINDOW, MODEL_CONTEXT_TABLE, ProviderEntry, ProviderManager
 
         gpt = ProviderEntry(id="p1", name="gpt", provider_type="custom", base_url="http://localhost:9000", model="gpt-4o")
@@ -846,7 +846,7 @@ def main() -> int:
         # Guards the observed failure where _summarize_segment fed the model a
         # transcript of character counts, producing a garbage "numerical exchanges"
         # summary that was injected into the conversation and echoed by the model.
-        from coworker.agents import (
+        from coworker.agent.middleware import (
             COMPACTION_PROMPTS,
             KEEP_RECENT_TOKENS,
             CoworkerSummarizationMiddleware,
@@ -980,7 +980,7 @@ def main() -> int:
             # Summary cap: oversized output trimmed to <= SUMMARY_OUTPUT_TOKENS.
             long_summary = "长摘要" * 50_000
             capped = _cap_summary(long_summary)
-            from coworker.agents import _estimate_tokens
+            from coworker.agent.core import _estimate_tokens
             check("summary capped to budget", _estimate_tokens(capped) <= 4_096, f"{_estimate_tokens(capped)} tokens")
             check("cap keeps short summaries intact", _cap_summary(good_summary) == good_summary, "")
             check("capped summary has truncation marker", capped.endswith("to fit context]"), capped[-40:])

@@ -907,5 +907,8 @@
   "chat.reorder_queued": "Glisser pour réordonner",
   "chat.worker_loading": "Chargement du flux du worker…",
   "files.expand_all": "Tout déplier ({count} de plus)",
-  "files.collapse": "Réduire"
+  "files.collapse": "Réduire",
+  "providers.temperature": "Température d'échantillonnage",
+  "providers.temperature_placeholder": "0 = automatique (défaut famille)",
+  "providers.temperature_hint": "Remplace la valeur par défaut du modèle ; 0 choisit automatiquement (p. ex. 0.55 pour qwen) ou laisse au fournisseur"
 }

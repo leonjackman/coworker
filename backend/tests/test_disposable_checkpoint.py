@@ -23,7 +23,7 @@ os.environ["COWORKER_DATA_DIR"] = str(Path(BACKEND) / ".test_stop_data")
 os.environ["COWORKER_AGENT_PROVIDER"] = "simulated"
 os.environ["COWORKER_LOG_LEVEL"] = "WARNING"
 
-from coworker import agents  # noqa: E402
+from coworker.agent import core as agents  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

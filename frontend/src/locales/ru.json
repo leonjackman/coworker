@@ -907,5 +907,8 @@
   "chat.reorder_queued": "Перетащите для изменения порядка",
   "chat.worker_loading": "Загрузка потока worker…",
   "files.expand_all": "Развернуть все (ещё {count})",
-  "files.collapse": "Свернуть"
+  "files.collapse": "Свернуть",
+  "providers.temperature": "Температура сэмплинга",
+  "providers.temperature_placeholder": "0 = автоматически (по семейству)",
+  "providers.temperature_hint": "Переопределяет значение по умолчанию; 0 выбирает автоматически (например 0.55 для qwen) или оставляет провайдеру"
 }

@@ -25,6 +25,7 @@ const emptyForm = (): FormState => ({
   api_key: '',
   model: '',
   availableModels: [],
+  temperature: 0,
 });
 
 // Preset max-output options (tokens) for the per-provider cap; a custom value
@@ -105,6 +106,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
       ...(provider.context_window ? { context_window: provider.context_window } : {}),
       ...(provider.max_output_tokens !== undefined && provider.max_output_tokens > 0 ? { max_output_tokens: provider.max_output_tokens } : {}),
       vision: Boolean(provider.vision),
+      ...(provider.temperature !== undefined && provider.temperature > 0 ? { temperature: provider.temperature } : {}),
     });
     setMaxOutputMode(provider.max_output_tokens !== undefined && MAX_OUTPUT_PRESETS.includes(provider.max_output_tokens) ? 'preset' : 'custom');
     setTestResult(null);
@@ -158,6 +160,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
           ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
           vision: Boolean(form.vision),
+          temperature: form.temperature ?? 0,
         });
       } else {
         await chatService.createProvider({
@@ -169,6 +172,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
           ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
           vision: Boolean(form.vision),
+          temperature: form.temperature ?? 0,
         });
       }
       await load();
@@ -400,6 +404,24 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                 )}
               </div>
               <small>{t('providers.max_output_tokens_hint')}</small>
+            </label>
+
+            <label className="field">
+              <span>{t('providers.temperature')}</span>
+              <input
+                type="number"
+                min={0}
+                max={1.5}
+                step={0.05}
+                value={form.temperature ?? 0}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setForm({ ...form, temperature: value === '' ? 0 : Number(value) });
+                }}
+                placeholder={t('providers.temperature_placeholder')}
+                disabled={saving}
+              />
+              <small>{t('providers.temperature_hint')}</small>
             </label>
 
             <label className="field provider-vision-field">

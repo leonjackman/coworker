@@ -249,7 +249,7 @@ class TestWorkerToolSetRecursionGuard:
     async def test_worker_tool_set_excludes_spawn_tools(self, monkeypatch, tmp_path):
         from pathlib import Path
 
-        from coworker.agents import build_workspace_tools
+        from coworker.agent.graph import build_workspace_tools
         from coworker.workspace import Workspace
         from coworker.workers import worker as worker_mod
 
@@ -295,7 +295,7 @@ class TestWorkerToolSetRecursionGuard:
         and aggregates all results into a numbered list."""
         from pathlib import Path
 
-        from coworker.agents import build_workspace_tools
+        from coworker.agent.graph import build_workspace_tools
         from coworker.workspace import Workspace
         from coworker.workers import worker as worker_mod
 
@@ -339,7 +339,7 @@ class TestWorkerToolSetRecursionGuard:
     async def test_use_workers_empty_tasks(self, monkeypatch, tmp_path):
         from pathlib import Path
 
-        from coworker.agents import build_workspace_tools
+        from coworker.agent.graph import build_workspace_tools
         from coworker.workspace import Workspace
         from coworker.workers import worker as worker_mod
 
@@ -362,7 +362,7 @@ class TestWorkerToolSetRecursionGuard:
         import asyncio
         from pathlib import Path
 
-        from coworker.agents import build_workspace_tools
+        from coworker.agent.graph import build_workspace_tools
         from coworker.workspace import Workspace
         from coworker.workers import worker as worker_mod
 

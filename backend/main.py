@@ -34,9 +34,8 @@ except ImportError:  # pragma: no cover - non-POSIX platforms (e.g. Windows)
     termios = None  # type: ignore[assignment]
     _PTY_AVAILABLE = False
 
-from coworker.agents import (
+from coworker.agent.core import (
     AgentMode,
-    AgentRuntimeRegistry,
     Language,
     context_budget_chars,
     context_budget_tokens,
@@ -45,6 +44,7 @@ from coworker.agents import (
     normalize_work_mode,
     _runtime_context_budget,
 )
+from coworker.agent.runtime import AgentRuntimeRegistry
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.events import WorkerEventBus, session_event_bus, worker_event_bus
@@ -248,6 +248,14 @@ async def _tracked_stream(stream_iter: Any, session_id: str):
         agent_registry.checkpoint_manager.mark_idle(session_id)
         if _stream_tasks.get(session_id) is asyncio.current_task():
             _stream_tasks.pop(session_id, None)
+        # Force-close the wrapped stream so a cancelled turn tears the provider
+        # HTTP request down (see _sse_events producer's finally). Without this,
+        # closing this generator alone leaves the inner graph.astream suspended
+        # and generating to a dead socket.
+        try:
+            await stream_iter.aclose()
+        except Exception:  # noqa: BLE001 - teardown is best-effort
+            pass
 
 
 @app.on_event("startup")
@@ -494,6 +502,17 @@ async def _sse_events(
                 err = {"type": "error", "error": "internal stream failure"}
             await queue.put(("error", err))
         finally:
+            # CRITICAL teardown: ``async for`` does NOT close an async iterator
+            # when the loop is interrupted by an exception. A task.cancel()
+            # (user Stop / client disconnect) that lands between chunks leaves
+            # the provider stream (graph.astream → langchain → httpx → vLLM
+            # socket) running and generating to a dead socket — the "vLLM is
+            # still running after Stop" bug. Force-close the whole chain here so
+            # the upstream HTTP request is aborted promptly.
+            try:
+                await stream_iter.aclose()
+            except Exception:  # noqa: BLE001 - teardown is best-effort
+                pass
             await queue.put(("end", None))
 
     task = asyncio.ensure_future(_producer())
@@ -643,6 +662,7 @@ class ProviderCreate(BaseModel):
     context_window: int = 0
     max_output_tokens: int = 0
     vision: bool = False
+    temperature: float = 0
 
 class ProviderUpdate(BaseModel):
     name: Optional[str] = None
@@ -653,6 +673,7 @@ class ProviderUpdate(BaseModel):
     context_window: Optional[int] = None
     max_output_tokens: Optional[int] = None
     vision: Optional[bool] = None
+    temperature: Optional[float] = None
 
 class DefaultProviderPayload(BaseModel):
     provider_id: str
@@ -2383,7 +2404,7 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
             break
     if not user_message:
         return {"status": "ok", "title": session.title}
-    from coworker.agents import generate_title
+    from coworker.agent.core import generate_title
     new_title = await asyncio.to_thread(
         generate_title,
         user_message,
@@ -3654,7 +3675,7 @@ async def resolve_command_approval(request: CommandApprovalResolve):
             # For plan approvals the decision also carries the chosen execution
             # autonomy (supervised / guarded / autonomous) that routes the
             # follow-up execution posture.
-            from coworker.agents import normalize_autonomy
+            from coworker.agent.core import normalize_autonomy
 
             autonomy = normalize_autonomy(request.decision.autonomy) if request.decision.autonomy else None
             decision = {"type": "approve", **({"autonomy": autonomy} if autonomy else {})}
@@ -3951,6 +3972,7 @@ def create_provider(request: ProviderCreate):
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
             vision=request.vision,
+            temperature=request.temperature,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3980,6 +4002,7 @@ def update_provider(provider_id: str, request: ProviderUpdate):
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
             vision=request.vision,
+            temperature=request.temperature,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

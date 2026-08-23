@@ -331,6 +331,8 @@ export interface ProviderEntry {
   /** Multimodal (vision) capability: screenshots/images are sent as native
    *  image blocks instead of being externalized to disk. */
   vision?: boolean;
+  /** Sampling temperature for this provider, 0 = auto (per-model-family default). */
+  temperature?: number;
   created_at: string;
   updated_at: string;
 }
@@ -351,6 +353,7 @@ export interface ProviderPayload {
   context_window?: number;
   max_output_tokens?: number;
   vision?: boolean;
+  temperature?: number;
 }
 
 export interface ProviderUpdatePayload {
@@ -362,6 +365,7 @@ export interface ProviderUpdatePayload {
   context_window?: number;
   max_output_tokens?: number;
   vision?: boolean;
+  temperature?: number;
 }
 
 export interface ProviderTestResult {

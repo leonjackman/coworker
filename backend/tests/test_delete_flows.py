@@ -21,7 +21,7 @@ os.environ["COWORKER_AGENT_PROVIDER"] = "simulated"
 os.environ["COWORKER_LOG_LEVEL"] = "WARNING"
 
 import main  # noqa: E402
-from coworker import agents as agents_mod  # noqa: E402
+from coworker.agent import core as agents_mod  # noqa: E402
 
 
 @pytest.fixture()

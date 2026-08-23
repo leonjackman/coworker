@@ -316,7 +316,8 @@ class Delegator:
 
     def _run_sub_turn(self, agent: str, task: str, context: str, readonly: bool, worker_run_id: str = "") -> str:
         """Build and run a bounded nested graph for ``agent``; return final text."""
-        from .agents import agent_run_config
+        from .agent.core import agent_run_config
+        from .agent.graph import build_workspace_tools
         from .memory.memory_manager import DEFAULT_AGENT
         from .org import AGENT_STATUS_ACTIVE
         from .workers.worker_config import TaskBrief, WorkerConfig

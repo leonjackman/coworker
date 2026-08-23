@@ -33,7 +33,7 @@ async def summarize_result(
     - 不超过 max_chars：直接返回
     - 超过 max_chars：用 summarizer 候选链摘要，失败则规则截断
     """
-    from coworker.agents import _summarizer_candidates
+    from coworker.agent.middleware import _summarizer_candidates
 
     if len(content) <= max_chars:
         return content

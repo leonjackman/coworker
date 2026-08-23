@@ -164,7 +164,7 @@ def test_effective_input_limit_matches_incident():
 
 
 def test_budget_subtracts_max_output():
-    from coworker.agents import CONTEXT_SAFETY_FACTOR, context_budget_tokens
+    from coworker.agent.core import CONTEXT_SAFETY_FACTOR, context_budget_tokens
 
     assert context_budget_tokens(262_144, 8192) == int((262_144 - 8192) * CONTEXT_SAFETY_FACTOR)
     assert context_budget_tokens(262_144, 8192) < context_budget_tokens(262_144, 0)
@@ -239,7 +239,7 @@ class FakeRequest:
 
 
 def _guard(window=100_000, max_output=8192, mcp_names=None):
-    from coworker.agents import ContextGuardMiddleware
+    from coworker.agent.middleware import ContextGuardMiddleware
 
     return ContextGuardMiddleware(
         window_tokens=window,
@@ -328,7 +328,7 @@ def test_guard_caps_images_even_under_token_budget():
     # provider's per-prompt image ceiling (e.g. vLLM --limit-mm-per-prompt.image)
     # would 400 the request — the guard must cap image count even when the
     # calibrated token measurement is under the effective limit.
-    from coworker.agents import MAX_IMAGES_PER_PROMPT
+    from coworker.agent.core import MAX_IMAGES_PER_PROMPT
 
     guard = _guard(window=200_000, max_output=8192)
     img = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + "I" * 300}}
@@ -367,7 +367,7 @@ def test_guard_caps_images_even_under_token_budget():
 
 def test_guard_raises_when_single_message_exceeds_window():
     guard = _guard(window=10_000, max_output=8192)
-    from coworker.agents import ContextOverflowError
+    from coworker.agent.middleware import ContextOverflowError
 
     def handler(request):  # pragma: no cover - must not run
         raise AssertionError("handler must not be called on unreducible overflow")
@@ -459,7 +459,7 @@ def test_guard_incident_shape_regression():
     the guard armed on the SAME window/output reservation AND the bootstrap
     calibration factor (base64 tokenizes ~2.8x denser than prose), the request
     must be reduced below the effective limit and contain no base64 at all."""
-    from coworker.agents import ContextGuardMiddleware
+    from coworker.agent.middleware import ContextGuardMiddleware
 
     store = CalibrationStore(None)  # fresh → bootstrap factor applies
     guard = ContextGuardMiddleware(

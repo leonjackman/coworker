@@ -323,8 +323,8 @@ def get_logger(name: str | None = None) -> logging.Logger:
     """Return a logger under the ``coworker`` hierarchy.
 
     If ``name`` does not already live under ``coworker``, it is prefixed so
-    that ``get_logger(__name__)`` in ``coworker/agents.py`` resolves to
-    ``coworker.agents``. Calling without a name returns the top-level
+    that ``get_logger(__name__)`` in ``coworker/agent/core.py`` resolves to
+    ``coworker.agent.core``. Calling without a name returns the top-level
     ``coworker`` logger.
     """
     if not name:

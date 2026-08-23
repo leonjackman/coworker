@@ -907,5 +907,8 @@
   "chat.reorder_queued": "ドラッグで並べ替え",
   "chat.worker_loading": "ワーカーのストリームを読み込み中…",
   "files.expand_all": "すべて展開（あと {count} 件）",
-  "files.collapse": "折りたたむ"
+  "files.collapse": "折りたたむ",
+  "providers.temperature": "サンプリング温度",
+  "providers.temperature_placeholder": "0 = 自動（ファミリー既定）",
+  "providers.temperature_hint": "モデル既定を上書き；0 は自動（qwen なら 0.55）またはプロバイダー任せ"
 }

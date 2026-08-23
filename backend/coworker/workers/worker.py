@@ -190,14 +190,15 @@ class WorkerAgent:
         #    stream_mode="values" 的最后一块取得。
         try:
             async def _consume() -> dict[str, Any]:
-                from coworker.agents import _message_chunk_events, _normalize_usage
+                from coworker.agent.runtime import _aclose_on_exit
+                from coworker.agent.core import _message_chunk_events, _normalize_usage
 
                 final_state: dict[str, Any] | None = None
-                async for stream_mode, chunk in graph.astream(
+                async for stream_mode, chunk in _aclose_on_exit(graph.astream(
                     state,
                     config=self._run_config,
                     stream_mode=["messages", "custom", "updates", "values"],
-                ):
+                )):
                     if stream_mode == "values":
                         final_state = chunk if isinstance(chunk, dict) else None
                     elif stream_mode == "messages":
@@ -309,7 +310,7 @@ class WorkerAgent:
 
         # 5.5 向 worker bus 发布最终的 done（含权威 parts），并关闭 run
         try:
-            from coworker.agents import _merge_event_parts, _terminate_stray_tools
+            from coworker.agent.core import _merge_event_parts, _terminate_stray_tools
 
             merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
             _publish({"type": "done", "content": content, "parts": merged_parts, "usage": run_usage})
@@ -337,7 +338,7 @@ class WorkerAgent:
 
     def _build_graph(self) -> Any:
         """构建子代理的 LangChain agent graph。"""
-        from coworker.agents import build_coworker_agent_graph
+        from coworker.agent.graph import build_coworker_agent_graph
 
         return build_coworker_agent_graph(
             self.llm,
@@ -359,7 +360,7 @@ class WorkerAgent:
 
     def _build_state(self) -> dict[str, Any]:
         """构建子代理的输入 state。"""
-        from coworker.agents import prepare_agent_messages
+        from coworker.agent.core import prepare_agent_messages
 
         prompt = f"{self.brief.task}"
         if self.brief.context:
@@ -384,7 +385,7 @@ class WorkerAgent:
     @property
     def _run_config(self) -> dict[str, Any]:
         """子代理的 run config。"""
-        from coworker.agents import agent_run_config
+        from coworker.agent.core import agent_run_config
 
         return agent_run_config(
             session_id=self._thread_id or f"{self.session_id}::worker::{uuid.uuid4().hex[:8]}",
@@ -398,7 +399,7 @@ class WorkerAgent:
 
     def _coerce_message_content(self, msg: Any) -> str:
         """提取 AIMessage 的文本内容。"""
-        from coworker.agents import coerce_message_content
+        from coworker.agent.core import coerce_message_content
 
         return coerce_message_content(msg)
 
