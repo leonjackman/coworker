@@ -328,6 +328,9 @@ export interface ProviderEntry {
   context_source?: string;
   context_error?: string;
   max_output_tokens?: number;
+  /** Multimodal (vision) capability: screenshots/images are sent as native
+   *  image blocks instead of being externalized to disk. */
+  vision?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -347,6 +350,7 @@ export interface ProviderPayload {
   model: string;
   context_window?: number;
   max_output_tokens?: number;
+  vision?: boolean;
 }
 
 export interface ProviderUpdatePayload {
@@ -357,6 +361,7 @@ export interface ProviderUpdatePayload {
   enabled?: boolean;
   context_window?: number;
   max_output_tokens?: number;
+  vision?: boolean;
 }
 
 export interface ProviderTestResult {
@@ -612,7 +617,8 @@ export interface PendingRequest {
     | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string; worker_run_id?: string }
     | { type: 'delegate_progress'; from: string; to?: string; status: string; chars?: number; error?: string; session_id?: string; worker_run_id?: string }
     | { type: 'delegate_end'; from?: string | string[]; to?: string; ok?: number | boolean; failed?: string[]; error?: string; parallel?: boolean; chars?: number; session_id?: string; worker_run_id?: string }
-    | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; used_tokens: number; budget_tokens: number; active_budget_tokens: number; window_tokens: number; compacted: boolean; compact_count: number; window_source: string; window_warning?: string; session_id?: string }
+    | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; used_tokens: number; used_tokens_calibrated?: number; calibration_factor?: number; budget_tokens: number; active_budget_tokens: number; window_tokens: number; effective_window_tokens?: number; max_output_tokens?: number; compacted: boolean; compact_count: number; window_source: string; window_warning?: string; session_id?: string }
+    | { type: 'context_guard'; status: string; measured_tokens?: number; limit_tokens?: number; calibration_factor?: number; steps?: string[]; session_id?: string }
     | { type: 'idle_warning'; seconds_idle: number; session_id?: string }
     | {
         type: 'revert_summary';
@@ -630,12 +636,22 @@ export interface ContextUsage {
   compressed: boolean;
   /** Token estimate of the resident message set (better than chars; counts tool I/O). */
   usedTokens: number;
-  /** Safety budget in tokens (= window × 0.75); the bar fills against this. */
+  /** Calibrated usage: raw estimate × the factor learned from the provider's
+   *  real usage for this model. The bar fills against THIS — it tracks what
+   *  the provider will actually bill, not the local guess. */
+  usedTokensCalibrated?: number;
+  /** Closed-loop calibration factor (actual usage / raw estimate). */
+  calibrationFactor?: number;
+  /** Safety budget in tokens (= (window − maxOutput) × 0.75); the bar fills against this. */
   budgetTokens: number;
   /** Token budget active after compaction (may be halved). Falls back to budgetTokens when absent. */
   activeBudgetTokens?: number;
-  /** The model's REAL context window in tokens (what usage % is measured against). */
+  /** The model's REAL context window in tokens. */
   windowTokens: number;
+  /** TRUE input ceiling: window − max_output (providers reserve output tokens). */
+  effectiveWindowTokens?: number;
+  /** Output tokens the provider reserves from the window on every request. */
+  maxOutputTokens?: number;
   /** Whether any compression (trim or summarize) has happened this session. */
   compacted: boolean;
   /** Cumulative number of compressions this session (persisted in state). */

@@ -22,9 +22,15 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage
-
 from coworker.logger import get_logger
+
 logger = get_logger(__name__)
+
+# Hard cap on the injected memory section. Memory rides in the system prompt on
+# EVERY model call of a turn; an unbounded memory file would silently tax the
+# whole window. 30k chars (~8–10k tokens) leaves room for real memory while
+# keeping a firm ceiling on the fixed per-call overhead.
+MEMORY_SECTION_MAX_CHARS = 30_000
 
 
 class MemoryMiddleware(AgentMiddleware):
@@ -39,9 +45,16 @@ class MemoryMiddleware(AgentMiddleware):
                 section = self.manager.render_for(self.manager.bound_project, self.manager.bound_agent)
             else:
                 section = self.manager.render_prompt()
-        except Exception as exc:  # noqa: BLE001 - a scan failure must not break chat
+        except Exception as exc:  # noqa: BLE001 - a scan failure must never break chat
             logger.warning("Memory load failed: %s", exc)
             return {}
+        if not section:
+            return {}
+        if len(section) > MEMORY_SECTION_MAX_CHARS:
+            section = (
+                section[:MEMORY_SECTION_MAX_CHARS]
+                + "\n[memory section truncated by Coworker to fit context]"
+            )
         if not section:
             return {}
 

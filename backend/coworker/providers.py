@@ -52,6 +52,13 @@ class ProviderEntry:
     # Users pick a preset or type a custom value (custom providers where the model
     # is not in the catalog).
     max_output_tokens: int = 0
+    # Multimodal (vision) capability. When True, screenshots / fetched images /
+    # image attachments are sent as native ``image_url`` content blocks (the
+    # model SEES them, billed as vision tokens); when False they are externalized
+    # to disk and referenced by path instead of being smuggled into the context
+    # as truncated base64 text (which is both a corrupted image and ~36k tokens
+    # of waste per shot). Default False keeps text-only providers safe.
+    vision: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -353,7 +360,7 @@ class ProviderManager:
             provider.model = config.default_model
         return provider
 
-    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0) -> dict[str, Any]:
+    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0, vision: bool = False) -> dict[str, Any]:
         base_url = self.validate_base_url(base_url, provider_type)
         if not name.strip():
             raise ValueError("provider name is required")
@@ -374,6 +381,7 @@ class ProviderManager:
             updated_at=now,
             context_window=max(0, int(context_window or 0)),
             max_output_tokens=max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens or 0))),
+            vision=bool(vision),
         )
         config.providers.append(provider)
         if not config.default_provider_id:
@@ -382,7 +390,7 @@ class ProviderManager:
         self.save(config)
         return self.public_provider(provider)
 
-    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None, max_output_tokens: int | None = None) -> dict[str, Any]:
+    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None, max_output_tokens: int | None = None, vision: bool | None = None) -> dict[str, Any]:
         config = self.load()
         provider = self.require_provider(config, provider_id)
         if name is not None:
@@ -404,6 +412,8 @@ class ProviderManager:
             provider.context_window = max(0, int(context_window))
         if max_output_tokens is not None:
             provider.max_output_tokens = max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens)))
+        if vision is not None:
+            provider.vision = bool(vision)
         if enabled is not None:
             provider.enabled = enabled
             if not enabled and config.default_provider_id == provider.id:
@@ -749,6 +759,7 @@ class ProviderManager:
             "context_source": source,
             "context_error": error,
             "max_output_tokens": provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS,
+            "vision": bool(provider.vision),
             "created_at": provider.created_at,
             "updated_at": provider.updated_at,
         }

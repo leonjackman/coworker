@@ -68,6 +68,9 @@ class WorkerAgent:
         worker_bus: Any | None = None,
         worker_run_id: str = "",
         depth: int = 0,
+        context_window_tokens: int = 0,
+        max_output_tokens: int = 0,
+        calibration_key: str = "",
     ):
         self.llm = llm
         self.brief = brief
@@ -91,6 +94,11 @@ class WorkerAgent:
         self.emit = emit or (lambda event: None)
         self.worker_bus = worker_bus
         self.worker_run_id = worker_run_id
+        # Context accounting inherited from the parent runtime: the worker's
+        # budget/trim/guard must run on the SAME window the provider enforces.
+        self.context_window_tokens = context_window_tokens
+        self.max_output_tokens = max_output_tokens
+        self.calibration_key = calibration_key
         # 委派深度：主 agent = 0，use_worker/delegate 每 spawn 一层 +1。
         # 引擎级兜底：超过 config.max_depth 的子代理直接拒绝运行，防止任何
         # spawn 路径（use_worker 或 delegate_task）形成无限嵌套链。
@@ -344,6 +352,9 @@ class WorkerAgent:
             skill_manager=self.skill_manager,
             memory_manager=self.memory_manager,
             workspace=self.workspace,
+            context_window_tokens=self.context_window_tokens,
+            max_output_tokens=self.max_output_tokens,
+            calibration_key=self.calibration_key,
         )
 
     def _build_state(self) -> dict[str, Any]:

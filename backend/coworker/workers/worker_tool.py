@@ -57,6 +57,9 @@ class UseWorkerTool:
         delegation_emit: Any | None = None,
         worker_bus: Any | None = None,
         depth: int = 0,
+        context_window_tokens: int = 0,
+        max_output_tokens: int = 0,
+        calibration_key: str = "",
     ):
         self.llm = llm
         self.workspace = workspace
@@ -75,6 +78,11 @@ class UseWorkerTool:
         self.max_concurrent = max_concurrent
         self.delegation_emit = delegation_emit or (lambda event: None)
         self.worker_bus = worker_bus
+        # Context accounting inherited from the parent runtime so the worker's
+        # own budget/trim/guard run on the SAME window the provider enforces.
+        self.context_window_tokens = context_window_tokens
+        self.max_output_tokens = max_output_tokens
+        self.calibration_key = calibration_key
         # 委派深度：主 agent = 0；spawn 出的 worker = depth+1。子代理自身工具集
         # 由构造方（agents.build_workspace_tools）预先排除委派/spawn 工具，这里
         # 只负责把深度传给引擎做兜底。
@@ -139,6 +147,9 @@ class UseWorkerTool:
             emit=self.delegation_emit,
             worker_bus=self.worker_bus,
             depth=self.depth + 1,
+            context_window_tokens=self.context_window_tokens,
+            max_output_tokens=self.max_output_tokens,
+            calibration_key=self.calibration_key,
         )
 
         # 异步调用：LangGraph 在 async 上下文中 await 此工具

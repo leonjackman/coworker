@@ -104,6 +104,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
       availableModels: provider.model ? [provider.model] : [],
       ...(provider.context_window ? { context_window: provider.context_window } : {}),
       ...(provider.max_output_tokens !== undefined && provider.max_output_tokens > 0 ? { max_output_tokens: provider.max_output_tokens } : {}),
+      vision: Boolean(provider.vision),
     });
     setMaxOutputMode(provider.max_output_tokens !== undefined && MAX_OUTPUT_PRESETS.includes(provider.max_output_tokens) ? 'preset' : 'custom');
     setTestResult(null);
@@ -156,6 +157,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           model: form.model,
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
           ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
+          vision: Boolean(form.vision),
         });
       } else {
         await chatService.createProvider({
@@ -166,6 +168,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           model: form.model,
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
           ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
+          vision: Boolean(form.vision),
         });
       }
       await load();
@@ -397,6 +400,19 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                 )}
               </div>
               <small>{t('providers.max_output_tokens_hint')}</small>
+            </label>
+
+            <label className="field provider-vision-field">
+              <div className="provider-vision-row">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.vision)}
+                  onChange={(e) => setForm({ ...form, vision: e.target.checked })}
+                  disabled={saving}
+                />
+                <span>{t('providers.vision')}</span>
+              </div>
+              <small>{t('providers.vision_hint')}</small>
             </label>
 
             <div className="provider-test-row">

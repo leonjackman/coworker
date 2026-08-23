@@ -13,8 +13,11 @@ result and the agent tells the user the browser only exists in the desktop app.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +26,42 @@ from typing import Any, Literal
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_DATA_URL_SPLIT_RE = re.compile(r"^data:(?P<mime>[\w.+:-]+/[\w.+:-]+);base64,(?P<body>.*)$", re.S)
+_SCREENSHOTS_DIRNAME = "screenshots"
+
+
+def screenshots_dir_for(data_dir: Path | str | None, session_id: str) -> Path | None:
+    """Per-session directory holding externalized screenshots (cleaned up with
+    the session). Returns ``None`` when there is no data dir."""
+    if data_dir is None:
+        return None
+    safe_session = "".join(ch for ch in str(session_id or "") if ch.isalnum() or ch in "-_") or "default"
+    return Path(data_dir) / _SCREENSHOTS_DIRNAME / safe_session
+
+
+def _save_screenshot(data_url: str, data_dir: Path | str | None, session_id: str) -> str | None:
+    """Persist a base64 data URL to disk and return the path (None on failure).
+
+    Screenshots are binary; the model can never use base64 *text* (a truncated
+    data URL is a corrupted image), so for non-vision providers the shot is
+    externalized and referenced by path instead of burning ~36k tokens.
+    """
+    match = _DATA_URL_SPLIT_RE.match(data_url or "")
+    if not match:
+        return None
+    target_dir = screenshots_dir_for(data_dir, session_id)
+    if target_dir is None:
+        return None
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        ext = "jpg" if "jpeg" in match.group("mime") else "png"
+        target = target_dir / f"shot-{int(time.time() * 1000)}.{ext}"
+        target.write_bytes(base64.b64decode(match.group("body")))
+        return str(target)
+    except (OSError, binascii.Error, ValueError):
+        logger.warning("screenshot save failed", exc_info=True)
+        return None
 
 _SETTINGS_FILENAME = ".coworker_settings.json"
 _BRIDGE_KEY = "browser_bridge"
@@ -235,8 +274,15 @@ def _render_error(result: dict[str, Any], action: str) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def build_browser_tool(data_dir: Path | str | None) -> Any | None:
-    """Build the ``browser`` LangChain tool (``None`` when the bridge is down)."""
+def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, session_id: str = "") -> Any | None:
+    """Build the ``browser`` LangChain tool (``None`` when the bridge is down).
+
+    ``vision`` (provider capability) controls screenshot delivery: vision
+    models receive a native ``image_url`` content block (they SEE the page;
+    billed as vision tokens); text-only models get the shot saved to disk and
+    referenced by path. Base64 is NEVER inlined into tool-result text — a
+    truncated data URL is a corrupted image that only burns ~36k tokens.
+    """
     from langchain_core.tools import tool
     from pydantic import BaseModel, Field
 
@@ -275,13 +321,12 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
         list of interactive elements with their on-screen center coordinates),
         then ``click``/``type``/``press``/``scroll`` to interact, then
         ``snapshot`` again to verify. Take a ``screenshot`` only when the page's
-        visual state matters (images, layout) — every screenshot costs tokens.
-        ``get_state`` returns the current URL/title. To read a page's text, use
-        ``get_text`` (bounded, cleaned) or a *targeted* ``evaluate`` (title +
-        specific selectors, or ``document.body.innerText.slice(0, 4000)``) —
-        never dump the whole ``document.body.innerText``: content-heavy pages
-        exceed the model's context window. Tool output is truncated (~50k chars;
-        evaluate ~20k).
+        visual state matters (images, layout). ``get_state`` returns the current
+        URL/title. To read a page's text, use ``get_text`` (bounded, cleaned) or
+        a *targeted* ``evaluate`` (title + specific selectors, or
+        ``document.body.innerText.slice(0, 4000)``) — never dump the whole
+        ``document.body.innerText``: content-heavy pages exceed the model's
+        context window. Tool output is truncated (~50k chars; evaluate ~20k).
         """
         try:
             if action == "navigate":
@@ -317,7 +362,40 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
             return json.dumps({"error": str(exc)[:500], "error_code": "browser_error"}, ensure_ascii=False)
         if result.get("error_code"):
             return _render_error(result, action)
+
+        # Screenshots are binary. Deliver them as a native image block for
+        # vision providers (the model actually sees the page) or externalize to
+        # disk for text-only providers — never inline base64 into tool text.
+        if action == "screenshot":
+            data_url = str(result.get("image") or "")
+            if data_url:
+                if vision:
+                    return [
+                        {"type": "text", "text": "Screenshot of the current browser page."},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ]
+                saved = _save_screenshot(data_url, data_dir, session_id)
+                if saved:
+                    return json.dumps(
+                        {
+                            "screenshot": saved,
+                            "note": "This model has no vision capability; the screenshot was saved to disk "
+                                    "instead of being shown to you. Rely on `snapshot`/`get_text`/`evaluate` "
+                                    "to inspect the page.",
+                        },
+                        ensure_ascii=False,
+                    )
+                return json.dumps(
+                    {"error": "screenshot could not be captured or saved", "error_code": "screenshot_failed"},
+                    ensure_ascii=False,
+                )
+
         payload = json.dumps(result, ensure_ascii=False)
+        # Defense in depth: strip any base64/data-URL blob that slips into a
+        # non-screenshot result (e.g. an evaluate() that returned a data URL).
+        from coworker.context import scrub_text
+
+        payload, _scrubbed = scrub_text(payload)
         # Hard backstop: cap any single tool output so a huge page can never
         # overflow the model context window (get_text/evaluate are the usual
         # offenders, but this guards every action). evaluate gets an even tighter
@@ -331,10 +409,10 @@ def build_browser_tool(data_dir: Path | str | None) -> Any | None:
     return browser
 
 
-def resolve_browser_tool(data_dir: Path | str | None) -> Any | None:
+def resolve_browser_tool(data_dir: Path | str | None, *, vision: bool = False, session_id: str = "") -> Any | None:
     """Browser tool for a runtime when the desktop bridge is up, else ``None``."""
     if data_dir is None:
         return None
     if not browser_available(data_dir):
         return None
-    return build_browser_tool(data_dir)
+    return build_browser_tool(data_dir, vision=vision, session_id=session_id)

@@ -52,23 +52,34 @@ const STATUS_COLORS = {
 
 function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
   const CHARS_PER_TOKEN = 3.5;
-  // Prefer the backend's token estimates (they count tool I/O and are CJK-aware);
-  // fall back to char-based values for older backends — B3/B4.
-  const used = usage.usedTokens ?? Math.round(usage.usedChars / CHARS_PER_TOKEN);
-  // Bar is measured against the model's REAL context window (e.g. 256k), NOT the
-  // safety budget / compaction threshold (window × 0.75 ≈ 197k). The backend
-  // emits windowTokens; activeBudgetTokens/budgetTokens are only fallbacks for
-  // older backends that never send the true window. Trimming still kicks in at
-  // 75% of the window internally — this just shows where you are in the window.
+  // Prefer the CALIBRATED token estimate (raw estimate × the factor learned
+  // from the provider's real usage for this model) — that is what the provider
+  // actually bills. Falls back to the raw estimate, then char-based values for
+  // older backends — B3/B4.
+  const rawUsed = usage.usedTokens ?? Math.round(usage.usedChars / CHARS_PER_TOKEN);
+  const used = (usage.usedTokensCalibrated != null && usage.usedTokensCalibrated > 0)
+    ? usage.usedTokensCalibrated
+    : rawUsed;
+  // Bar is measured against the EFFECTIVE input ceiling: the model's window
+  // MINUS the reserved output tokens (providers enforce input + max_output ≤
+  // window, so the raw window overstates the headroom). activeBudgetTokens /
+  // budgetTokens stay as fallbacks for older backends. Trimming still kicks in
+  // at 75% internally — this shows where you really are in the usable window.
   const rawActive: number | undefined = usage.activeBudgetTokens;
   const activeTok = (rawActive != null && rawActive > 0) ? rawActive : undefined;
-  const windowTok = usage.windowTokens ?? activeTok ?? usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
+  const rawWindow = usage.windowTokens ?? activeTok ?? usage.budgetTokens ?? Math.round(usage.budgetChars / CHARS_PER_TOKEN);
+  const windowTok = (usage.effectiveWindowTokens != null && usage.effectiveWindowTokens > 0)
+    ? usage.effectiveWindowTokens
+    : rawWindow;
   const pct = windowTok > 0 ? Math.min(100, Math.round((used / windowTok) * 100)) : 0;
-  const color = pct < 70 ? STATUS_COLORS.green : pct < 90 ? STATUS_COLORS.amber : STATUS_COLORS.red;
+  const color = pct < 70 ? STATUS_COLORS.green : pct < 85 ? STATUS_COLORS.amber : STATUS_COLORS.red;
   const formatK = (n: number) => (n >= 1_000 ? `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
+  const factor = usage.calibrationFactor;
   const tooltip = [
     t('titlebar.context_usage', { used: formatK(used), window: formatK(windowTok), pct }),
     t('titlebar.context_trim_hint'),
+    ...(factor != null && factor > 1.02 ? [t('titlebar.context_calibration', { factor: factor.toFixed(2) })] : []),
+    ...(usage.maxOutputTokens ? [t('titlebar.context_output_reserved', { tokens: formatK(usage.maxOutputTokens) })] : []),
     ...(usage.compressed ? [t('titlebar.context_compressing')] : []),
     ...(usage.compactCount > 0 || usage.compacted ? [t('titlebar.context_compressed')] : []),
     ...(usage.windowWarning ? [usage.windowWarning] : []),

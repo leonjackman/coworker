@@ -290,6 +290,56 @@ class McpToolMiddleware(AgentMiddleware):
 
     # ── execution ────────────────────────────────────────────────────────
 
+    # MCP servers run outside the workspace sandbox and their results were
+    # previously UNCAPPED — one chatty server reply could overflow the model
+    # context on its own. Same bound as the browser tool output.
+    _RESULT_MAX_CHARS = 50_000
+    _RESULT_TRUNCATION_NOTE = "\n[content truncated by Coworker to fit context]"
+
+    @classmethod
+    def _guard_result(cls, result: Any) -> Any:
+        """Bound and scrub an MCP tool result before it enters the context.
+
+        Text parts are scrubbed of base64/data-URL blobs and capped; native
+        image blocks ride through untouched (they are counted at vision cost,
+        not as text). Non-ToolMessage results pass through unchanged.
+        """
+        content = getattr(result, "content", None)
+        if content is None:
+            return result
+        try:
+            from coworker.context import scrub_text
+
+            if isinstance(content, str):
+                scrubbed, _ = scrub_text(content)
+                if len(scrubbed) > cls._RESULT_MAX_CHARS:
+                    scrubbed = scrubbed[: cls._RESULT_MAX_CHARS] + cls._RESULT_TRUNCATION_NOTE
+                if scrubbed != content:
+                    return result.model_copy(update={"content": scrubbed})
+                return result
+            if isinstance(content, list):
+                budget = cls._RESULT_MAX_CHARS
+                new_content: list[Any] = []
+                changed = False
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text = part.get("text") or ""
+                        scrubbed, n = scrub_text(text)
+                        if len(scrubbed) > budget:
+                            scrubbed = scrubbed[:budget] + cls._RESULT_TRUNCATION_NOTE
+                        budget = max(0, budget - len(scrubbed))
+                        if scrubbed != text:
+                            changed = True
+                        new_content.append({**part, "text": scrubbed})
+                    else:
+                        new_content.append(part)
+                if changed:
+                    return result.model_copy(update={"content": new_content})
+                return result
+        except Exception:  # noqa: BLE001 - guarding must never break a tool call
+            logger.debug("MCP result guard skipped", exc_info=True)
+        return result
+
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
         request, policy = self._prepare(request)
         if policy is None:
@@ -301,7 +351,7 @@ class McpToolMiddleware(AgentMiddleware):
             self._audit(policy, request, "error", started, error=exc)
             raise
         self._audit(policy, request, "ok", started, result=result)
-        return result
+        return self._guard_result(result)
 
     async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
         request, policy = self._prepare(request)
@@ -314,4 +364,4 @@ class McpToolMiddleware(AgentMiddleware):
             self._audit(policy, request, "error", started, error=exc)
             raise
         self._audit(policy, request, "ok", started, result=result)
-        return result
+        return self._guard_result(result)

@@ -54,6 +54,13 @@ def _message_text(message: Any) -> str:
     return str(content or "")
 
 
+# Hard cap per activated skill body. Skill bodies are injected into the system
+# prompt on EVERY model call of the turn; an unbounded one is a context bomb
+# (the same class of failure as uncapped tool results, just through a
+# different door).
+SKILL_BODY_MAX_CHARS = 80_000
+
+
 def _format_active_skills(active: list[dict[str, str]]) -> str:
     """Render the full bodies of explicitly activated skills into a prompt block."""
     lines = [
@@ -62,12 +69,16 @@ def _format_active_skills(active: list[dict[str, str]]) -> str:
         "<activated_skills>",
     ]
     for item in active:
+        body = item["body"]
+        truncated = len(body) > SKILL_BODY_MAX_CHARS
+        if truncated:
+            body = body[:SKILL_BODY_MAX_CHARS] + "\n[skill instructions truncated by Coworker to fit context]"
         lines.append("  <skill>")
         lines.append(f"    <name>{item['name']}</name>")
         if item.get("location"):
             lines.append(f"    <location>{item['location']}</location>")
         lines.append("    <instructions>")
-        lines.append(item["body"])
+        lines.append(body)
         lines.append("    </instructions>")
         lines.append("  </skill>")
     lines.append("</activated_skills>")

@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -639,6 +640,7 @@ class ProviderCreate(BaseModel):
     model: str = ""
     context_window: int = 0
     max_output_tokens: int = 0
+    vision: bool = False
 
 class ProviderUpdate(BaseModel):
     name: Optional[str] = None
@@ -648,6 +650,7 @@ class ProviderUpdate(BaseModel):
     enabled: Optional[bool] = None
     context_window: Optional[int] = None
     max_output_tokens: Optional[int] = None
+    vision: Optional[bool] = None
 
 class DefaultProviderPayload(BaseModel):
     provider_id: str
@@ -1523,6 +1526,7 @@ async def org_delete_agent(request: OrgAgentDeleteRequest):
         await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
+        _cleanup_session_screenshots(session["id"])
     session_store.delete_by_agent(request.project_id, request.id)
     # Trash the agent's memory directory (recoverable), never blocking the delete.
     from coworker.memory.memory_store import MemoryStore
@@ -2413,7 +2417,20 @@ async def delete_session(session_id: str):
     asyncio.create_task(asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id))
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
+    _cleanup_session_screenshots(session_id)
     return {"status": "ok"}
+
+
+def _cleanup_session_screenshots(session_id: str) -> None:
+    """Remove the session's externalized screenshots (best-effort)."""
+    try:
+        from coworker.browser.bridge_client import screenshots_dir_for
+
+        target = screenshots_dir_for(settings.data_dir, session_id)
+        if target is not None and target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+    except Exception:  # noqa: BLE001 - cleanup must never break a delete
+        logger.debug("screenshot cleanup failed for %s", session_id, exc_info=True)
 
 @app.post("/sessions/{session_id}/rename")
 async def rename_session(session_id: str, request: SessionRenameRequest):
@@ -3171,6 +3188,7 @@ async def delete_project(project_id: str):
         await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
+        _cleanup_session_screenshots(session["id"])
     session_store.delete_by_project(project_id)
     if memory_dir:
         project_memory = memory_manager.root / memory_dir
@@ -3780,6 +3798,7 @@ def create_provider(request: ProviderCreate):
             model=request.model,
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
+            vision=request.vision,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -3808,6 +3827,7 @@ def update_provider(provider_id: str, request: ProviderUpdate):
             enabled=request.enabled,
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
+            vision=request.vision,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

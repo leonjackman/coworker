@@ -38,7 +38,7 @@ from langchain.agents.middleware.context_editing import ClearToolUsesEdit
 from langchain.agents.middleware.summarization import SummarizationMiddleware
 from langchain.agents.middleware.types import AgentState, Runtime
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.messages.utils import count_tokens_approximately, get_buffer_string
+from langchain_core.messages.utils import get_buffer_string
 from pydantic import BaseModel, Field
 
 from .checkpoints import CheckpointManager
@@ -47,6 +47,7 @@ from .events import session_event_bus, worker_event_bus
 from .project_snapshot import ProjectSnapshotManager
 from .config import BackendSettings
 from .mcp.mcp import McpManager
+from .context import CalibrationStore
 from .providers import DEFAULT_MAX_OUTPUT_TOKENS, ProviderEntry, ProviderManager
 from .sessions import SessionStore
 from .traces import AGENT_TRACE_FILENAME, AgentTraceStore
@@ -549,6 +550,9 @@ def build_workspace_tools(
     worker_mcp_session_manager: Any | None = None,
     delegation_emit: Any | None = None,  # optional callback for use_worker SSE frames
     worker_bus: Any | None = None,  # WorkerEventBus for worker sub-agent internal streams
+    worker_context_window_tokens: int = 0,
+    worker_max_output_tokens: int = 0,
+    worker_calibration_key: str = "",
 ) -> list[Any]:
     from pathlib import Path as _Path
 
@@ -1001,6 +1005,9 @@ def build_workspace_tools(
             delegation_emit=delegation_emit,
             worker_bus=worker_bus,
             depth=0,
+            context_window_tokens=worker_context_window_tokens,
+            max_output_tokens=worker_max_output_tokens,
+            calibration_key=worker_calibration_key,
         )
         tools.extend(worker_tool.create_tools())
     return tools
@@ -2222,27 +2229,40 @@ TOOL_OUTPUT_MAX_CHARS = 2_000
 TRUNCATE_CHARS_PER_TOKEN = 1.5
 
 
-def context_budget_chars(context_window_tokens: int) -> int:
+def context_budget_chars(context_window_tokens: int, max_output_tokens: int = 0) -> int:
     """Convert a model's token context window into the resident-message budget.
 
-    ``budget = window × safety × chars_per_token``; a floor keeps tiny local
-    models usable (avoids a budget so small every turn trims immediately).
+    ``budget = (window − max_output) × safety × chars_per_token``; a floor keeps
+    tiny local models usable (avoids a budget so small every turn trims
+    immediately). The output reservation matters: providers reserve
+    ``max_output`` tokens from the window, so budgeting against the raw window
+    leaves zero real margin (see :func:`coworker.context.effective_input_limit`).
     """
+    from .context import effective_input_limit
+
     if not context_window_tokens or context_window_tokens <= 0:
         context_window_tokens = 128_000
-    return max(20_000, int(context_window_tokens * CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN))
+    limit = effective_input_limit(context_window_tokens, max_output_tokens)
+    return max(20_000, int(limit * CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN))
 
 
-def context_budget_tokens(context_window_tokens: int) -> int:
-    """Token-space resident-message budget (``window × safety``).
+def context_budget_tokens(context_window_tokens: int, max_output_tokens: int = 0) -> int:
+    """Token-space resident-message budget (``(window − max_output) × safety``).
 
     The trim/compact meter runs in tokens (CJK-aware via :func:`_estimate_tokens`)
     because providers count tokens, not characters — a char budget at a flat
-    chars/token ratio badly under-counts Chinese content.
+    chars/token ratio badly under-counts Chinese content. ``max_output_tokens``
+    is subtracted FIRST: vLLM/OpenAI-family servers enforce
+    ``input + max_tokens ≤ window``, so the input ceiling is
+    ``window − max_output`` — budgeting against the raw window silently spends
+    the reserved output tokens and dies one token past the real limit.
     """
+    from .context import effective_input_limit
+
     if not context_window_tokens or context_window_tokens <= 0:
         context_window_tokens = 128_000
-    return max(5_000, int(context_window_tokens * CONTEXT_SAFETY_FACTOR))
+    limit = effective_input_limit(context_window_tokens, max_output_tokens)
+    return max(5_000, int(limit * CONTEXT_SAFETY_FACTOR))
 
 
 # Provider "context overflow" error signatures that trigger an automatic
@@ -2267,23 +2287,30 @@ def is_context_overflow_error(exc: BaseException | None) -> bool:
     return any(pattern in text for pattern in CONTEXT_OVERFLOW_PATTERNS)
 
 
-def _runtime_context_budget(provider: Any, model_override: str | None = None) -> tuple[int, int, str, str | None]:
-    """Resolve ``(budget_chars, window_tokens, source, warning)`` for a provider.
+def _runtime_context_budget(provider: Any, model_override: str | None = None) -> tuple[int, int, str, str | None, int]:
+    """Resolve ``(budget_chars, window_tokens, source, warning, max_output_tokens)``.
 
     The window resolution is model-aware: ``model_override`` (the model chosen for
     this turn) takes precedence over the provider's stored default model, so
     switching models mid-conversation recomputes the budget from the new model's
     context window — see B7. ``source`` is one of user/table/discovered/default.
     ``warning`` is a human-readable note (e.g. an untrusted oversized window or a
-    server-reported cap) surfaced to the UI, or ``None``.
+    server-reported cap) surfaced to the UI, or ``None``. ``max_output_tokens``
+    is the per-request output reservation (0 ⇒ DEFAULT_MAX_OUTPUT_TOKENS) that
+    every budget must subtract from the window.
     """
     try:
-        from .providers import ProviderManager
+        from .providers import DEFAULT_MAX_OUTPUT_TOKENS, ProviderManager
 
+        max_output = int(getattr(provider, "max_output_tokens", 0) or 0)
+        if max_output <= 0:
+            max_output = DEFAULT_MAX_OUTPUT_TOKENS
         window, source, warning = ProviderManager._resolve_context_window_full(provider, model=model_override)
-        return context_budget_chars(window), window, source, warning
+        return context_budget_chars(window, max_output), window, source, warning, max_output
     except Exception:  # noqa: BLE001 - a failed resolve must never break a turn
-        return context_budget_chars(128_000), 128_000, "default", None
+        from .providers import DEFAULT_MAX_OUTPUT_TOKENS
+
+        return context_budget_chars(128_000, DEFAULT_MAX_OUTPUT_TOKENS), 128_000, "default", None, DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def _message_text(msg: Any) -> str:
@@ -2292,36 +2319,12 @@ def _message_text(msg: Any) -> str:
     Used for BOTH the character-based trim budget and the token estimate, so the
     context-budget meter and the actual trimming agree on message "size". Tool
     calls / tool results previously counted as zero chars and could silently push
-    a tool-heavy turn past the window — see B3.
+    a tool-heavy turn past the window — see B3. Media blocks (image/audio) are
+    NOT text — they are counted separately at a per-item vision cost.
     """
-    try:
-        content = msg.content
-    except Exception:  # noqa: BLE001
-        content = None
-    chunks: list[str] = []
-    if isinstance(content, str):
-        chunks.append(content)
-    elif isinstance(content, list):
-        for part in content:
-            if isinstance(part, dict):
-                if part.get("type") == "text":
-                    chunks.append(part.get("text") or "")
-                else:
-                    # tool_use / tool_result / function blocks etc.
-                    chunks.append(str(part.get("input") or part.get("content") or part.get("text") or ""))
-    # AI message tool calls (OpenAI-style: name + args).
-    tool_calls = getattr(msg, "tool_calls", None)
-    if tool_calls:
-        for tc in tool_calls:
-            if isinstance(tc, dict):
-                chunks.append(str(tc.get("name") or ""))
-                chunks.append(str(tc.get("args") or ""))
-            else:
-                fn = getattr(tc, "function", None)
-                if fn is not None:
-                    chunks.append(str(getattr(fn, "name", "") or ""))
-                    chunks.append(str(getattr(fn, "arguments", "") or ""))
-    return "".join(chunks)
+    from .context import message_text
+
+    return message_text(msg)
 
 
 def _msg_chars(msg: Any) -> int:
@@ -2329,26 +2332,30 @@ def _msg_chars(msg: Any) -> int:
 
 
 def _msg_tokens(msg: Any) -> int:
-    """CJK-aware token estimate for a message (see :func:`_estimate_tokens`)."""
-    return _estimate_tokens(_message_text(msg))
+    """Calibrated-free token estimate for a message (CJK + base64 aware).
+
+    Media blocks count at the per-image vision cost instead of zero (the old
+    behaviour let image-bearing messages budget as empty while the provider
+    charged real vision tokens).
+    """
+    from .context import message_tokens
+
+    return message_tokens(msg)
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token count: ~3.8 chars/token for Latin, ~1.6 chars/token for CJK.
+    """Content-class aware token estimate (Latin ~3.8 chars/token, CJK ~0.6
+    tokens/char, base64/data-URL runs at their true ~1.4 chars/token density).
 
-    A flat 3.5 chars/token (CHARS_PER_TOKEN) over-estimates tokens for Chinese
-    and under-states real context usage — see B4. Blending the two scripts keeps
-    the displayed budget closer to what the provider actually counts. Latin is
-    nudged to 3.8 (not 4) because dense ASCII payloads like base64 image data /
-    JSON in tool results tokenize slightly denser than plain prose; under-counting
-    these is what let a browser-heavy session drift past the provider's real
-    window despite the 0.75 safety factor.
+    Delegates to :func:`coworker.context.estimate_text_tokens`, the single base
+    estimator every meter/budget/guard shares. A flat chars/token rate badly
+    under-counted dense payloads (screenshots smuggled in as base64 text
+    tokenize ~2.8x denser than prose) — that under-count let a browser-heavy
+    turn blow the provider window while the meter showed 50%.
     """
-    if not text:
-        return 0
-    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
-    other = len(text) - cjk
-    return max(1, round(other / 3.8 + cjk * 0.6))
+    from .context import estimate_text_tokens
+
+    return estimate_text_tokens(text)
 
 
 def _truncate_message(msg: Any, budget: int) -> Any:
@@ -2607,8 +2614,13 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
       configured models) instead of a single fixed LLM.
     """
 
-    def __init__(self, budget_chars: int | None = None, llm: Any | None = None, summarizer_candidates: list[Any] | None = None, language: Language = "zh", context_window_tokens: int = 0, context_window_source: str = "default", context_window_warning: str | None = None, tool_edit: Any | None = None):
-        self.configured_budget = max(20_000, int(budget_chars or context_budget_chars(128_000)))
+    def __init__(self, budget_chars: int | None = None, llm: Any | None = None, summarizer_candidates: list[Any] | None = None, language: Language = "zh", context_window_tokens: int = 0, context_window_source: str = "default", context_window_warning: str | None = None, tool_edit: Any | None = None, max_output_tokens: int = 0, calibration_store: Any | None = None, calibration_key: str = ""):
+        # The provider reserves ``max_output_tokens`` from the window for the
+        # response; budgeting against the RAW window spends that reservation and
+        # dies one token past the real input ceiling (the incident 400). Both the
+        # char and token budgets are computed on the effective limit.
+        self.max_output_tokens = max(0, int(max_output_tokens or 0))
+        self.configured_budget = max(20_000, int(budget_chars or context_budget_chars(128_000, self.max_output_tokens)))
         # Mutable per-turn budget (the overflow retry path halves this). The UI
         # always reads ``configured_budget`` so the meter never jumps on a retry
         # — see B9.
@@ -2616,7 +2628,8 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         # Token-space budget drives trimming/compaction (CJK-aware). Mirrors
         # ``budget_chars`` mutations (overflow retry halves both).
         self.budget_tokens = context_budget_tokens(
-            context_window_tokens if context_window_tokens and context_window_tokens > 0 else 128_000
+            context_window_tokens if context_window_tokens and context_window_tokens > 0 else 128_000,
+            self.max_output_tokens,
         )
         self.language = language if language in ("zh", "en") else "zh"
         # Real model context window (tokens) + how it was resolved, surfaced to the
@@ -2627,6 +2640,11 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         # Human-readable warning about the window (unverified oversized override,
         # or server-reported cap). Surfaced to the UI via context_usage.
         self.context_window_warning = context_window_warning
+        # Closed-loop tokenizer calibration (actual usage / raw estimate) shared
+        # with the pre-send guard; the meter surfaces the factor + calibrated
+        # usage so the topbar shows what the provider will REALLY charge.
+        self.calibration_store = calibration_store
+        self.calibration_key = calibration_key or ""
         self._summarized_segments: set[str] = set()
         # Cheap layer: ClearToolUsesEdit (Anthropic-style context editing) used
         # BOTH by this middleware (prune-aware trigger, CJK-counted) and by the
@@ -2668,14 +2686,20 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         return sum(_msg_tokens(m) for m in messages)
 
     def _pruned_messages(self, messages: list[Any]) -> list[Any]:
-        """Apply the cheap tool-result clear on a copy (CJK-aware decision)."""
+        """Apply the cheap tool-result clear on a copy (CJK-aware decision).
+
+        Uses the SAME CJK/base64-aware counter as every other budget decision —
+        the framework default (``count_tokens_approximately``) is ASCII-biased
+        and made the prune trigger disagree with the trim trigger on the very
+        same message list.
+        """
         if self.tool_edit is None:
             return messages
         import copy
 
         try:
             pruned = copy.deepcopy(list(messages))
-            self.tool_edit.apply(pruned, count_tokens=count_tokens_approximately)
+            self.tool_edit.apply(pruned, count_tokens=self._cjk_token_counter)
             return pruned
         except Exception:  # noqa: BLE001 - pruning is best-effort
             logger.warning("tool-result pruning failed", exc_info=True)
@@ -2778,15 +2802,33 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             window_tokens = self.context_window_tokens or round(
                 self.configured_budget / (CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN)
             )
+            # Closed-loop calibration factor learned from real provider usage for
+            # this (provider, model); the calibrated figure is what the provider
+            # will actually bill, so the bar/colour follow IT, not the raw guess.
+            calibration_factor = 1.0
+            if self.calibration_store is not None and self.calibration_key:
+                try:
+                    calibration_factor = float(self.calibration_store.get(self.calibration_key))
+                except Exception:  # noqa: BLE001 - telemetry must never break a turn
+                    calibration_factor = 1.0
+            from .context import effective_input_limit
+
             runtime.stream_writer(
                 {
                     "type": "context_usage",
                     "used_chars": total,
                     "budget_chars": self.configured_budget,
                     "used_tokens": used_tokens,
+                    "used_tokens_calibrated": int(round(used_tokens * calibration_factor)),
+                    "calibration_factor": round(calibration_factor, 3),
                     "budget_tokens": self.budget_tokens,
                     "active_budget_tokens": self.budget_tokens,
                     "window_tokens": window_tokens,
+                    # The TRUE input ceiling: providers reserve max_output from
+                    # the window (input + max_tokens ≤ window), so the meter's
+                    # denominator must be the effective limit, not the raw window.
+                    "effective_window_tokens": effective_input_limit(window_tokens, self.max_output_tokens),
+                    "max_output_tokens": self.max_output_tokens,
                     # Per-turn signal: is the resident set over the active budget
                     # (i.e. will this call trim/compact)? Distinct from `compacted`,
                     # which is the cumulative "has compression ever happened" flag
@@ -3373,6 +3415,410 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
 
 # ---------------------------------------------------------------------------
+# ContextGuardMiddleware – final-request boundary guard.
+# ---------------------------------------------------------------------------
+
+
+class ContextOverflowError(RuntimeError):
+    """The final request still exceeds the effective window after every staged
+    reduction. Carries the measured size / limit so callers can surface a
+    precise, friendly error instead of the provider's raw 400."""
+
+    def __init__(self, message: str, *, measured_tokens: int = 0, limit_tokens: int = 0, steps: list[str] | None = None):
+        super().__init__(message)
+        self.measured_tokens = measured_tokens
+        self.limit_tokens = limit_tokens
+        self.steps = list(steps or [])
+
+
+class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Last line of defense before a request hits the provider.
+
+    Every other context mechanism (trim, compaction, tool-result clearing)
+    measures ``state["messages"]`` with an estimate; the provider measures the
+    REAL request — system prompt + tool schemas + messages + template overhead,
+    with its own tokenizer, and reserves ``max_output_tokens`` from the window.
+    When estimate and reality disagree (dense code, base64 blobs, CJK, vision
+    blocks) the state-side mechanisms can stay comfortably "under budget"
+    while the real request sails past ``window − max_output`` — exactly the
+    incident this guard exists to kill.
+
+    Mounted INNERMOST (last in the middleware chain) so it measures the request
+    after every other middleware has applied its system-prompt / tool / message
+    overrides. When the calibrated measurement exceeds the effective input
+    limit it applies staged reductions — cheapest and least-destructive first,
+    all on request-local copies (checkpointed state and the UI transcript are
+    untouched, same contract as ``ContextEditingMiddleware``):
+
+      S1 externalize binary blobs (base64/data-URL runs are corrupted-on-
+         arrival text: pure token waste) and degrade stale image blocks;
+      S2 clear old tool results (keep=3, then keep=1);
+      S3 truncate the oldest oversized tool results;
+      S4 drop optional tool schemas (MCP tools);
+      S5 emergency-drop the oldest messages (AI/Tool pairing preserved).
+
+    If the request STILL does not fit, raises :class:`ContextOverflowError` so
+    the runtime can emit a friendly terminal event + one-click compacted retry
+    instead of leaking the provider's 400 mid-turn.
+
+    The guard also publishes the calibrated measurement + raw estimate for the
+    closed-loop calibration (the streaming loop pairs ``last_raw_estimate``
+    with the provider-reported ``usage_metadata.input_tokens``).
+    """
+
+    # Image blocks kept intact during S1 degradation (the most recent ones are
+    # the only ones still relevant to the model's current decision).
+    KEEP_RECENT_IMAGES = 2
+    # S3 truncation target per old tool result (opencode TOOL_OUTPUT_MAX_CHARS).
+    TOOL_RESULT_KEEP_CHARS = 2_000
+    # Stop reducing once comfortably under the limit (calibrated headroom).
+    TARGET_RATIO = 0.95
+
+    def __init__(
+        self,
+        *,
+        window_tokens: int,
+        max_output_tokens: int = 0,
+        calibration_store: Any | None = None,
+        calibration_key: str = "",
+        mcp_tool_names_provider: Callable[[], set[str]] | None = None,
+    ) -> None:
+        from .context import effective_input_limit
+
+        self.window_tokens = int(window_tokens or 0)
+        self.max_output_tokens = max(0, int(max_output_tokens or 0))
+        self.limit_tokens = effective_input_limit(self.window_tokens or 128_000, self.max_output_tokens)
+        self.calibration_store = calibration_store
+        self.calibration_key = calibration_key or ""
+        self.mcp_tool_names_provider = mcp_tool_names_provider
+        # Calibration pairing: the streaming loop reads these right after each
+        # successful model call and folds actual/estimate into the store.
+        self.last_raw_estimate = 0
+        self.last_measured = 0
+        self.last_steps: list[str] = []
+
+    # -- measurement --------------------------------------------------------
+
+    def _factor(self) -> float:
+        if self.calibration_store is not None and self.calibration_key:
+            try:
+                return float(self.calibration_store.get(self.calibration_key))
+            except Exception:  # noqa: BLE001 - fall back to uncalibrated
+                return 1.0
+        return 1.0
+
+    def _measure(self, request: Any) -> tuple[int, int, float]:
+        """Return ``(raw_estimate, calibratedMeasurement, factor)`` for the FULL
+        final request (messages + system + tools + per-message overhead)."""
+        from .context import (
+            PER_MESSAGE_OVERHEAD_TOKENS,
+            estimate_text_tokens,
+            messages_tokens,
+            tool_schema_tokens,
+        )
+
+        system_text = ""
+        system_message = getattr(request, "system_message", None)
+        if system_message is not None:
+            content = getattr(system_message, "content", "")
+            if isinstance(content, str):
+                system_text = content
+            elif isinstance(content, list):
+                system_text = "\n".join(
+                    str(part.get("text", "")) for part in content if isinstance(part, dict)
+                )
+        messages = list(request.messages or [])
+        raw = messages_tokens(messages)
+        raw += tool_schema_tokens(getattr(request, "tools", None) or [])
+        if system_text:
+            raw += estimate_text_tokens(system_text)
+        raw += PER_MESSAGE_OVERHEAD_TOKENS * len(messages)
+        factor = self._factor()
+        return raw, int(round(raw * factor)), factor
+
+    # -- staged reductions (all request-local) --------------------------------
+
+    @staticmethod
+    def _with_content(msg: Any, content: Any) -> Any:
+        """Copy of ``msg`` with replaced content (keeps ids/pairing intact)."""
+        try:
+            return msg.model_copy(update={"content": content})
+        except Exception:  # noqa: BLE001 - older pydantic / message classes
+            try:
+                return msg.copy(update={"content": content})
+            except Exception:  # noqa: BLE001
+                return msg
+
+    def _strip_blobs_and_degrade_images(self, messages: list[Any]) -> tuple[list[Any], int]:
+        """S1: scrub base64/data-URL text runs and degrade stale image blocks.
+
+        A truncated base64 blob is a CORRUPTED binary — the model can never use
+        it, it only burns tokens (~36k per 50k chars). Old images are replaced
+        with a text placeholder; the most recent ``KEEP_RECENT_IMAGES`` image
+        blocks survive (they are the ones the model is currently reasoning
+        about). Returns ``(new_messages, changes)``.
+        """
+        from .context import contains_binary_blob, message_media_count, scrub_text
+
+        # Pass 1 (backwards): decide which image blocks are recent enough to keep.
+        keep_budget = self.KEEP_RECENT_IMAGES
+        keep_marks: list[set[int]] = []
+        for msg in reversed(messages):
+            content = getattr(msg, "content", None)
+            marks: set[int] = set()
+            if isinstance(content, list):
+                for idx in range(len(content) - 1, -1, -1):
+                    part = content[idx]
+                    if isinstance(part, dict) and part.get("type") in ("image", "image_url", "audio", "video", "file"):
+                        if keep_budget > 0:
+                            marks.add(idx)
+                            keep_budget -= 1
+            keep_marks.append(marks)
+        keep_marks.reverse()
+
+        changed = 0
+        new_messages: list[Any] = []
+        for msg, marks in zip(messages, keep_marks):
+            content = getattr(msg, "content", None)
+            if isinstance(content, list):
+                new_content: list[Any] = []
+                msg_changed = False
+                for idx, part in enumerate(content):
+                    if isinstance(part, dict):
+                        ptype = part.get("type")
+                        if ptype in ("image", "image_url", "audio", "video", "file"):
+                            if idx in marks:
+                                new_content.append(part)
+                            else:
+                                new_content.append(
+                                    {"type": "text", "text": f"[{ptype} removed from context to save space]"}
+                                )
+                                msg_changed = True
+                            continue
+                        if ptype == "text":
+                            text = part.get("text") or ""
+                            if contains_binary_blob(text):
+                                scrubbed, n = scrub_text(text)
+                                if n:
+                                    part = {**part, "text": scrubbed}
+                                    msg_changed = True
+                    new_content.append(part)
+                if msg_changed:
+                    changed += 1
+                    msg = self._with_content(msg, new_content)
+            elif isinstance(content, str) and contains_binary_blob(content):
+                scrubbed, n = scrub_text(content)
+                if n:
+                    changed += 1
+                    msg = self._with_content(msg, scrubbed)
+            new_messages.append(msg)
+        return new_messages, changed
+
+    def _clear_tool_results(self, messages: list[Any], keep: int) -> list[Any]:
+        """S2: forced ClearToolUsesEdit pass (trigger=0 ⇒ always applies)."""
+        try:
+            from langchain.agents.middleware import ClearToolUsesEdit
+
+            edit = ClearToolUsesEdit(
+                trigger=0,
+                keep=keep,
+                placeholder="[cleared]",
+                exclude_tools=("write_todos", "memory", "memory_read", "ask_user"),
+            )
+            working = [m.model_copy() if hasattr(m, "model_copy") else m for m in messages]
+            edit.apply(working, count_tokens=self._cjk_counter)
+            return working
+        except Exception:  # noqa: BLE001 - reduction step must never break a turn
+            logger.warning("guard: tool-result clearing failed", exc_info=True)
+            return messages
+
+    @staticmethod
+    def _cjk_counter(messages: Iterable[Any]) -> int:
+        return sum(_msg_tokens(m) for m in messages)
+
+    def _truncate_old_tool_results(self, messages: list[Any]) -> tuple[list[Any], int]:
+        """S3: truncate oversized tool results, oldest first."""
+        changed = 0
+        new_messages = list(messages)
+        for idx, msg in enumerate(new_messages):
+            if not isinstance(msg, ToolMessage):
+                continue
+            content = getattr(msg, "content", None)
+            if not isinstance(content, str) or len(content) <= self.TOOL_RESULT_KEEP_CHARS:
+                continue
+            new_messages[idx] = self._with_content(
+                msg, content[: self.TOOL_RESULT_KEEP_CHARS] + "\n…[truncated by context guard]"
+            )
+            changed += 1
+        return new_messages, changed
+
+    def _drop_mcp_tools(self, tools: list[Any] | None) -> tuple[list[Any] | None, int]:
+        """S4: drop optional MCP tool schemas (they ride on EVERY request).
+
+        Handles both ``BaseTool`` instances and raw schema dicts (ModelRequest
+        accepts either, and the phase gate passes dicts through untouched).
+        """
+        if not tools or self.mcp_tool_names_provider is None:
+            return tools, 0
+        try:
+            mcp_names = self.mcp_tool_names_provider()
+        except Exception:  # noqa: BLE001 - a broken provider never gates the guard
+            return tools, 0
+        if not mcp_names:
+            return tools, 0
+
+        def _tool_name(tool: Any) -> str:
+            name = getattr(tool, "name", "")
+            if name:
+                return str(name)
+            if isinstance(tool, dict):
+                fn = tool.get("function")
+                if isinstance(fn, dict):
+                    return str(fn.get("name") or "")
+                return str(tool.get("name") or "")
+            return ""
+
+        kept = [t for t in tools if _tool_name(t) not in mcp_names]
+        return kept, len(tools) - len(kept)
+
+    def _emergency_drop_oldest(self, messages: list[Any], limit: int, factor: float) -> tuple[list[Any], int]:
+        """S5: drop oldest messages until under limit (AI/Tool pairing safe)."""
+        from .context import messages_tokens
+
+        working = list(messages)
+        dropped = 0
+        while len(working) > 4:
+            measured = int(round(messages_tokens(working) * factor))
+            if measured <= limit * self.TARGET_RATIO:
+                break
+            working.pop(0)
+            dropped += 1
+            while working and isinstance(working[0], ToolMessage):
+                working.pop(0)
+                dropped += 1
+        return working, dropped
+
+    # -- guard core -----------------------------------------------------------
+
+    def _guard(self, request: Any) -> Any:
+        """Measure the final request; apply staged reductions when over limit.
+
+        Returns the (possibly overridden) request, or raises
+        :class:`ContextOverflowError` when nothing fits.
+        """
+        raw, measured, factor = self._measure(request)
+        self.last_raw_estimate = raw
+        self.last_measured = measured
+        self.last_steps = []
+        if measured <= self.limit_tokens:
+            return request
+
+        logger.warning(
+            "context guard: request %s tokens (calibrated, factor=%.2f) exceeds effective limit %s; reducing",
+            measured, factor, self.limit_tokens,
+        )
+        self._emit_telemetry(request, measured, "reducing")
+
+        overrides: dict[str, Any] = {}
+        messages = list(request.messages or [])
+        tools = getattr(request, "tools", None)
+
+        # S1 — binary blobs + stale images (cheapest, zero information loss:
+        # truncated base64 was already useless).
+        messages, n1 = self._strip_blobs_and_degrade_images(messages)
+        if n1:
+            self.last_steps.append(f"blobs/images:{n1}")
+            overrides["messages"] = messages
+
+        def _current() -> tuple[int, int]:
+            probe = request.override(**({"messages": messages} | ({"tools": tools} if tools is not None else {})))
+            raw_now, measured_now, _ = self._measure(probe)
+            self.last_raw_estimate = raw_now
+            return raw_now, measured_now
+
+        _, measured = _current()
+        if measured <= self.limit_tokens * self.TARGET_RATIO:
+            return self._finalize(request, overrides, measured)
+
+        # S2 — clear stale tool results (keep=3, then keep=1).
+        for keep in (3, 1):
+            messages = self._clear_tool_results(messages, keep)
+            overrides["messages"] = messages
+            self.last_steps.append(f"clear_tools_keep{keep}")
+            _, measured = _current()
+            if measured <= self.limit_tokens * self.TARGET_RATIO:
+                return self._finalize(request, overrides, measured)
+
+        # S3 — truncate the oldest oversized tool results.
+        messages, n3 = self._truncate_old_tool_results(messages)
+        if n3:
+            overrides["messages"] = messages
+            self.last_steps.append(f"truncate_tools:{n3}")
+            _, measured = _current()
+            if measured <= self.limit_tokens * self.TARGET_RATIO:
+                return self._finalize(request, overrides, measured)
+
+        # S4 — drop optional MCP tool schemas.
+        tools, n4 = self._drop_mcp_tools(tools)
+        if n4:
+            overrides["tools"] = tools
+            self.last_steps.append(f"drop_mcp_tools:{n4}")
+            _, measured = _current()
+            if measured <= self.limit_tokens * self.TARGET_RATIO:
+                return self._finalize(request, overrides, measured)
+
+        # S5 — emergency drop of the oldest messages.
+        messages, n5 = self._emergency_drop_oldest(messages, self.limit_tokens, factor)
+        if n5:
+            overrides["messages"] = messages
+            self.last_steps.append(f"drop_oldest:{n5}")
+            _, measured = _current()
+            if measured <= self.limit_tokens:
+                return self._finalize(request, overrides, measured)
+
+        # S6 — nothing fits: raise so the runtime emits a friendly terminal
+        # event + one-click compacted retry instead of the provider's raw 400.
+        self._emit_telemetry(request, measured, "overflow")
+        raise ContextOverflowError(
+            f"request still {measured} tokens after staged reductions (limit {self.limit_tokens})",
+            measured_tokens=measured,
+            limit_tokens=self.limit_tokens,
+            steps=self.last_steps,
+        )
+
+    def _finalize(self, request: Any, overrides: dict[str, Any], measured: int) -> Any:
+        if not overrides:
+            return request
+        self._emit_telemetry(request, measured, "reduced")
+        return request.override(**overrides)
+
+    def _emit_telemetry(self, request: Any, measured: int, status: str) -> None:
+        try:
+            runtime = getattr(request, "runtime", None)
+            writer = getattr(runtime, "stream_writer", None)
+            if writer is None:
+                return
+            writer(
+                {
+                    "type": "context_guard",
+                    "status": status,
+                    "measured_tokens": measured,
+                    "limit_tokens": self.limit_tokens,
+                    "calibration_factor": round(self._factor(), 3),
+                    "steps": list(self.last_steps),
+                }
+            )
+        except Exception:  # noqa: BLE001 - telemetry must never break a turn
+            logger.debug("context_guard telemetry skipped", exc_info=True)
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        return handler(self._guard(request))
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        return await handler(self._guard(request))
+
+
+# ---------------------------------------------------------------------------
 # Agent builder – single create_agent graph (official langchain idiom).
 # ---------------------------------------------------------------------------
 
@@ -3395,6 +3841,8 @@ def build_coworker_agent_graph(
     context_window_warning: str | None = None,
     web_capability: str = "",
     browser_capability: str = "",
+    max_output_tokens: int = 0,
+    calibration_key: str = "",
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -3435,12 +3883,26 @@ def build_coworker_agent_graph(
         "\n\n".join(part for part in (web_capability, browser_capability) if part),
         workspace=workspace,
     )
+    # Output reservation: 0 means "unset" upstream, but the LLM call itself
+    # always sends DEFAULT_MAX_OUTPUT_TOKENS — budget against what really goes
+    # over the wire, not the raw zero.
+    from .providers import DEFAULT_MAX_OUTPUT_TOKENS as _DEFAULT_MAX_OUTPUT
+
+    effective_max_output = max_output_tokens if max_output_tokens > 0 else _DEFAULT_MAX_OUTPUT
+    # Closed-loop tokenizer calibration (actual usage / raw estimate), shared by
+    # the summarization meter and the pre-send guard.
+    from .context import get_calibration_store
+
+    calibration_store = get_calibration_store(data_dir) if data_dir is not None else None
+
     # Cheap per-call layer: clear stale tool results (Anthropic-style context
     # editing) so the model never pays for long-dead tool output. Transient —
     # the UI/session history is untouched (two-layer storage). The SAME edit
     # instance also feeds the summarization middleware's prune-aware trigger.
+    # Trigger lives on the EFFECTIVE budget ((window − max_output) × safety),
+    # so the reservation can never be double-spent.
     tool_edit = ClearToolUsesEdit(
-        trigger=int(context_budget_tokens(context_window_tokens or 128_000) * 0.75),
+        trigger=int(context_budget_tokens(context_window_tokens or 128_000, effective_max_output) * 0.75),
         keep=3,
         placeholder="[cleared]",
         exclude_tools=("write_todos", "memory", "memory_read", "ask_user"),
@@ -3454,6 +3916,9 @@ def build_coworker_agent_graph(
         context_window_source=context_window_source,
         context_window_warning=context_window_warning,
         tool_edit=tool_edit,
+        max_output_tokens=effective_max_output,
+        calibration_store=calibration_store,
+        calibration_key=calibration_key,
     )
     middleware: list[Any] = [
         NormalizeMessagesMiddleware(),
@@ -3490,11 +3955,25 @@ def build_coworker_agent_graph(
         except Exception as exc:  # noqa: BLE001 - a broken memory middleware must not break chat
             logger.warning("Memory middleware unavailable: %s", exc)
 
-    # Loop guard (innermost): the model must never re-run the same failing
-    # tool call forever. create_agent's default recursion_limit (9_999) makes
-    # an unguarded loop effectively infinite, so cap identical consecutive
-    # calls here and force a text-only final turn on the hard cap.
+    # Loop guard: the model must never re-run the same failing tool call
+    # forever. create_agent's default recursion_limit (9_999) makes an
+    # unguarded loop effectively infinite, so cap identical consecutive calls
+    # here and force a text-only final turn on the hard cap.
     middleware.append(RepeatedToolCallMiddleware())
+
+    # Context guard (INNERMOST — last in the chain, so it measures the request
+    # after every other middleware's overrides): calibrated measurement of the
+    # FULL final request against ``window − max_output`` with staged reductions.
+    # The window falls back to 128k for runtimes that never resolved one (the
+    # same fallback every other budget uses), so the guard is always armed.
+    context_guard = ContextGuardMiddleware(
+        window_tokens=context_window_tokens or 128_000,
+        max_output_tokens=effective_max_output,
+        calibration_store=calibration_store,
+        calibration_key=calibration_key,
+        mcp_tool_names_provider=mcp_middleware.tool_names,
+    )
+    middleware.append(context_guard)
 
     system_prompt = (
         f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
@@ -3521,6 +4000,7 @@ def build_coworker_agent_graph(
     # tighten the budget when the provider rejects an oversized request.
     try:
         setattr(graph, "_cw_context_middleware", context_middleware)
+        setattr(graph, "_cw_context_guard", context_guard)
     except Exception:  # noqa: BLE001 - best-effort hook
         pass
     return graph
@@ -3577,7 +4057,8 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
         self.memory_manager = memory_manager
         self.project_store = project_store
         self.project_id = project_id or ""
-        self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning = _runtime_context_budget(provider, model_override)
+        self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning, self.max_output_tokens = _runtime_context_budget(provider, model_override)
+        self.provider_vision = bool(getattr(provider, "vision", False))
         self.agent = agent or DEFAULT_AGENT_NAME
 
     def _resolve_project_dir(self) -> str:
@@ -3607,19 +4088,23 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
 
-    @property
-    def _web_tools(self) -> list[Any]:
+    def _web_tools_for(self, session_id: str) -> list[Any]:
         """Web search/fetch tools when enabled, else ``[]``.
 
         The Tavily key is optional (``web_fetch`` is keyless; ``web_search``
         reports the missing-key state to the model). Resolved lazily per turn
         so settings / key changes are picked up on the next run without a
-        restart. A broken config disables web silently.
+        restart. A broken config disables web silently. ``vision`` decides how
+        fetched images are delivered; ``session_id`` scopes externalized bytes.
         """
         try:
             from coworker.web import resolve_web_tools
 
-            return resolve_web_tools(self.data_dir)
+            return resolve_web_tools(
+                self.data_dir,
+                vision=bool(getattr(self, "provider_vision", False)),
+                session_id=session_id,
+            )
         except Exception:  # noqa: BLE001 - a web misconfiguration must never break a turn
             logger.warning("web tools disabled (config error)", exc_info=True)
             return []
@@ -3635,17 +4120,23 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             logger.warning("web capability line unavailable", exc_info=True)
             return ""
 
-    @property
-    def _browser_tool(self) -> Any | None:
+    def _browser_tool_for(self, session_id: str) -> Any | None:
         """Embedded-browser tool when the desktop bridge is up, else ``None``.
 
         Resolved lazily per turn so the tool appears the moment Electron
         registers the bridge. A broken bridge disables the tool silently.
+        ``vision`` (provider capability) decides whether screenshots ride as
+        native image blocks or are externalized to disk; ``session_id`` scopes
+        the screenshot directory for cleanup.
         """
         try:
             from coworker.browser.bridge_client import resolve_browser_tool
 
-            return resolve_browser_tool(self.data_dir)
+            return resolve_browser_tool(
+                self.data_dir,
+                vision=bool(getattr(self, "provider_vision", False)),
+                session_id=session_id,
+            )
         except Exception:  # noqa: BLE001 - a browser misconfiguration must never break a turn
             logger.warning("browser tool disabled (config error)", exc_info=True)
             return None
@@ -3715,6 +4206,10 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 skill_manager=self.skill_manager,
                 emit=self._delegation_event,
                 worker_bus=worker_event_bus,
+                vision=bool(getattr(self, "provider_vision", False)),
+                context_window_tokens=self.context_window_tokens,
+                max_output_tokens=self.max_output_tokens,
+                calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
             )
         except Exception:  # noqa: BLE001 - delegation must never break a turn
             logger.warning("delegation disabled", exc_info=True)
@@ -3754,8 +4249,8 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 memory_rel=memory_rel,
                 delegator=delegator,
                 caller_agent=self.agent,
-                web_tools=self._web_tools,
-                browser_tool=self._browser_tool,
+                web_tools=self._web_tools_for(session_id),
+                browser_tool=self._browser_tool_for(session_id),
                 # WorkerAgent 集成
                 use_worker_enabled=True,
                 language=language,
@@ -3770,6 +4265,9 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
                 worker_mcp_session_manager=self.mcp_session_manager,
                 delegation_emit=self._delegation_emit_live(session_id),
                 worker_bus=worker_event_bus,
+                worker_context_window_tokens=self.context_window_tokens,
+                worker_max_output_tokens=self.max_output_tokens,
+                worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
             ),
             work_mode=work_mode,
             language=language,
@@ -3787,6 +4285,8 @@ class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
             context_window_warning=self.context_window_warning,
             web_capability=self._web_capability_line,
             browser_capability=self._browser_capability_line,
+            max_output_tokens=self.max_output_tokens,
+            calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
         )
         try:
             result = graph.invoke(
@@ -3854,7 +4354,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.project_id = project_id or ""
         self.agent = agent or DEFAULT_AGENT_NAME
         self._delegation_buffer: list[dict[str, Any]] = []
-        self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning = _runtime_context_budget(provider, model_override)
+        self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning, self.max_output_tokens = _runtime_context_budget(provider, model_override)
+        self.provider_vision = bool(getattr(provider, "vision", False))
 
     def _resolve_project_dir(self) -> str:
         """Resolve the project memory dir for this runtime.
@@ -3883,19 +4384,23 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
 
-    @property
-    def _web_tools(self) -> list[Any]:
+    def _web_tools_for(self, session_id: str) -> list[Any]:
         """Web search/fetch tools when enabled, else ``[]``.
 
         The Tavily key is optional (``web_fetch`` is keyless; ``web_search``
         reports the missing-key state to the model). Resolved lazily per turn
         so settings / key changes are picked up on the next run without a
-        restart. A broken config disables web silently.
+        restart. A broken config disables web silently. ``vision`` decides how
+        fetched images are delivered; ``session_id`` scopes externalized bytes.
         """
         try:
             from coworker.web import resolve_web_tools
 
-            return resolve_web_tools(self.data_dir)
+            return resolve_web_tools(
+                self.data_dir,
+                vision=bool(getattr(self, "provider_vision", False)),
+                session_id=session_id,
+            )
         except Exception:  # noqa: BLE001 - a web misconfiguration must never break a turn
             logger.warning("web tools disabled (config error)", exc_info=True)
             return []
@@ -3911,17 +4416,23 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             logger.warning("web capability line unavailable", exc_info=True)
             return ""
 
-    @property
-    def _browser_tool(self) -> Any | None:
+    def _browser_tool_for(self, session_id: str) -> Any | None:
         """Embedded-browser tool when the desktop bridge is up, else ``None``.
 
         Resolved lazily per turn so the tool appears the moment Electron
         registers the bridge. A broken bridge disables the tool silently.
+        ``vision`` (provider capability) decides whether screenshots ride as
+        native image blocks or are externalized to disk; ``session_id`` scopes
+        the screenshot directory for cleanup.
         """
         try:
             from coworker.browser.bridge_client import resolve_browser_tool
 
-            return resolve_browser_tool(self.data_dir)
+            return resolve_browser_tool(
+                self.data_dir,
+                vision=bool(getattr(self, "provider_vision", False)),
+                session_id=session_id,
+            )
         except Exception:  # noqa: BLE001 - a browser misconfiguration must never break a turn
             logger.warning("browser tool disabled (config error)", exc_info=True)
             return None
@@ -3991,6 +4502,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 skill_manager=self.skill_manager,
                 emit=self._delegation_emit_live(session_id),
                 worker_bus=worker_event_bus,
+                vision=bool(getattr(self, "provider_vision", False)),
+                context_window_tokens=self.context_window_tokens,
+                max_output_tokens=self.max_output_tokens,
+                calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
             )
         except Exception:  # noqa: BLE001 - delegation must never break a turn
             logger.warning("delegation disabled", exc_info=True)
@@ -4047,6 +4562,36 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             logger.info("forced context compaction for overflow retry (budget halved)")
         except Exception:  # noqa: BLE001 - best-effort
             logger.warning("overflow compaction failed", exc_info=True)
+
+    def _fold_calibration(self, graph: Any, actual_prompt_tokens: int) -> None:
+        """Feed one real usage observation into the closed-loop calibration.
+
+        Pairs the provider-reported prompt tokens with the guard's RAW pre-send
+        estimate of the same request; the learned factor corrects every future
+        meter/trim/guard decision for this (provider, model).
+        """
+        try:
+            guard = getattr(graph, "_cw_context_guard", None)
+            store = getattr(guard, "calibration_store", None)
+            key = getattr(guard, "calibration_key", "") or ""
+            estimated = int(getattr(guard, "last_raw_estimate", 0) or 0)
+            if store is None or not key or estimated <= 0 or actual_prompt_tokens <= 0:
+                return
+            store.update(key, actual_tokens=actual_prompt_tokens, estimated_tokens=estimated)
+        except Exception:  # noqa: BLE001 - calibration must never break a turn
+            logger.debug("calibration fold skipped", exc_info=True)
+
+    def _fold_calibration_from_error(self, graph: Any, exc: BaseException) -> None:
+        """Learn from an overflow 400: providers report the real prompt size in
+        the rejection message; folding it calibrates the meter immediately."""
+        try:
+            from .context import parse_overflow_actual_tokens
+
+            actual = parse_overflow_actual_tokens(str(exc))
+            if actual:
+                self._fold_calibration(graph, actual)
+        except Exception:  # noqa: BLE001 - best-effort
+            logger.debug("overflow calibration fold skipped", exc_info=True)
 
     @staticmethod
     def _openai_compatible_base_url(provider: ProviderEntry) -> str:
@@ -4113,8 +4658,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     memory_rel=memory_rel,
                     delegator=delegator,
                     caller_agent=self.agent,
-                    web_tools=self._web_tools,
-                    browser_tool=self._browser_tool,
+                    web_tools=self._web_tools_for(session_id),
+                    browser_tool=self._browser_tool_for(session_id),
                     # WorkerAgent 集成
                     use_worker_enabled=True,
                     language=language,
@@ -4129,6 +4674,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     worker_mcp_session_manager=self.mcp_session_manager,
                     delegation_emit=self._delegation_emit_live(session_id),
                     worker_bus=worker_event_bus,
+                    worker_context_window_tokens=self.context_window_tokens,
+                    worker_max_output_tokens=self.max_output_tokens,
+                    worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -4143,6 +4691,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 context_window_warning=self.context_window_warning,
                 web_capability=self._web_capability_line,
             browser_capability=self._browser_capability_line,
+            max_output_tokens=self.max_output_tokens,
+            calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
             )
 
             inputs = {
@@ -4212,6 +4762,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                     # The middleware has no session context, so
                                     # stamp the active session id before forwarding.
                                     yield {**chunk, "session_id": session_id}
+                                elif event_type == "context_guard":
+                                    yield {**chunk, "session_id": session_id}
                                 elif event_type in ("plan_start", "plan_delta", "plan_end"):
                                     parts.append(chunk)
                                     yield chunk
@@ -4236,9 +4788,37 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                             p, c = _normalize_usage(usage)
                                             run_usage["prompt_tokens"] += p
                                             run_usage["completion_tokens"] += c
+                                            # Closed-loop calibration: pair the
+                                            # provider's ACTUAL prompt tokens with
+                                            # the guard's raw pre-send estimate of
+                                            # the very same request.
+                                            self._fold_calibration(graph, p)
                     break
                 except asyncio.CancelledError:
                     raise
+                except ContextOverflowError as exc:
+                    # The pre-send guard already applied every staged reduction
+                    # and the request still does not fit. Emit a precise terminal
+                    # error (never the provider's raw 400) and compact so the
+                    # user's next action starts from a smaller resident set.
+                    logger.warning("context guard overflow: %s", str(exc)[:300])
+                    self.trace_store.record(
+                        "agent_activity", "error", current_trace_context,
+                        {"error": str(exc)[:400], "kind": "context_overflow"},
+                    )
+                    await self._force_compact(graph, inputs, config)
+                    yield {
+                        "type": "error",
+                        "session_id": session_id,
+                        "error": (
+                            "上下文已滿：即使清理了舊工具結果與早期消息，請求仍超出模型可用窗口。"
+                            "已自動壓縮歷史，請點重試或繼續對話。"
+                        ),
+                        "error_code": "context_overflow",
+                        "measured_tokens": exc.measured_tokens,
+                        "limit_tokens": exc.limit_tokens,
+                    }
+                    return
                 except Exception as exc:
                     if (
                         _attempt == 0
@@ -4247,6 +4827,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         and is_context_overflow_error(exc)
                     ):
                         logger.warning("context overflow; compacting and retrying once: %s", str(exc)[:200])
+                        # A provider overflow carries the REAL token count in its
+                        # message — feed it to calibration before retrying so the
+                        # very failure that slipped through corrects the meter.
+                        self._fold_calibration_from_error(graph, exc)
                         await self._force_compact(graph, inputs, config)
                         continue
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
@@ -4353,8 +4937,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         skill_manager=self.skill_manager,
                         memory_store=memory_store,
                         memory_rel=memory_rel,
-                        web_tools=self._web_tools,
-                        browser_tool=self._browser_tool,
+                        web_tools=self._web_tools_for(session_id),
+                        browser_tool=self._browser_tool_for(session_id),
                         # WorkerAgent 集成
                         use_worker_enabled=True,
                         language=language,
@@ -4369,6 +4953,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         worker_mcp_session_manager=self.mcp_session_manager,
                         delegation_emit=self._delegation_emit_live(session_id),
                         worker_bus=worker_event_bus,
+                        worker_context_window_tokens=self.context_window_tokens,
+                        worker_max_output_tokens=self.max_output_tokens,
+                        worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -4383,6 +4970,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 context_window_warning=self.context_window_warning,
                 web_capability=self._web_capability_line,
             browser_capability=self._browser_capability_line,
+            max_output_tokens=self.max_output_tokens,
+            calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of

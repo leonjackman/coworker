@@ -36,6 +36,19 @@ _WEB_FETCH_MAX_BYTES = 5 * 1024 * 1024  # 5MB
 _WEB_FETCH_TIMEOUT_S = 30.0
 _WEB_FETCH_MAX_TIMEOUT_S = 120.0
 
+# Hard cap on the readable content a single fetch returns to the model. The
+# markdownify path previously had NO cap — one heavy page could dump hundreds of
+# KB into a tool result and blow the context window before any trim could act.
+# 100k chars ≈ 26–30k tokens: ample for a full article, bounded for the window.
+WEB_FETCH_MAX_CHARS = 100_000
+_WEB_FETCH_TRUNCATION_NOTE = "\n[content truncated by Coworker to fit context]"
+
+
+def _cap_fetch_text(text: str) -> str:
+    if len(text) <= WEB_FETCH_MAX_CHARS:
+        return text
+    return text[:WEB_FETCH_MAX_CHARS] + _WEB_FETCH_TRUNCATION_NOTE
+
 _CHROME_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
@@ -344,16 +357,16 @@ def fetch_page(url: str, *, timeout_s: float = 30.0, out_format: str = "markdown
 
     if mime == "text/html" or "<html" in text[:2000].lower():
         if out_format == "html":
-            return {"ok": True, "is_image": False, "html": text, "markdown": ""}
+            return {"ok": True, "is_image": False, "html": _cap_fetch_text(text), "markdown": ""}
         if out_format == "text":
-            return {"ok": True, "is_image": False, "markdown": _extract_text(text)}
+            return {"ok": True, "is_image": False, "markdown": _cap_fetch_text(_extract_text(text))}
         try:
-            return {"ok": True, "is_image": False, "markdown": _html_to_markdown(text)}
+            return {"ok": True, "is_image": False, "markdown": _cap_fetch_text(_html_to_markdown(text))}
         except Exception:  # noqa: BLE001 - fall back to plain text extraction
             logger.warning("markdownify failed, falling back to text extraction")
-            return {"ok": True, "is_image": False, "markdown": _extract_text(text)}
+            return {"ok": True, "is_image": False, "markdown": _cap_fetch_text(_extract_text(text))}
 
-    return {"ok": True, "is_image": False, "markdown": text}
+    return {"ok": True, "is_image": False, "markdown": _cap_fetch_text(text)}
 
 
 # ── LangChain tools ────────────────────────────────────────────────────────
@@ -369,11 +382,14 @@ class WebFetchArgs(BaseModel):
     timeout: int = Field(default=30, ge=5, le=120, description="Timeout in seconds (5–120).")
 
 
-def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = None) -> list[Any]:
+def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = None, *, vision: bool = False, data_dir: Path | str | None = None, session_id: str = "") -> list[Any]:
     """Build ``web_search`` / ``web_fetch`` LangChain tools for the agent.
 
     Tools are only constructed when the caller passes a resolved config; the
-    agent wiring decides whether they are enabled / keyed at all.
+    agent wiring decides whether they are enabled / keyed at all. ``vision``
+    decides how fetched IMAGES are delivered: vision providers get a native
+    ``image_url`` block, text-only providers get the bytes saved to disk and a
+    path back — base64 never enters the context as text.
     """
     from langchain_core.tools import tool
 
@@ -415,8 +431,26 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
             if not result.get("ok"):
                 return json.dumps({"error": result.get("error", "fetch failed"), "markdown": ""}, ensure_ascii=False)
             if result.get("is_image"):
+                data_url = str(result.get("data_url", ""))
+                if vision and data_url:
+                    return [
+                        {"type": "text", "text": f"Fetched image from {url}."},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ]
+                # Text-only providers: externalize the bytes, return a path.
+                try:
+                    from coworker.browser.bridge_client import _save_screenshot
+
+                    saved = _save_screenshot(data_url, data_dir, session_id) if data_url else None
+                except Exception:  # noqa: BLE001 - externalization must never break fetch
+                    saved = None
+                if saved:
+                    return json.dumps(
+                        {"error": "", "image_saved_to": saved, "markdown": ""},
+                        ensure_ascii=False,
+                    )
                 return json.dumps(
-                    {"error": "", "image": result.get("data_url", ""), "markdown": ""},
+                    {"error": "", "image": "", "markdown": "(image fetched but not delivered: model has no vision)"},
                     ensure_ascii=False,
                 )
             return json.dumps({"error": "", "markdown": result.get("markdown", "")}, ensure_ascii=False)
@@ -428,7 +462,7 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
 
 # ── Runtime-facing helpers ────────────────────────────────────────────────
 
-def resolve_web_tools(data_dir: Path | str | None) -> list[Any]:
+def resolve_web_tools(data_dir: Path | str | None, *, vision: bool = False, session_id: str = "") -> list[Any]:
     """Web tools for a runtime/sub-agent when web is enabled, else ``[]``.
 
     The key is optional: ``web_fetch`` works without it, and ``web_search``
@@ -441,7 +475,7 @@ def resolve_web_tools(data_dir: Path | str | None) -> list[Any]:
     config = load_web_config(data_dir)
     if not config.enabled:
         return []
-    return build_web_tools(config, get_tavily_key(data_dir))
+    return build_web_tools(config, get_tavily_key(data_dir), vision=vision, data_dir=data_dir, session_id=session_id)
 
 
 def web_capability_status(data_dir: Path | str | None) -> str:

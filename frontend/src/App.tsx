@@ -1414,7 +1414,7 @@ function App() {
       handleStreamWebEvents(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
-          const cu = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) };
+          const cu = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}), ...(event.used_tokens_calibrated != null ? { usedTokensCalibrated: event.used_tokens_calibrated } : {}), ...(event.calibration_factor != null ? { calibrationFactor: event.calibration_factor } : {}), ...(event.effective_window_tokens != null ? { effectiveWindowTokens: event.effective_window_tokens } : {}), ...(event.max_output_tokens != null ? { maxOutputTokens: event.max_output_tokens } : {}) };
           setContextUsage(cu);
         }
         return;
@@ -1842,7 +1842,7 @@ function App() {
       trackBrowserToolEvent(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
-          const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) }; setContextUsage(cu2);
+          const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}), ...(event.used_tokens_calibrated != null ? { usedTokensCalibrated: event.used_tokens_calibrated } : {}), ...(event.calibration_factor != null ? { calibrationFactor: event.calibration_factor } : {}), ...(event.effective_window_tokens != null ? { effectiveWindowTokens: event.effective_window_tokens } : {}), ...(event.max_output_tokens != null ? { maxOutputTokens: event.max_output_tokens } : {}) }; setContextUsage(cu2);
         }
         return;
       }
@@ -2075,7 +2075,7 @@ function App() {
       trackBrowserToolEvent(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
-          const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) }; setContextUsage(cu2);
+          const cu2 = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}), ...(event.used_tokens_calibrated != null ? { usedTokensCalibrated: event.used_tokens_calibrated } : {}), ...(event.calibration_factor != null ? { calibrationFactor: event.calibration_factor } : {}), ...(event.effective_window_tokens != null ? { effectiveWindowTokens: event.effective_window_tokens } : {}), ...(event.max_output_tokens != null ? { maxOutputTokens: event.max_output_tokens } : {}) }; setContextUsage(cu2);
         }
         return;
       }
@@ -2374,7 +2374,7 @@ function App() {
           handleStreamWebEvents(event);
           if (event.type === 'context_usage') {
             if (!event.session_id || event.session_id === sessionIdRef.current) {
-              const cu = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}) };
+              const cu = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}), ...(event.used_tokens_calibrated != null ? { usedTokensCalibrated: event.used_tokens_calibrated } : {}), ...(event.calibration_factor != null ? { calibrationFactor: event.calibration_factor } : {}), ...(event.effective_window_tokens != null ? { effectiveWindowTokens: event.effective_window_tokens } : {}), ...(event.max_output_tokens != null ? { maxOutputTokens: event.max_output_tokens } : {}) };
               setContextUsage(cu);
             }
             return;

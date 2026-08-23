@@ -64,6 +64,10 @@ class Delegator:
         skill_manager: Any | None = None,
         emit: Any | None = None,  # optional callback for delegation SSE frames
         worker_bus: Any | None = None,  # WorkerEventBus for sub-agent internal streams
+        vision: bool = False,  # provider multimodal capability (image delivery mode)
+        context_window_tokens: int = 0,
+        max_output_tokens: int = 0,
+        calibration_key: str = "",
     ):
         self.org_store = org_store
         self.memory_manager = memory_manager
@@ -87,6 +91,10 @@ class Delegator:
         self.skill_manager = skill_manager
         self.emit = emit or (lambda event: None)
         self.worker_bus = worker_bus
+        self.vision = bool(vision)
+        self.context_window_tokens = context_window_tokens
+        self.max_output_tokens = max_output_tokens
+        self.calibration_key = calibration_key
         self._lock = threading.Lock()
 
     # -- validation --------------------------------------------------------
@@ -339,7 +347,7 @@ class Delegator:
         try:
             from coworker.web import resolve_web_tools, web_capability_line
 
-            web_tools = resolve_web_tools(self.data_dir)
+            web_tools = resolve_web_tools(self.data_dir, vision=self.vision, session_id=self.session_id)
             web_capability = web_capability_line(self.data_dir)
         except Exception:  # noqa: BLE001 - delegation must never break on a web misconfig
             web_tools = []
@@ -352,7 +360,7 @@ class Delegator:
             try:
                 from coworker.browser.bridge_client import browser_capability_line, resolve_browser_tool
 
-                browser_tool = resolve_browser_tool(self.data_dir)
+                browser_tool = resolve_browser_tool(self.data_dir, vision=self.vision, session_id=self.session_id)
                 browser_capability = browser_capability_line(self.data_dir)
             except Exception:  # noqa: BLE001 - delegation must never break on a browser misconfig
                 browser_tool = None
@@ -422,6 +430,9 @@ class Delegator:
             worker_bus=self.worker_bus,
             worker_run_id=worker_run_id,
             depth=depth,
+            context_window_tokens=self.context_window_tokens,
+            max_output_tokens=self.max_output_tokens,
+            calibration_key=self.calibration_key,
         )
 
         # 同步调用（delegation 目前是同步的）

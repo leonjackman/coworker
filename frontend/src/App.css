@@ -3712,6 +3712,18 @@ body.bottom-panel-resizing {
   border-color: var(--ring);
 }
 
+.provider-vision-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-vision-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ring);
+}
+
 .provider-message {
   margin: 0;
   color: var(--muted-foreground);
