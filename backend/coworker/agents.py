@@ -1924,7 +1924,24 @@ def _default_title_from_message(user_message: str) -> str:
     return text[:20].rstrip()[:20]
 
 
-def prepare_agent_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+# 每个 prompt 允许的最大 image_url 区块数。对齐 vLLM 服务端
+# --limit-mm-per-prompt.image（常见值 5）；固定常数，不暴露为设置。超过时只保留
+# 最近的图（保证当前这轮附件在内），旧图以文字注记取代，避免把整段视觉历史无上限
+# 塞进每个 prompt 而撞上服务端的图数上限（400 At most N image(s)…）。
+MAX_IMAGES_PER_PROMPT = 5
+
+
+def prepare_agent_messages(
+    messages: list[dict[str, Any]],
+    max_images: int | None = None,
+) -> list[dict[str, Any]]:
+    """为模型准备会话历史。
+
+    多模态 ``list[dict]`` 内容原样透传（交给 LangChain 转成 ``image_url`` 块）。
+    为避免冲破服务端的每 prompt 图数上限，当图片总数超过 ``max_images`` 时只保留
+    最近的图片（当前这轮的附件一定在内），被丢弃的旧图以一段文字注记取代。
+    """
+    limit = int(max_images) if max_images and max_images > 0 else MAX_IMAGES_PER_PROMPT
     prepared: list[dict[str, Any]] = []
     for message in messages:
         role = str(message.get("role", ""))
@@ -1938,7 +1955,46 @@ def prepare_agent_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
         )
     if not prepared:
         prepared.append({"role": "user", "content": ""})
+        return prepared
+    _cap_images_in_prepared(prepared, limit)
     return prepared
+
+
+def _cap_images_in_prepared(prepared: list[dict[str, Any]], max_images: int) -> None:
+    """原地收敛：仅保留最近的 ``max_images`` 个 image_url 区块。
+
+    最旧的图被丢弃；每条被丢弃图片的讯息会补一段合并的文字注记。当前轮（最后）
+    的讯息优先保留，因此当前轮附件一定在内。不修改调用方的原始 content 列表。
+    """
+    positions: list[tuple[int, int]] = []
+    for mi, msg in enumerate(prepared):
+        content = msg.get("content")
+        if isinstance(content, list):
+            for bi, block in enumerate(content):
+                if isinstance(block, dict) and block.get("type") == "image_url":
+                    positions.append((mi, bi))
+    if len(positions) <= max_images:
+        return
+    drop = len(positions) - max_images
+    dropped = set(positions[:drop])  # 按时间顺序 → 最旧在前
+    out: list[dict[str, Any]] = []
+    for mi, msg in enumerate(prepared):
+        content = msg.get("content")
+        if not isinstance(content, list):
+            out.append(msg)
+            continue
+        kept: list[dict[str, Any]] = []
+        msg_dropped = 0
+        for bi, block in enumerate(content):
+            if (mi, bi) in dropped:
+                msg_dropped += 1
+                continue
+            kept.append(block)
+        if msg_dropped:
+            note = f"(已省略 {msg_dropped} 张较早的截图/图片，以符合模型每 prompt 的图片上限)"
+            kept.insert(0, {"type": "text", "text": note})
+        out.append({**msg, "content": kept})
+    prepared[:] = out
 
 
 def _content_chars(content: Any) -> int:
@@ -2285,6 +2341,25 @@ def is_context_overflow_error(exc: BaseException | None) -> bool:
         return False
     text = str(exc).lower()
     return any(pattern in text for pattern in CONTEXT_OVERFLOW_PATTERNS)
+
+
+# Provider "per-prompt image limit" error signatures → automatic single retry
+# with a reduced image set (so a single oversized multimodal prompt doesn't
+# surface the raw 400 to the user).
+IMAGE_LIMIT_PATTERNS = (
+    "at most",
+    "image(s) may be provided",
+    "limit_mm_per_prompt",
+    "too many images",
+    "maximum number of images",
+)
+
+
+def is_image_limit_error(exc: BaseException | None) -> bool:
+    if exc is None:
+        return False
+    text = str(exc).lower()
+    return any(pattern in text for pattern in IMAGE_LIMIT_PATTERNS)
 
 
 def _runtime_context_budget(provider: Any, model_override: str | None = None) -> tuple[int, int, str, str | None, int]:
@@ -4832,6 +4907,20 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         # very failure that slipped through corrects the meter.
                         self._fold_calibration_from_error(graph, exc)
                         await self._force_compact(graph, inputs, config)
+                        continue
+                    if (
+                        _attempt == 0
+                        and not content_parts
+                        and not parts
+                        and is_image_limit_error(exc)
+                    ):
+                        # 服务端对每 prompt 图数设了上限（如 vLLM --limit-mm-per-prompt.image）。
+                        # prepare_agent_messages 已先限流到 MAX_IMAGES_PER_PROMPT，这里作为兜底：
+                        # 极少发生的图数超限（例如服务端上限比预期更低）时，少带图重试点一次，
+                        # 避免把原始 400 直接丢给用户。
+                        logger.warning("image limit overflow; retrying once with a single image: %s", str(exc)[:200])
+                        prepared_messages = prepare_agent_messages(messages, max_images=1)
+                        inputs["messages"] = prepared_messages
                         continue
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
                     # Do NOT yield an error event here before raising: every consumer
