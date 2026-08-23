@@ -94,8 +94,8 @@ class CheckpointManager:
         # persistent DB-file property (set once at startup by the registry's
         # long-lived connection and by _ensure_autovacuum during the
         # sweep) and re-applying it per connection raises "database is locked"
-        # while another writer (e.g. a streaming session's AsyncSqliteSaver) is
-        # active — see the matching note in AgentRuntimeRegistry._open_sync_checkpointer.
+        # while another writer (e.g. the single shared AsyncSqliteSaver) is
+        # active.
         return conn
 
     def _ensure_autovacuum(self, conn: sqlite3.Connection) -> bool:

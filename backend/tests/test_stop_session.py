@@ -28,7 +28,6 @@ import main  # noqa: E402
 
 
 def _clear_state() -> None:
-    main._interrupted_sessions.clear()
     main._stream_tasks.clear()
     for sid in list(main.agent_registry.checkpoint_manager.active_sessions()):
         main.agent_registry.checkpoint_manager.mark_idle(sid)
@@ -43,7 +42,6 @@ def test_force_stop_clears_active_marker():
     main._force_stop_session_stream(sid)
 
     assert sid not in main.agent_registry.checkpoint_manager.active_sessions()
-    assert sid in main._interrupted_sessions, "stop must mark the session interrupted so the next run rebuilds fresh"
 
 
 def test_force_stop_is_idempotent():

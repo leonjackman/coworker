@@ -187,12 +187,10 @@ def _memory_agent_name(project_dir: str, agent_id: str) -> str:
 
 memory_manager.scanner.agent_name_resolver = _memory_agent_name
 workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir, org_store=org_store)
-# Sessions whose in-flight stream was interrupted (client abort / Stop). The
-# next /chat/stream for such a session must NOT continue from the dirty runtime
-# checkpoint (which would make the model keep executing the ORIGINAL task); it
-# rebuilds from the session history instead so the new message becomes the
-# active instruction.
-_interrupted_sessions: set[str] = set()
+# The runtime checkpoint DB is a disposable per-turn scratch (single-writer
+# model): every /chat/stream deletes the session's thread and rebuilds from the
+# session history, so there is no "dirty checkpoint from an aborted turn" to
+# guard against — see _guard_session_not_streaming / forget_runtime_checkpoint.
 agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
 
 # Persistent MCP sessions: start the background loop, pre-warm connections so
@@ -1533,7 +1531,7 @@ async def org_delete_agent(request: OrgAgentDeleteRequest):
     for session in session_store.list_sessions(request.project_id):
         if session.get("agent_id") != request.id:
             continue
-        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
+        await agent_registry.forget_runtime_checkpoint(session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
         _cleanup_session_screenshots(session["id"])
@@ -1830,24 +1828,17 @@ async def chat_stream(request: ChatStreamRequest):
     # submit) would race the graph's SQLite writes on the same thread_id.
     await _guard_session_not_streaming(session_id)
 
-    # The previous turn was interrupted (client abort / Stop): forget the dirty
-    # runtime checkpoint so this turn rebuilds from the session history and the
-    # new user message becomes the active instruction. Otherwise the graph would
-    # continue from the mid-task checkpoint and keep executing the ORIGINAL task
-    # (or a huge accumulated context) instead of following the new message.
-    if session_id in _interrupted_sessions:
-        _interrupted_sessions.discard(session_id)
-        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
+    # The checkpoint DB is a DISPOSABLE per-turn scratch (single-writer model,
+    # cf. codex/opencode): every turn rebuilds from the session history instead
+    # of resuming a runtime checkpoint. Delete the thread so this run starts
+    # fresh from `history + [user_message]` — this also covers crash leftovers
+    # and aborted turns (Stop).
+    await agent_registry.forget_runtime_checkpoint(session_id)
 
     user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
     session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
     snapshot_user_message_id = request.user_message_id or session_store.require(session_id).messages[-1].id
-    # has_runtime_checkpoint opens a fresh sqlite connection; keep it off the
-    # event loop so a transient DB lock can never stall every other request.
-    if runtime.owns_runtime_messages and await asyncio.to_thread(agent_registry.has_runtime_checkpoint, session_id):
-        messages = [user_message]
-    else:
-        messages = history + [user_message]
+    messages = history + [user_message]
 
     async def event_stream():
         terminal_sent = False
@@ -1989,10 +1980,10 @@ async def chat_stream(request: ChatStreamRequest):
         def _on_error(exc):
             # Catch GeneratorExit / asyncio.CancelledError on client disconnect.
             nonlocal terminal_sent
-            # The in-flight turn was interrupted (client abort / Stop). Mark the
-            # session so the NEXT /chat/stream rebuilds from session history
-            # instead of continuing from the dirty runtime checkpoint.
-            _interrupted_sessions.add(session_id)
+            # The in-flight turn was interrupted (client abort / Stop). The turn's
+            # checkpoint thread is deleted by the stream's finally (turn-end
+            # cleanup), and the next /chat/stream deletes it again before starting
+            # fresh from session history — no dirty state survives.
             if accumulated_content and not terminal_sent:
                 # Persist the partial reply with a GENERATED id (not the
                 # client-supplied one) so the frontend's stream-settle
@@ -2069,6 +2060,21 @@ async def chat_stream(request: ChatStreamRequest):
             await asyncio.gather(turn_task, return_exceptions=True)
             agent_registry.checkpoint_manager.mark_idle(session_id)
             session_event_bus.purge(session_id)
+            # The turn is over and the session released. Delete the disposable
+            # checkpoint thread UNLESS the turn paused for an approval/question
+            # (interrupt_emitted): that interrupt checkpoint must survive so the
+            # resume (HITL) can continue the graph. Shielded so the delete still
+            # completes even when the client disconnects right after `done`
+            # (Starlette then cancels this generator, which would otherwise abort
+            # the await mid-delete). The next /chat/stream also deletes the
+            # thread, so a failed delete here is harmless.
+            if not interrupt_emitted:
+                try:
+                    await asyncio.shield(agent_registry.forget_runtime_checkpoint(session_id))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    logger.warning("turn-end checkpoint delete failed for %s", session_id, exc_info=True)
             if snapshot_pre is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, snapshot_user_message_id, resolved_workspace,
@@ -2435,7 +2441,7 @@ async def delete_session(session_id: str):
     # record is already gone and thread ids are UUIDs, so cleanup is safe to
     # run in the background — awaiting it here would push the response past
     # the caller's timeout.
-    asyncio.create_task(asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id))
+    asyncio.create_task(agent_registry.forget_runtime_checkpoint(session_id))
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
     _cleanup_session_screenshots(session_id)
@@ -2566,13 +2572,12 @@ def _force_stop_session_stream(session_id: str) -> None:
     Cancelling the stream-consuming task directly (``_hard_stop_session_stream``)
     makes Stop deterministic: the task's cancellation closes the tracked stream,
     which runs ``mark_idle``, and the explicit ``mark_idle`` below is an
-    idempotent safety net for the case where the graph never unwinds. Marking the
-    session interrupted (same as the client-abort path) makes the NEXT run rebuild
-    from the session history instead of resuming the dirty runtime checkpoint.
+    idempotent safety net for the case where the graph never unwinds. The turn's
+    checkpoint thread is deleted by the stream's finally, and the next run
+    rebuilds fresh from session history anyway.
     """
     _hard_stop_session_stream(session_id)
     agent_registry.checkpoint_manager.mark_idle(session_id)
-    _interrupted_sessions.add(session_id)
 
 
 async def _guard_session_not_streaming(session_id: str) -> None:
@@ -3011,9 +3016,9 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         if dropped_assistant_ids:
             revert_summary = await _revert_turn_changes(session_id, user_message.id, dropped_assistant_ids, mark=True)
         session_store.truncate_from(session_id, user_message.id)
-        # Checkpoint deletion touches SQLite; run off the event loop so a
-        # transient DB writer lock cannot stall unrelated requests.
-        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
+        # Checkpoint delete is routed through the single shared checkpointer
+        # (single-writer model) — no thread needed, never contends.
+        await agent_registry.forget_runtime_checkpoint(session_id)
         session = session_store.require(session_id)
         history = _session_message_history(session)
         referenced_ids = _session_referenced_ids(session)
@@ -3158,6 +3163,16 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
             await asyncio.gather(turn_task, return_exceptions=True)
             agent_registry.checkpoint_manager.mark_idle(session_id)
             session_event_bus.purge(session_id)
+            # Turn over: delete the disposable checkpoint thread unless it paused
+            # for an approval/question (the interrupt checkpoint must survive resume).
+            # Shielded so it completes even if the client disconnects after done.
+            if not interrupt_emitted:
+                try:
+                    await asyncio.shield(agent_registry.forget_runtime_checkpoint(session_id))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    logger.warning("turn-end checkpoint delete failed for %s", session_id, exc_info=True)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, user_message.id, snapshot_workspace,
@@ -3188,9 +3203,9 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             revert_summary = await _revert_turn_changes(session_id, message_id, dropped_assistant_ids, mark=True)
         session_store.update_message_content(session_id, message_id, request.content)
         session_store.truncate_from(session_id, message_id)
-        # Checkpoint deletion touches SQLite; run off the event loop so a
-        # transient DB writer lock cannot stall unrelated requests.
-        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session_id)
+        # Checkpoint delete is routed through the single shared checkpointer
+        # (single-writer model) — no thread needed, never contends.
+        await agent_registry.forget_runtime_checkpoint(session_id)
         session = session_store.require(session_id)
         history = _session_message_history(session)
         referenced_ids = _session_referenced_ids(session)
@@ -3343,6 +3358,16 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             await asyncio.gather(turn_task, return_exceptions=True)
             agent_registry.checkpoint_manager.mark_idle(session_id)
             session_event_bus.purge(session_id)
+            # Turn over: delete the disposable checkpoint thread unless it paused
+            # for an approval/question (the interrupt checkpoint must survive resume).
+            # Shielded so it completes even if the client disconnects after done.
+            if not interrupt_emitted:
+                try:
+                    await asyncio.shield(agent_registry.forget_runtime_checkpoint(session_id))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    logger.warning("turn-end checkpoint delete failed for %s", session_id, exc_info=True)
             if snapshot_pre is not None and snapshot_workspace is not None:
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, message_id, snapshot_workspace,
@@ -3413,7 +3438,7 @@ async def delete_project(project_id: str):
     if not project_store.delete(project_id):
         raise HTTPException(status_code=404, detail=f"project {project_id} not found")
     for session in session_store.list_sessions(project_id):
-        await asyncio.to_thread(agent_registry.forget_runtime_checkpoint, session["id"])
+        await agent_registry.forget_runtime_checkpoint(session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
         _cleanup_session_screenshots(session["id"])
@@ -3879,6 +3904,12 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
     context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
     session_id = str(context.get("session_id") or "")
     memory_manager.note_turn_active(session_id) if session_id else None
+    # A resume re-enters the graph and writes checkpoints on the session's
+    # thread_id. Mark the session active for the resume's duration so the sweep
+    # never trims the interrupt checkpoint mid-resume and the streaming guard
+    # correctly sees the session as busy.
+    if session_id:
+        agent_registry.checkpoint_manager.mark_active(session_id)
     try:
         if not decisions:
             approval_event_bus.close(resume_id)
@@ -3923,6 +3954,17 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
                 pass
         for item in ordered:
             command_approval_store.mark_consumed(item.get("id", ""))
+        # Resume reached a terminal `done`: the turn is over, so the disposable
+        # checkpoint thread is no longer needed — delete it (fresh-start handles
+        # it next turn too, but cleaning here keeps the DB empty). Shielded so
+        # the delete still completes if this background task is cancelled.
+        if done and session_id:
+            try:
+                await asyncio.shield(agent_registry.forget_runtime_checkpoint(session_id))
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                logger.warning("resume checkpoint delete failed for %s", session_id, exc_info=True)
     except Exception as exc:
         # Surface the failure on the bus AND record it in the trace log so a
         # silently-dead resume (answer sent but agent never continues) is
@@ -3950,6 +3992,9 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
         )
     finally:
         approval_event_bus.close(resume_id)
+        # The resume is over: release the session so the next turn can start.
+        if session_id:
+            agent_registry.checkpoint_manager.mark_idle(session_id)
 
 
 @app.get("/command-approvals/events/{resume_id}")

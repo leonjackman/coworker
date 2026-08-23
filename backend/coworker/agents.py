@@ -482,39 +482,87 @@ def agent_run_config(
         },
         "configurable": {
             "thread_id": session_id,
+            # Persist ~1 checkpoint per turn (only at exit / on interrupt) instead
+            # of after every superstep. The checkpoint DB is disposable per-turn,
+            # so mid-run checkpoints would only be garbage that grows the file and
+            # lengthens the SQLite write-lock hold. exit-durability still writes
+            # the interrupt checkpoint durably, so HITL resume keeps working.
+            "__pregel_durability": "exit",
         },
     }
 
 
-def _open_checkpointer(checkpoint_path: Any):
-    """Return a per-stream AsyncSqliteSaver connection for the checkpoint.
+_shared_checkpointer: Any = None
+_shared_checkpointer_conn: Any = None
+_shared_checkpointer_init: Any = None
 
-    Every stream (agent run) gets its OWN sqlite connection for the duration of
-    the run, so concurrent sessions never serialize on a single process-wide
-    connection. WAL mode allows concurrent readers plus brief writer locks, and
-    ``busy_timeout`` makes a writer wait (up to 30s) instead of failing with
-    ``database is locked``. The checkpoint DB is tiny (pruned) so write
-    contention is negligible; this keeps different sessions' agent runs isolated
-    from one another.
+
+def _quarantine_checkpoint_db(db_path: Any) -> None:
+    """Move a corrupt checkpoint DB (and WAL/shm sidecars) aside and rebuild it.
+
+    The checkpoint DB is disposable: it holds only per-turn runtime state that is
+    rebuilt from session JSON, so quarantining (codex-style recovery) is safe and
+    prevents one corrupt file from shipping corruption into every graph run.
     """
-    import aiosqlite
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    import shutil
+
+    backup_dir = Path(str(db_path)).parent / "db-backups"
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        for suffix in ("", "-wal", "-shm"):
+            src = Path(f"{db_path}{suffix}")
+            if src.exists():
+                shutil.move(str(src), str(backup_dir / f"{src.name}.corrupt.{stamp}"))
+        logger.warning("quarantined corrupt checkpoint DB %s -> %s", db_path, backup_dir)
+    except Exception:  # noqa: BLE001 - recovery must never break startup
+        logger.warning("failed to quarantine corrupt checkpoint DB %s", db_path, exc_info=True)
+
+
+async def _get_shared_checkpointer(checkpoint_path: Any) -> Any:
+    """Lazily create the single process-wide AsyncSqliteSaver connection."""
+    global _shared_checkpointer, _shared_checkpointer_conn, _shared_checkpointer_init
+    if _shared_checkpointer is None:
+        if _shared_checkpointer_init is None:
+            _shared_checkpointer_init = asyncio.Lock()
+        async with _shared_checkpointer_init:
+            if _shared_checkpointer is None:
+                import aiosqlite
+                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+                conn = await aiosqlite.connect(str(checkpoint_path), timeout=30.0)
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA busy_timeout=30000")
+                await conn.execute("PRAGMA synchronous=NORMAL")
+                # Do NOT set auto_vacuum per connection: it is a persistent
+                # DB-file property and re-applying it while another writer holds
+                # the lock raises "database is locked" (the checkpoint manager
+                # already guarantees INCREMENTAL mode).
+                saver = AsyncSqliteSaver(conn)
+                await saver.setup()  # create checkpoints/writes tables up-front
+                _shared_checkpointer_conn = conn
+                _shared_checkpointer = saver
+    return _shared_checkpointer
+
+
+def _open_checkpointer(checkpoint_path: Any):
+    """Yield the single process-wide AsyncSqliteSaver (single-writer model).
+
+    Mainstream pattern (cf. opencode's global single-permit semaphore, codex's
+    per-thread single writer): ALL checkpoint I/O — writes, deletes and reads —
+    goes through ONE connection, serialized by the saver's own ``asyncio.Lock``.
+    With ``durability="exit"`` the graph persists ~1 checkpoint per turn, so
+    global serialization is cheap and the SQLite file-level write lock is never
+    contended by parallel sessions. The checkpoint DB is disposable: each turn
+    starts fresh from session history and deletes its thread when it ends, so it
+    never grows into a lock-hogging monolith.
+    """
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
     async def _open():
-        conn = await aiosqlite.connect(str(checkpoint_path), timeout=30.0)
-        try:
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA busy_timeout=30000")
-            await conn.execute("PRAGMA synchronous=NORMAL")
-            # Do NOT set auto_vacuum per connection: it is a persistent DB-file
-            # property and re-applying it while another writer holds the lock
-            # raises "database is locked" (the checkpoint manager already
-            # guarantees INCREMENTAL mode, so this is redundant anyway).
-            yield AsyncSqliteSaver(conn)
-        finally:
-            await conn.close()
+        saver = await _get_shared_checkpointer(checkpoint_path)
+        yield saver
 
     return _open()
 
@@ -4812,12 +4860,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
                 language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
             )
-            if self.checkpoint_manager is not None and self.checkpoint_manager.has_reset_pending(session_id):
-                # A deferred checkpoint delete means LangGraph would otherwise
-                # resume the stale mid-task checkpoint (ignoring the rebuilt
-                # history). Point at a non-existent checkpoint so the run starts
-                # fresh from the input messages.
-                config.setdefault("configurable", {})["checkpoint_id"] = str(uuid.uuid4())
 
             content_parts: list[str] = []
             tool_state: dict[str, dict[str, Any]] = {}
@@ -5240,11 +5282,22 @@ class AgentRuntimeRegistry:
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
         self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
+        # The checkpoint DB is a DISPOSABLE per-turn cache (single-writer model,
+        # cf. codex: SQLite is a rebuildable projection of the authoritative
+        # session JSON). A corrupt DB would otherwise poison every graph run, so
+        # on startup we verify integrity and, if bad, move the file aside and
+        # recreate it — nothing is lost that matters.
+        try:
+            self.checkpoint_conn.execute("PRAGMA quick_check")
+        except sqlite3.DatabaseError:
+            self.checkpoint_conn.close()
+            _quarantine_checkpoint_db(self.checkpoint_path)
+            self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
+            self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
         # Use INCREMENTAL auto_vacuum, NOT FULL. FULL reorganizes the file on
-        # EVERY commit, and because LangGraph writes a full state snapshot at
-        # every graph step, that holds the single global SQLite write lock long
-        # enough for sibling connections (sweep, has_runtime_checkpoint, other
-        # concurrent worker runs) to time out with "database is locked".
+        # EVERY commit, and even with exit-durability a commit can be a large
+        # state blob; FULL would hold the SQLite write lock long enough for other
+        # connections (sweep/clear_all) to time out with "database is locked".
         # INCREMENTAL only frees pages when we explicitly PRAGMA incremental_vacuum
         # (done by the sweep/delete paths), so commits stay cheap. On an existing
         # DB the PRAGMA below is a no-op until a VACUUM rewrites the header — the
@@ -5267,82 +5320,22 @@ class AgentRuntimeRegistry:
         except sqlite3.OperationalError as exc:
             logger.warning("checkpoint auto_vacuum migration skipped at startup: %s", exc)
 
-    def _open_sync_checkpointer(self):
-        # A fresh synchronous connection per call, committed and closed, so it
-        # never holds a lingering lock that contends with the async saver used
-        # during streaming/resume. ``auto_vacuum`` is a persistent DB property
-        # (already set by the checkpoint manager at startup) and cannot be
-        # re-applied per connection — doing so raises "database is locked" when
-        # the async saver is actively writing.
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=5.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        return SqliteSaver(conn), conn
-
-    def has_runtime_checkpoint(self, session_id: str) -> bool:
-        if self.checkpoint_manager.has_reset_pending(session_id):
-            # A deferred checkpoint delete means the stored rows are stale; the
-            # graph must rebuild from session history, not resume them.
-            return False
-        try:
-            saver, conn = self._open_sync_checkpointer()
-        except sqlite3.OperationalError:
-            # The async saver holds the write lock (a stream just ended). Be
-            # conservative and assume a checkpoint exists: chat_stream then keeps
-            # just the new user message and continues from the checkpoint instead
-            # of re-adding the FULL history (which would duplicate context).
-            return True
-        try:
-            return saver.get({"configurable": {"thread_id": session_id}}) is not None
-        except sqlite3.OperationalError:
-            return True
-        finally:
-            try:
-                conn.commit()
-            finally:
-                conn.close()
-
-    def forget_runtime_checkpoint(self, session_id: str) -> bool:
+    async def forget_runtime_checkpoint(self, session_id: str) -> bool:
         """Best-effort checkpoint reset; returns whether the delete completed.
 
-        Runs on the request critical path via ``to_thread``. A writer lock held
-        by a sibling stream must never stall the caller (previously a 30s busy
-        wait x retries = ~1min of no LLM activity). On failure the session is
-        marked reset-pending (so the next run starts fresh instead of resuming
-        stale state) and the rows are cleaned up by a bounded background retry.
+        Runs on the event loop through the single shared ``AsyncSqliteSaver``,
+        so it is serialized with every other checkpoint write/delete (single
+        writer model) and can never contend on SQLite's file-level write lock.
+        The checkpoint DB is disposable per turn, so a failed delete is harmless
+        — the next turn rebuilds from session history anyway.
         """
-        if self.checkpoint_manager.delete_thread(session_id):
+        try:
+            checkpointer = await _get_shared_checkpointer(self.checkpoint_path)
+            await checkpointer.adelete_thread(session_id)
             return True
-        self.checkpoint_manager._mark_reset_pending(session_id)
-        self._schedule_checkpoint_delete_retry(session_id)
-        return False
-
-    def _schedule_checkpoint_delete_retry(self, session_id: str) -> None:
-        """Retry a deferred checkpoint delete off the request path.
-
-        Bounded (~1 minute) and skips the session while a stream is writing its
-        checkpoint. If it still cannot acquire the lock the session is left
-        reset-pending, which keeps graph runs correct (fresh start) and lets a
-        later forget/sweep reclaim the rows.
-        """
-
-        def _retry() -> None:
-            for _ in range(12):
-                time.sleep(5.0)
-                if session_id in self.checkpoint_manager.active_sessions():
-                    continue
-                try:
-                    if self.checkpoint_manager.delete_thread(session_id):
-                        self.checkpoint_manager._clear_reset_pending(session_id)
-                        return
-                except Exception:  # noqa: BLE001 - best-effort cleanup
-                    pass
-            logger.warning("checkpoint delete retry gave up for %s", session_id)
-
-        threading.Thread(target=_retry, daemon=True).start()
-
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+            logger.warning("forget_runtime_checkpoint failed for %s: %s", session_id, exc, exc_info=True)
+            return False
     def _provider_for_request(self, provider_id: str | None, model: str | None) -> ProviderEntry | None:
         if provider_id:
             config = self.provider_manager.load()
@@ -5435,9 +5428,10 @@ class AgentRuntimeRegistry:
         workspace_path: str | None = None, agent: str | None = None, project_id: str | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Reset the session checkpoint and re-run the agent from full history."""
-        # The checkpoint delete touches SQLite; run it off the event loop so a
-        # transient writer lock can never stall every other request in the app.
-        await asyncio.to_thread(self.forget_runtime_checkpoint, session_id)
+        # Routed through the single shared checkpointer (single-writer model) so
+        # the delete is serialized with all other checkpoint I/O and never
+        # contends on SQLite's file-level write lock.
+        await self.forget_runtime_checkpoint(session_id)
         context = {
             "provider_id": provider_id or "",
             "model": model or "",
