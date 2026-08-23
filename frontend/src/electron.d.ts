@@ -107,14 +107,14 @@ declare global {
       redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
       editMessageBegin: (sessionId: string, messageId: string, revertCode: boolean) => Promise<EditBeginResponse>;
       editMessageCancel: (sessionId: string, messageId: string) => Promise<RedoResponse>;
-      streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback, language?: string, assistantMessageId?: string) => Promise<void>;
+      streamRegenerateMessage: (requestId: string, sessionId: string, messageId: string, onEvent: StreamEventCallback, language?: string, assistantMessageId?: string, providerId?: string, model?: string) => Promise<void>;
       streamEditMessage: (
         requestId: string,
         sessionId: string,
         messageId: string,
         content: string,
         onEvent: StreamEventCallback,
-        options?: { work_mode?: string; autonomy?: string; revert_code?: boolean; assistant_message_id?: string },
+        options?: { work_mode?: string; autonomy?: string; revert_code?: boolean; assistant_message_id?: string; provider_id?: string; model?: string },
         language?: string,
       ) => Promise<void>;
       fetchSettings?: () => Promise<{ max_attachment_mb: number; revert_code: boolean }>;

@@ -153,14 +153,14 @@ export interface ChatService {
     messageId: string,
     onEvent: StreamEventCallback,
     signal?: AbortSignalLike,
-    options?: { assistantMessageId?: string },
+    options?: { assistantMessageId?: string; providerId?: string; model?: string },
   ) => Promise<void>;
   streamEditMessage: (
     sessionId: string,
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string; providerId?: string; model?: string },
   ) => Promise<void>;
   fetchSettings: () => Promise<{ max_attachment_mb: number; revert_code: boolean }>;
   saveSettings: (settings: { max_attachment_mb?: number; revert_code?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean }>;
@@ -733,7 +733,7 @@ class ElectronChatService implements ChatService {
     }
   }
 
-  async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike, options?: { assistantMessageId?: string }): Promise<void> {
+  async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike, options?: { assistantMessageId?: string; providerId?: string; model?: string }): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     if (signal?.aborted) {
       throw new DOMException('The operation was aborted.', 'AbortError');
@@ -755,7 +755,7 @@ class ElectronChatService implements ChatService {
       onEvent(event);
     };
     try {
-      await window.electronAPI.streamRegenerateMessage(requestId, sessionId, messageId, wrappedEvent, getLanguage(), options?.assistantMessageId);
+      await window.electronAPI.streamRegenerateMessage(requestId, sessionId, messageId, wrappedEvent, getLanguage(), options?.assistantMessageId, options?.providerId, options?.model);
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
       detachAbortListener();
@@ -767,7 +767,7 @@ class ElectronChatService implements ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string; providerId?: string; model?: string },
   ): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const signal = options?.signal;
@@ -796,6 +796,8 @@ class ElectronChatService implements ChatService {
         ...(options?.autonomy ? { autonomy: options.autonomy } : {}),
         ...(options?.revertCode !== undefined ? { revert_code: options.revertCode } : {}),
         ...(options?.assistantMessageId ? { assistant_message_id: options.assistantMessageId } : {}),
+        ...(options?.providerId ? { provider_id: options.providerId } : {}),
+        ...(options?.model ? { model: options.model } : {}),
       }, getLanguage());
     } finally {
       if (idleTimer) clearTimeout(idleTimer);
@@ -1258,8 +1260,8 @@ class HttpChatService implements ChatService {
     }
   }
 
-  async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike, options?: { assistantMessageId?: string }): Promise<void> {
-    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate`, { language: getLanguage(), ...(options?.assistantMessageId ? { assistant_message_id: options.assistantMessageId } : {}) }, onEvent, signal);
+  async streamRegenerateMessage(sessionId: string, messageId: string, onEvent: StreamEventCallback, signal?: AbortSignalLike, options?: { assistantMessageId?: string; providerId?: string; model?: string }): Promise<void> {
+    await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate`, { language: getLanguage(), ...(options?.assistantMessageId ? { assistant_message_id: options.assistantMessageId } : {}), ...(options?.providerId ? { provider_id: options.providerId } : {}), ...(options?.model ? { model: options.model } : {}) }, onEvent, signal);
   }
 
   async streamEditMessage(
@@ -1267,13 +1269,15 @@ class HttpChatService implements ChatService {
     messageId: string,
     content: string,
     onEvent: StreamEventCallback,
-    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string },
+    options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string; providerId?: string; model?: string },
   ): Promise<void> {
     const payload: Record<string, unknown> = { content, language: getLanguage() };
     if (options?.workMode) payload.work_mode = options.workMode;
     if (options?.autonomy) payload.autonomy = options.autonomy;
     if (options?.revertCode !== undefined) payload.revert_code = options.revertCode;
     if (options?.assistantMessageId) payload.assistant_message_id = options.assistantMessageId;
+    if (options?.providerId) payload.provider_id = options.providerId;
+    if (options?.model) payload.model = options.model;
     await this.streamPost(`/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/edit`, payload, onEvent, options?.signal);
   }
 

@@ -2005,16 +2005,22 @@ function startStreamingRequest(requestId, path, payload, sender, eventName = 'ch
   return openSseStream({ requestId, method: 'POST', path, payload, sender, eventName, idleTimeoutMs: 300_000 });
 }
 
-ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language, assistant_message_id }) => {
-  return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/regenerate`, { language: language || 'zh', ...(assistant_message_id ? { assistant_message_id } : {}) }, event.sender);
+ipcMain.handle('start-regenerate-stream', async (event, { requestId, session_id, message_id, language, assistant_message_id, provider_id, model }) => {
+  const payload = { language: language || 'zh' };
+  if (assistant_message_id) payload.assistant_message_id = assistant_message_id;
+  if (provider_id) payload.provider_id = provider_id;
+  if (model) payload.model = model;
+  return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/regenerate`, payload, event.sender);
 });
 
-ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, revert_code, assistant_message_id, language }) => {
+ipcMain.handle('start-edit-stream', async (event, { requestId, session_id, message_id, content, work_mode, autonomy, revert_code, assistant_message_id, language, provider_id, model }) => {
   const payload = { content, language: language || 'zh' };
   if (work_mode != null) payload.work_mode = work_mode;
   if (autonomy != null) payload.autonomy = autonomy;
   if (revert_code != null) payload.revert_code = !!revert_code;
   if (assistant_message_id) payload.assistant_message_id = assistant_message_id;
+  if (provider_id) payload.provider_id = provider_id;
+  if (model) payload.model = model;
   return startStreamingRequest(requestId, `/sessions/${encodeURIComponent(session_id)}/messages/${encodeURIComponent(message_id)}/edit`, payload, event.sender);
 });
 

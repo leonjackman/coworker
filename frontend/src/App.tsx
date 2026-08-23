@@ -1972,12 +1972,15 @@ function App() {
       }
     };
     try {
+      const selectedProvider = providers.find((p) => p.id === selectedModel);
       await chatService.streamEditMessage(currentSessionId, messageId, trimmed, handleEvent, {
         signal: controller.signal,
         workMode,
         autonomy,
         revertCode,
         assistantMessageId,
+        providerId: selectedModel,
+        ...(selectedProvider?.model ? { model: selectedProvider.model } : {}),
       });
       await refreshSessions();
       await refreshProjects();
@@ -2206,7 +2209,12 @@ function App() {
       }
     };
     try {
-      await chatService.streamRegenerateMessage(currentSessionId, triggerUserMessageId || messageId, handleEvent, controller.signal, { assistantMessageId });
+      const selProv = providers.find((p) => p.id === selectedModel);
+      await chatService.streamRegenerateMessage(currentSessionId, triggerUserMessageId || messageId, handleEvent, controller.signal, {
+        assistantMessageId,
+        providerId: selectedModel,
+        ...(selProv?.model ? { model: selProv.model } : {}),
+      });
       await refreshSessions();
       await refreshProjects();
       setChangesRefreshKey((value) => value + 1);

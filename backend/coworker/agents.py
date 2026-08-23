@@ -2347,7 +2347,6 @@ def is_context_overflow_error(exc: BaseException | None) -> bool:
 # with a reduced image set (so a single oversized multimodal prompt doesn't
 # surface the raw 400 to the user).
 IMAGE_LIMIT_PATTERNS = (
-    "at most",
     "image(s) may be provided",
     "limit_mm_per_prompt",
     "too many images",
@@ -2873,7 +2872,10 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         try:
             messages = state.get("messages", [])
             total = sum(_msg_chars(m) for m in messages)
-            used_tokens = sum(_estimate_tokens(_message_text(m)) for m in messages)
+            # Same accounting as the trim/guard decision (`_msg_tokens` counts
+            # media blocks at the per-item vision cost), so the bar and the
+            # `compressed` flag never disagree on image-heavy sessions.
+            used_tokens = sum(_msg_tokens(m) for m in messages)
             window_tokens = self.context_window_tokens or round(
                 self.configured_budget / (CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN)
             )
@@ -3624,19 +3626,26 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             except Exception:  # noqa: BLE001
                 return msg
 
-    def _strip_blobs_and_degrade_images(self, messages: list[Any]) -> tuple[list[Any], int]:
+    def _strip_blobs_and_degrade_images(
+        self,
+        messages: list[Any],
+        *,
+        keep_images: int | None = None,
+        scrub: bool = True,
+    ) -> tuple[list[Any], int]:
         """S1: scrub base64/data-URL text runs and degrade stale image blocks.
 
         A truncated base64 blob is a CORRUPTED binary — the model can never use
         it, it only burns tokens (~36k per 50k chars). Old images are replaced
-        with a text placeholder; the most recent ``KEEP_RECENT_IMAGES`` image
-        blocks survive (they are the ones the model is currently reasoning
-        about). Returns ``(new_messages, changes)``.
+        with a text placeholder; the most recent ``keep_images`` image blocks
+        survive (they are the ones the model is currently reasoning about).
+        Returns ``(new_messages, changes)``.
         """
-        from .context import contains_binary_blob, message_media_count, scrub_text
+        from .context import contains_binary_blob, scrub_text
+
+        keep_budget = self.KEEP_RECENT_IMAGES if keep_images is None else max(0, int(keep_images))
 
         # Pass 1 (backwards): decide which image blocks are recent enough to keep.
-        keep_budget = self.KEEP_RECENT_IMAGES
         keep_marks: list[set[int]] = []
         for msg in reversed(messages):
             content = getattr(msg, "content", None)
@@ -3671,17 +3680,18 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                                 msg_changed = True
                             continue
                         if ptype == "text":
-                            text = part.get("text") or ""
-                            if contains_binary_blob(text):
-                                scrubbed, n = scrub_text(text)
-                                if n:
-                                    part = {**part, "text": scrubbed}
-                                    msg_changed = True
+                            if scrub:
+                                text = part.get("text") or ""
+                                if contains_binary_blob(text):
+                                    scrubbed, n = scrub_text(text)
+                                    if n:
+                                        part = {**part, "text": scrubbed}
+                                        msg_changed = True
                     new_content.append(part)
                 if msg_changed:
                     changed += 1
                     msg = self._with_content(msg, new_content)
-            elif isinstance(content, str) and contains_binary_blob(content):
+            elif isinstance(content, str) and scrub and contains_binary_blob(content):
                 scrubbed, n = scrub_text(content)
                 if n:
                     changed += 1
@@ -3710,6 +3720,13 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     @staticmethod
     def _cjk_counter(messages: Iterable[Any]) -> int:
         return sum(_msg_tokens(m) for m in messages)
+
+    @staticmethod
+    def _image_count(messages: Iterable[Any]) -> int:
+        """Total image/audio/video/file blocks across the request's messages."""
+        from .context import message_media_count
+
+        return sum(message_media_count(m) for m in messages)
 
     def _truncate_old_tool_results(self, messages: list[Any]) -> tuple[list[Any], int]:
         """S3: truncate oversized tool results, oldest first."""
@@ -3786,6 +3803,20 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         self.last_measured = measured
         self.last_steps = []
         if measured <= self.limit_tokens:
+            # Even when comfortably under the token budget, enforce the per-prompt
+            # IMAGE-COUNT ceiling (e.g. vLLM --limit-mm-per-prompt.image=5): 6+
+            # in-turn screenshots fit easily inside the window but still 400 the
+            # provider. Cheap pre-check; the common path stays untouched.
+            messages = list(request.messages or [])
+            if self._image_count(messages) > MAX_IMAGES_PER_PROMPT:
+                messages, _n = self._strip_blobs_and_degrade_images(
+                    messages, keep_images=MAX_IMAGES_PER_PROMPT, scrub=False
+                )
+                # Re-sync the raw estimate so the closed-loop calibration pairs
+                # the ACTUAL sent request (degraded images) with its usage.
+                raw_capped, _measured, _ = self._measure(request.override(messages=messages))
+                self.last_raw_estimate = raw_capped
+                return self._finalize(request, {"messages": messages}, measured)
             return request
 
         logger.warning(

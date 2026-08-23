@@ -44,7 +44,6 @@ from coworker.agents import (
     normalize_autonomy,
     normalize_work_mode,
     _runtime_context_budget,
-    _estimate_tokens,
 )
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
@@ -2496,11 +2495,19 @@ class EditMessageRequest(BaseModel):
     language: Language = "zh"
     revert_code: bool = True
     assistant_message_id: str = ""
+    # Provider/model for the re-run. When empty, falls back to the session's
+    # last-run provider/model (legacy clients).
+    provider_id: str = ""
+    model: str = ""
 
 
 class RegenerateRequest(BaseModel):
     language: Language = "zh"
     assistant_message_id: str = ""
+    # Provider/model for the re-run. When empty, falls back to the session's
+    # last-run provider/model (legacy clients).
+    provider_id: str = ""
+    model: str = ""
 
 
 class EditBeginRequest(BaseModel):
@@ -2553,6 +2560,44 @@ def _provider_id_for_model(provider_name: str, model: str) -> str:
     return ""
 
 
+def _provider_name_for_id(provider_id: str) -> str:
+    """Provider display name for a provider id ('' when unknown/disabled)."""
+    if not provider_id:
+        return ""
+    try:
+        provider = provider_manager.load().find_enabled(provider_id)
+        return provider.name if provider is not None else ""
+    except Exception:  # noqa: BLE001 - best-effort
+        return ""
+
+
+def _resolve_run_provider(session, provider_id: str, model: str) -> tuple[str, str]:
+    """Resolve ``(provider_id, model)`` for regenerate/edit re-runs.
+
+    Prefers the caller's explicit provider/model (the current UI selection — the
+    same source /chat/stream and the context-usage preview use), so every run
+    path and the topbar meter agree on the window. Falls back to the session's
+    last-run provider/model, then to the default enabled provider, so invalid
+    selections and legacy clients keep working.
+    """
+    try:
+        config = provider_manager.load()
+    except Exception:  # noqa: BLE001 - a broken config must never block a run
+        return "", ""
+    requested = config.find_enabled(provider_id) if provider_id else None
+    if requested is not None:
+        return requested.id, (model or requested.model)
+    provider_name, stored_model = _session_provider_context(session)
+    if provider_name:
+        sid = _provider_id_for_model(provider_name, stored_model)
+        if sid:
+            return sid, stored_model or model
+    first = next((p for p in config.providers if p.enabled), None)
+    if first is not None:
+        return first.id, (model or first.model)
+    return "", ""
+
+
 def _session_message_history(session) -> list[dict[str, Any]]:
     """Build the message history (role/content) that should be replayed when
     re-running the agent from a truncated point."""
@@ -2588,34 +2633,87 @@ def _session_provider_context(session) -> tuple[str, str]:
     return "", ""
 
 
+def _history_content_chars(content) -> int:
+    """Char length of a stored message's TEXT blocks only (media skipped).
+
+    Mirrors the runtime meter (``_msg_chars`` → ``_message_text``), which counts
+    images at a per-item vision cost, never as text. Counting ``str(content)``
+    on a multimodal list would charge the full base64 data URL as ~400x too many
+    tokens, making every image-bearing session preview as "full".
+    """
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        total = 0
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                total += len(str(part.get("text") or ""))
+        return total
+    return 0
+
+
+def _history_content_tokens(content) -> int:
+    """Token estimate of a stored message's content, matching the runtime meter.
+
+    Text blocks use the CJK/base64-aware estimator; media blocks (image/audio/
+    video/file) are charged the per-item vision cost — the same accounting as
+    ``coworker.context.message_tokens``.
+    """
+    from coworker.context import TOKENS_PER_IMAGE_DEFAULT, estimate_text_tokens
+
+    if isinstance(content, str):
+        return estimate_text_tokens(content)
+    if isinstance(content, list):
+        total = 0
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get("type")
+            if ptype == "text":
+                total += estimate_text_tokens(str(part.get("text") or ""))
+            elif ptype in ("image", "image_url", "audio", "video", "file"):
+                total += TOKENS_PER_IMAGE_DEFAULT
+            else:
+                total += estimate_text_tokens(str(part.get("text") or part.get("input") or ""))
+        return total
+    return 0
+
+
 def _session_context_usage_snapshot(session, provider_id: str, model: str) -> dict | None:
     """Lightweight context-usage preview for a session, resolved from the
     CURRENT provider config (so older sessions immediately reflect model-window
     changes instead of a stale last-run value). Field shape matches the
     streaming ``context_usage`` event so the client reuses the same mapping.
-    A subsequent run supersedes this with a calibrated figure."""
+    A subsequent run supersedes this with a fresh calibrated figure."""
     pm = provider_manager.load()
     provider = pm.find_enabled(provider_id) if provider_id else None
     if provider is None:
-        enabled = pm.list_enabled()
+        enabled = [p for p in pm.providers if p.enabled]
         provider = enabled[0] if enabled else None
     if provider is None:
         return None
     budget_chars, window_tokens, source, warning, max_output = _runtime_context_budget(provider, model or None)
-    from coworker.context import effective_input_limit
+    from coworker.context import CalibrationStore, effective_input_limit, get_calibration_store
 
     budget_tokens = context_budget_tokens(window_tokens, max_output)
     effective = effective_input_limit(window_tokens, max_output)
     history = _session_message_history(session)
-    total = sum(len(str(m.get("content") or "")) for m in history)
-    used_tokens = sum(_estimate_tokens(str(m.get("content") or "")) for m in history)
+    total = sum(_history_content_chars(m.get("content")) for m in history)
+    used_tokens = sum(_history_content_tokens(m.get("content")) for m in history)
+    # Reuse the same closed-loop calibration factor a real run would apply for
+    # this (provider, model), so the preview does not jump on the next run.
+    calibration_factor = 1.0
+    if provider is not None:
+        resolved_model = (model or None) or provider.model
+        store = get_calibration_store(settings.data_dir)
+        calibration_factor = store.get(CalibrationStore.key_for(provider.id, resolved_model or ""))
     return {
         "type": "context_usage",
         "used_chars": total,
         "budget_chars": budget_chars,
         "used_tokens": used_tokens,
-        "used_tokens_calibrated": used_tokens,
-        "calibration_factor": 1.0,
+        "used_tokens_calibrated": int(round(used_tokens * calibration_factor)),
+        "calibration_factor": round(calibration_factor, 3),
         "budget_tokens": budget_tokens,
         "active_budget_tokens": budget_tokens,
         "window_tokens": window_tokens,
@@ -2871,14 +2969,14 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
         session = session_store.require(session_id)
         history = _session_message_history(session)
         referenced_ids = _session_referenced_ids(session)
-        provider_name, model = _session_provider_context(session)
+        provider_id, model = _resolve_run_provider(session, request.provider_id, request.model)
+        provider_name = _provider_name_for_id(provider_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     work_mode = normalize_work_mode(session.work_mode)
     autonomy = normalize_autonomy(session.autonomy)
     language = request.language
-    provider_id = _provider_id_for_model(provider_name, model)
     try:
         workspace_path = workspace_controller.workspace_for_session(session_id).root
     except ValueError as exc:
@@ -3042,7 +3140,8 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         session = session_store.require(session_id)
         history = _session_message_history(session)
         referenced_ids = _session_referenced_ids(session)
-        provider_name, model = _session_provider_context(session)
+        provider_id, model = _resolve_run_provider(session, request.provider_id, request.model)
+        provider_name = _provider_name_for_id(provider_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -3057,7 +3156,6 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
         except KeyError:
             pass
     language = request.language
-    provider_id = _provider_id_for_model(provider_name, model)
     try:
         workspace_path = workspace_controller.workspace_for_session(session_id).root
     except ValueError as exc:

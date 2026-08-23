@@ -323,6 +323,48 @@ def test_guard_keeps_only_recent_images():
     assert sent_images == 2  # KEEP_RECENT_IMAGES
 
 
+def test_guard_caps_images_even_under_token_budget():
+    # 6 in-turn screenshots fit comfortably inside the token window, yet the
+    # provider's per-prompt image ceiling (e.g. vLLM --limit-mm-per-prompt.image)
+    # would 400 the request — the guard must cap image count even when the
+    # calibrated token measurement is under the effective limit.
+    from coworker.agents import MAX_IMAGES_PER_PROMPT
+
+    guard = _guard(window=200_000, max_output=8192)
+    img = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + "I" * 300}}
+    messages = [
+        HumanMessage(
+            content=[{"type": "text", "text": "screenshots"}]
+            + [dict(img) for _ in range(MAX_IMAGES_PER_PROMPT + 1)]
+        )
+    ]
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return "ok"
+
+    guard.wrap_model_call(FakeRequest(messages), handler)
+    sent = seen[0]
+    assert guard.last_steps == []  # never entered the token-reduction ladder
+    images = sum(
+        1
+        for m in sent.messages
+        if isinstance(getattr(m, "content", None), list)
+        for part in m.content
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    )
+    assert images == MAX_IMAGES_PER_PROMPT
+    note = sum(
+        1
+        for m in sent.messages
+        if isinstance(getattr(m, "content", None), list)
+        for part in m.content
+        if isinstance(part, dict) and part.get("type") == "text" and "removed from context" in part.get("text", "")
+    )
+    assert note == 1  # the dropped image was replaced with a text note
+
+
 def test_guard_raises_when_single_message_exceeds_window():
     guard = _guard(window=10_000, max_output=8192)
     from coworker.agents import ContextOverflowError
