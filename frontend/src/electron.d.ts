@@ -90,6 +90,7 @@ declare global {
       deleteSession: (sessionId: string) => Promise<{ status: string }>;
       renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
       getSession: (sessionId: string) => Promise<SessionDetailResponse>;
+      getContextUsage: (sessionId: string, providerId: string, model: string) => Promise<SessionContextUsageResponse>;
       generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string, language?: string) => Promise<{ status: string; title: string }>;
       listProjects: () => Promise<ProjectsListResponse>;
       createProject: (payload: CreateProjectRequest) => Promise<ProjectResponse>;

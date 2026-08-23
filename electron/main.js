@@ -1981,9 +1981,15 @@ ipcMain.handle('rename-session', async (event, payload) => {
   return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/rename`, 'POST', { title: payload.title });
 });
 
-ipcMain.handle('get-session', async (event, sessionId) => {
-  return requestBackend(`/sessions/${encodeURIComponent(sessionId)}`);
-});
+ ipcMain.handle('get-session', async (event, sessionId) => {
+   return requestBackend(`/sessions/${encodeURIComponent(sessionId)}`);
+ });
+
+ ipcMain.handle('get-context-usage', async (event, sessionId, providerId, model) => {
+   return requestBackend(
+     `/sessions/${encodeURIComponent(sessionId)}/context-usage?provider_id=${encodeURIComponent(providerId || '')}&model=${encodeURIComponent(model || '')}`,
+   );
+ });
 
 ipcMain.handle('generate-title', async (event, payload) => {
   return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/generateTitle`, 'POST', {

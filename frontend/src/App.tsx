@@ -439,6 +439,29 @@ function createMessage(
   };
 }
 
+// Map a raw `context_usage` event (snake_case) into the frontend ContextUsage
+// shape. Shared by the streaming event handler AND the session-open preview
+// fetch so both paths render an identical indicator.
+function mapContextUsage(e: any): ContextUsage {
+  return {
+    usedChars: e.used_chars,
+    budgetChars: e.budget_chars,
+    compressed: e.compressed,
+    usedTokens: e.used_tokens,
+    budgetTokens: e.budget_tokens,
+    windowTokens: e.window_tokens,
+    compacted: e.compacted,
+    compactCount: e.compact_count,
+    windowSource: e.window_source,
+    ...(e.active_budget_tokens != null ? { activeBudgetTokens: e.active_budget_tokens } : {}),
+    ...(e.window_warning ? { windowWarning: e.window_warning } : {}),
+    ...(e.used_tokens_calibrated != null ? { usedTokensCalibrated: e.used_tokens_calibrated } : {}),
+    ...(e.calibration_factor != null ? { calibrationFactor: e.calibration_factor } : {}),
+    ...(e.effective_window_tokens != null ? { effectiveWindowTokens: e.effective_window_tokens } : {}),
+    ...(e.max_output_tokens != null ? { maxOutputTokens: e.max_output_tokens } : {}),
+  };
+}
+
 function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -1414,8 +1437,7 @@ function App() {
       handleStreamWebEvents(event);
       if (event.type === 'context_usage') {
         if (!event.session_id || event.session_id === sessionIdRef.current) {
-          const cu = { usedChars: event.used_chars, budgetChars: event.budget_chars, compressed: event.compressed, usedTokens: event.used_tokens, budgetTokens: event.budget_tokens, windowTokens: event.window_tokens, compacted: event.compacted, compactCount: event.compact_count, windowSource: event.window_source, ...(event.active_budget_tokens != null ? { activeBudgetTokens: event.active_budget_tokens } : {}), ...(event.window_warning ? { windowWarning: event.window_warning } : {}), ...(event.used_tokens_calibrated != null ? { usedTokensCalibrated: event.used_tokens_calibrated } : {}), ...(event.calibration_factor != null ? { calibrationFactor: event.calibration_factor } : {}), ...(event.effective_window_tokens != null ? { effectiveWindowTokens: event.effective_window_tokens } : {}), ...(event.max_output_tokens != null ? { maxOutputTokens: event.max_output_tokens } : {}) };
-          setContextUsage(cu);
+          setContextUsage(mapContextUsage(event));
         }
         return;
       }
@@ -2675,7 +2697,22 @@ function App() {
       );
       setSessionId(sessionIdToOpen);
       sessionIdRef.current = sessionIdToOpen;
-      setContextUsage(null); // 打开会话时不残留上一会话的上下文预算（B10）
+      // 打开会话时立即按「当前模型配置」拉取最新上下文预算，而非残留上一会话
+      // 的旧值（否则旧会话会一直显示改动前的窗口，例如 252k 而非最新的 192k）。
+      // 服务端按当前 providers 配置解析窗口，因此改过 context_window 后旧会话
+      // 也会立刻反映新窗口；下一次真正 run 会用校准值覆盖这里的预览值。
+      const selProvider = providers.find((p) => p.id === selectedModel);
+      const selModel = selProvider?.model ?? runtimeConfig?.selected_model ?? '';
+      void chatService
+        .getContextUsage(sessionIdToOpen, selectedModel, selModel)
+        .then((resp) => {
+          if (sessionIdRef.current === sessionIdToOpen && resp?.context_usage) {
+            setContextUsage(mapContextUsage(resp.context_usage));
+          }
+        })
+        .catch(() => {
+          if (sessionIdRef.current === sessionIdToOpen) setContextUsage(null);
+        });
       pendingProjectIdRef.current = undefined;
       setPendingRequests((current) => current.filter((item) => item.session_id !== sessionIdToOpen));
       void restorePendingForSession(sessionIdToOpen);
@@ -3011,7 +3048,19 @@ function App() {
     if (!provider) return;
     const previous = selectedModel;
     setSelectedModel(provider.id);
-    setContextUsage(null); // 切换模型/服务商后清掉旧的预算显示，避免残留上一个模型的窗口（例如 DeepSeek 1000k）
+    // 切换模型/服务商后，用新模型的「当前窗口」刷新预算显示，避免残留上一个模型的
+    // 窗口（例如 DeepSeek 1000k）；若当前没有打开的会话则清空。
+    const nextModel = provider.model ?? '';
+    if (sessionIdRef.current) {
+      void chatService
+        .getContextUsage(sessionIdRef.current, provider.id, nextModel)
+        .then((resp) => {
+          if (sessionIdRef.current && resp?.context_usage) setContextUsage(mapContextUsage(resp.context_usage));
+        })
+        .catch(() => setContextUsage(null));
+    } else {
+      setContextUsage(null);
+    }
     try {
       const config = await chatService.updateRuntimeConfig({
         selected_provider_id: provider.id,

@@ -630,6 +630,12 @@ export interface PendingRequest {
       };
 
 /** Live context-budget usage surfaced by the backend's context-window middleware. */
+export interface SessionContextUsageResponse {
+  status: string;
+  /** Raw `context_usage` event shape (snake_case) — map via mapContextUsage. */
+  context_usage: Record<string, unknown>;
+}
+
 export interface ContextUsage {
   usedChars: number;
   budgetChars: number;

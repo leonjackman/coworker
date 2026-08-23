@@ -33,6 +33,7 @@ import type {
   EditBeginResponse,
   SessionChangesResponse,
   SessionDetailResponse,
+  SessionContextUsageResponse,
   SessionMessageRecord,
   SessionResponse,
   SessionsListResponse,
@@ -120,6 +121,7 @@ export interface ChatService {
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
   getSession: (sessionId: string) => Promise<SessionDetailResponse>;
+  getContextUsage: (sessionId: string, providerId: string, model: string) => Promise<SessionContextUsageResponse>;
   generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string) => Promise<string>;
   listProjects: () => Promise<ProjectsListResponse>;
   createProject: (request: CreateProjectRequest) => Promise<ProjectResponse>;
@@ -293,6 +295,11 @@ class ElectronChatService implements ChatService {
   async getSession(sessionId: string): Promise<SessionDetailResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.getSession(sessionId);
+  }
+
+  async getContextUsage(sessionId: string, providerId: string, model: string): Promise<SessionContextUsageResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getContextUsage(sessionId, providerId, model);
   }
 
   async listProjects(): Promise<ProjectsListResponse> {
@@ -1018,6 +1025,12 @@ class HttpChatService implements ChatService {
 
   async getSession(sessionId: string): Promise<SessionDetailResponse> {
     return this.request<SessionDetailResponse>(`/sessions/${sessionId}`);
+  }
+
+  async getContextUsage(sessionId: string, providerId: string, model: string): Promise<SessionContextUsageResponse> {
+    return this.request<SessionContextUsageResponse>(
+      `/sessions/${sessionId}/context-usage?provider_id=${encodeURIComponent(providerId)}&model=${encodeURIComponent(model)}`,
+    );
   }
 
   async listProjects(): Promise<ProjectsListResponse> {

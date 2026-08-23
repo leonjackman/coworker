@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       language: language || 'zh',
     }),
   getSession: (sessionId) => ipcRenderer.invoke('get-session', sessionId),
+  getContextUsage: (sessionId, providerId, model) => ipcRenderer.invoke('get-context-usage', sessionId, providerId, model),
   redoMessage: (sessionId, messageId) =>
     ipcRenderer.invoke('redo-message', { session_id: sessionId, message_id: messageId }),
   editMessageBegin: (sessionId, messageId, revertCode) =>

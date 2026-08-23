@@ -34,7 +34,18 @@ except ImportError:  # pragma: no cover - non-POSIX platforms (e.g. Windows)
     termios = None  # type: ignore[assignment]
     _PTY_AVAILABLE = False
 
-from coworker.agents import AgentMode, AgentRuntimeRegistry, Language, format_user_message, normalize_autonomy, normalize_work_mode
+from coworker.agents import (
+    AgentMode,
+    AgentRuntimeRegistry,
+    Language,
+    context_budget_chars,
+    context_budget_tokens,
+    format_user_message,
+    normalize_autonomy,
+    normalize_work_mode,
+    _runtime_context_budget,
+    _estimate_tokens,
+)
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.events import WorkerEventBus, session_event_bus, worker_event_bus
@@ -2575,6 +2586,65 @@ def _session_provider_context(session) -> tuple[str, str]:
         if message.role == "assistant" and message.provider:
             return message.provider, message.model
     return "", ""
+
+
+def _session_context_usage_snapshot(session, provider_id: str, model: str) -> dict | None:
+    """Lightweight context-usage preview for a session, resolved from the
+    CURRENT provider config (so older sessions immediately reflect model-window
+    changes instead of a stale last-run value). Field shape matches the
+    streaming ``context_usage`` event so the client reuses the same mapping.
+    A subsequent run supersedes this with a calibrated figure."""
+    pm = provider_manager.load()
+    provider = pm.find_enabled(provider_id) if provider_id else None
+    if provider is None:
+        enabled = pm.list_enabled()
+        provider = enabled[0] if enabled else None
+    if provider is None:
+        return None
+    budget_chars, window_tokens, source, warning, max_output = _runtime_context_budget(provider, model or None)
+    from coworker.context import effective_input_limit
+
+    budget_tokens = context_budget_tokens(window_tokens, max_output)
+    effective = effective_input_limit(window_tokens, max_output)
+    history = _session_message_history(session)
+    total = sum(len(str(m.get("content") or "")) for m in history)
+    used_tokens = sum(_estimate_tokens(str(m.get("content") or "")) for m in history)
+    return {
+        "type": "context_usage",
+        "used_chars": total,
+        "budget_chars": budget_chars,
+        "used_tokens": used_tokens,
+        "used_tokens_calibrated": used_tokens,
+        "calibration_factor": 1.0,
+        "budget_tokens": budget_tokens,
+        "active_budget_tokens": budget_tokens,
+        "window_tokens": window_tokens,
+        "effective_window_tokens": effective,
+        "max_output_tokens": max_output,
+        "compressed": used_tokens > budget_tokens,
+        "compacted": False,
+        "compact_count": 0,
+        "window_source": source,
+        "window_warning": warning,
+    }
+
+
+@app.get("/sessions/{session_id}/context-usage")
+async def session_context_usage(session_id: str, provider_id: str = "", model: str = ""):
+    # Surface the CURRENT context-window usage for a session without running it,
+    # so opening an older session shows the live window (e.g. 192k after a
+    # context_window change) rather than the stale last-run figure (e.g. 252k).
+    try:
+        session = session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        snap = _session_context_usage_snapshot(session, provider_id, model)
+    except Exception:  # noqa: BLE001 - never let a preview crash the open flow
+        snap = None
+    if snap is None:
+        raise HTTPException(status_code=404, detail="no enabled provider")
+    return {"status": "ok", "context_usage": snap}
 
 
 async def _revert_turn_changes(
