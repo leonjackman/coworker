@@ -3,8 +3,6 @@ import json
 import operator
 import os
 import re
-import sqlite3
-import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -348,23 +346,6 @@ class ReadSessionArgs(BaseModel):
     max_messages: int = Field(default=0, ge=0, le=50, description="Optional cap on how many recent messages to read (0 = no cap).")
 
 
-class AgentRuntime(ABC):
-    mode: AgentMode
-    owns_runtime_messages = False
-
-    def _next_turn_index(self, session_id: str) -> int:
-        if getattr(self, "change_store", None) is None:
-            return 1
-        try:
-            return self.change_store.next_turn_index(session_id)
-        except Exception:
-            return 1
-
-    @abstractmethod
-    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AgentReply:
-        raise NotImplementedError
-
-
 class AgentStreamRuntime(ABC):
     mode: AgentMode
     owns_runtime_messages = False
@@ -493,75 +474,48 @@ def agent_run_config(
 
 
 _shared_checkpointer: Any = None
-_shared_checkpointer_conn: Any = None
 _shared_checkpointer_init: Any = None
 
 
-def _quarantine_checkpoint_db(db_path: Any) -> None:
-    """Move a corrupt checkpoint DB (and WAL/shm sidecars) aside and rebuild it.
+async def _get_shared_checkpointer(checkpoints_dir: Any) -> Any:
+    """Lazily create the single process-wide JSON-file checkpoint saver.
 
-    The checkpoint DB is disposable: it holds only per-turn runtime state that is
-    rebuilt from session JSON, so quarantining (codex-style recovery) is safe and
-    prevents one corrupt file from shipping corruption into every graph run.
+    All checkpoint I/O (writes, deletes, reads) goes through ONE saver whose
+    ``asyncio.Lock`` serializes the per-session file operations. Each session
+    keeps its OWN ``checkpoints/<session_id>.json`` file written atomically
+    (temp + rename), so there is no shared SQLite file to lock and different
+    sessions never contend. With ``durability="exit"`` each turn writes ~1
+    checkpoint, and the file is deleted when the turn ends — the checkpoint DB
+    stays a tiny, disposable per-turn cache.
     """
-    import shutil
-
-    backup_dir = Path(str(db_path)).parent / "db-backups"
-    try:
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        for suffix in ("", "-wal", "-shm"):
-            src = Path(f"{db_path}{suffix}")
-            if src.exists():
-                shutil.move(str(src), str(backup_dir / f"{src.name}.corrupt.{stamp}"))
-        logger.warning("quarantined corrupt checkpoint DB %s -> %s", db_path, backup_dir)
-    except Exception:  # noqa: BLE001 - recovery must never break startup
-        logger.warning("failed to quarantine corrupt checkpoint DB %s", db_path, exc_info=True)
-
-
-async def _get_shared_checkpointer(checkpoint_path: Any) -> Any:
-    """Lazily create the single process-wide AsyncSqliteSaver connection."""
-    global _shared_checkpointer, _shared_checkpointer_conn, _shared_checkpointer_init
+    global _shared_checkpointer, _shared_checkpointer_init
     if _shared_checkpointer is None:
         if _shared_checkpointer_init is None:
             _shared_checkpointer_init = asyncio.Lock()
         async with _shared_checkpointer_init:
             if _shared_checkpointer is None:
-                import aiosqlite
-                from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+                from coworker.checkpoint_store import JsonFileCheckpointSaver
 
-                conn = await aiosqlite.connect(str(checkpoint_path), timeout=30.0)
-                await conn.execute("PRAGMA journal_mode=WAL")
-                await conn.execute("PRAGMA busy_timeout=30000")
-                await conn.execute("PRAGMA synchronous=NORMAL")
-                # Do NOT set auto_vacuum per connection: it is a persistent
-                # DB-file property and re-applying it while another writer holds
-                # the lock raises "database is locked" (the checkpoint manager
-                # already guarantees INCREMENTAL mode).
-                saver = AsyncSqliteSaver(conn)
-                await saver.setup()  # create checkpoints/writes tables up-front
-                _shared_checkpointer_conn = conn
-                _shared_checkpointer = saver
+                _shared_checkpointer = JsonFileCheckpointSaver(Path(checkpoints_dir))
     return _shared_checkpointer
 
 
-def _open_checkpointer(checkpoint_path: Any):
-    """Yield the single process-wide AsyncSqliteSaver (single-writer model).
+def _open_checkpointer(checkpoints_dir: Any):
+    """Yield the single process-wide JSON-file checkpoint saver.
 
-    Mainstream pattern (cf. opencode's global single-permit semaphore, codex's
-    per-thread single writer): ALL checkpoint I/O — writes, deletes and reads —
-    goes through ONE connection, serialized by the saver's own ``asyncio.Lock``.
-    With ``durability="exit"`` the graph persists ~1 checkpoint per turn, so
-    global serialization is cheap and the SQLite file-level write lock is never
-    contended by parallel sessions. The checkpoint DB is disposable: each turn
-    starts fresh from session history and deletes its thread when it ends, so it
-    never grows into a lock-hogging monolith.
+    Every stream shares the one ``JsonFileCheckpointSaver`` (serialized by its
+    ``asyncio.Lock``). Checkpoints are stored as one atomic JSON file per
+    session under ``checkpoints/<session_id>.json`` — the per-session-file
+    persistence model (cf. cline), so the SQLite write-lock / busy_timeout /
+    "database is locked" failure modes are physically impossible. The checkpoint
+    is disposable per turn: each turn starts fresh from session history and
+    deletes its thread when it ends.
     """
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
     async def _open():
-        saver = await _get_shared_checkpointer(checkpoint_path)
+        saver = await _get_shared_checkpointer(checkpoints_dir)
         yield saver
 
     return _open()
@@ -4164,328 +4118,11 @@ def build_coworker_agent_graph(
 # Concrete runtimes
 # ---------------------------------------------------------------------------
 
-class SimulatedSingleAgentRuntime(AgentRuntime):
-    mode: AgentMode = "single"
-
-    def __init__(self, settings: BackendSettings, workspace: Workspace, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None):
-        self.settings = settings
-        self.workspace = workspace
-
-    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AgentReply:
-        if language == "zh":
-            content = (
-                "Coworker 正在以模拟提供商模式运行。\n\n"
-                f"工作区：{self.workspace.root}\n会话：{session_id}\n\n"
-                f"模式：{work_mode} / {autonomy}\n\n你说：{message}"
-            )
-        else:
-            content = (
-                "Coworker is running in simulated provider mode.\n\n"
-                f"Workspace: {self.workspace.root}\nSession: {session_id}\n\n"
-                f"Mode: {work_mode} / {autonomy}\n\nYou said: {message}"
-            )
-        return AgentReply(content=content, mode=self.mode, provider="simulated")
-
-
-class OpenAICompatibleSingleAgentRuntime(AgentRuntime):
-    mode: AgentMode = "single"
-    owns_runtime_messages = True
-
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpointer: Any, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None):
-        llm_cls = ReasonPreservingChatOpenAI.create
-        self.settings = settings
-        self.provider_id = provider.id
-        self.provider_name = provider.name
-        self.model_name = model_override or provider.model
-        self.llm = llm_cls(**_provider_llm_kwargs(self.model_name, provider, 0, self._openai_compatible_base_url(provider)))
-        self.workspace = workspace
-        self.approval_store = approval_store
-        self.trace_store = trace_store
-        self.checkpointer = checkpointer
-        self.change_store = change_store
-        self.session_store = session_store
-        self.referenced_sessions = set(referenced_sessions or set())
-        self.data_dir = data_dir
-        self.mcp_session_manager = mcp_session_manager
-        self.skill_manager = skill_manager
-        self.memory_manager = memory_manager
-        self.project_store = project_store
-        self.project_id = project_id or ""
-        self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning, self.max_output_tokens = _runtime_context_budget(provider, model_override)
-        self.provider_vision = bool(getattr(provider, "vision", False))
-        self.agent = agent or DEFAULT_AGENT_NAME
-
-    def _resolve_project_dir(self) -> str:
-        """Resolve the project memory dir for this runtime.
-
-        Prefers the explicit ``project_id`` threaded at construction time; a
-        single workspace may host two projects (one per mode), so the legacy
-        workspace-path reverse lookup is ambiguous and only used as a fallback
-        for non-project / default-workspace runs.
-        """
-        if self.project_id:
-            try:
-                return self.project_store.memory_dir_for(self.project_id)
-            except (KeyError, ValueError):
-                pass
-        return _resolve_project_memory_dir(self.project_store, str(self.workspace.root))
-
-    @property
-    def _memory(self) -> tuple[Any | None, Any | None, str]:
-        """Return ``(project_scoped_manager, memory_store, agent_memory_rel)``."""
-        if self.memory_manager is None or not getattr(self.memory_manager, "enabled", False):
-            return None, None, ""
-        project_dir = self._resolve_project_dir()
-        view = self.memory_manager.for_project(project_dir, self.agent)
-        agent_rel = ""
-        if project_dir:
-            agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
-        return view, getattr(view, "store", None), agent_rel
-
-    def _web_tools_for(self, session_id: str) -> list[Any]:
-        """Web search/fetch tools when enabled, else ``[]``.
-
-        The Tavily key is optional (``web_fetch`` is keyless; ``web_search``
-        reports the missing-key state to the model). Resolved lazily per turn
-        so settings / key changes are picked up on the next run without a
-        restart. A broken config disables web silently. ``vision`` decides how
-        fetched images are delivered; ``session_id`` scopes externalized bytes.
-        """
-        try:
-            from coworker.web import resolve_web_tools
-
-            return resolve_web_tools(
-                self.data_dir,
-                vision=bool(getattr(self, "provider_vision", False)),
-                session_id=session_id,
-            )
-        except Exception:  # noqa: BLE001 - a web misconfiguration must never break a turn
-            logger.warning("web tools disabled (config error)", exc_info=True)
-            return []
-
-    @property
-    def _web_capability_line(self) -> str:
-        """Capability summary injected into the system prompt (3 states)."""
-        try:
-            from coworker.web import web_capability_line
-
-            return web_capability_line(self.data_dir)
-        except Exception:  # noqa: BLE001
-            logger.warning("web capability line unavailable", exc_info=True)
-            return ""
-
-    def _browser_tool_for(self, session_id: str) -> Any | None:
-        """Embedded-browser tool when the desktop bridge is up, else ``None``.
-
-        Resolved lazily per turn so the tool appears the moment Electron
-        registers the bridge. A broken bridge disables the tool silently.
-        ``vision`` (provider capability) decides whether screenshots ride as
-        native image blocks or are externalized to disk; ``session_id`` scopes
-        the screenshot directory for cleanup.
-        """
-        try:
-            from coworker.browser.bridge_client import resolve_browser_tool
-
-            return resolve_browser_tool(
-                self.data_dir,
-                vision=bool(getattr(self, "provider_vision", False)),
-                session_id=session_id,
-            )
-        except Exception:  # noqa: BLE001 - a browser misconfiguration must never break a turn
-            logger.warning("browser tool disabled (config error)", exc_info=True)
-            return None
-
-    @property
-    def _browser_capability_line(self) -> str:
-        """Capability summary injected into the system prompt (2 states)."""
-        try:
-            from coworker.browser.bridge_client import browser_capability_line
-
-            return browser_capability_line(self.data_dir)
-        except Exception:  # noqa: BLE001
-            logger.warning("browser capability line unavailable", exc_info=True)
-            return ""
-
-    def _nudge_memory(self, session_id: str) -> None:
-        """Phase 2: one call per settled turn; never blocks or raises.
-
-        Uses the project-scoped memory view so that auto-extract writes to the
-        correct ``<project_dir>/<agent>/BASE/MEMORY.md`` instead of ``USER.md``.
-        """
-        try:
-            if self.memory_manager is None:
-                return
-            project_dir = self._resolve_project_dir()
-            scoped = self.memory_manager.for_project(project_dir, self.agent)
-            scoped.after_turn(session_id)
-        except Exception:  # noqa: BLE001 - a memory hiccup must never break a turn
-            logger.warning("memory nudge failed", exc_info=True)
-
-    def _build_delegator(self, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy):
-        """Return a team Delegator when the project org is multi-agent, else None."""
-        try:
-            from .delegation import Delegator
-
-            org_store = getattr(self.memory_manager, "org_store", None)
-            if org_store is None or not getattr(self.memory_manager, "enabled", False):
-                return None
-            project_dir = self._resolve_project_dir()
-            if not project_dir or not org_store.exists(project_dir):
-                return None
-            org = org_store.load(project_dir)
-            if getattr(org, "mode", "single") != "multi":
-                return None
-            if not org_store.is_active(org, self.agent):
-                return None
-            return Delegator(
-                org_store=org_store,
-                memory_manager=self.memory_manager,
-                project_store=self.project_store,
-                workspace=self.workspace,
-                caller_agent=self.agent,
-                project_dir=project_dir,
-                language=language,
-                work_mode=work_mode,
-                autonomy=autonomy,
-                session_id=session_id,
-                provider_name=self.provider_name,
-                model_name=self.model_name,
-                llm=self.llm,
-                trace_store=self.trace_store,
-                approval_store=self.approval_store,
-                change_store=self.change_store,
-                session_store=self.session_store,
-                data_dir=self.data_dir,
-                mcp_session_manager=self.mcp_session_manager,
-                skill_manager=self.skill_manager,
-                emit=self._delegation_event,
-                worker_bus=worker_event_bus,
-                vision=bool(getattr(self, "provider_vision", False)),
-                context_window_tokens=self.context_window_tokens,
-                max_output_tokens=self.max_output_tokens,
-                calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
-            )
-        except Exception:  # noqa: BLE001 - delegation must never break a turn
-            logger.warning("delegation disabled", exc_info=True)
-            return None
-
-    def _delegation_event(self, event: dict[str, Any]) -> None:
-        """Sink for delegation SSE frames (no-op in the sync path)."""
-        return
-
-    @staticmethod
-    def _openai_compatible_base_url(provider: ProviderEntry) -> str:
-        base_url = provider.base_url.rstrip("/")
-        if provider.provider_type == "ollama" and not base_url.endswith("/v1"):
-            return f"{base_url}/v1"
-        return base_url
-
-    def run(self, message: str, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy) -> AgentReply:
-        audit_context = {
-            "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
-            "model": self.model_name, "workspace_path": str(self.workspace.root), "project_id": self.project_id,
-        }
-        current_trace_context = trace_context(
-            session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
-            model=self.model_name, language=language, work_mode=work_mode, autonomy=autonomy, streaming=False,
-        )
-        self.trace_store.record("agent_activity", "start", current_trace_context, {"activity": "run"})
-        turn_index = self._next_turn_index(session_id)
-        memory_view, memory_store, memory_rel = self._memory
-        delegator = self._build_delegator(session_id, language, work_mode, autonomy)
-        graph = build_coworker_agent_graph(
-            self.llm,
-            build_workspace_tools(
-                self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
-                session_store=self.session_store, referenced_sessions=self.referenced_sessions,
-                skill_manager=self.skill_manager,
-                memory_store=memory_store,
-                memory_rel=memory_rel,
-                delegator=delegator,
-                caller_agent=self.agent,
-                web_tools=self._web_tools_for(session_id),
-                browser_tool=self._browser_tool_for(session_id),
-                # WorkerAgent 集成
-                use_worker_enabled=True,
-                language=language,
-                max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
-                worker_llm=self.llm,
-                worker_session_id=session_id,
-                worker_work_mode=work_mode,
-                worker_autonomy=autonomy,
-                worker_provider_name=self.provider_name,
-                worker_approval_store=self.approval_store,
-                worker_data_dir=self.data_dir,
-                worker_mcp_session_manager=self.mcp_session_manager,
-                delegation_emit=self._delegation_emit_live(session_id),
-                worker_bus=worker_event_bus,
-                worker_context_window_tokens=self.context_window_tokens,
-                worker_max_output_tokens=self.max_output_tokens,
-                worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
-            ),
-            work_mode=work_mode,
-            language=language,
-            autonomy=autonomy,
-            checkpointer=self.checkpointer,
-            approval_store=self.approval_store,
-            data_dir=self.data_dir,
-            mcp_session_manager=self.mcp_session_manager,
-            skill_manager=self.skill_manager,
-            memory_manager=memory_view,
-            workspace=self.workspace,
-            context_budget=self.context_budget_chars,
-            context_window_tokens=self.context_window_tokens,
-            context_window_source=self.context_window_source,
-            context_window_warning=self.context_window_warning,
-            web_capability=self._web_capability_line,
-            browser_capability=self._browser_capability_line,
-            max_output_tokens=self.max_output_tokens,
-            calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
-        )
-        try:
-            result = graph.invoke(
-                {
-                    "messages": prepare_agent_messages([{"role": "user", "content": message}]),
-                    "work_mode": work_mode,
-                    "language": language,
-                    "phase": normalize_phase(None, work_mode),
-                    "autonomy": autonomy,
-                },
-                config=agent_run_config(
-                    session_id=session_id, provider=self.provider_name, model=self.model_name,
-                    language=language, work_mode=work_mode, autonomy=autonomy, streaming=False,
-                ),
-            )
-        except Exception as exc:
-            self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
-            raise
-        if "__interrupt__" in result:
-            approvals = record_runtime_interrupts(
-                result["__interrupt__"], self.approval_store,
-                {**audit_context, "language": language, "work_mode": work_mode, "autonomy": autonomy, "referenced_sessions": list(self.referenced_sessions)},
-                mcp_policy_resolver(self.mcp_session_manager),
-            )
-            self.trace_store.record("agent_activity", "pending", current_trace_context, {"approval_ids": [a.get("id", "") for a in approvals]})
-            approval_ids = ", ".join(str(a.get("id", "")) for a in approvals)
-            content = f"Command approval required: {approval_ids}" if language == "en" else f"命令需要审批：{approval_ids}"
-            self._nudge_memory(session_id)
-            return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
-        messages = result.get("messages", []) if isinstance(result, dict) else []
-        content = coerce_message_content(messages[-1]) if messages else ""
-        # Drop any verbatim echo of the injected compaction summary.
-        _mw = getattr(graph, "_cw_context_middleware", None)
-        if _mw is not None:
-            content = _strip_compaction_echo(content, getattr(_mw, "last_summary", "") or "")
-        self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(content)})
-        self._nudge_memory(session_id)
-        return AgentReply(content=content, mode=self.mode, provider=self.provider_name)
-
-
 class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoint_path: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None, checkpoint_manager: Any | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoints_dir: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None, checkpoint_manager: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.settings = settings
         self.provider_id = provider.id
@@ -4495,7 +4132,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.workspace = workspace
         self.approval_store = approval_store
         self.trace_store = trace_store
-        self.checkpoint_path = checkpoint_path
+        self.checkpoints_dir = Path(checkpoints_dir)
         self.checkpoint_manager = checkpoint_manager
         self.change_store = change_store
         self.session_store = session_store
@@ -4802,7 +4439,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         memory_view, memory_store, memory_rel = self._memory
         delegator = self._build_delegator(session_id, language, work_mode, autonomy)
 
-        async with _open_checkpointer(self.checkpoint_path) as checkpointer:
+        async with _open_checkpointer(self.checkpoints_dir) as checkpointer:
             graph = build_coworker_agent_graph(
                 self.llm, build_workspace_tools(
                     self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
@@ -5090,7 +4727,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
         )
 
-        async with _open_checkpointer(self.checkpoint_path) as checkpointer:
+        async with _open_checkpointer(self.checkpoints_dir) as checkpointer:
             memory_view, memory_store, memory_rel = self._memory
             graph = build_coworker_agent_graph(
                 self.llm, build_workspace_tools(
@@ -5259,8 +4896,6 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
 class AgentRuntimeRegistry:
     def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None):
-        from langgraph.checkpoint.sqlite import SqliteSaver
-
         self.settings = settings
         self.session_store = session_store
         self.skill_manager = skill_manager
@@ -5278,59 +4913,45 @@ class AgentRuntimeRegistry:
         self.provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
         self.mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
         self.mcp_session_manager = mcp_session_manager
-        self.checkpoint_path = settings.data_dir / "runtime_checkpoints.sqlite"
-        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
-        self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
-        # The checkpoint DB is a DISPOSABLE per-turn cache (single-writer model,
-        # cf. codex: SQLite is a rebuildable projection of the authoritative
-        # session JSON). A corrupt DB would otherwise poison every graph run, so
-        # on startup we verify integrity and, if bad, move the file aside and
-        # recreate it — nothing is lost that matters.
-        try:
-            self.checkpoint_conn.execute("PRAGMA quick_check")
-        except sqlite3.DatabaseError:
-            self.checkpoint_conn.close()
-            _quarantine_checkpoint_db(self.checkpoint_path)
-            self.checkpoint_conn = sqlite3.connect(str(self.checkpoint_path), check_same_thread=False, timeout=30.0)
-            self.checkpoint_conn.execute("PRAGMA journal_mode=WAL")
-        # Use INCREMENTAL auto_vacuum, NOT FULL. FULL reorganizes the file on
-        # EVERY commit, and even with exit-durability a commit can be a large
-        # state blob; FULL would hold the SQLite write lock long enough for other
-        # connections (sweep/clear_all) to time out with "database is locked".
-        # INCREMENTAL only frees pages when we explicitly PRAGMA incremental_vacuum
-        # (done by the sweep/delete paths), so commits stay cheap. On an existing
-        # DB the PRAGMA below is a no-op until a VACUUM rewrites the header — the
-        # CheckpointManager._ensure_autovacuum call right after repairs it.
-        self.checkpoint_conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        self.checkpoint_conn.execute("PRAGMA busy_timeout=30000")
-        self.checkpoint_conn.execute("PRAGMA synchronous=NORMAL")
-        self.checkpointer = SqliteSaver(self.checkpoint_conn)
+        # Per-session JSON checkpoint files (single-writer model, cf. cline):
+        # each session keeps ONE atomic `checkpoints/<session_id>.json` while its
+        # turn is in flight / an approval is pending, and deletes it at turn end.
+        # There is no shared SQLite file, so write-lock contention / busy_timeout
+        # / "database is locked" are physically impossible.
+        self.checkpoints_dir = settings.data_dir / "checkpoints"
+        self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        # Migrate away from the legacy shared SQLite checkpoint DB: it is a
+        # disposable per-turn cache rebuilt from session history, so it is simply
+        # removed (backed up first) rather than migrated.
+        legacy_db = settings.data_dir / "runtime_checkpoints.sqlite"
+        if legacy_db.exists():
+            try:
+                backup = settings.data_dir / "db-backups"
+                backup.mkdir(parents=True, exist_ok=True)
+                import shutil
+                for suffix in ("", "-wal", "-shm"):
+                    src = Path(f"{legacy_db}{suffix}")
+                    if src.exists():
+                        shutil.move(str(src), str(backup / src.name))
+                logger.info("migrated legacy runtime_checkpoints.sqlite into %s", backup)
+            except Exception:  # noqa: BLE001 - migration must never break startup
+                logger.warning("failed to migrate legacy checkpoint DB: %s", legacy_db, exc_info=True)
         self.checkpoint_manager = CheckpointManager(
-            self.checkpoint_path,
+            self.checkpoints_dir,
             sessions_dir=settings.data_dir / "sessions",
-            cap_per_session=settings.checkpoint_cap_per_session,
-            max_bytes_per_thread=settings.checkpoint_max_bytes_per_thread,
         )
-        # Repair a legacy FULL/NONE auto_vacuum DB into INCREMENTAL. Runs a
-        # one-time VACUUM at startup while no streams are active, so it is safe.
-        try:
-            if self.checkpoint_manager._ensure_autovacuum(self.checkpoint_conn):
-                logger.info("checkpoint DB migrated to INCREMENTAL auto_vacuum")
-        except sqlite3.OperationalError as exc:
-            logger.warning("checkpoint auto_vacuum migration skipped at startup: %s", exc)
 
     async def forget_runtime_checkpoint(self, session_id: str) -> bool:
         """Best-effort checkpoint reset; returns whether the delete completed.
 
-        Runs on the event loop through the single shared ``AsyncSqliteSaver``,
-        so it is serialized with every other checkpoint write/delete (single
-        writer model) and can never contend on SQLite's file-level write lock.
-        The checkpoint DB is disposable per turn, so a failed delete is harmless
-        — the next turn rebuilds from session history anyway.
+        Runs on the event loop through the single shared JSON-file saver, which
+        serializes deletes with every other checkpoint write (single-writer
+        model). Deletion is just removing ``checkpoints/<session_id>.json`` —
+        no database to lock. The checkpoint is disposable per turn, so a failed
+        delete is harmless — the next turn rebuilds from session history anyway.
         """
         try:
-            checkpointer = await _get_shared_checkpointer(self.checkpoint_path)
+            checkpointer = await _get_shared_checkpointer(self.checkpoints_dir)
             await checkpointer.adelete_thread(session_id)
             return True
         except Exception as exc:  # noqa: BLE001 - best-effort cleanup
@@ -5351,23 +4972,6 @@ class AgentRuntimeRegistry:
     def _workspace_or_default(self, workspace: Workspace | None = None) -> Workspace:
         return workspace or self.default_workspace
 
-    def _create_single_agent(self, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None, project_id: str | None = None) -> AgentRuntime:
-        selected_workspace = self._workspace_or_default(workspace)
-        provider = self._provider_for_request(provider_id, model)
-        if provider:
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings)
-        if self.settings.agent_provider == "openai":
-            env_provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
-            return OpenAICompatibleSingleAgentRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpointer, env_provider, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings)
-        if self.settings.agent_provider == "simulated":
-            return SimulatedSingleAgentRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
-        raise RuntimeError(f"Unsupported COWORKER_AGENT_PROVIDER: {self.settings.agent_provider}")
-
-    def get_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None, project_id: str | None = None) -> AgentRuntime:
-        if mode == "single":
-            return self._create_single_agent(provider_id, model, workspace, referenced_sessions, agent, project_id)
-        raise RuntimeError(f"Unsupported agent mode: {mode}")
-
     def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.trace_store.list(limit)
 
@@ -5381,7 +4985,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoint_path, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings, checkpoint_manager=self.checkpoint_manager)
+            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoints_dir, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings, checkpoint_manager=self.checkpoint_manager)
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:

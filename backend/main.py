@@ -621,12 +621,6 @@ def resolve_request_autonomy(request) -> str:
         return normalize_autonomy(request.autonomy)
     return "guarded"
 
-class ChatResponse(BaseModel):
-    response: str
-    session_id: str
-    mode: AgentMode
-    provider: str
-
 class RuntimeConfigResponse(BaseModel):
     workspace: str
     data_dir: str
@@ -954,121 +948,6 @@ def update_runtime_config(request: RuntimeConfigUpdate):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    if not request.session_id and not request.project_id:
-        raise HTTPException(status_code=400, detail="project_id is required to start a new chat")
-    created_session = None
-    session_id = request.session_id
-    memory_manager.note_turn_active(session_id) if session_id else None
-    work_mode = normalize_work_mode(request.work_mode)
-    autonomy = resolve_request_autonomy(request)
-    references = _resolve_references(request.referenced_sessions)
-    referenced_ids = {ref["id"] for ref in references}
-    try:
-        resolved_workspace = workspace_controller.workspace_for_chat(
-            session_id=session_id,
-            project_id=request.project_id,
-        )
-        agent = request.agent or DEFAULT_AGENT
-        if not session_id:
-            created_session = session_store.new_session("", project_id=request.project_id or "", agent_id=agent)
-            session_id = created_session.id
-        else:
-            try:
-                existing = session_store.require(session_id)
-                if request.agent:
-                    existing.agent_id = request.agent
-                    session_store.save(existing)
-                elif existing.agent_id:
-                    agent = existing.agent_id
-            except KeyError:
-                pass
-        # Ensure org manifest so the agent runtime can use delegation & team tools.
-        project_dir = _project_memory_dir(request.project_id or "")
-        if project_dir:
-            _ensure_agent_skeleton(project_dir, agent)
-            _ensure_org(project_dir)
-        # Runtime construction resolves the context window with a synchronous
-        # network probe (cold cache); keep it off the event loop.
-        runtime = await asyncio.to_thread(
-            agent_registry.get_runtime, request.mode, request.provider_id, request.model, resolved_workspace,
-            referenced_sessions=referenced_ids, agent=agent, project_id=request.project_id,
-        )
-        agent_registry.checkpoint_manager.mark_active(session_id)
-        try:
-            # The sync path runs the whole LangGraph turn (LLM calls + possibly a
-            # subprocess command) on a worker thread so it never blocks the
-            # event loop that also serves SSE/heartbeats for other sessions.
-            reply = await asyncio.to_thread(
-                runtime.run,
-                format_user_message(request.message, request.attachments, references),
-                session_id,
-                request.language,
-                work_mode,
-                autonomy,
-            )
-        finally:
-            agent_registry.checkpoint_manager.mark_idle(session_id)
-    except (KeyError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    try:
-        if request.session_id:
-            session_store.append_message(
-                session_id,
-                role="user",
-                content=request.message,
-                mode=request.mode,
-                work_mode=work_mode,
-                autonomy=autonomy,
-                attachments=request.attachments,
-                references=references,
-            )
-            session_store.append_message(
-                session_id,
-                role="assistant",
-                content=reply.content,
-                mode=reply.mode,
-                provider=reply.provider,
-                model=request.model or "",
-                work_mode=work_mode,
-                autonomy=autonomy,
-                parts=reply.parts or [],
-            )
-        else:
-            session = created_session or session_store.require(session_id)
-            if created_session:
-                session_store.save(session)
-            session_store.append_message(session.id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references)
-            session_store.append_message(
-                session.id,
-                role="assistant",
-                content=reply.content,
-                mode=reply.mode,
-                provider=reply.provider,
-                model=request.model or "",
-                work_mode=work_mode,
-                autonomy=autonomy,
-                parts=reply.parts or [],
-            )
-            session_id = session.id
-        try:
-            session_store.update_modes(session_id, work_mode, autonomy)
-        except KeyError:
-            pass
-    except KeyError:
-        pass
-
-    return ChatResponse(
-        response=reply.content,
-        session_id=session_id,
-        mode=reply.mode,
-        provider=reply.provider,
-    )
 
 
 # --------------------------------------------------------------------------- #
@@ -2435,12 +2314,9 @@ async def delete_session(session_id: str):
     await _guard_session_not_streaming(session_id)
     if not session_store.delete(session_id):
         raise HTTPException(status_code=404, detail=f"session {session_id} not found")
-    # Checkpoint teardown (delete_thread) can block for many seconds on the
-    # shared SQLite writer lock while *another* session streams and writes
-    # checkpoints (busy_timeout up to 30s, multiple retries). The session
-    # record is already gone and thread ids are UUIDs, so cleanup is safe to
-    # run in the background — awaiting it here would push the response past
-    # the caller's timeout.
+    # Checkpoint teardown just unlinks a per-session JSON file; still run it in
+    # the background so a huge file never pushes the delete past the caller's
+    # timeout (the session record is already gone, so cleanup is safe).
     asyncio.create_task(agent_registry.forget_runtime_checkpoint(session_id))
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
@@ -3604,18 +3480,21 @@ async def clear_agent_traces():
 
 @app.get("/checkpoints/export")
 async def export_checkpoints():
-    """Download the LangGraph checkpoint SQLite DB (best-effort copy)."""
+    """Download the per-session checkpoint files as a zip (best-effort copy)."""
     from starlette.background import BackgroundTask
     from fastapi import BackgroundTasks
     from fastapi.responses import FileResponse
     import shutil
 
-    db_path = agent_registry.checkpoint_path
-    if not db_path.exists():
+    ck_dir = agent_registry.checkpoints_dir
+    if not ck_dir.is_dir() or not any(ck_dir.glob("*.json")):
         return {"status": "ok", "size": 0, "note": "no checkpoints yet"}
-    tmp = db_path.with_name(f"{db_path.name}.export.{uuid.uuid4().hex[:8]}.tmp")
+    tmp = ck_dir.with_name(f"checkpoints.export.{uuid.uuid4().hex[:8]}.zip")
     try:
-        shutil.copy2(db_path, tmp)
+        import zipfile
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(ck_dir.glob("*.json")):
+                zf.write(f, arcname=f.name)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"failed to snapshot checkpoints: {exc}") from exc
 
@@ -3627,8 +3506,8 @@ async def export_checkpoints():
 
     return FileResponse(
         str(tmp),
-        media_type="application/octet-stream",
-        filename="coworker-checkpoints.sqlite3",
+        media_type="application/zip",
+        filename="coworker-checkpoints.zip",
         background=BackgroundTasks([BackgroundTask(_cleanup)]),
     )
 

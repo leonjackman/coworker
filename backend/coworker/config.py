@@ -30,8 +30,6 @@ class BackendSettings:
     memory_dir: Path
     agent_provider: str
     openai_model: str
-    checkpoint_cap_per_session: int
-    checkpoint_max_bytes_per_thread: int
     checkpoint_sweep_interval_seconds: int
     memory_enabled: bool
     memory_char_limit: int
@@ -55,8 +53,6 @@ def load_settings() -> BackendSettings:
     openai_model = os.getenv("COWORKER_OPENAI_MODEL", "gpt-4.1-mini").strip()
 
     # Checkpoint lifecycle tuning (see coworker.checkpoints).
-    checkpoint_cap_per_session = _env_int("COWORKER_CHECKPOINT_CAP", 500)
-    checkpoint_max_bytes_per_thread = _env_int("COWORKER_CHECKPOINT_MAX_MB_PER_THREAD", 32) * 1024 * 1024
     checkpoint_sweep_interval_seconds = _env_int("COWORKER_CHECKPOINT_SWEEP_INTERVAL_SECONDS", 21600)
 
     memory_enabled = os.getenv("COWORKER_MEMORY_ENABLED", "1").strip().lower() not in {
@@ -93,8 +89,6 @@ def load_settings() -> BackendSettings:
         memory_dir=memory_dir,
         agent_provider=agent_provider,
         openai_model=openai_model,
-        checkpoint_cap_per_session=checkpoint_cap_per_session,
-        checkpoint_max_bytes_per_thread=checkpoint_max_bytes_per_thread,
         checkpoint_sweep_interval_seconds=checkpoint_sweep_interval_seconds,
         memory_enabled=memory_enabled,
         memory_char_limit=memory_char_limit,

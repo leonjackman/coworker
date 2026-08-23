@@ -1,10 +1,12 @@
 """Tests for the disposable single-writer checkpoint architecture.
 
-The runtime checkpoint DB is now a per-turn scratch cache (single-writer model,
-cf. codex/opencode): every graph run shares ONE AsyncSqliteSaver serialized by
-its own lock, writes are reduced to ~1 per turn via exit-durability, and each
-turn deletes its thread so the DB never accumulates. These tests pin down the
-building blocks: shared saver identity, durability config, and async deletes.
+The runtime checkpoint is now a per-session JSON file (single-writer model, cf.
+cline): one ``checkpoints/<session_id>.json`` per session, written atomically,
+deleted at turn end. These tests pin down the building blocks: shared saver
+identity, durability config, and per-session file deletes.
+
+Note: importing ``main`` spins up the app's background machinery, so these tests
+keep the shared saver on a throwaway temp directory and never leak connections.
 """
 
 import asyncio
@@ -26,23 +28,11 @@ from coworker import agents  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolate_shared_saver():
-    saved = (agents._shared_checkpointer, agents._shared_checkpointer_conn, agents._shared_checkpointer_init)
+    saved = (agents._shared_checkpointer, agents._shared_checkpointer_init)
     agents._shared_checkpointer = None
-    agents._shared_checkpointer_conn = None
     agents._shared_checkpointer_init = None
     yield
-    agents._shared_checkpointer, agents._shared_checkpointer_conn, agents._shared_checkpointer_init = saved
-
-
-async def _close_shared_conn() -> None:
-    conn = agents._shared_checkpointer_conn
-    if conn is not None:
-        try:
-            await conn.close()
-        except Exception:  # noqa: BLE001 - cleanup
-            pass
-        agents._shared_checkpointer_conn = None
-        agents._shared_checkpointer = None
+    agents._shared_checkpointer, agents._shared_checkpointer_init = saved
 
 
 def test_agent_run_config_sets_exit_durability():
@@ -59,38 +49,44 @@ def test_agent_run_config_sets_exit_durability():
 
 
 def test_shared_checkpointer_is_singleton(tmp_path: Path):
-    db = tmp_path / "cp.sqlite"
-
     async def scenario():
-        cp1 = await agents._get_shared_checkpointer(db)
-        cp2 = await agents._get_shared_checkpointer(db)
-        assert cp1 is cp2, "all streams must share ONE AsyncSqliteSaver (single-writer model)"
+        cp1 = await agents._get_shared_checkpointer(tmp_path)
+        cp2 = await agents._get_shared_checkpointer(tmp_path)
+        assert cp1 is cp2, "all streams must share ONE JSON saver (single-writer model)"
 
     asyncio.run(scenario())
-    asyncio.run(_close_shared_conn())
 
 
-def test_adelete_thread_removes_rows(tmp_path: Path):
-    db = tmp_path / "cp.sqlite"
-
+def test_adelete_thread_removes_file(tmp_path: Path):
     async def scenario():
-        checkpointer = await agents._get_shared_checkpointer(db)
-        await checkpointer.conn.execute(
-            "INSERT OR REPLACE INTO checkpoints "
-            "(thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
-            "VALUES (?, '', ?, NULL, 'json', ?, '{}')",
-            ("del-me", "cp1", b'{"v":1}'),
+        saver = await agents._get_shared_checkpointer(tmp_path)
+        # aput writes a checkpoint for a thread, then adelete_thread removes it.
+        await saver.aput(
+            config={"configurable": {"thread_id": "del-me"}},
+            checkpoint={"v": 1, "id": "cp1", "ts": "2026-01-01T00:00:00+00:00", "channel_values": {"n": 1}, "channel_versions": {}, "versions_seen": {}, "pending_sends": []},
+            metadata={"step": 1},
+            new_versions={},
         )
-        await checkpointer.conn.commit()
-        count = await (await checkpointer.conn.execute(
-            "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", ("del-me",)
-        )).fetchone()
-        assert count[0] == 1
-        await checkpointer.adelete_thread("del-me")
-        count = await (await checkpointer.conn.execute(
-            "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", ("del-me",)
-        )).fetchone()
-        assert count[0] == 0, "adelete_thread must remove the whole thread"
+        files = list((tmp_path).glob("*.json"))
+        assert len(files) == 1 and files[0].name == "del-me.json"
+        await saver.adelete_thread("del-me")
+        assert list((tmp_path).glob("*.json")) == []
 
     asyncio.run(scenario())
-    asyncio.run(_close_shared_conn())
+
+
+def test_aput_writes_then_aget_tuple_pending(tmp_path: Path):
+    async def scenario():
+        saver = await agents._get_shared_checkpointer(tmp_path)
+        cfg = await saver.aput(
+            config={"configurable": {"thread_id": "t"}},
+            checkpoint={"v": 1, "id": "cp1", "ts": "2026-01-01T00:00:00+00:00", "channel_values": {"n": 1}, "channel_versions": {}, "versions_seen": {}, "pending_sends": []},
+            metadata={"step": 1},
+            new_versions={},
+        )
+        await saver.aput_writes(cfg, [("messages", "hi")], task_id="task1")
+        tup = await saver.aget_tuple(cfg)
+        assert tup is not None
+        assert tup.pending_writes == [("task1", "messages", "hi")]
+
+    asyncio.run(scenario())
