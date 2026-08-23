@@ -74,16 +74,7 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
   const pct = windowTok > 0 ? Math.min(100, Math.round((used / windowTok) * 100)) : 0;
   const color = pct < 70 ? STATUS_COLORS.green : pct < 85 ? STATUS_COLORS.amber : STATUS_COLORS.red;
   const formatK = (n: number) => (n >= 1_000 ? `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`);
-  const factor = usage.calibrationFactor;
-  const tooltip = [
-    t('titlebar.context_usage', { used: formatK(used), window: formatK(windowTok), pct }),
-    t('titlebar.context_trim_hint'),
-    ...(factor != null && factor > 1.02 ? [t('titlebar.context_calibration', { factor: factor.toFixed(2) })] : []),
-    ...(usage.maxOutputTokens ? [t('titlebar.context_output_reserved', { tokens: formatK(usage.maxOutputTokens) })] : []),
-    ...(usage.compressed ? [t('titlebar.context_compressing')] : []),
-    ...(usage.compactCount > 0 || usage.compacted ? [t('titlebar.context_compressed')] : []),
-    ...(usage.windowWarning ? [usage.windowWarning] : []),
-  ].join(' · ');
+  const tooltip = t('titlebar.context_usage', { used: formatK(used), window: formatK(windowTok), pct });
 
   return (
     <Tooltip content={tooltip}>
