@@ -35,7 +35,7 @@
 | Feature | Description |
 | --- | --- |
 | 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
-| 📥 **Message Queue** | Keep typing while the agent works — sends queue up per session and auto-send one-by-one when the stream finishes |
+| 📥 **Message Queue & Interject** | Keep typing while the agent works — sends queue up per session and auto-send one-by-one when the stream finishes; interject (↳) any queued message to steer the running reply without interrupting it |
 | 🔌 **Multi-Provider** | OpenAI, Ollama, and any OpenAI-compatible API, with live context-window discovery |
 | 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract, zip export / import, trash recovery, and cross-directory migration |
 | 👥 **Multi-Agent Teams** ⚠️ | Create teams & departments and let agents delegate tasks to each other. **Experimental** — see note below |
@@ -274,8 +274,8 @@ next message right away.
   stream finishes (`done` / error / stopped). Send without content shows the
   Stop button instead, so you can still interrupt the running task.
 - **Queued messages are visible** — each pending message is listed in the
-  task-list card above the composer (one row per message) with a **✕** remove
-  action, so nothing is hidden behind an icon.
+  task-list card above the composer (one row per message) with an **Interject now**
+  (↳) action and a **✕** remove action, so nothing is hidden behind an icon.
 - **Edits & regenerations stay serialized** — only one stream runs per session;
   queued messages never race the stream they are waiting for.
 
@@ -287,8 +287,24 @@ and rebuilds from the session history, so the new (or first queued) message
 becomes the active instruction instead of the model continuing the original task
 from a stale mid-task checkpoint.
 
-> Note: this is a plain queue — there is no "steer" / priority injection. A
-> queued message always waits for the in-flight turn to settle.
+### Interject (guide a running task)
+
+While the agent is streaming, pick any queued message and hit **Interject now**
+(↳) to steer the reply **without stopping or restarting it**.
+
+- **Guides within the current run** — interjecting does not abort the in-flight
+  stream. The message is handed to the running agent and folded into its **next
+  model call**, so the LLM's subsequent output and tool steps follow your steer.
+- **Shown as a "Steered" card** — the interjected text appears as a notice
+  inside the assistant bubble (not as a separate user bubble), keeping the
+  transcript clean.
+- **Never lost on a late steer** — if the task already finished before the steer
+  could be consumed, the interjection is automatically continued as the next
+  turn instead of being dropped.
+
+> Queued messages auto-send one-by-one once the stream settles; use **Interject
+> now** when you want guidance to take effect *within* the current run instead
+> of waiting for it to finish.
 
 ---
 
