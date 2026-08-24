@@ -1745,6 +1745,9 @@ async def chat_stream(request: ChatStreamRequest):
         error_emitted = False
         interrupt_emitted = False
         accumulated_content = ""
+        # Last full `context_usage` frame from the run, persisted on `done` so the
+        # session-open preview shows the true request size (system + tools + …).
+        last_context_usage: dict[str, Any] | None = None
         stream_iter: Any
 
         # Fast-fail: when the requested provider was recently discovered as
@@ -1792,8 +1795,11 @@ async def chat_stream(request: ChatStreamRequest):
                 logger.exception("Failed to persist assistant message for session %s", session_id)
 
         def _handle_event(event):
-            nonlocal terminal_sent, accumulated_content, error_emitted, interrupt_emitted
+            nonlocal terminal_sent, accumulated_content, error_emitted, interrupt_emitted, last_context_usage
             etype = event.get("type", "")
+            if etype == "context_usage":
+                # Remember the latest full measurement; persisted on `done`.
+                last_context_usage = event
             if etype in ("approval_required", "question_required"):
                 # The agent interrupted to ask the user. The turn is NOT complete:
                 # the stream must end without a synthetic `done` so the frontend
@@ -1819,6 +1825,20 @@ async def chat_stream(request: ChatStreamRequest):
                     session_store.update_modes(session_id, work_mode, autonomy)
                 except Exception:  # noqa: BLE001 - never break the terminal event
                     logger.warning("update_modes failed on done for session %s", session_id, exc_info=True)
+                # Persist the last full context-usage measurement so the preview
+                # reflects the real request size (system prompt + tool schemas +
+                # messages + overhead), not a message-only undercount.
+                if last_context_usage is not None:
+                    try:
+                        session_store.update_context_usage(
+                            session_id,
+                            used_tokens=int(last_context_usage.get("used_tokens", 0) or 0),
+                            used_tokens_calibrated=int(last_context_usage.get("used_tokens_calibrated", 0) or 0),
+                            used_chars=int(last_context_usage.get("used_chars", 0) or 0),
+                            calibration_factor=float(last_context_usage.get("calibration_factor", 0.0) or 0.0),
+                        )
+                    except Exception:  # noqa: BLE001 - telemetry must never break the stream
+                        logger.debug("update_context_usage failed for session %s", session_id, exc_info=True)
                 terminal_sent = True
             elif etype == "error":
                 # The runtime yields an explicit error event BEFORE re-raising so
@@ -2647,29 +2667,43 @@ def _session_context_usage_snapshot(session, provider_id: str, model: str) -> di
 
     budget_tokens = context_budget_tokens(window_tokens, max_output)
     effective = effective_input_limit(window_tokens, max_output)
-    history = _session_message_history(session)
-    total = sum(_history_content_chars(m.get("content")) for m in history)
-    used_tokens = sum(_history_content_tokens(m.get("content")) for m in history)
-    # Reuse the same closed-loop calibration factor a real run would apply for
-    # this (provider, model), so the preview does not jump on the next run.
-    calibration_factor = 1.0
-    if provider is not None:
-        resolved_model = (model or None) or provider.model
-        store = get_calibration_store(settings.data_dir)
-        calibration_factor = store.get(CalibrationStore.key_for(provider.id, resolved_model or ""))
+    # Prefer the last FULL measurement persisted from a real run (system prompt +
+    # tool schemas + messages + overhead, calibrated) — that is the true request
+    # size. Fall back to a message-only estimate only for sessions that have
+    # never run (nothing to measure yet).
+    stored_cal = int(session.context_used_tokens_calibrated or 0)
+    if stored_cal > 0:
+        used_tokens = int(session.context_used_tokens or 0)
+        used_tokens_calibrated = stored_cal
+        used_chars = int(session.context_used_chars or 0)
+        calibration_factor = float(session.context_calibration_factor or 0.0) or 1.0
+    else:
+        history = _session_message_history(session)
+        used_chars = sum(_history_content_chars(m.get("content")) for m in history)
+        used_tokens = sum(_history_content_tokens(m.get("content")) for m in history)
+        # Reuse the same closed-loop calibration factor a real run would apply for
+        # this (provider, model), so the preview does not jump on the next run.
+        calibration_factor = 1.0
+        if provider is not None:
+            resolved_model = (model or None) or provider.model
+            store = get_calibration_store(settings.data_dir)
+            calibration_factor = store.get(CalibrationStore.key_for(provider.id, resolved_model or ""))
+        used_tokens_calibrated = int(round(used_tokens * calibration_factor))
     return {
         "type": "context_usage",
-        "used_chars": total,
+        "used_chars": used_chars,
         "budget_chars": budget_chars,
         "used_tokens": used_tokens,
-        "used_tokens_calibrated": int(round(used_tokens * calibration_factor)),
+        "used_tokens_calibrated": used_tokens_calibrated,
         "calibration_factor": round(calibration_factor, 3),
         "budget_tokens": budget_tokens,
         "active_budget_tokens": budget_tokens,
         "window_tokens": window_tokens,
         "effective_window_tokens": effective,
         "max_output_tokens": max_output,
-        "compressed": used_tokens > budget_tokens,
+        # Over the effective input ceiling (window − max_output), which is what
+        # the model actually receives — consistent with the live event.
+        "compressed": used_tokens > effective,
         "compacted": False,
         "compact_count": 0,
         "window_source": source,

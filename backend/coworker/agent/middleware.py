@@ -924,62 +924,6 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         # so it accumulates across turns — see B6.
         return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept], "context_compact_count": 1}
 
-    def _emit_context_usage(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> None:
-        # Surface live context-budget usage to the client so the topbar can show
-        # how close the conversation is to the compaction/trim threshold. Emitted
-        # on every model call via the LangGraph "custom" stream channel; the
-        # no-op writer in non-streaming contexts keeps this safe.
-        try:
-            messages = state.get("messages", [])
-            total = sum(_msg_chars(m) for m in messages)
-            # Same accounting as the trim/guard decision (`_msg_tokens` counts
-            # media blocks at the per-item vision cost), so the bar and the
-            # `compressed` flag never disagree on image-heavy sessions.
-            used_tokens = sum(_msg_tokens(m) for m in messages)
-            window_tokens = self.context_window_tokens or round(
-                self.configured_budget / (CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN)
-            )
-            # Closed-loop calibration factor learned from real provider usage for
-            # this (provider, model); the calibrated figure is what the provider
-            # will actually bill, so the bar/colour follow IT, not the raw guess.
-            calibration_factor = 1.0
-            if self.calibration_store is not None and self.calibration_key:
-                try:
-                    calibration_factor = float(self.calibration_store.get(self.calibration_key))
-                except Exception:  # noqa: BLE001 - telemetry must never break a turn
-                    calibration_factor = 1.0
-            from ..context import effective_input_limit
-
-            runtime.stream_writer(
-                {
-                    "type": "context_usage",
-                    "used_chars": total,
-                    "budget_chars": self.configured_budget,
-                    "used_tokens": used_tokens,
-                    "used_tokens_calibrated": int(round(used_tokens * calibration_factor)),
-                    "calibration_factor": round(calibration_factor, 3),
-                    "budget_tokens": self.budget_tokens,
-                    "active_budget_tokens": self.budget_tokens,
-                    "window_tokens": window_tokens,
-                    # The TRUE input ceiling: providers reserve max_output from
-                    # the window (input + max_tokens ≤ window), so the meter's
-                    # denominator must be the effective limit, not the raw window.
-                    "effective_window_tokens": effective_input_limit(window_tokens, self.max_output_tokens),
-                    "max_output_tokens": self.max_output_tokens,
-                    # Per-turn signal: is the resident set over the active budget
-                    # (i.e. will this call trim/compact)? Distinct from `compacted`,
-                    # which is the cumulative "has compression ever happened" flag
-                    # (counted in checkpointed state, persists across turns) — B6.
-                    "compressed": sum(_msg_tokens(m) for m in messages) > self.budget_tokens,
-                    "compacted": state.get("context_compact_count", 0) > 0,
-                    "compact_count": state.get("context_compact_count", 0),
-                    "window_source": self.context_window_source,
-                    "window_warning": self.context_window_warning,
-                }
-            )
-        except Exception:  # noqa: BLE001 - telemetry must never break a turn
-            logger.debug("context_usage emit skipped", exc_info=True)
-
     def _select_compact_plan(self, messages: list[Any]) -> tuple[str, Any, Any] | None:
         """Choose a compaction action: prune tool results, or summarize a segment.
 
@@ -1076,7 +1020,6 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
     async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         self.last_summary = str(state.get("context_summary", "") or "")
         self._summarized_segments = set(state.get("context_summarized_fingerprints") or [])
-        self._emit_context_usage(state, runtime)
         if not self.summarizer_candidates:
             return self._trim(state)
         try:
@@ -1719,6 +1662,8 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         calibration_store: Any | None = None,
         calibration_key: str = "",
         mcp_tool_names_provider: Callable[[], set[str]] | None = None,
+        window_source: str = "default",
+        window_warning: str | None = None,
     ) -> None:
         from ..context import effective_input_limit
 
@@ -1728,6 +1673,8 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         self.calibration_store = calibration_store
         self.calibration_key = calibration_key or ""
         self.mcp_tool_names_provider = mcp_tool_names_provider
+        self.window_source = window_source
+        self.window_warning = window_warning
         # Calibration pairing: the streaming loop reads these right after each
         # successful model call and folds actual/estimate into the store.
         self.last_raw_estimate = 0
@@ -1962,6 +1909,14 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         self.last_raw_estimate = raw
         self.last_measured = measured
         self.last_steps = []
+        # Surface the FULL request size (messages + system prompt + tool schemas
+        # + per-message overhead, calibrated) as the `context_usage` telemetry the
+        # UI topbar renders — the single source of truth for "how full is the
+        # context". The compaction middleware's older message-only estimate
+        # undercounted the fixed system/tool overhead (the B-series blind spot),
+        # so the guard — which already measures the real request — owns this
+        # event now.
+        self._emit_context_usage_event(request, raw, measured, factor, measured > self.limit_tokens)
         if measured <= self.limit_tokens:
             # Even when comfortably under the token budget, enforce the per-prompt
             # IMAGE-COUNT ceiling (e.g. vLLM --limit-mm-per-prompt.image=5): 6+
@@ -2076,6 +2031,46 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             )
         except Exception:  # noqa: BLE001 - telemetry must never break a turn
             logger.debug("context_guard telemetry skipped", exc_info=True)
+
+    def _emit_context_usage_event(
+        self, request: Any, raw: int, measured: int, factor: float, over: bool
+    ) -> None:
+        """Emit the authoritative `context_usage` event for the UI topbar.
+
+        Uses the FULL calibrated request measurement (``raw``/``measured`` from
+        :meth:`_measure`, which counts system prompt + tool schemas + messages +
+        per-message overhead) so the indicator reflects what is actually sent to
+        the model — not just the message history.
+        """
+        try:
+            runtime = getattr(request, "runtime", None)
+            writer = getattr(runtime, "stream_writer", None)
+            if writer is None:
+                return
+            messages = list(getattr(request, "messages", []) or [])
+            used_chars = sum(_msg_chars(m) for m in messages)
+            writer(
+                {
+                    "type": "context_usage",
+                    "used_chars": used_chars,
+                    "budget_chars": 0,
+                    "used_tokens": raw,
+                    "used_tokens_calibrated": measured,
+                    "calibration_factor": round(float(factor), 3),
+                    "budget_tokens": self.limit_tokens,
+                    "active_budget_tokens": self.limit_tokens,
+                    "window_tokens": self.window_tokens,
+                    "effective_window_tokens": self.limit_tokens,
+                    "max_output_tokens": self.max_output_tokens,
+                    "compressed": bool(over),
+                    "compacted": False,
+                    "compact_count": 0,
+                    "window_source": self.window_source,
+                    "window_warning": self.window_warning,
+                }
+            )
+        except Exception:  # noqa: BLE001 - telemetry must never break a turn
+            logger.debug("context_usage telemetry skipped", exc_info=True)
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         return handler(self._guard(request))

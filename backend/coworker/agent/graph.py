@@ -746,6 +746,8 @@ def build_coworker_agent_graph(
         calibration_store=calibration_store,
         calibration_key=calibration_key,
         mcp_tool_names_provider=mcp_middleware.tool_names,
+        window_source=context_window_source,
+        window_warning=context_window_warning,
     )
     middleware.append(context_guard)
 

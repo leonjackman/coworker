@@ -48,6 +48,13 @@ class Session:
     autonomy: str = "guarded"
     todos: list[dict[str, Any]] = field(default_factory=list)
     title_auto: bool = False
+    # Last FULL context-usage measurement (system prompt + tool schemas + messages
+    # + overhead, calibrated) persisted from the most recent run, so the session
+    # preview shows the true request size instead of a message-only undercount.
+    context_used_tokens: int = 0
+    context_used_tokens_calibrated: int = 0
+    context_used_chars: int = 0
+    context_calibration_factor: float = 0.0
     messages: list[SessionMessage] = field(default_factory=list)
 
     @classmethod
@@ -68,6 +75,10 @@ class Session:
             autonomy=str(autonomy),
             todos=[dict(item) for item in payload.get("todos", []) if isinstance(item, dict)],
             title_auto=bool(payload.get("title_auto", False)),
+            context_used_tokens=int(payload.get("context_used_tokens", 0) or 0),
+            context_used_tokens_calibrated=int(payload.get("context_used_tokens_calibrated", 0) or 0),
+            context_used_chars=int(payload.get("context_used_chars", 0) or 0),
+            context_calibration_factor=float(payload.get("context_calibration_factor", 0.0) or 0.0),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
         )
 
@@ -123,6 +134,32 @@ class SessionStore:
 
     def save(self, session: Session) -> None:
         session.updated_at = _now()
+        atomic_write_text(
+            self._path(session.id),
+            json.dumps(session.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        )
+
+    def update_context_usage(
+        self,
+        session_id: str,
+        *,
+        used_tokens: int,
+        used_tokens_calibrated: int,
+        used_chars: int = 0,
+        calibration_factor: float = 0.0,
+    ) -> None:
+        """Persist the last full context-usage measurement for the session-open
+        preview, so it reflects the real request size (system + tools + messages
+        + overhead) rather than a message-only undercount."""
+        try:
+            session = self.require(session_id)
+        except KeyError:
+            return
+        session.context_used_tokens = int(used_tokens)
+        session.context_used_tokens_calibrated = int(used_tokens_calibrated)
+        session.context_used_chars = int(used_chars)
+        session.context_calibration_factor = float(calibration_factor)
+        # Persist without bumping updated_at (this is telemetry, not activity).
         atomic_write_text(
             self._path(session.id),
             json.dumps(session.to_dict(), ensure_ascii=False, indent=2) + "\n",
