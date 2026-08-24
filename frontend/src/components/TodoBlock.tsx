@@ -1,5 +1,5 @@
 import { useRef, useState, type CSSProperties } from 'react';
-import { Check, ListChecks, ChevronDown, GripVertical, Pencil, X } from 'lucide-react';
+import { Check, ListChecks, ChevronDown, GripVertical, Pencil, Send, X } from 'lucide-react';
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -23,6 +23,9 @@ interface TodoBlockProps {
   onEditQueued?: (id: string, message: string) => void;
   /** Reorder the queue (drag-to-reorder); receives the new id order. */
   onReorderQueued?: (orderedIds: string[]) => void;
+  /** Interject (插話) a queued message into the currently-running task to guide
+   *  the LLM WITHOUT pausing/stopping the stream. */
+  onInterjectQueued?: (id: string) => void;
   onClose?: () => void;
 }
 
@@ -35,6 +38,7 @@ interface SortableQueueItemProps {
   onCommitEdit: () => void;
   onCancelEdit: () => void;
   onRemove: (id: string) => void;
+  onInterject: (id: string) => void;
 }
 
 /** One queued message row. Uses @dnd-kit sortable (same as the sidebar) so
@@ -49,6 +53,7 @@ function SortableQueueItem({
   onCommitEdit,
   onCancelEdit,
   onRemove,
+  onInterject,
 }: SortableQueueItemProps) {
   const editingInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
@@ -114,6 +119,15 @@ function SortableQueueItem({
       )}
       <button
         type="button"
+        className="todo-block__queue-interject"
+        onClick={() => onInterject(queued.id)}
+        aria-label={t('chat.interject_queued')}
+        title={t('chat.interject_queued')}
+      >
+        <Send size={12} />
+      </button>
+      <button
+        type="button"
         className="todo-block__queue-edit"
         onClick={startEdit}
         aria-label={t('chat.edit_queued')}
@@ -139,7 +153,7 @@ function SortableQueueItem({
  * get checked off as the agent works; queued messages are listed one per row
  * with drag-to-reorder, inline edit and a remove action.
  */
-export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQueued, onEditQueued, onReorderQueued, onClose }: TodoBlockProps) {
+export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQueued, onEditQueued, onReorderQueued, onInterjectQueued, onClose }: TodoBlockProps) {
   const [expanded, setExpanded] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -228,6 +242,7 @@ export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQu
                         onCommitEdit={commitEdit}
                         onCancelEdit={cancelEdit}
                         onRemove={(id) => onRemoveQueued?.(id)}
+                        onInterject={(id) => onInterjectQueued?.(id)}
                       />
                     ))}
                   </ul>

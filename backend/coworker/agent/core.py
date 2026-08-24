@@ -47,6 +47,10 @@ class CoworkerAgentState(AgentState[Any]):
     phase: NotRequired[str]
     autonomy: NotRequired[str]
     todos: NotRequired[list[Any]]
+    # Session id injected via graph inputs so the steer middleware can resolve
+    # which session's interjection inbox to drain at each model-call boundary
+    # (the middleware's Runtime has no access to the run config metadata).
+    session_id: NotRequired[str]
     # Cumulative count of context compressions (trim or summarize) for this
     # session. Lives in state (not on the middleware) because the middleware is
     # rebuilt every turn; the checkpoint persists this so the "已精简" badge is

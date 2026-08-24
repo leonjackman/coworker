@@ -910,5 +910,8 @@
   "files.collapse": "Recolher",
   "providers.temperature": "Temperatura de amostragem",
   "providers.temperature_placeholder": "0 = automático (padrão da família)",
-  "providers.temperature_hint": "Substitui o padrão do modelo; 0 escolhe automaticamente (ex.: 0.55 para qwen) ou deixa com o provedor"
+  "providers.temperature_hint": "Substitui o padrão do modelo; 0 escolhe automaticamente (ex.: 0.55 para qwen) ou deixa com o provedor",
+  "chat.interject_queued": "Intervir agora",
+  "chat.interject_badge": "Intervenção",
+  "chat.steer_injected_label": "Intervenção recebida"
 }

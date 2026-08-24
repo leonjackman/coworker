@@ -912,5 +912,8 @@
   "files.collapse": "Collapse",
   "providers.temperature": "Sampling temperature",
   "providers.temperature_placeholder": "0 = auto (family default)",
-  "providers.temperature_hint": "Overrides the per-model default; 0 auto-picks it (e.g. 0.55 for qwen) or leaves it to the provider"
+  "providers.temperature_hint": "Overrides the per-model default; 0 auto-picks it (e.g. 0.55 for qwen) or leaves it to the provider",
+  "chat.interject_queued": "Interject now",
+  "chat.interject_badge": "Interject",
+  "chat.steer_injected_label": "Steered"
 }

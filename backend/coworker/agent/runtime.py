@@ -128,6 +128,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.project_id = project_id or ""
         self.agent = agent or DEFAULT_AGENT_NAME
         self._delegation_buffer: list[dict[str, Any]] = []
+        # Interjection (插話): consumed-steer frames buffered for persistence.
+        # Mirrors ``_delegation_buffer`` — see ``_steer_emit_live``.
+        self._steer_buffer: list[dict[str, Any]] = []
         self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning, self.max_output_tokens = _runtime_context_budget(provider, model_override)
         self.provider_vision = bool(getattr(provider, "vision", False))
 
@@ -320,6 +323,39 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         except Exception:  # noqa: BLE001
             return []
 
+    def _steer_emit_live(self, session_id: str):
+        """Interjection emit callback: buffer for persistence AND publish live.
+
+        Called by ``SteerInjectionMiddleware`` the moment a steer is consumed by
+        the graph. The buffered frame is drained by ``_stream`` into ``parts``
+        so the "收到插話" notice round-trips through ``done.parts`` (survives a
+        refresh); publishing to the session bus delivers it to the frontend's
+        live SSE stream immediately.
+        """
+
+        def _emit(event: dict[str, Any]) -> None:
+            try:
+                # 持久化到 parts 的副本用 ``steer`` 型别（前端 PartSteer 直接渲染）；
+                # 发给 session bus 的 SSE 事件维持 ``steer_injected``（前端事件分支）。
+                part = {**event, "type": "steer"}
+                self._steer_buffer.append(part)
+            except Exception:  # noqa: BLE001 - never break on buffer append
+                pass
+            try:
+                session_event_bus.publish(session_id, event)
+            except Exception:  # noqa: BLE001 - never break on a publish hiccup
+                pass
+
+        return _emit
+
+    def _drain_steer_events(self) -> list[dict[str, Any]]:
+        try:
+            events = list(self._steer_buffer)
+            self._steer_buffer.clear()
+            return events
+        except Exception:  # noqa: BLE001
+            return []
+
     async def _force_compact(self, graph: Any, inputs: dict[str, Any], config: Any) -> None:
         """Halve the context budget on the middleware and nudge the checkpoint
         so the overflow retry sends a strictly smaller request.
@@ -464,6 +500,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             browser_capability=self._browser_capability_line,
             max_output_tokens=self.max_output_tokens,
             calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
+            steer_emit=self._steer_emit_live(session_id),
             )
 
             inputs = {
@@ -472,6 +509,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 "language": language,
                 "phase": normalize_phase(None, work_mode),
                 "autonomy": autonomy,
+                "session_id": session_id,
             }
             config = agent_run_config(
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
@@ -499,6 +537,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         # authoritative `done.parts`.
                         for delegate_event in self._drain_delegation_events():
                             parts.append(delegate_event)
+                        # Interjection (插話) consumed-steer frames (published live
+                        # by SteerInjectionMiddleware); record them in parts so the
+                        # "收到插話" notice persists and round-trips via done.parts.
+                        for steer_event in self._drain_steer_events():
+                            parts.append(steer_event)
                         if stream_mode == "messages":
                             msg, _meta = chunk
                             # LangGraph's "messages" stream mode also captures the
@@ -751,6 +794,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             browser_capability=self._browser_capability_line,
             max_output_tokens=self.max_output_tokens,
             calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
+            steer_emit=self._steer_emit_live(session_id),
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of
@@ -772,11 +816,15 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
             tool_state: dict[str, dict[str, Any]] = {}
             try:
-                async for stream_mode, chunk in _aclose_on_exit(graph.astream(Command(resume=resume_map), config=config, stream_mode=["messages", "custom", "updates"])):
+                # ``update`` seeds the session_id so the steer middleware can
+                # resolve the interjection inbox during a resumed (HITL) turn too.
+                async for stream_mode, chunk in _aclose_on_exit(graph.astream(Command(resume=resume_map, update={"session_id": session_id}), config=config, stream_mode=["messages", "custom", "updates"])):
                     # Delegation frames are published live to the session bus by
                     # _delegation_emit_live; record them in parts for persistence.
                     for delegate_event in self._drain_delegation_events():
                         parts.append(delegate_event)
+                    for steer_event in self._drain_steer_events():
+                        parts.append(steer_event)
                     if stream_mode == "messages":
                         msg, _meta = chunk
                         # Same nested-sub-agent filter as _stream: worker / delegation

@@ -65,7 +65,10 @@ function splitDoneParts(parts: MessagePart[]): { process: MessagePart[]; finalRe
   }
   if (lastTextIdx < 0) return { process: parts, finalReply: null };
   const finalReply = (parts[lastTextIdx] as Extract<MessagePart, { type: 'text' }>).content;
-  const process = parts.slice(0, lastTextIdx);
+  // 尾部若有非文本 part（例如最后一段 text 之后到达的 steer 插話通知），也归入
+  // process，避免 done 态把它们丢出渲染（插話通知在会话里仍是可见的）。
+  const trailing = parts.slice(lastTextIdx + 1).filter((p) => p.type !== 'text');
+  const process = parts.slice(0, lastTextIdx).concat(trailing);
   return { process, finalReply: finalReply || null };
 }
 
@@ -118,7 +121,10 @@ function UserMessage({ message, onEdit, onRedo }: { message: ChatMessage; onEdit
             ))}
           </div>
         )}
-        <div className="stream-bubble stream-bubble--user">{message.content}</div>
+        <div className="stream-bubble stream-bubble--user">
+          {message.interject && <span className="interject-badge">{t('chat.interject_badge')}</span>}
+          {message.content}
+        </div>
         {message.attachments && message.attachments.length > 0 && (
           <div className="user-bubble-attachments">
             {message.attachments.map((attachment) => (

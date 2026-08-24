@@ -46,6 +46,7 @@ import type {
   StreamEvent,
   ToolAuditResponse,
   WorkspaceBranchResponse,
+  InterjectRequest,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
@@ -106,6 +107,7 @@ export interface ChatService {
   getRuntimeConfig: () => Promise<RuntimeConfig>;
   updateRuntimeConfig: (request: RuntimeConfigUpdate) => Promise<RuntimeConfig>;
   sendMessageStream: (request: ChatRequest, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
+  interject: (request: InterjectRequest) => Promise<{ status: string; steer_id: string; session_id: string }>;
   listProviders: () => Promise<ProvidersListResponse>;
   createProvider: (request: ProviderPayload) => Promise<void>;
   updateProvider: (providerId: string, request: ProviderUpdatePayload) => Promise<void>;
@@ -261,6 +263,19 @@ class ElectronChatService implements ChatService {
       if (idleTimer) clearTimeout(idleTimer);
       detachAbortListener();
     }
+  }
+
+  async interject(request: InterjectRequest): Promise<{ status: string; steer_id: string; session_id: string }> {
+    const response = await fetch(`${BACKEND_URL}/chat/interject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail || `Backend returned ${response.status}`);
+    }
+    return payload as { status: string; steer_id: string; session_id: string };
   }
 
   async openDirectoryPicker(options?: { title?: string; defaultPath?: string }): Promise<string | null> {
@@ -1025,6 +1040,14 @@ class HttpChatService implements ChatService {
   async listActiveSessions(): Promise<string[]> {
     const response = await this.request<{ status: string; session_ids: string[] }>('/sessions/active');
     return response.session_ids ?? [];
+  }
+
+  async interject(request: InterjectRequest): Promise<{ status: string; steer_id: string; session_id: string }> {
+    return this.request<{ status: string; steer_id: string; session_id: string }>('/chat/interject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
   }
 
   async createSession(request: CreateSessionRequest): Promise<SessionResponse> {

@@ -6,3 +6,4 @@ pybackend.spec
 
 # Test scratch data dir (tests/test_stop_session.py)
 .test_stop_data/
+.test_interject_data/

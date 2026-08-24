@@ -907,5 +907,8 @@
   "chat.reorder_queued": "Arrastrar para reordenar",
   "chat.worker_loading": "Cargando flujo del worker…",
   "files.expand_all": "Expandir todo ({count} más)",
-  "files.collapse": "Contraer"
+  "files.collapse": "Contraer",
+  "chat.interject_queued": "Intervenir ahora",
+  "chat.interject_badge": "Intervenir",
+  "chat.steer_injected_label": "Intervención recibida"
 }

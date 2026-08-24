@@ -53,6 +53,7 @@ from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
+from coworker.steer import SteerEntry, steer_inbox
 from coworker.skills.skill_manager import SkillManager
 from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
 from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
@@ -1616,6 +1617,10 @@ class ChatStreamRequest(ChatRequest):
     # 前端「文件体积上限」设置换算成的字节数；后端按此上限如实处理附件
     # （超过的附件不内联、在提示词中说明未转发）。None 时后端用默认 25MB。
     max_attachment_bytes: Optional[int] = None
+    # 插話 (interject) 自动续跑：user 消息已由 /chat/interject 持久化（它就是
+    # history 的最后一条 user 消息），这里不再 append，直接以 history 作为模型输入，
+    # 避免重复写库与重复送上下文。
+    skip_user_append: bool = False
 
 def _cached_provider_unreachable(provider_id: str | None, model: str | None) -> str | None:
     """Best-effort fast-fail guard: return the cached "LLM 服务不可达" message
@@ -1735,10 +1740,20 @@ async def chat_stream(request: ChatStreamRequest):
     # and aborted turns (Stop).
     await agent_registry.forget_runtime_checkpoint(session_id)
 
-    user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
-    session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
-    snapshot_user_message_id = request.user_message_id or session_store.require(session_id).messages[-1].id
-    messages = history + [user_message]
+    if request.skip_user_append:
+        # 插話自动续跑：steer 已由 /chat/interject 持久化为最后一条 user 消息。
+        # 直接复用 history（不 append、不重复送模型）。
+        user_message = None
+        messages = history
+    else:
+        user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
+        session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
+        messages = history + [user_message]
+    if request.user_message_id:
+        snapshot_user_message_id = request.user_message_id
+    else:
+        session_messages = session_store.require(session_id).messages
+        snapshot_user_message_id = session_messages[-1].id if session_messages else ""
 
     async def event_stream():
         terminal_sent = False
@@ -2005,6 +2020,85 @@ async def chat_stream(request: ChatStreamRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class InterjectRequest(BaseModel):
+    session_id: str = ""
+    message: str = ""
+    # 前端乐观渲染时生成的 user 消息 id，与 /chat/interject 持久化的 id 一致
+    # （late-steer 自动续跑时以同一 id + skip_user_append 复用 history）。
+    user_message_id: str = ""
+    attachments: list[dict[str, Any]] = []
+    referenced_sessions: list[str] = []
+    max_attachment_bytes: int = 25 * 1024 * 1024
+
+
+@app.post("/chat/interject")
+async def interject(request: InterjectRequest):
+    """把一条排队消息插入正在进行的流式任务，引导 LLM 后续输出与思考方向。
+
+    与「排队」的区别：插话不会暂停/终止当前流式任务，而是把消息送入
+    per-session 的 steer 收件箱，由图内的 ``SteerInjectionMiddleware`` 在下一
+    次模型呼叫边界注入为 HumanMessage。当前在飞的 ``llm.stream`` 不被中止。
+
+    仅当会话正处于流式（有在飞的 /chat/stream 任务）时才可插话；否则 409，
+    前端回退为普通发送。
+    """
+    session_id = request.session_id
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    try:
+        session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # 仅当会话正处于流式（有在飞的 /chat/stream 任务）时才可插话；否则 409，
+    # 前端回退为普通发送。
+    task = _stream_tasks.get(session_id)
+    if task is None or task.done():
+        raise HTTPException(
+            status_code=409,
+            detail="当前没有正在进行的任务，无法插话（消息已退回队列）。",
+        )
+
+    references = _resolve_references(request.referenced_sessions)
+    steer_id = str(uuid.uuid4())
+    entry = SteerEntry(
+        id=steer_id,
+        content=request.message,
+        ts=int(time.time() * 1000),
+        user_message_id=request.user_message_id,
+        attachments=request.attachments or [],
+        references=references,
+        max_attachment_bytes=request.max_attachment_bytes,
+    )
+    # 持久化为真实 user 消息：会话历史可回溯；late-steer 自动续跑时以
+    # skip_user_append 直接复用 history（该 steer 已是最后一条 user 消息）。
+    try:
+        session_store.append_message(
+            session_id,
+            role="user",
+            content=request.message,
+            attachments=request.attachments or [],
+            references=references,
+            message_id=request.user_message_id or None,
+        )
+    except Exception:  # noqa: BLE001 - persistence failure must not break the interject
+        logger.exception("interject persist failed for session %s", session_id)
+
+    steer_inbox.push(session_id, entry)
+    try:
+        session_event_bus.publish(
+            session_id,
+            {
+                "type": "steer_admitted",
+                "session_id": session_id,
+                "steer_id": steer_id,
+                "content": request.message,
+            },
+        )
+    except Exception:  # noqa: BLE001 - a publish hiccup must not break the interject
+        pass
+    return {"status": "ok", "steer_id": steer_id, "session_id": session_id}
 
 class SettingsUpdate(BaseModel):
     max_attachment_mb: int = 25

@@ -910,5 +910,8 @@
   "files.collapse": "折りたたむ",
   "providers.temperature": "サンプリング温度",
   "providers.temperature_placeholder": "0 = 自動（ファミリー既定）",
-  "providers.temperature_hint": "モデル既定を上書き；0 は自動（qwen なら 0.55）またはプロバイダー任せ"
+  "providers.temperature_hint": "モデル既定を上書き；0 は自動（qwen なら 0.55）またはプロバイダー任せ",
+  "chat.interject_queued": "割り込み送信",
+  "chat.interject_badge": "割り込み",
+  "chat.steer_injected_label": "割り込みを受信"
 }

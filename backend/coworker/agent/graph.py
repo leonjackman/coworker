@@ -70,6 +70,7 @@ from .middleware import (
     PhaseToolGateMiddleware,
     RepeatedToolCallMiddleware,
     StallRetryMiddleware,
+    SteerInjectionMiddleware,
     ToolCallCleanerMiddleware,
     _summarizer_candidates,
     command_approval_middleware,
@@ -617,6 +618,7 @@ def build_coworker_agent_graph(
     browser_capability: str = "",
     max_output_tokens: int = 0,
     calibration_key: str = "",
+    steer_emit: Any | None = None,  # interjection (插話) live-emit callback
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -734,6 +736,13 @@ def build_coworker_agent_graph(
     # unguarded loop effectively infinite, so cap identical consecutive calls
     # here and force a text-only final turn on the hard cap.
     middleware.append(RepeatedToolCallMiddleware())
+
+    # Interjection (插話) steering: drains the per-session steer inbox at every
+    # model-call boundary and folds pending user messages into the next request
+    # — WITHOUT aborting the in-flight stream. Mounted AFTER compaction (so the
+    # steer survives any trim) and BEFORE the context guard (so the guard
+    # measures the full final request including injected steers).
+    middleware.append(SteerInjectionMiddleware(steer_emit=steer_emit))
 
     # Context guard (INNERMOST — last in the chain, so it measures the request
     # after every other middleware's overrides): calibrated measurement of the

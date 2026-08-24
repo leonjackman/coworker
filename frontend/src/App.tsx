@@ -87,6 +87,18 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
       if (!exists && part.content) {
         merged.push(part);
       }
+    } else if (part.type === 'steer') {
+      // steer 通知既通过 steer_injected 事件 live 加入，也会随 done.parts 回传，
+      // 按 steer_id（无 id 时退化为内容）去重，避免重复叠加。
+      const exists = merged.some(
+        (p) =>
+          p.type === 'steer' &&
+          ((p.steer_id !== undefined && p.steer_id === part.steer_id) ||
+            (p.steer_id === undefined && p.content === part.content)),
+      );
+      if (!exists) {
+        merged.push(part);
+      }
     } else {
       merged.push(part);
     }
@@ -162,6 +174,14 @@ function applyStreamEventToParts(parts: MessagePart[], event: StreamEvent): Mess
       return parts.map((p) => (p.type === 'plan' ? { ...p, content: p.content + event.content } : p));
     case 'plan_end':
       return parts.map((p) => (p.type === 'plan' ? { ...p, content: event.content || p.content } : p));
+    case 'steer_injected': {
+      const steerPart: MessagePart = {
+        type: 'steer',
+        content: event.content || '',
+        ...(event.steer_id ? { steer_id: event.steer_id } : {}),
+      };
+      return [...parts, steerPart];
+    }
     default:
       return parts;
   }
@@ -813,6 +833,76 @@ function App() {
   };
   const queuedMessagesFor = (sessionId: string | undefined) => queuedEntries[streamKey(sessionId)] ?? [];
 
+  // 插話 (interject)：已提交给 /chat/interject、但尚未被运行中 graph 消费的
+  // steer。当当前流的 assistant 消息进入终态（done/error/stopped）而该 steer
+  // 仍未收到 `steer_injected` 时，自动续跑为下一轮，避免插话丢失。
+  interface PendingSteer {
+    id: string;
+    message: string;
+    userMessageId: string;
+    attachments?: ComposerAttachment[];
+    references?: SessionReference[];
+  }
+  const pendingSteersRef = useRef<Record<string, PendingSteer[]>>({});
+  const markSteerConsumed = (sessionId: string | undefined, steerId: string) => {
+    const key = streamKey(sessionId);
+    pendingSteersRef.current[key] = (pendingSteersRef.current[key] ?? []).filter((s) => s.id !== steerId);
+  };
+
+  // 从队列中选择一条消息插话：立即以 user 气泡展示，同时推送到后端 steer 收件箱。
+  // 后端在下一次模型呼叫边界注入到运行中的图（不中止当前流）；若 409（无活动任务）
+  // 则退回队列并移除气泡。
+  const interjectQueuedMessage = async (sessionId: string, queuedId: string) => {
+    const key = streamKey(sessionId);
+    const queue = queuedMessagesRef.current[key] ?? [];
+    const entry = queue.find((q) => q.id === queuedId);
+    if (!entry) return;
+    removeQueuedMessage(sessionId, queuedId);
+    const steerId = `steer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const userMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    pendingSteersRef.current[key] = [
+      ...(pendingSteersRef.current[key] ?? []),
+      {
+        id: steerId,
+        message: entry.message,
+        userMessageId,
+        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+        ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
+      },
+    ];
+    setMessages((current) => [
+      ...current,
+      createMessage('user', entry.message, {
+        id: userMessageId,
+        status: 'done',
+        sessionId,
+        interject: true,
+        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+        ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
+      }),
+    ]);
+    try {
+      await chatService.interject({
+        session_id: sessionId,
+        message: entry.message,
+        user_message_id: userMessageId,
+        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+        ...(entry.references && entry.references.length > 0 ? { referenced_sessions: entry.references.map((r) => r.id) } : {}),
+        max_attachment_bytes: Math.max(1, maxAttachmentMb) * 1024 * 1024,
+      });
+    } catch (error) {
+      // 409：当前无正在进行的任务，插话无法命中本次流。退回队列并移除气泡，
+      // 由用户决定重新插话或按队列顺序发送。
+      pendingSteersRef.current[key] = (pendingSteersRef.current[key] ?? []).filter((s) => s.id !== steerId);
+      setMessages((current) => current.filter((m) => m.id !== userMessageId));
+      enqueueMessage(sessionId, entry.message, {
+        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+        ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
+      });
+      console.warn('interject failed (returned to queue):', error);
+    }
+  };
+
   const abortStreamFor = (sessionId?: string | null) => {
     const key = streamKey(sessionId);
     streamControllersRef.current[key]?.abort();
@@ -1204,7 +1294,19 @@ function App() {
     setActiveView('settings');
   };
 
-  const sendMessage = async (override?: { message: string; projectId?: string }) => {
+  const sendMessage = async (override?: {
+    message: string;
+    projectId?: string;
+    attachments?: ComposerAttachment[];
+    references?: SessionReference[];
+    sessionId?: string;
+    /** 插話自动续跑：user 气泡已存在（interject 时创建的），不再新建。 */
+    skipUserBubble?: boolean;
+    /** 插話自动续跑：user 消息已由 /chat/interject 持久化，后端复用 history。 */
+    skipUserAppend?: boolean;
+    /** skipUserBubble 时复用的 user 消息 id（interject 时创建的）。 */
+    userMessageId?: string;
+  }) => {
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) {
       // Agent is streaming for this session — do NOT start a second stream. A
@@ -1313,10 +1415,10 @@ function App() {
     const requestId = requestSeqRef.current + 1;
     requestSeqRef.current = requestId;
     const selectedProvider = providers.find((provider) => provider.id === selectedModel);
-    const requestAttachments = attachments;
+    const requestAttachments = override?.attachments ?? attachments;
     const requestModel = selectedProvider?.model ?? runtimeConfig?.selected_model ?? '';
     const requestProvider = selectedProvider?.name ?? runtimeConfig?.agent_provider ?? '';
-    const requestSessionId = sessionIdRef.current;
+    const requestSessionId = override?.sessionId || sessionIdRef.current;
     // New generation for this session: any older stream of the SAME session is
     // now stale, but streams of OTHER sessions (kept alive after a switch)
     // stay valid and keep updating their own message in the background.
@@ -1324,7 +1426,7 @@ function App() {
     const myRequestSeq = getSessionSeq(requestSessionId);
 
     // 引用会话：先采用 composer 中已确认的 chips，再兜底扫描消息文本里出现的会话 id
-    const requestReferences = [...references];
+    const requestReferences = override?.references ?? [...references];
     const referencedIds = new Set(requestReferences.map((reference) => reference.id));
     for (const sessionIdInText of extractSessionIds(message)) {
       if (referencedIds.has(sessionIdInText)) continue;
@@ -1337,12 +1439,16 @@ function App() {
 
     // 在消息墙展示用户输入（含 /new、/help 等命令令牌）
     // 前端生成稳定的消息 id，回传后端以统一前后端 id（修复按 id 回退/重生成时 404）
-    const userMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const userMessageId =
+      override?.skipUserBubble && override.userMessageId
+        ? override.userMessageId
+        : `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const assistantMessageId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setMessages((current) => [
-      ...current,
-      createMessage('user', message, {
-        id: userMessageId,
+    if (!override?.skipUserBubble) {
+      setMessages((current) => [
+        ...current,
+        createMessage('user', message, {
+          id: userMessageId,
         status: 'done',
         ...(requestSessionId ? { sessionId: requestSessionId } : {}),
         autonomy,
@@ -1352,15 +1458,18 @@ function App() {
         ...(requestReferences.length > 0 ? { references: requestReferences } : {}),
       }),
     ]);
-    setInput('');
-    // 发送即清空输入框里的附件与引用：它们已被捕获进用户消息气泡（上方
-    // setMessages 的 attachments/references）和即将发出的请求体，无需再停留
-    // 在 composer。放在此处（而非等流式结束后）可彻底避免两类问题：
-    // 1) 长任务的整段流式期间附件 chip 一直挂在输入框，看起来像「没发出去」；
-    // 2) 流式出错/被中止时 catch/finally 不会清附件，导致 chip 永久残留，
-    //    且残留的附件会在下一次发送时被 requestAttachments 误带重发。
-    setAttachments([]);
-    setReferences([]);
+    }
+    if (!override?.skipUserBubble) {
+      setInput('');
+      // 发送即清空输入框里的附件与引用：它们已被捕获进用户消息气泡（上方
+      // setMessages 的 attachments/references）和即将发出的请求体，无需再停留
+      // 在 composer。放在此处（而非等流式结束后）可彻底避免两类问题：
+      // 1) 长任务的整段流式期间附件 chip 一直挂在输入框，看起来像「没发出去」；
+      // 2) 流式出错/被中止时 catch/finally 不会清附件，导致 chip 永久残留，
+      //    且残留的附件会在下一次发送时被 requestAttachments 误带重发。
+      setAttachments([]);
+      setReferences([]);
+    }
 
     setMessages((current) => [
       ...current,
@@ -1517,6 +1626,15 @@ function App() {
         commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? requestSessionId);
         playSound('reply_done');
+      } else if (event.type === 'steer_injected') {
+        // 插話已被运行中 graph 消费：从 pending 列表移除（不再自动续跑），
+        // 并在当前 assistant 气泡内追加一条「收到插話」notice。
+        const consumedSessionId = event.session_id ?? requestSessionId;
+        if (event.steer_id) markSteerConsumed(consumedSessionId, event.steer_id);
+        if (!event.session_id || event.session_id === requestSessionId) {
+          localParts = applyStreamEventToParts(localParts, event);
+          commit(localParts);
+        }
       } else if (event.type === 'todos') {
         // Task list is keyed by session (works for background streams too): the
         // TodoBlock card above the composer shows it in every mode. The
@@ -1560,6 +1678,7 @@ function App() {
           ...(draftAgentId ? { agent: draftAgentId } : {}),
           user_message_id: userMessageId,
           assistant_message_id: assistantMessageId,
+          ...(override?.skipUserAppend ? { skip_user_append: true } : {}),
         },
         handleEvent,
         controller.signal,
@@ -1617,17 +1736,41 @@ function App() {
   // via messages/queued state so the session is guaranteed idle (no running /
   // waiting message) before dequeuing — a queued message must never race the
   // stream it is waiting for.
+  // 插話 late-steer 也在这里兜底：流已 settle 但某条插话未被运行中 graph 消费时，
+  // 自动续跑为下一轮（user 气泡已存在 → skipUserBubble + skipUserAppend 复用同一
+  // 条消息，不重复建气泡/写库）。插话优先于普通队列；每轮 effect run 每会话只发
+  // 一条，避免同一会话并发双流被后端 409。
   useEffect(() => {
-    for (const key of Object.keys(queuedMessagesRef.current)) {
-      const queuedSessionId = key === '__none__' ? undefined : key;
-      if (queuedSessionId == null) continue;
-      const queue = queuedMessagesRef.current[key];
-      if (!queue || queue.length === 0) continue;
+    const keys = new Set<string>([
+      ...Object.keys(queuedMessagesRef.current),
+      ...Object.keys(pendingSteersRef.current),
+    ]);
+    for (const key of keys) {
+      const sessionId = key === '__none__' ? undefined : key;
+      if (sessionId == null) continue;
       const busy = messages.some(
-        (m) => (m.status === 'running' || m.status === 'waiting') && m.sessionId === queuedSessionId,
+        (m) => (m.status === 'running' || m.status === 'waiting') && m.sessionId === sessionId,
       );
       if (busy) continue;
-      const dequeued = dequeueMessage(queuedSessionId);
+      const pendingSteers = pendingSteersRef.current[key];
+      if (pendingSteers && pendingSteers.length > 0) {
+        pendingSteersRef.current[key] = [];
+        const steer = pendingSteers[0];
+        if (!steer) continue;
+        void sendMessage({
+          message: steer.message,
+          ...(steer.attachments && steer.attachments.length > 0 ? { attachments: steer.attachments } : {}),
+          ...(steer.references && steer.references.length > 0 ? { references: steer.references } : {}),
+          sessionId,
+          skipUserBubble: true,
+          skipUserAppend: true,
+          userMessageId: steer.userMessageId,
+        });
+        continue;
+      }
+      const queue = queuedMessagesRef.current[key];
+      if (!queue || queue.length === 0) continue;
+      const dequeued = dequeueMessage(sessionId);
       if (dequeued) {
         void sendMessage({
           message: dequeued.message,
@@ -1953,6 +2096,10 @@ function App() {
       } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
         localParts = applyDelegateEventToParts(localParts, event);
         commit(localParts);
+      } else if (event.type === 'steer_injected') {
+        if (event.steer_id) markSteerConsumed(event.session_id ?? currentSessionId, event.steer_id);
+        localParts = applyStreamEventToParts(localParts, event);
+        commit(localParts);
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
@@ -2193,6 +2340,10 @@ function App() {
         commit(localParts);
       } else if (event.type === 'delegate_start' || event.type === 'delegate_progress' || event.type === 'delegate_end') {
         localParts = applyDelegateEventToParts(localParts, event);
+        commit(localParts);
+      } else if (event.type === 'steer_injected') {
+        if (event.steer_id) markSteerConsumed(event.session_id ?? currentSessionId, event.steer_id);
+        localParts = applyStreamEventToParts(localParts, event);
         commit(localParts);
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
@@ -2442,6 +2593,13 @@ function App() {
             playSound('reply_done');
           } else if (event.type === 'todos') {
             setSessionTodos(event.session_id ?? resumeSessionId, targetMessageId, event.todos);
+          } else if (event.type === 'steer_injected') {
+            if (event.steer_id) markSteerConsumed(event.session_id ?? resumeSessionId, event.steer_id);
+            resumeParts = [
+              ...resumeParts,
+              { type: 'steer' as const, content: event.content || '', ...(event.steer_id ? { steer_id: event.steer_id } : {}) },
+            ];
+            applyResume('running');
           } else if (event.type === 'delta') {
             resumeContent += event.content;
             const last = resumeParts[resumeParts.length - 1];
@@ -3480,6 +3638,9 @@ function App() {
                           }}
                           onReorderQueued={(orderedIds) => {
                             if (sessionId) reorderQueuedMessage(sessionId, orderedIds);
+                          }}
+                          onInterjectQueued={(id) => {
+                            if (sessionId) void interjectQueuedMessage(sessionId, id);
                           }}
                           onClose={dismissCurrentTodos}
                         />

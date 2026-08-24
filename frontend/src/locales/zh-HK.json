@@ -910,5 +910,8 @@
   "files.collapse": "收起",
   "providers.temperature": "採樣溫度",
   "providers.temperature_placeholder": "0 = 自動（家族預設）",
-  "providers.temperature_hint": "覆寫模型預設；0 自動套用（如 qwen 為 0.55）或交由提供商決定"
+  "providers.temperature_hint": "覆寫模型預設；0 自動套用（如 qwen 為 0.55）或交由提供商決定",
+  "chat.interject_queued": "插話引導",
+  "chat.interject_badge": "插話",
+  "chat.steer_injected_label": "收到插話"
 }

@@ -2367,6 +2367,47 @@ body.bottom-panel-resizing {
   border-bottom-right-radius: 5px;
 }
 
+.interject-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: 1px;
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color: var(--accent-foreground);
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+}
+
+/* 插話 notice：assistant 气泡内「收到插話：…」的分隔提示。 */
+.steer-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 18%, transparent);
+  border-left-width: 3px;
+}
+
+.steer-notice__icon {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.steer-notice__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .stream-avatar {
   flex: 0 0 auto;
   width: 30px;
@@ -9985,6 +10026,33 @@ body.bottom-panel-resizing {
 .todo-block__queue-remove:hover {
   background: color-mix(in oklab, var(--color-danger, #e5484d) 14%, transparent);
   color: var(--color-danger, #e5484d);
+}
+
+.todo-block__queue-interject {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.todo-block__queue-interject:hover {
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color: var(--accent-foreground);
+  transform: translateY(-1px);
+}
+
+.todo-block__queue-interject:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .todo-block__queue-edit {

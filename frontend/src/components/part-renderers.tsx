@@ -1,5 +1,6 @@
 import { lazy, Suspense, type ReactNode } from 'react';
 import type { MessagePart, PartAgent } from '../types';
+import { t } from '../lib/i18n';
 import { ThinkingBlock } from './ThinkingBlock';
 import { PlanBlock } from './PlanBlock';
 import { ToolCallCard } from './ToolCallCard';
@@ -110,6 +111,15 @@ export function OrderedParts({
       nodes.push(<ThinkingBlock key={`reasoning-${index}`} reasoningParts={[part]} working={running} />);
     } else if (part.type === 'plan') {
       nodes.push(<PlanBlock key={`plan-${index}`} planParts={[part]} working={running} />);
+    } else if (part.type === 'steer') {
+      nodes.push(
+        <div key={`steer-${index}`} className="steer-notice" title={t('chat.steer_injected_label')}>
+          <span className="steer-notice__icon" aria-hidden>↳</span>
+          <span className="steer-notice__text">
+            {t('chat.steer_injected_label')}：{part.content}
+          </span>
+        </div>,
+      );
     } else if (part.type === 'agent') {
       if (renderAgentBlock) {
         const RenderAgentBlock = renderAgentBlock;

@@ -258,7 +258,16 @@ export interface PartText {
   content: string;
 }
 
-export type MessagePart = PartTool | PartReasoning | PartPlan | PartAgent | PartText;
+/** A user interjection (插話) consumed by the running turn. Rendered as a small
+ *  inline notice inside the assistant bubble so the steer is visible in the
+ *  transcript (persisted via done.parts). */
+export interface PartSteer {
+  type: 'steer';
+  content: string;
+  steer_id?: string;
+}
+
+export type MessagePart = PartTool | PartReasoning | PartPlan | PartAgent | PartText | PartSteer;
 
 export interface ChatMessage {
   id: string;
@@ -278,6 +287,8 @@ export interface ChatMessage {
   references?: SessionReference[];
   /** Number of file changes reverted by editing this user message (awaiting redo). */
   revertedFiles?: number;
+  /** This user message was sent as an interjection (插話) into a running task. */
+  interject?: boolean;
 }
 
 export interface RuntimeConfig {
@@ -312,6 +323,22 @@ export interface ChatRequest {
   user_message_id?: string;
   assistant_message_id?: string;
   // 「文件体积上限」设置换算成的字节数，后端按此如实处理附件
+  max_attachment_bytes?: number;
+  // 插話 (interject) 自动续跑：user 消息已由 /chat/interject 持久化，后端不再
+  // append，直接以 history 作为模型输入（避免重复写库与重复送上下文）。
+  skip_user_append?: boolean;
+}
+
+/** 插話 (interject)：把一条排队消息插入正在进行的流式任务，引导 LLM 后续输出
+ *  与思考方向，而不暂停/终止当前流。 */
+export interface InterjectRequest {
+  session_id: string;
+  message: string;
+  // 前端乐观渲染时生成的 user 消息 id，与后端 /chat/interject 持久化的 id 一致
+  // （late-steer 自动续跑以同一 id + skip_user_append 复用 history）。
+  user_message_id?: string;
+  attachments?: ComposerAttachment[];
+  referenced_sessions?: string[];
   max_attachment_bytes?: number;
 }
 
@@ -624,6 +651,8 @@ export interface PendingRequest {
     | { type: 'context_usage'; used_chars: number; budget_chars: number; compressed: boolean; used_tokens: number; used_tokens_calibrated?: number; calibration_factor?: number; budget_tokens: number; active_budget_tokens: number; window_tokens: number; effective_window_tokens?: number; max_output_tokens?: number; compacted: boolean; compact_count: number; window_source: string; window_warning?: string; session_id?: string }
     | { type: 'context_guard'; status: string; measured_tokens?: number; limit_tokens?: number; calibration_factor?: number; steps?: string[]; session_id?: string }
     | { type: 'idle_warning'; seconds_idle: number; session_id?: string }
+    | { type: 'steer_admitted'; session_id?: string; steer_id?: string; content?: string }
+    | { type: 'steer_injected'; session_id?: string; steer_id?: string; content?: string }
     | {
         type: 'revert_summary';
         session_id: string;
