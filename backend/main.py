@@ -45,6 +45,7 @@ from coworker.agent.core import (
     _runtime_context_budget,
 )
 from coworker.agent.runtime import AgentRuntimeRegistry
+from coworker.platform import default_shell as _platform_default_shell
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.events import WorkerEventBus, session_event_bus, worker_event_bus
@@ -3477,10 +3478,11 @@ async def delete_project(project_id: str):
         project_memory = memory_manager.root / memory_dir
         if project_memory.exists():
             try:
-                from coworker.memory.trash import send_to_trash, system_trash_dir
+                from coworker.memory.trash import send_to_os_trash, send_to_trash
 
-                dest_dir = system_trash_dir() or (memory_manager.root / ".trash")
-                send_to_trash(project_memory, dest_dir)
+                dest = send_to_os_trash(project_memory)
+                if dest is None:
+                    dest = send_to_trash(project_memory, memory_manager.root / ".trash")
             except Exception:  # noqa: BLE001 - trash failure must not fail the delete
                 logger.warning("could not trash project memory dir %s", memory_dir, exc_info=True)
     return {"status": "ok"}
@@ -4410,11 +4412,6 @@ async def ws_terminal(websocket: WebSocket):
 
     project_id = websocket.query_params.get("project_id")
 
-    if not _PTY_AVAILABLE:
-        await websocket.send_text(json.dumps({"type": "error", "message": "Interactive terminal is not supported on this platform."}))
-        await websocket.close()
-        return
-
     try:
         if project_id:
             workspace = workspace_controller.workspace_for_project(project_id)
@@ -4424,7 +4421,13 @@ async def ws_terminal(websocket: WebSocket):
     except Exception:
         cwd = os.path.expanduser("~")
 
-    shell = os.environ.get("SHELL") or "/bin/bash"
+    if not _PTY_AVAILABLE:
+        # Windows: no POSIX pty. Fall back to a pipe-based interactive shell
+        # that keeps the same WebSocket protocol.
+        await _pipe_terminal(websocket, cwd)
+        return
+
+    shell = _platform_default_shell()
     master_fd: int | None = None
     proc: subprocess.Popen[bytes] | None = None
 
@@ -4543,6 +4546,131 @@ async def ws_terminal(websocket: WebSocket):
                 os.close(master_fd)
             except OSError:
                 pass
+
+
+async def _pipe_terminal(websocket: WebSocket, cwd: str) -> None:
+    """Non-PTY interactive terminal fallback for platforms without ``pty`` (Windows).
+
+    Runs ``powershell.exe`` (or ``cmd.exe``) over anonymous pipes, keeping the
+    same WebSocket protocol as the POSIX PTY terminal: the client sends
+    ``{"type":"input","data":...}`` frames (``resize`` is accepted but ignored)
+    and receives raw stdout bytes as text frames. A one-line banner notes the
+    reduced mode (no resize, no raw TTY control codes).
+    """
+    import threading
+
+    import subprocess as _subprocess
+
+    shell = _platform_default_shell()
+    env = dict(os.environ)
+    env.setdefault("TERM", "xterm-256color")
+    creationflags = 0
+    try:
+        from subprocess import CREATE_NEW_PROCESS_GROUP
+
+        creationflags = CREATE_NEW_PROCESS_GROUP
+    except ImportError:  # pragma: no cover - non-Windows
+        pass
+
+    proc: _subprocess.Popen[bytes] | None = None
+    try:
+        proc = _subprocess.Popen(
+            [shell],
+            stdin=_subprocess.PIPE,
+            stdout=_subprocess.PIPE,
+            stderr=_subprocess.STDOUT,
+            cwd=cwd or os.path.expanduser("~"),
+            env=env,
+            bufsize=0,
+            creationflags=creationflags,
+        )
+    except Exception as exc:
+        try:
+            await websocket.send_text(json.dumps({"type": "error", "message": f"Failed to start shell: {exc}"}))
+        except Exception:  # noqa: BLE001
+            pass
+        await websocket.close()
+        return
+
+    loop = asyncio.get_running_loop()
+    write_queue: asyncio.Queue[str] = asyncio.Queue()
+    eof = asyncio.Event()
+
+    def _enqueue(text: str) -> None:
+        try:
+            write_queue.put_nowait(text)
+        except asyncio.QueueFull:
+            pass
+
+    def _reader() -> None:
+        assert proc is not None and proc.stdout is not None
+        try:
+            while True:
+                data = proc.stdout.read(65536)
+                if not data:
+                    break
+                loop.call_soon_threadsafe(_enqueue, data.decode("utf-8", errors="replace"))
+        finally:
+            loop.call_soon_threadsafe(eof.set)
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
+
+    async def pump() -> None:
+        while True:
+            try:
+                chunk = await write_queue.get()
+            except asyncio.CancelledError:
+                return
+            try:
+                await websocket.send_text(chunk)
+            except Exception:  # noqa: BLE001
+                return
+
+    pump_task = asyncio.ensure_future(pump())
+
+    def _write(data: str) -> None:
+        if proc is None or proc.stdin is None or proc.poll() is not None:
+            return
+        try:
+            proc.stdin.write(data.encode("utf-8", errors="replace"))
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+
+    try:
+        await websocket.send_text(
+            "\r\n\x1b[33mNon-PTY terminal mode (Windows). Resize is not supported; ANSI-only.\x1b[0m\r\n"
+        )
+        while True:
+            if eof.is_set():
+                break
+            message = await websocket.receive_text()
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                _write(message)
+                continue
+            msg_type = payload.get("type")
+            if msg_type == "input":
+                _write(str(payload.get("data", "")))
+            # "resize" is accepted and ignored on non-PTY platforms.
+    except WebSocketDisconnect:
+        pass
+    finally:
+        pump_task.cancel()
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                proc.wait(timeout=2)
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
 
 
 # ---------------------------------------------------------------------------

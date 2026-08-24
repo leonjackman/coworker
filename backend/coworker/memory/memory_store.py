@@ -146,23 +146,20 @@ class MemoryStore:
     def _move_to_trash(self, path: Path, trash_dir: Path | None) -> str:
         """Move ``path`` into trash.
 
-        With no explicit ``trash_dir``, tries the OS trash first and falls
-        back to the hidden in-library ``.trash/`` when the OS trash is
-        unavailable or not writable (e.g. sandboxed environments), so a
-        removal never silently fails just because the system trash is
-        inaccessible.
+        With no explicit ``trash_dir``, tries the OS trash first (send2trash
+        across platforms) and falls back to the hidden in-library ``.trash/``
+        when the OS trash is unavailable or not writable (e.g. sandboxed
+        environments), so a removal never silently fails just because the
+        system trash is inaccessible.
         """
-        from .trash import send_to_trash, system_trash_dir
+        from .trash import send_to_os_trash, send_to_trash
 
         if trash_dir is not None:
             # Explicit destination (tests): single attempt, no fallback.
             return send_to_trash(path, trash_dir)
-        system = system_trash_dir()
-        if system is not None:
-            try:
-                return send_to_trash(path, system)
-            except OSError:
-                pass  # fall through to the in-library .trash/ fallback
+        dest = send_to_os_trash(path)
+        if dest is not None:
+            return dest
         return send_to_trash(path, self.root / ".trash")
 
     def move_file(self, rel: str, new_rel: str) -> str:

@@ -30,6 +30,7 @@ a = Analysis(
         'tiktoken',
         'tiktoken_ext',
         'tiktoken_ext.openai_public',
+        'send2trash',
     ],
     hookspath=[],
     hooksconfig={},

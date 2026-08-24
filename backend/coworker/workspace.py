@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import platform as _platform
 from .atomicio import append_jsonl_retained, trim_jsonl
 
 
@@ -79,11 +80,10 @@ class ExternalWriteError(PathBoundaryError):
         super().__init__(path, "external_write")
 
 
-READ_ONLY_COMMANDS = frozenset({
-    "cat", "ls", "pwd", "head", "tail", "more", "less",
-    "wc", "grep", "rg", "find", "file", "stat", "du", "df",
-    "id", "whoami", "uname", "date", "echo",
-})
+# Read-only commands are resolved per platform (supervised mode auto-approves
+# these without an approval prompt). Windows uses the native PowerShell/cmd
+# read-only vocabulary; macOS/Linux use the Unix tools.
+READ_ONLY_COMMANDS = _platform.read_only_commands()
 
 
 def fingerprint_path_for(data_dir: Path, workspace_root: Path) -> Path:
@@ -115,22 +115,11 @@ def set_tool_audit_retention(lines: int) -> None:
     global ACTIVE_TOOL_AUDIT_RETENTION
     ACTIVE_TOOL_AUDIT_RETENTION = max(1, min(int(lines or MAX_TOOL_AUDIT_LINES), 10_000))
 
-ALLOWED_COMMANDS = {
-    "cat",
-    "chmod",
-    "find",
-    "git",
-    "ls",
-    "node",
-    "npm",
-    "npx",
-    "pwd",
-    "python",
-    "python3",
-    "pytest",
-    "rg",
-    "sed",
-}
+# Allowlisted run_command executables, resolved per platform. On macOS/Linux the
+# agent speaks the Unix tool vocabulary (cat/ls/rg/sed/…); on Windows it uses
+# native PowerShell/cmd commands (dir/type/findstr/where/…). This is a fixed
+# workspace restriction that user approval cannot override.
+ALLOWED_COMMANDS = _platform.allowed_commands()
 
 
 class CommandApprovalStore:
@@ -858,7 +847,11 @@ class Workspace:
                 raise ValueError(f"Executable is outside the workspace: {executable}")
             return str(resolved)
 
-        return command_name
+        # Windows: resolve a bare name to a real executable suffix so `python`
+        # -> `python.exe` and `npm` -> `npm.cmd` (subprocess does NOT do this
+        # for shell=False). Unix keeps the bare name; PATH lookup happens in
+        # subprocess.run.
+        return _platform.resolve_command_name(command_name)
 
     @staticmethod
     def decode_process_output(value: str | bytes | None) -> str:

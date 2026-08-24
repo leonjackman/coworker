@@ -201,6 +201,19 @@ def build_workspace_tools(
         except Exception as exc:
             return _error_result(exc, "run_command")
 
+    # Platform-aware command vocabulary: tell the model which OS it is on and
+    # which commands are actually allowlisted, so it stops guessing `ls` on
+    # Windows or `dir` on Unix.
+    from .. import platform as _platform
+
+    run_command.description = (
+        run_command.description
+        + "\n\n"
+        + _platform.platform_hint()
+        + " "
+        + _platform.command_hint()
+    )
+
     @tool(args_schema=InstallSkillArgs)
     def install_skill(name: str, content: str, commands: list[dict[str, str]] | None = None) -> str:
         """Install a NEW skill by writing its SKILL.md directly into the user skills
@@ -655,8 +668,10 @@ def build_coworker_agent_graph(
         audit_path=(Path(data_dir) / TOOL_AUDIT_FILENAME) if data_dir is not None else None,
     )
 
+    from .. import platform as _platform
+
     phase_gate = PhaseToolGateMiddleware(
-        "\n\n".join(part for part in (web_capability, browser_capability) if part),
+        "\n\n".join(part for part in (_platform.platform_hint(), web_capability, browser_capability) if part),
         workspace=workspace,
     )
     # Output reservation: 0 means "unset" upstream, but the LLM call itself
