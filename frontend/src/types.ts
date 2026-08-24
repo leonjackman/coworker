@@ -337,6 +337,9 @@ export interface InterjectRequest {
   // 前端乐观渲染时生成的 user 消息 id，与后端 /chat/interject 持久化的 id 一致
   // （late-steer 自动续跑以同一 id + skip_user_append 复用 history）。
   user_message_id?: string;
+  // 前端生成的 steer id：steer_injected 事件原样带回，前端据此从 pending 列表
+  // 移除已注入的插话，避免被误判为 late-steer 而二次执行。
+  steer_id?: string;
   attachments?: ComposerAttachment[];
   referenced_sessions?: string[];
   max_attachment_bytes?: number;
@@ -455,6 +458,8 @@ export interface SessionMessageRecord {
   parts?: MessagePart[];
   references?: SessionReference[];
   agent_id?: string;
+  /** 插話 (interject) 持久化标记：前端不把它渲染为独立用户泡泡。 */
+  interject?: boolean;
 }
 
 export interface SessionDetailResponse {

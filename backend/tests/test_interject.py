@@ -106,12 +106,18 @@ class TestInterjectEndpoint:
             with TestClient(main.app) as client:
                 resp = client.post(
                     "/chat/interject",
-                    json={"session_id": sid, "message": "please use approach X", "user_message_id": "user-steer-1"},
+                    json={
+                        "session_id": sid,
+                        "message": "please use approach X",
+                        "user_message_id": "user-steer-1",
+                        "steer_id": "steer-frontend-1",
+                    },
                 )
                 assert resp.status_code == 200
                 body = resp.json()
                 assert body["status"] == "ok"
-                assert body["steer_id"]
+                # 前端传入的 steer_id 被原样采用（steer_injected 事件据此匹配）。
+                assert body["steer_id"] == "steer-frontend-1"
         finally:
             main._stream_tasks.pop(sid, None)
 
@@ -124,6 +130,8 @@ class TestInterjectEndpoint:
         assert session.messages[-1].role == "user"
         assert session.messages[-1].content == "please use approach X"
         assert session.messages[-1].id == "user-steer-1"
+        # interject=True：前端据此不渲染独立用户泡泡（内容由「收到插話」card 展示）。
+        assert session.messages[-1].interject is True
 
     def test_interject_publishes_steer_admitted(self):
         _clear_state()

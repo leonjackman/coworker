@@ -2028,6 +2028,9 @@ class InterjectRequest(BaseModel):
     # 前端乐观渲染时生成的 user 消息 id，与 /chat/interject 持久化的 id 一致
     # （late-steer 自动续跑时以同一 id + skip_user_append 复用 history）。
     user_message_id: str = ""
+    # 前端生成的 steer id：steer_injected 事件会原样带回该 id，前端据此匹配并
+    # 从 pending 列表移除，避免「已注入当前轮」的插话又被误判为 late-steer 而二次执行。
+    steer_id: str = ""
     attachments: list[dict[str, Any]] = []
     referenced_sessions: list[str] = []
     max_attachment_bytes: int = 25 * 1024 * 1024
@@ -2061,7 +2064,7 @@ async def interject(request: InterjectRequest):
         )
 
     references = _resolve_references(request.referenced_sessions)
-    steer_id = str(uuid.uuid4())
+    steer_id = request.steer_id or str(uuid.uuid4())
     entry = SteerEntry(
         id=steer_id,
         content=request.message,
@@ -2073,6 +2076,7 @@ async def interject(request: InterjectRequest):
     )
     # 持久化为真实 user 消息：会话历史可回溯；late-steer 自动续跑时以
     # skip_user_append 直接复用 history（该 steer 已是最后一条 user 消息）。
+    # interject=True 让前端不把它渲染为独立用户泡泡（内容由「收到插話」card 展示）。
     try:
         session_store.append_message(
             session_id,
@@ -2081,6 +2085,7 @@ async def interject(request: InterjectRequest):
             attachments=request.attachments or [],
             references=references,
             message_id=request.user_message_id or None,
+            interject=True,
         )
     except Exception:  # noqa: BLE001 - persistence failure must not break the interject
         logger.exception("interject persist failed for session %s", session_id)

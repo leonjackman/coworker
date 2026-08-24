@@ -639,8 +639,11 @@ function App() {
   // new-chat draft) only ambient messages (no sessionId) are shown — background
   // running messages from other sessions stay hidden but keep their stream.
   const displayedMessages = useMemo(() => {
-    if (!sessionId) return messages.filter((m) => !m.sessionId);
-    return messages.filter((m) => !m.sessionId || m.sessionId === sessionId);
+    // 插话消息（interject=true）不渲染为独立用户泡泡：内容由 assistant 气泡内的
+    // 「收到插話」card 展示（无论当前轮注入还是 late-steer 自动续跑轮注入）。
+    const visible = messages.filter((m) => !(m.role === 'user' && m.interject));
+    if (!sessionId) return visible.filter((m) => !m.sessionId);
+    return visible.filter((m) => !m.sessionId || m.sessionId === sessionId);
   }, [messages, sessionId]);
 
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
@@ -860,6 +863,8 @@ function App() {
     removeQueuedMessage(sessionId, queuedId);
     const steerId = `steer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const userMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    // 插话不渲染独立用户泡泡：内容由 assistant 气泡内的「收到插話」card 展示。
+    // pending 记录仅用于 late-steer 兜底判定（steer_injected 收到即移除）。
     pendingSteersRef.current[key] = [
       ...(pendingSteersRef.current[key] ?? []),
       {
@@ -870,31 +875,20 @@ function App() {
         ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
       },
     ];
-    setMessages((current) => [
-      ...current,
-      createMessage('user', entry.message, {
-        id: userMessageId,
-        status: 'done',
-        sessionId,
-        interject: true,
-        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
-        ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
-      }),
-    ]);
     try {
       await chatService.interject({
         session_id: sessionId,
         message: entry.message,
         user_message_id: userMessageId,
+        steer_id: steerId,
         ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
         ...(entry.references && entry.references.length > 0 ? { referenced_sessions: entry.references.map((r) => r.id) } : {}),
         max_attachment_bytes: Math.max(1, maxAttachmentMb) * 1024 * 1024,
       });
     } catch (error) {
-      // 409：当前无正在进行的任务，插话无法命中本次流。退回队列并移除气泡，
+      // 409：当前无正在进行的任务，插话无法命中本次流。退回队列，
       // 由用户决定重新插话或按队列顺序发送。
       pendingSteersRef.current[key] = (pendingSteersRef.current[key] ?? []).filter((s) => s.id !== steerId);
-      setMessages((current) => current.filter((m) => m.id !== userMessageId));
       enqueueMessage(sessionId, entry.message, {
         ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
         ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
@@ -2878,6 +2872,7 @@ function App() {
           ...(record.attachments?.length ? { attachments: record.attachments } : {}),
           ...(record.parts?.length ? { parts: normalizeParts(record.parts as MessagePart[]) } : {}),
           ...(record.references?.length ? { references: record.references } : {}),
+          ...(record.interject ? { interject: true } : {}),
           timestamp: new Date(record.created_at).getTime(),
         }),
       );

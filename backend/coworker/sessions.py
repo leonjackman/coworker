@@ -34,6 +34,9 @@ class SessionMessage:
     parts: list[dict[str, Any]] = field(default_factory=list)
     references: list[dict[str, Any]] = field(default_factory=list)
     agent_id: str = ""
+    # 插話 (interject) 持久化标记：该 user 消息是一条插进运行中任务的引导消息，
+    # 前端不把它渲染为独立用户泡泡（内容由 assistant 的「收到插話」card 展示）。
+    interject: bool = False
 
 
 @dataclass
@@ -266,6 +269,7 @@ class SessionStore:
         references: list[dict[str, Any]] | None = None,
         message_id: str | None = None,
         agent_id: str = "",
+        interject: bool = False,
     ) -> Session:
         session = self.require(session_id)
         # 优先使用调用方传入的 id（通常是前端乐观渲染时生成的 id），
@@ -287,6 +291,7 @@ class SessionStore:
                 parts=parts or [],
                 references=references or [],
                 agent_id=resolved_agent,
+                interject=interject,
             )
         )
         if role == "user" and session.title == "新会话":
