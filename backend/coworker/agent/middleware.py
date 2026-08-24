@@ -33,6 +33,7 @@ from .core import (
     CONTEXT_SAFETY_FACTOR,
     CHARS_PER_TOKEN,
     Language,
+    VALID_LANGUAGES,
     MAX_IMAGES_PER_PROMPT,
     AskUserOption,
     CoworkerAgentState,
@@ -764,7 +765,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             context_window_tokens if context_window_tokens and context_window_tokens > 0 else 128_000,
             self.max_output_tokens,
         )
-        self.language = language if language in ("zh", "en") else "zh"
+        self.language = language if language in VALID_LANGUAGES else "zh"
         # Real model context window (tokens) + how it was resolved, surfaced to the
         # UI so the meter shows usage against the ACTUAL window (not just the 75%
         # safety budget) and explains the source — B2/B8.

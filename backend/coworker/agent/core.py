@@ -32,7 +32,7 @@ from langchain.agents.middleware.types import AgentState
 from pydantic import BaseModel, Field
 
 from .prompts import _default_title_from_message, _title_system_prompt
-from .types import AgentMode, Autonomy, Language, Phase, WorkMode
+from .types import AgentMode, Autonomy, Language, Phase, VALID_LANGUAGES, WorkMode
 
 
 MAX_ATTACHMENT_CHARS = 120_000
@@ -334,7 +334,11 @@ def normalize_phase(phase: str | None, work_mode: str | None = None) -> Phase:
 
 
 def normalize_language(language: Any) -> Language:
-    return "en" if language == "en" else "zh"
+    # Accept any supported UI language (the agent mirrors the user's message
+    # language, so we no longer force zh/en). Unknown values fall back to zh.
+    if language in VALID_LANGUAGES:
+        return language  # type: ignore[return-value]
+    return "zh"
 
 
 

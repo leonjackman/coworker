@@ -42,7 +42,10 @@ def phase_system_prompt(language: Language, phase: Phase, autonomy: Autonomy) ->
     ``PhaseToolGateMiddleware``); this prompt only sets the behavioural
     contract for that phase.
     """
-    lang_line = f"Reply in {language_name(language)}."
+    # Chat replies mirror the user's message language (mainstream behaviour) —
+    # we no longer force a fixed UI language. The `language` hint is only kept
+    # for prompts that have no user text to mirror (e.g. title generation).
+    lang_line = "Reply in the same language as the user's message."
     todo_hint = (
         "Break your work into a visible task list: call write_todos with the concrete steps "
         "you intend to take, then call write_todos again as each step completes to update its "

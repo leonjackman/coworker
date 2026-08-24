@@ -74,8 +74,6 @@ from .middleware import (
     _summarizer_candidates,
     command_approval_middleware,
 )
-from .prompts import language_name
-
 logger = get_logger(__name__)
 
 
@@ -752,7 +750,8 @@ def build_coworker_agent_graph(
     middleware.append(context_guard)
 
     system_prompt = (
-        f"You are Coworker, a local coding assistant. Reply in {language_name(language)}. "
+        "You are Coworker, a local coding assistant. "
+        "Reply in the same language as the user's message. "
         "Use workspace tools only when they are needed and keep answers concise. "
         "If a tool call fails, do NOT re-run the exact same call; analyze the error and "
         "change approach (narrow the scope, pick a different tool) or summarize and answer directly. "
