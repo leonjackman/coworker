@@ -432,6 +432,7 @@ export interface GoalState {
   token_budget: number | null;
   tokens_used: number;
   time_used_seconds: number;
+  round: number;
   created_at: number;
   updated_at: number;
 }

@@ -2033,6 +2033,11 @@ async def chat_stream(request: ChatStreamRequest):
                             session_store.account_goal_usage(session_id, token_delta, round_elapsed)
                         except Exception:  # noqa: BLE001 - never break the stream
                             logger.debug("account_goal_usage failed for %s", session_id, exc_info=True)
+                        # 记录已完成的回合数（供 update_goal(blocked) 做引擎侧 ≥3 轮审计）。
+                        try:
+                            session_store.update_goal_round(session_id, round_index)
+                        except Exception:  # noqa: BLE001 - never break the stream
+                            logger.debug("update_goal_round failed for %s", session_id, exc_info=True)
 
                     # HITL：保留 interrupt checkpoint，goal 保持 active，等前端 resume。
                     if interrupt_emitted:

@@ -1352,8 +1352,30 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     def _blocked_tool_message(self, request: Any) -> Any:
         from langchain_core.messages import ToolMessage
         tool_name = self._tool_name(request)
+        registered: set[str] = set()
+        if self.workspace is not None:
+            try:
+                registered = set(getattr(self.workspace, "_registered_tool_names", set()) or set())
+            except Exception:  # noqa: BLE001 - a broken registry must not crash a turn
+                registered = set()
+        if registered and tool_name and tool_name not in registered:
+            # The model hallucinated a tool name (e.g. list_directory). Tell it the
+            # tool does not exist and list what IS available so it can self-correct
+            # instead of believing the tool is phase-gated and retrying in vain.
+            names = sorted(registered)
+            sample = ", ".join(names[:12])
+            more = f" … +{len(names) - 12} more" if len(names) > 12 else ""
+            content = (
+                f"Tool '{tool_name}' does not exist. Only these tools are available: "
+                f"{sample}{more}. Use the exact tool names above; do not invent tools."
+            )
+        else:
+            content = (
+                f"Tool '{tool_name}' is not available in the current phase/autonomy. "
+                "It was skipped."
+            )
         return ToolMessage(
-            content=f"Tool '{tool_name}' is not available in the current phase/autonomy. It was skipped.",
+            content=content,
             tool_call_id=request.tool_call.get("id", "unknown"),
             status="error",
         )

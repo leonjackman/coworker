@@ -57,6 +57,9 @@ class GoalState:
     token_budget: int | None = None
     tokens_used: int = 0
     time_used_seconds: int = 0
+    # 已完成的回合数（round 0 = 首轮用户驱动轮）。引擎在每轮结束后写回，
+    # 供 `update_goal(blocked)` 做引擎侧 blocked audit（须连续 ≥3 轮同一阻塞）。
+    round: int = 0
     created_at: int = 0
     updated_at: int = 0
 
@@ -71,6 +74,7 @@ class GoalState:
             token_budget=int(token_budget) if token_budget is not None else None,
             tokens_used=int(payload.get("tokens_used", 0) or 0),
             time_used_seconds=int(payload.get("time_used_seconds", 0) or 0),
+            round=int(payload.get("round", 0) or 0),
             created_at=int(payload.get("created_at", 0) or 0),
             updated_at=int(payload.get("updated_at", 0) or 0),
         )
@@ -302,6 +306,15 @@ class SessionStore:
         if session.goal is None:
             return None
         session.goal.objective = objective
+        session.goal.updated_at = _now_epoch_ms()
+        self.save(session)
+        return session.goal
+
+    def update_goal_round(self, session_id: str, round_: int) -> GoalState | None:
+        session = self.require(session_id)
+        if session.goal is None:
+            return None
+        session.goal.round = max(0, int(round_))
         session.goal.updated_at = _now_epoch_ms()
         self.save(session)
         return session.goal

@@ -69,6 +69,7 @@ export function GoalCard({ goal, onPause, onResume, onDelete }: GoalCardProps) {
             <Target size={15} />
             {statusLabel(goal)}
           </span>
+          <span className="goal-card__round">{t('chat.goal_round', { round: goal.round + 1 })}</span>
         </div>
         <div className="goal-card__actions">
           {active && (

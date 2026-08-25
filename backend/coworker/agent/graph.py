@@ -186,7 +186,7 @@ def build_workspace_tools(
             return _error_result(exc, "apply_text_edits")
 
     @tool(args_schema=RunCommandArgs)
-    def run_command(command: list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
+    def run_command(command: str | list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
         """Run an allowlisted command in the workspace after runtime policy approval.
 
         The result is JSON with ``return_code`` (0 = success), ``stdout``,
@@ -196,7 +196,17 @@ def build_workspace_tools(
         report "Permission denied" for unreadable directories even when the
         search itself worked: narrow the search path instead of retrying the
         whole tree with the same command.
+
+        ``command`` may be an argv array or a plain shell string — the backend
+        normalizes strings into argv (shlex) automatically.
         """
+        import shlex as _shlex
+
+        if isinstance(command, str):
+            try:
+                command = _shlex.split(command)
+            except ValueError:
+                command = [command]
         try:
             # Runtime policy approval (HITL) is owned by HumanInTheLoopMiddleware;
             # this tool call is not the sync bottom-panel approval flow.
@@ -541,6 +551,10 @@ def build_workspace_tools(
         "blocked" is only for a true impasse: the SAME blocking condition has
         repeated for at least three consecutive goal turns. Never use it because
         the work is hard, uncertain, or would benefit from clarification.
+
+        The system enforces this: calling "blocked" before the goal has run
+        three turns is REJECTED and the goal stays active — you must keep
+        working. Only after the third goal turn will "blocked" be accepted.
         """
         if session_store is None or not session_id:
             return json.dumps({"error": "goal store unavailable"}, ensure_ascii=False)
@@ -549,6 +563,20 @@ def build_workspace_tools(
             return json.dumps({"error": "当前没有 active 目标"}, ensure_ascii=False)
         if goal.status not in {"active", "budget_limited"}:
             return json.dumps({"error": f"goal status is {goal.status}, cannot update"}, ensure_ascii=False)
+        if status == "blocked" and goal.round < 2:
+            # 引擎侧 blocked audit：须连续 ≥3 轮同一阻塞才可 blocked（round 0/1/2）。
+            # 过早 blocked 会被拒绝，目标保持 active，要求模型继续推进。
+            return json.dumps(
+                {
+                    "error": (
+                        "blocked 仅允许在「同一阻塞连续出现 ≥3 轮」后声明（当前第 "
+                        f"{goal.round + 1} 轮）。请继续基于实际当前状态推进目标，"
+                        "不要因工作困难/进度慢/需要澄清而 blocked。若确有同一阻塞，"
+                        "持续尝试到第 3 轮后再 update_goal(status=\"blocked\")。"
+                    )
+                },
+                ensure_ascii=False,
+            )
         updated = session_store.update_goal_status(session_id, status)
         if goal_emit is not None:
             try:
@@ -646,6 +674,14 @@ def build_workspace_tools(
             calibration_key=worker_calibration_key,
         )
         tools.extend(worker_tool.create_tools())
+    # Record the full registered tool-name set on the workspace so the phase gate
+    # can tell the model a hallucinated tool (e.g. list_directory) does not exist
+    # instead of a misleading "not available in the current phase/autonomy".
+    if workspace is not None:
+        try:
+            workspace._registered_tool_names = {getattr(t, "name", "") for t in tools if getattr(t, "name", "")}
+        except Exception:  # noqa: BLE001 - never break tool building
+            pass
     return tools
 
 

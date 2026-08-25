@@ -832,7 +832,10 @@ class Workspace:
             raise ValueError(
                 f"Command is not allowed: {command_name}. "
                 "This is a fixed workspace restriction that user approval cannot override. "
-                f"Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}."
+                "The allowlist covers all mainstream dev/ops toolchains plus niche "
+                f"utilities. Confirm it exists with `which {command_name}` / "
+                f"`command -v {command_name}`; see the run_command tool description "
+                "for the curated list."
             )
 
         if executable_path.is_absolute():

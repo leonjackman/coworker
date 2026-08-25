@@ -220,6 +220,7 @@ update_goal(status: "complete" | "blocked")
 - **严禁**模型置 `paused` / `resume` / `budget`（由用户 / 系统控制）。
 - **只读 `get_goal` 工具（必做，已拍板）**：模型可主动读取 objective / 预算 / 已用，不暴露变更（对齐 codex `get_goal`）。
 - 提示词约束照搬 `update_goal` 的严格审计描述（完成须逐条需求审计；blocked 须连续 ≥3 轮同一阻塞）。
+- **引擎侧 blocked audit（2026-08-26 真机发现后补充）**：`GoalState` 新增 `round` 计数（续跑循环每轮结束写回）；`update_goal(blocked)` 在 `round < 2`（第 3 轮前）时**被引擎拒绝**并返回「请继续推进」提示，目标保持 active——避免模型第一轮就放弃、把目标立即置 blocked（如会話 426f08f7 的「找 10 個 bug 每輪修 1 個」目標在第 1 輪被模型 blocked）。`complete` 任何轮均可。
 
 ## 3.5 记账与兜底 — `runtime.py` + `sessions.py`
 

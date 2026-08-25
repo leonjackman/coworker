@@ -128,7 +128,13 @@ class ApplyTextEditsArgs(BaseModel):
 
 
 class RunCommandArgs(BaseModel):
-    command: list[str] = Field(description="Command argv array, for example ['npm', 'run', 'build']. Shell strings are not accepted.")
+    command: str | list[str] = Field(
+        description=(
+            "Command to run. Pass either an argv array, for example ['npm', 'run', 'build'], "
+            "OR a plain shell command string, for example 'npm run build'. The backend normalizes "
+            "strings into argv automatically, so a string is always safe."
+        )
+    )
     cwd: str = Field(default="", description="Optional workspace-relative working directory.")
     timeout_seconds: int = Field(default=20, ge=1, le=60, description="Command timeout in seconds.")
 
