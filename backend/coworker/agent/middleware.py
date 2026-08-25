@@ -1493,7 +1493,7 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     ``create_agent`` hard-codes ``recursion_limit: 9_999``, so a model that
     re-emits one failing call (e.g. a ``find`` blocked by permissions) loops
     effectively forever. This middleware guards the trailing message history
-    before every model call and, when a loop is detected:
+    before every model call and, when a genuine loop is detected:
 
     * warns the model to change approach, then
     * on the hard cap strips every tool so the model MUST reply with a
@@ -1509,12 +1509,19 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
        text (the qwen3-on-vLLM failure mode: "讓我做X：" repeated ~40× in one
        reply, which the old tool-only guard could never catch).
 
+    IMPORTANT (2026-08-26, 对照 opencode/codex 调研）：真实多步任务（如「找 10 個
+    bug 每輪修 1 個」）天然需要大量工具调用（整条对话 100+ 次），opencode 默认
+    ``maxSteps=Infinity``、codex 的 turn loop 无上限，都不按调用次数强制停止。
+    因此「连续工具轮数」与「总调用数」只作为**提醒**（不再硬停/禁用工具），
+    阈值放宽到真实任务不会误触发的水平；只有「连续同一失败调用 / 重复文本 /
+    退化文本」这类**真死循环**才硬停。
+
     Only trailing runs count, so ordinary long tasks are unaffected. Mounted
     last (innermost) so its overrides are applied after PhaseToolGateMiddleware
     / SkillMiddleware / MemoryMiddleware.
     """
 
-    def __init__(self, warn_after: int = 2, stop_after: int = 4, text_warn_after: int = 3, text_stop_after: int = 5, max_tool_turns: int = 12, max_total_tool_calls: int = 50) -> None:
+    def __init__(self, warn_after: int = 2, stop_after: int = 4, text_warn_after: int = 3, text_stop_after: int = 5, max_tool_turns: int = 30, max_total_tool_calls: int = 250) -> None:
         self.warn_after = max(1, int(warn_after))
         self.stop_after = max(self.warn_after + 1, int(stop_after))
         self.text_warn_after = max(1, int(text_warn_after))
@@ -1664,12 +1671,6 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         if text_count >= self.text_stop_after:
             hard_stop = True
             hard_reasons.append(f"you have already given the identical reply {text_count} times")
-        if tool_turns >= self.max_tool_turns:
-            hard_stop = True
-            hard_reasons.append(f"you have made {tool_turns} consecutive tool calls without finishing")
-        if total_tools >= self.max_total_tool_calls:
-            hard_stop = True
-            hard_reasons.append(f"this turn already used {total_tools} tool calls")
 
         if hard_stop:
             msg = (
@@ -1689,9 +1690,17 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         if text_count >= self.text_warn_after:
             warn_reasons.append(f"you have already given the identical reply {text_count} times")
         if tool_turns >= max(2, self.max_tool_turns // 2):
-            warn_reasons.append(f"you have made {tool_turns} consecutive tool calls; finish soon")
+            warn_reasons.append(
+                f"you have made {tool_turns} consecutive tool calls without producing text. "
+                "Ensure every call makes concrete progress and periodically summarize in text; "
+                "there is no fixed tool-call budget for legitimate multi-step work."
+            )
         if total_tools >= self.max_total_tool_calls // 2:
-            warn_reasons.append(f"this turn already used {total_tools} tool calls; wrap up soon")
+            warn_reasons.append(
+                f"this conversation has already used {total_tools} tool calls. Keep working — "
+                "multi-step tasks legitimately need many calls. If a call fails, analyze the "
+                "error and change approach instead of repeating it."
+            )
         if not warn_reasons:
             return {}
 
