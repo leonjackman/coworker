@@ -685,6 +685,7 @@ export interface PendingRequest {
     | { type: 'goal_updated'; goal: GoalState; session_id?: string }
     | { type: 'goal_cleared'; session_id?: string }
     | { type: 'goal_stream_end'; session_id?: string }
+    | { type: 'goal_round_start'; session_id?: string; round?: number; message_id?: string }
     | { type: 'worker_stream_end'; worker_run_id?: string }
     | { type: 'todos'; todos: Todo[]; session_id?: string }
     | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string; worker_run_id?: string }

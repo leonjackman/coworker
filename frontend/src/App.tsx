@@ -1386,9 +1386,18 @@ function App() {
         const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
         const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
         const goalUserMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        // 绑定当前会话（有会话时）：避免无 sessionId 的泡泡被 displayedMessages
+        // 渲染到所有会话头部；新会话（尚无 session）在 handleSlashCommand 建会后重绑。
         setMessages((current) => [
           ...current,
-          createMessage('user', prompt || combined, { id: goalUserMessageId, status: 'done', autonomy, provider: providerName, model }),
+          createMessage('user', prompt || combined, {
+            id: goalUserMessageId,
+            status: 'done',
+            ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
+            autonomy,
+            provider: providerName,
+            model,
+          }),
         ]);
         handleSlashCommand(combined, {
           userMessageId: goalUserMessageId,
@@ -1420,9 +1429,17 @@ function App() {
         // 并生成持久化 id 随 /goal/set 落库（重载/重进会话后泡泡不消失）。
         const displayText = command === '/goal' ? typedMessage.slice('/goal'.length).trim() || typedMessage : typedMessage;
         goalUserMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        // 绑定当前会话（有会话时）：避免无 sessionId 的泡泡渲染到所有会话头部。
         setMessages((current) => [
           ...current,
-          createMessage('user', displayText, { id: goalUserMessageId, status: 'done', autonomy, provider: providerName, model }),
+          createMessage('user', displayText, {
+            id: goalUserMessageId,
+            status: 'done',
+            ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
+            autonomy,
+            provider: providerName,
+            model,
+          }),
         ]);
       }
       handleSlashCommand(
@@ -1572,6 +1589,12 @@ function App() {
     // 以及本条流是否处于 goal 多轮模式（未到 goal_stream_end 前不 stream-settle）。
     let round1Done = false;
     let goalStreamActiveLocal = false;
+    // 当前正在流式渲染的 assistant 消息 id：首轮 = 前端预建的 assistantMessageId；
+    // 续跑轮 = 后端 goal_round_start 提前下发的 round id（让 delta 流式进该轮气泡）。
+    let currentRoundAssistantId: string = assistantMessageId;
+    // 运行中模型把目标置为 complete/blocked 时暂存：流真正结束（goal_stream_end）
+    // 才应用到 GoalCard，避免「卡片已完成但流还在跑」的错位。
+    let pendingTerminalGoal: GoalState | null = null;
     const markLocalGoalStream = () => {
       if (!goalStreamActiveLocal) {
         goalStreamActiveLocal = true;
@@ -1590,13 +1613,15 @@ function App() {
     // transcripts (mergeLiveAgentTranscript) instead of overwriting them with
     // the main stream's delegate summary frames. Extra status/content/streamEndAt
     // patches cover the terminal variants (done/error/stopped/waiting).
+    // 目标续跑：delta/工具帧流式写进「当前轮」气泡（首轮 = assistantMessageId，
+    // 续跑轮 = goal_round_start 下发的 round id）。
     const commit = (
       nextParts: MessagePart[],
       patch?: { content?: string; status?: ChatMessage['status']; streamEndAt?: number },
     ) =>
       setMessages((current) =>
         current.map((item) =>
-          item.id === assistantMessageId
+          item.id === currentRoundAssistantId
             ? {
                 ...item,
                 content: patch?.content !== undefined ? patch.content : streamedContent,
@@ -1697,31 +1722,35 @@ function App() {
           mergedParts = mergeMessageParts(localParts, event.parts);
         }
         mergedParts = settleRunningTools(mergedParts);
-        // goal 单流多轮：后端在每条 done 帧回带该轮 assistant 消息 id。若与首轮
-        // 的 assistantMessageId 不同 → 续跑轮 → 新建独立气泡；否则首轮 → commit。
-        const roundMessageId = event.message_id || assistantMessageId;
+        // goal 单流多轮：done 帧回带该轮 assistant 消息 id。续跑轮的气泡已由
+        // goal_round_start 以 running 态创建（delta 流式渲染），这里 commit 收尾；
+        // 兜底：若未收到 goal_round_start（旧后端）则补建气泡。
+        const roundMessageId = event.message_id || currentRoundAssistantId;
         const isContinuationRound = Boolean(event.message_id && event.message_id !== assistantMessageId);
         if (isContinuationRound) {
           markLocalGoalStream();
-          const roundSessionId = event.session_id || requestSessionId;
-          setMessages((current) => [
-            ...current,
-            createMessage('assistant', event.content || '', {
-              id: roundMessageId,
-              status: 'done',
-              ...(roundSessionId ? { sessionId: roundSessionId } : {}),
-              parts: mergedParts,
-              streamStartAt: Date.now(),
-              streamEndAt: Date.now(),
-              autonomy,
-              provider: requestProvider,
-              model: requestModel,
-            }),
-          ]);
+          currentRoundAssistantId = roundMessageId;
+          setMessages((current) => {
+            if (current.some((m) => m.id === roundMessageId)) return current;
+            const roundSessionId = event.session_id || requestSessionId;
+            return [
+              ...current,
+              createMessage('assistant', event.content || '', {
+                id: roundMessageId,
+                status: 'running',
+                ...(roundSessionId ? { sessionId: roundSessionId } : {}),
+                parts: mergedParts,
+                streamStartAt: Date.now(),
+                autonomy,
+                provider: requestProvider,
+                model: requestModel,
+              }),
+            ];
+          });
         } else {
           round1Done = true;
-          commit(mergedParts, { status: 'done', streamEndAt: Date.now() });
         }
+        commit(mergedParts, { status: 'done', streamEndAt: Date.now() });
         // 终态副作用：goal 流延后到 goal_stream_end（避免每轮播声音/清 todos）；
         // 普通流（无 goal）在此立即执行，保持原行为。
         const isGoalSession = goalsBySessionRef.current[goalsSessionKey(event.session_id ?? requestSessionId)] != null;
@@ -1731,17 +1760,62 @@ function App() {
           clearSessionTodos(event.session_id ?? requestSessionId);
           playSound('reply_done');
         }
+      } else if (event.type === 'goal_round_start') {
+        // 续跑轮开始：后端提前下发该轮 assistant 消息 id → 以 running 态建泡，
+        // 本轮 delta 流式渲染（done 前不折叠进「思考过程」组）。
+        const roundId = event.message_id;
+        if (roundId) {
+          markLocalGoalStream();
+          currentRoundAssistantId = roundId;
+          streamedContent = '';
+          localParts = [];
+          const roundSessionId = event.session_id || requestSessionId;
+          setMessages((current) => {
+            if (current.some((m) => m.id === roundId)) return current;
+            return [
+              ...current,
+              createMessage('assistant', '', {
+                id: roundId,
+                status: 'running',
+                ...(roundSessionId ? { sessionId: roundSessionId } : {}),
+                parts: [],
+                streamStartAt: Date.now(),
+                autonomy,
+                provider: requestProvider,
+                model: requestModel,
+              }),
+            ];
+          });
+        }
       } else if (event.type === 'goal_updated') {
-        setSessionGoal(event.session_id ?? requestSessionId, event.goal);
+        // 目标在运行中（流未结束）被模型置为 complete/blocked：先暂存，等
+        // goal_stream_end 真正结束时再应用到卡片，避免「卡片已完成但流还在跑」。
+        const g = event.goal;
+        if (goalStreamActiveLocal && g && (g.status === 'complete' || g.status === 'blocked')) {
+          pendingTerminalGoal = g;
+        } else {
+          setSessionGoal(event.session_id ?? requestSessionId, event.goal);
+        }
         markLocalGoalStream();
       } else if (event.type === 'goal_cleared') {
         setSessionGoal(event.session_id ?? requestSessionId, null);
       } else if (event.type === 'goal_stream_end') {
         // 整条 goal 续跑链结束：此刻才是终态（settle / 队列已由 goalStreamSessions
-        // 闸门保护），补终态副作用。
+        // 闸门保护），补终态副作用并应用暂存的 complete/blocked。
         markGoalStreamEnded(event.session_id ?? requestSessionId);
         clearSessionTodos(event.session_id ?? requestSessionId);
         playSound('reply_done');
+        if (pendingTerminalGoal) {
+          const sid = event.session_id ?? requestSessionId;
+          setSessionGoal(sid, pendingTerminalGoal);
+          if (pendingTerminalGoal.status === 'complete') {
+            // 目标已完成：展示「已完成」片刻后自动关闭 GoalCard。
+            window.setTimeout(() => {
+              setSessionGoal(sid, null);
+            }, 2500);
+          }
+          pendingTerminalGoal = null;
+        }
       } else if (event.type === 'steer_injected') {
         // 插話已被运行中 graph 消费：从 pending 列表移除（不再自动续跑），
         // 并在当前 assistant 气泡内追加一条「收到插話」notice。
@@ -1844,6 +1918,17 @@ function App() {
         streamedContent,
         receivedDone,
       });
+      // 目标多轮：流终止时把仍 running 的续跑轮气泡标记为 interrupted（这些轮
+      // 的气泡由 goal_round_start 创建，settle 只对账首轮 assistantMessageId）。
+      if (goalStreamActiveLocal) {
+        setMessages((current) =>
+          current.map((item) =>
+            item.status === 'running' && item.sessionId === requestSessionId && item.id !== assistantMessageId
+              ? { ...item, status: 'interrupted', streamEndAt: Date.now() }
+              : item,
+          ),
+        );
+      }
       if (streamControllersRef.current[streamKey(requestSessionId)] === controller) {
         delete streamControllersRef.current[streamKey(requestSessionId)];
         delete activeAssistantMessageIdsRef.current[streamKey(requestSessionId)];
@@ -3308,6 +3393,15 @@ function App() {
               // 立即加入本地会话列表，保证侧栏即时可见
               setSessions((current) => [newSession, ...current]);
               sid = newSession.id;
+              // 把创建会话前渲染的 goal user 泡泡绑定到新会话（避免无 sessionId
+              // 而显示在所有会话头部）。
+              if (goalMeta?.userMessageId && sid) {
+                setMessages((current) =>
+                  current.map((m) =>
+                    m.id === goalMeta.userMessageId && !m.sessionId ? { ...m, sessionId: sid as string } : m,
+                  ),
+                );
+              }
             }
           } catch (error) {
             console.error('Failed to create session for /goal:', error);

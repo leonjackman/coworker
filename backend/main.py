@@ -2009,6 +2009,16 @@ async def chat_stream(request: ChatStreamRequest):
                         round_anchor = current_round_assistant_id
                         last_seen_objective = goal.objective
 
+                    # 通知前端本轮（续跑轮）已开始：提前给出该轮 assistant 消息 id，
+                    # 让前端以 running 态建泡并流式渲染 delta（done 前不折叠进组）。
+                    if round_index > 0:
+                        yield {
+                            "type": "goal_round_start",
+                            "session_id": session_id,
+                            "round": round_index,
+                            "message_id": current_round_assistant_id or "",
+                        }
+
                     # ---- per-round snapshot（回滚按轮隔离）----
                     inflight_anchor = round_anchor
                     inflight_pre = await asyncio.to_thread(_begin_round, round_anchor)
