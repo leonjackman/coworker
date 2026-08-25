@@ -422,9 +422,14 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
     if kind == "question":
         args = context.get("action_args") if isinstance(context.get("action_args"), dict) else {}
         options = args.get("options") if isinstance(args.get("options"), list) else []
+        question = str(args.get("question") or "").strip()
+        if not question:
+            # 防御：模型偶发以空 question 调 ask_user → 前端会渲染空提问卡。
+            # 兜底给一句可读文案（前端另有本地化兜底），绝不把空串发出去。
+            question = "The agent needs your input to continue — please reply with guidance."
         return {
             **base, "type": "question_required",
-            "question": str(args.get("question") or ""),
+            "question": question,
             "header": str(args.get("header") or ""),
             "options": options,
             "multiple": bool(args.get("multiple")),

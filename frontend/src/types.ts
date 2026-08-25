@@ -442,6 +442,15 @@ export interface GoalResponse {
   goal: GoalState | null;
 }
 
+/** 前端为 /goal user 泡泡生成的元数据，随 /goal/set 持久化，保证重载后泡泡不消失。 */
+export interface GoalSetMeta {
+  userMessageId: string;
+  provider: string;
+  model: string;
+  workMode: string;
+  autonomy: string;
+}
+
 export type ProjectMode = 'single' | 'multi';
 
 export interface ProjectEntry {

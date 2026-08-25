@@ -417,7 +417,18 @@ def build_workspace_tools(
 
     @tool(args_schema=AskUserArgs)
     def ask_user(question: str, options: list[dict[str, str]], multiple: bool = False, header: str = "") -> str:
-        """Ask the user a question with selectable options when you need a decision or clarification."""
+        """Ask the user a question with selectable options when you need a decision or clarification.
+
+        ``question`` MUST be a concrete, non-empty question written for the user
+        (e.g. "Which fix do you want first?"). Never call this with an empty or
+        placeholder question. ``options`` may be empty for a free-form reply, but
+        prefer 2-4 clear choices when they exist."""
+        question = (question or "").strip()
+        if not question:
+            return json.dumps(
+                {"error": "question_required", "message": "ask_user requires a concrete non-empty 'question'. Restate the actual decision you need from the user and call again."},
+                ensure_ascii=False,
+            )
         normalized_options = [
             item.model_dump() if isinstance(item, AskUserOption) else item
             for item in options

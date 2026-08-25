@@ -940,5 +940,6 @@
   "goal.need_session": "请先开始一个会话（发送一条消息），再设置目标。",
   "goal.need_workspace": "请先选择工作空间，再设置目标。",
   "goal.command_failed": "目标操作失败，请重试。",
-  "goal.elapsed": "已用"
+  "goal.elapsed": "已用",
+  "chat.question_empty_fallback": "Agent 需要你的输入才能继续——请回复你的指示或选择。"
 }

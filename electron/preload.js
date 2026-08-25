@@ -56,11 +56,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameSession: (sessionId, title) => ipcRenderer.invoke('rename-session', { session_id: sessionId, title }),
   stopSessionStream: (sessionId) => ipcRenderer.invoke('stop-session-stream', sessionId),
   goalGet: (sessionId) => ipcRenderer.invoke('goal-get', sessionId),
-  goalSet: (sessionId, objective, tokenBudget) =>
+  goalSet: (sessionId, objective, tokenBudget, meta) =>
     ipcRenderer.invoke('goal-set', {
       session_id: sessionId,
       objective,
       ...(tokenBudget != null ? { token_budget: tokenBudget } : {}),
+      ...(meta
+        ? {
+            user_message_id: meta.userMessageId,
+            provider: meta.provider || '',
+            model: meta.model || '',
+            work_mode: meta.workMode || '',
+            autonomy: meta.autonomy || '',
+          }
+        : {}),
     }),
   goalPause: (sessionId) => ipcRenderer.invoke('goal-pause', { session_id: sessionId }),
   goalResume: (sessionId) => ipcRenderer.invoke('goal-resume', { session_id: sessionId }),

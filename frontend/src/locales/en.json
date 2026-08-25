@@ -940,5 +940,6 @@
   "goal.need_session": "Start a conversation first (send a message), then set a goal.",
   "goal.need_workspace": "Select a workspace first, then set a goal.",
   "goal.command_failed": "Goal operation failed. Please retry.",
-  "goal.elapsed": "elapsed"
+  "goal.elapsed": "elapsed",
+  "chat.question_empty_fallback": "The agent needs your input to continue — please reply with guidance."
 }

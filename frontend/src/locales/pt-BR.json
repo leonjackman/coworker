@@ -938,5 +938,6 @@
   "goal.need_session": "Comece uma conversa primeiro (envie uma mensagem) e depois defina uma meta.",
   "goal.need_workspace": "Selecione primeiro um espaço de trabalho e depois defina uma meta.",
   "goal.command_failed": "Falha na operação da meta. Tente novamente.",
-  "goal.elapsed": "decorrido"
+  "goal.elapsed": "decorrido",
+  "chat.question_empty_fallback": "O agente precisa da sua resposta para continuar — por favor, responda."
 }

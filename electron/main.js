@@ -2006,6 +2006,11 @@ ipcMain.handle('goal-set', async (event, payload) => {
     session_id: payload?.session_id,
     objective: payload?.objective || '',
     ...(payload?.token_budget != null ? { token_budget: payload.token_budget } : {}),
+    ...(payload?.user_message_id ? { user_message_id: payload.user_message_id } : {}),
+    ...(payload?.provider ? { provider: payload.provider } : {}),
+    ...(payload?.model ? { model: payload.model } : {}),
+    ...(payload?.work_mode ? { work_mode: payload.work_mode } : {}),
+    ...(payload?.autonomy ? { autonomy: payload.autonomy } : {}),
   });
 });
 

@@ -343,7 +343,7 @@ function QuestionDock({ request, total, onResolve, onStop }: { request: PendingR
       ) : null}
       <div className="pending-dock__question" data-slot="question-content">
         {request.header ? <h4 className="pending-dock__question-hint">{request.header}</h4> : null}
-        <p className="pending-dock__question-text">{request.question}</p>
+        <p className="pending-dock__question-text">{request.question || t('chat.question_empty_fallback')}</p>
       </div>
       {request.options && request.options.length > 0 ? (
         <fieldset className="pending-dock__options" data-slot="question-options">

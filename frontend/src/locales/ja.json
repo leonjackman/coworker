@@ -938,5 +938,6 @@
   "goal.need_session": "先に会話を開始（メッセージを送信）してから、ゴールを設定してください。",
   "goal.need_workspace": "先にワークスペースを選択してから、ゴールを設定してください。",
   "goal.command_failed": "ゴール操作に失敗しました。もう一度お試しください。",
-  "goal.elapsed": "経過"
+  "goal.elapsed": "経過",
+  "chat.question_empty_fallback": "エージェントが続行するには入力が必要です。指示または選択を返してください。"
 }

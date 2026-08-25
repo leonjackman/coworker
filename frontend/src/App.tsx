@@ -27,7 +27,7 @@ import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -1379,17 +1379,24 @@ function App() {
       }
       if (chip.type === 'sys' && chip.command === '/goal') {
         // /goal chip：user 消息只显示目标文本（不带 /goal 前綴，对原版前端 UI），
-        // 再走命令分发（goal 设定结果以独立 GoalCard 反馈）。
+        // 并生成持久化 id 随 /goal/set 落库（重载/重进会话后泡泡不消失）。
         const combined = `${chip.command}${prompt ? ` ${prompt}` : ''}`;
         setInput('');
         const provider = providers.find((p) => p.id === selectedModel);
         const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
         const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
+        const goalUserMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         setMessages((current) => [
           ...current,
-          createMessage('user', prompt || combined, { status: 'done', autonomy, provider: providerName, model }),
+          createMessage('user', prompt || combined, { id: goalUserMessageId, status: 'done', autonomy, provider: providerName, model }),
         ]);
-        handleSlashCommand(combined);
+        handleSlashCommand(combined, {
+          userMessageId: goalUserMessageId,
+          provider: providerName,
+          model,
+          workMode,
+          autonomy,
+        });
         return;
       }
       return;
@@ -1404,18 +1411,26 @@ function App() {
       const bareCmd = command.startsWith('/') ? command.slice(1) : '';
       const isSkillCommand =
         command === '/skill' || Boolean(skillSubCommandIndex[bareCmd]) || skillNameIndex.has(bareCmd);
+      const provider = providers.find((p) => p.id === selectedModel);
+      const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
+      const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
+      let goalUserMessageId = '';
       if (!isSkillCommand) {
-        const provider = providers.find((p) => p.id === selectedModel);
-        const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
-        const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
-        // /goal 的 user 消息只显示目标文本（不带 /goal 前綴，对原版前端 UI）。
+        // /goal 的 user 消息只显示目标文本（不带 /goal 前綴，对原版前端 UI），
+        // 并生成持久化 id 随 /goal/set 落库（重载/重进会话后泡泡不消失）。
         const displayText = command === '/goal' ? typedMessage.slice('/goal'.length).trim() || typedMessage : typedMessage;
+        goalUserMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         setMessages((current) => [
           ...current,
-          createMessage('user', displayText, { status: 'done', autonomy, provider: providerName, model }),
+          createMessage('user', displayText, { id: goalUserMessageId, status: 'done', autonomy, provider: providerName, model }),
         ]);
       }
-      handleSlashCommand(typedMessage);
+      handleSlashCommand(
+        typedMessage,
+        command === '/goal'
+          ? { userMessageId: goalUserMessageId, provider: providerName, model, workMode, autonomy }
+          : undefined,
+      );
       return;
     }
 
@@ -3182,7 +3197,7 @@ function App() {
   };
 
   /** /goal 目标命令（严格会话隔离：只作用于当前会话）。 */
-  const handleGoalSlash = async (sid: string, rest: string) => {
+  const handleGoalSlash = async (sid: string, rest: string, meta?: GoalSetMeta | undefined) => {
     const sub = rest.split(/\s+/)[0] ?? '';
     const usage = () =>
       setMessages((current) => [
@@ -3222,7 +3237,7 @@ function App() {
       }
       const objective = rest.trim();
       if (!objective) return usage();
-      const resp = await chatService.setGoal(sid, objective);
+      const resp = await chatService.setGoal(sid, objective, undefined, meta ?? null);
       setSessionGoal(sid, resp?.goal ?? null);
       // 空闲启动：设定 active 后立即触发续跑流（设计文档 §3.3.2）。
       if (resp?.goal?.status === 'active') void kickGoalContinuation(sid);
@@ -3231,7 +3246,7 @@ function App() {
     }
   };
 
-  const handleSlashCommand = (message: string) => {
+  const handleSlashCommand = (message: string, goalMeta?: GoalSetMeta | undefined) => {
     const [command] = message.split(/\s+/);
     setInput('');
     if (command === '/clear') {
@@ -3305,7 +3320,7 @@ function App() {
           ]);
           return;
         }
-        void handleGoalSlash(sid, rest);
+        void handleGoalSlash(sid, rest, goalMeta);
       })();
       return;
     }

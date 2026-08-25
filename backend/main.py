@@ -2739,6 +2739,13 @@ class GoalSetRequest(BaseModel):
     session_id: str
     objective: str
     token_budget: int | None = None
+    # 前端乐观渲染的 /goal user 泡泡元数据：持久化进 session 保证重载/重进会话不消失，
+    # 且用 user_message_id 保证前后端消息 id 一致（可编辑/回退）。
+    user_message_id: str | None = None
+    provider: str = ""
+    model: str = ""
+    work_mode: str = ""
+    autonomy: str = ""
 
 
 class GoalControlRequest(BaseModel):
@@ -2770,6 +2777,23 @@ async def goal_set(request: GoalSetRequest):
     if not objective:
         raise HTTPException(status_code=400, detail="objective is required")
     goal = session_store.set_goal(request.session_id, objective, request.token_budget)
+    # 持久化目标设定 user 消息：前端乐观渲染的 /goal 泡泡在重载/重进会话后不消失，
+    # 且沿用前端传入的 id（编辑/回退时按 id 检索不会 404）。
+    try:
+        session = session_store.require(request.session_id)
+        session_store.append_message(
+            request.session_id,
+            role="user",
+            content=objective,
+            mode="single",
+            provider=request.provider or "",
+            model=request.model or "",
+            work_mode=request.work_mode or session.work_mode,
+            autonomy=request.autonomy or session.autonomy,
+            message_id=request.user_message_id or None,
+        )
+    except Exception:  # noqa: BLE001 - 持久化失败不影响 goal 设定
+        logger.warning("goal/set persist user message failed for %s", request.session_id, exc_info=True)
     return {"status": "ok", "goal": _emit_goal_updated(request.session_id, goal)}
 
 

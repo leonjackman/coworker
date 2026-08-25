@@ -938,5 +938,6 @@
   "goal.need_session": "Commencez une conversation (envoyez un message), puis définissez un objectif.",
   "goal.need_workspace": "Sélectionnez d'abord un espace de travail, puis définissez un objectif.",
   "goal.command_failed": "Échec de l'opération sur l'objectif. Veuillez réessayer.",
-  "goal.elapsed": "écoulé"
+  "goal.elapsed": "écoulé",
+  "chat.question_empty_fallback": "L'agent a besoin de votre réponse pour continuer — merci de répondre."
 }

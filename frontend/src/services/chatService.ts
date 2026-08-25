@@ -71,6 +71,7 @@ import type {
   OrgTeamPayload,
   OrgTeamUpdatePayload,
   GoalResponse,
+  GoalSetMeta,
 } from '../types';
 import { getLanguage } from '../lib/i18n';
 
@@ -126,7 +127,7 @@ export interface ChatService {
   stopSessionStream: (sessionId: string) => Promise<void>;
   getSession: (sessionId: string) => Promise<SessionDetailResponse>;
   getGoal: (sessionId: string) => Promise<GoalResponse>;
-  setGoal: (sessionId: string, objective: string, tokenBudget?: number | null) => Promise<GoalResponse>;
+  setGoal: (sessionId: string, objective: string, tokenBudget?: number | null, meta?: GoalSetMeta | null) => Promise<GoalResponse>;
   pauseGoal: (sessionId: string) => Promise<GoalResponse>;
   resumeGoal: (sessionId: string) => Promise<GoalResponse>;
   clearGoal: (sessionId: string) => Promise<{ status: string; cleared: boolean }>;
@@ -346,9 +347,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.goalGet(sessionId);
   }
 
-  async setGoal(sessionId: string, objective: string, tokenBudget?: number | null): Promise<GoalResponse> {
+  async setGoal(sessionId: string, objective: string, tokenBudget?: number | null, meta?: GoalSetMeta | null): Promise<GoalResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.goalSet(sessionId, objective, tokenBudget ?? null);
+    return window.electronAPI.goalSet(sessionId, objective, tokenBudget ?? null, meta ?? null);
   }
 
   async pauseGoal(sessionId: string): Promise<GoalResponse> {
@@ -1119,11 +1120,24 @@ class HttpChatService implements ChatService {
     return this.request<GoalResponse>(`/goal?session_id=${encodeURIComponent(sessionId)}`);
   }
 
-  async setGoal(sessionId: string, objective: string, tokenBudget?: number | null): Promise<GoalResponse> {
+  async setGoal(sessionId: string, objective: string, tokenBudget?: number | null, meta?: GoalSetMeta | null): Promise<GoalResponse> {
     return this.request<GoalResponse>('/goal/set', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, objective, ...(tokenBudget != null ? { token_budget: tokenBudget } : {}) }),
+      body: JSON.stringify({
+        session_id: sessionId,
+        objective,
+        ...(tokenBudget != null ? { token_budget: tokenBudget } : {}),
+        ...(meta
+          ? {
+              user_message_id: meta.userMessageId,
+              provider: meta.provider || '',
+              model: meta.model || '',
+              work_mode: meta.workMode || '',
+              autonomy: meta.autonomy || '',
+            }
+          : {}),
+      }),
     });
   }
 

@@ -938,5 +938,6 @@
   "goal.need_session": "Starten Sie zuerst eine Konversation (senden Sie eine Nachricht), dann setzen Sie ein Ziel.",
   "goal.need_workspace": "Wählen Sie zuerst einen Arbeitsbereich, dann setzen Sie ein Ziel.",
   "goal.command_failed": "Zieloperation fehlgeschlagen. Bitte erneut versuchen.",
-  "goal.elapsed": "verstrichen"
+  "goal.elapsed": "verstrichen",
+  "chat.question_empty_fallback": "Der Agent benötigt Ihre Eingabe, um fortzufahren — bitte antworten Sie."
 }
