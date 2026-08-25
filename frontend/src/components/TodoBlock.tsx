@@ -1,10 +1,10 @@
 import { useRef, useState, type CSSProperties } from 'react';
-import { Check, ListChecks, ChevronDown, GripVertical, Pencil, Send, X } from 'lucide-react';
+import { Check, ListChecks, ChevronDown, GripVertical, Pencil, Send, X, Target, Pause, Play, Trash2 } from 'lucide-react';
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { Todo } from '../types';
-import { t } from '../lib/i18n';
+import type { GoalState, GoalStatus, Todo } from '../types';
+import { t, tOrDefault } from '../lib/i18n';
 
 export interface QueuedMessageItem {
   id: string;
@@ -27,6 +27,44 @@ interface TodoBlockProps {
    *  the LLM WITHOUT pausing/stopping the stream. */
   onInterjectQueued?: (id: string) => void;
   onClose?: () => void;
+  /** Session-scoped goal (严格会话隔离：只渲染当前会话的目标）。 */
+  goal?: GoalState | null;
+  /** 暂停目标作用（停目标，不停任务）。 */
+  onGoalPause?: (goal: GoalState) => void;
+  /** 恢复目标作用。 */
+  onGoalResume?: (goal: GoalState) => void;
+  /** 清除目标（终止一切续跑）。 */
+  onGoalClear?: (goal: GoalState) => void;
+}
+
+function goalStatusLabel(status: GoalStatus): string {
+  switch (status) {
+    case 'active':
+      return tOrDefault('goal.status_active', '进行中');
+    case 'paused':
+      return tOrDefault('goal.status_paused', '已暂停');
+    case 'blocked':
+      return tOrDefault('goal.status_blocked', '受阻');
+    case 'complete':
+      return tOrDefault('goal.status_complete', '已完成');
+    case 'budget_limited':
+      return tOrDefault('goal.status_budget_limited', '预算受限');
+    case 'usage_limited':
+      return tOrDefault('goal.status_usage_limited', '用量受限');
+    default:
+      return status;
+  }
+}
+
+function formatGoalElapsed(seconds: number): string {
+  const s = Math.max(0, seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  return `${d}d`;
 }
 
 interface SortableQueueItemProps {
@@ -153,14 +191,14 @@ function SortableQueueItem({
  * get checked off as the agent works; queued messages are listed one per row
  * with drag-to-reorder, inline edit and a remove action.
  */
-export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQueued, onEditQueued, onReorderQueued, onInterjectQueued, onClose }: TodoBlockProps) {
+export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQueued, onEditQueued, onReorderQueued, onInterjectQueued, onClose, goal = null, onGoalPause, onGoalResume, onGoalClear }: TodoBlockProps) {
   const [expanded, setExpanded] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const hasTodos = todos.length > 0;
   const hasQueue = queuedMessages.length > 0;
-  if (!hasTodos && !hasQueue) return null;
+  if (!hasTodos && !hasQueue && !goal) return null;
   const doneCount = todos.filter((todo) => todo.status === 'completed').length;
 
   const startEdit = (queued: QueuedMessageItem) => {
@@ -186,8 +224,54 @@ export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQu
     onReorderQueued?.(arrayMove(queuedMessages.map((q) => q.id), oldIndex, newIndex));
   };
 
+  const goalTokenRatio = goal && goal.token_budget != null && goal.token_budget > 0 ? Math.min(1, goal.tokens_used / goal.token_budget) : 0;
+
   return (
     <div className="todo-block">
+      {goal && (
+        <div className={`todo-block__goal todo-block__goal--${goal.status}`}>
+          <div className="todo-block__goal-head">
+            <span className="todo-block__goal-title">
+              <Target size={13} className="todo-block__sign" />
+              <span className="todo-block__goal-objective" title={goal.objective}>{goal.objective}</span>
+            </span>
+            <span className="todo-block__goal-status">{goalStatusLabel(goal.status)}</span>
+          </div>
+          <div className="todo-block__goal-meta">
+            <span>{tOrDefault('goal.elapsed', '已用时间')} {formatGoalElapsed(goal.time_used_seconds)}</span>
+            <span>
+              {goal.token_budget != null
+                ? `${goal.tokens_used}/${goal.token_budget} tokens`
+                : `${goal.tokens_used} tokens`}
+            </span>
+          </div>
+          {goal.token_budget != null && goal.token_budget > 0 && (
+            <div className="todo-block__goal-budget">
+              <div className="todo-block__goal-budget-track">
+                <div className="todo-block__goal-budget-fill" style={{ width: `${Math.round(goalTokenRatio * 100)}%` }} />
+              </div>
+            </div>
+          )}
+          <div className="todo-block__goal-actions">
+            {(goal.status === 'active' || goal.status === 'budget_limited') && (
+              <button type="button" className="todo-block__goal-btn" onClick={() => onGoalPause?.(goal)} title={tOrDefault('goal.pause', '暂停目标')}>
+                <Pause size={12} />
+                {tOrDefault('goal.pause', '暂停')}
+              </button>
+            )}
+            {goal.status === 'paused' && (
+              <button type="button" className="todo-block__goal-btn" onClick={() => onGoalResume?.(goal)} title={tOrDefault('goal.resume', '恢复目标')}>
+                <Play size={12} />
+                {tOrDefault('goal.resume', '恢复')}
+              </button>
+            )}
+            <button type="button" className="todo-block__goal-btn" onClick={() => onGoalClear?.(goal)} title={tOrDefault('goal.clear', '清除目标')}>
+              <Trash2 size={12} />
+              {tOrDefault('goal.clear', '清除')}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="todo-block__head">
         <span className="todo-block__title">
           <ListChecks size={14} className="todo-block__sign" />

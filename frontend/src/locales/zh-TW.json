@@ -910,5 +910,6 @@
   "files.collapse": "收起",
   "chat.interject_queued": "插話引導",
   "chat.interject_badge": "插話",
-  "chat.steer_injected_label": "收到插話"
+  "chat.steer_injected_label": "收到插話",
+  "chat.command_goal": "設定目標（/goal <目標>）"
 }

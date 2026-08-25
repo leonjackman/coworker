@@ -356,6 +356,22 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         except Exception:  # noqa: BLE001
             return []
 
+    def _goal_emit_live(self, session_id: str):
+        """Goal-command emit callback: publish ``goal_updated`` to the session bus.
+
+        Called by the ``update_goal`` model tool the moment it changes the goal
+        status, so the TodoBlock goal section refreshes live (streaming channel);
+        the HTTP /goal endpoints use ``_emit_goal_updated`` for the idle channel.
+        """
+
+        def _emit(event: dict[str, Any]) -> None:
+            try:
+                session_event_bus.publish(session_id, event)
+            except Exception:  # noqa: BLE001 - never break on a publish hiccup
+                pass
+
+        return _emit
+
     async def _force_compact(self, graph: Any, inputs: dict[str, Any], config: Any) -> None:
         """Halve the context budget on the middleware and nudge the checkpoint
         so the overflow retry sends a strictly smaller request.
@@ -484,6 +500,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     worker_context_window_tokens=self.context_window_tokens,
                     worker_max_output_tokens=self.max_output_tokens,
                     worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
+                    session_id=session_id,
+                    goal_emit=self._goal_emit_live(session_id),
                 ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,
@@ -778,6 +796,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         worker_context_window_tokens=self.context_window_tokens,
                         worker_max_output_tokens=self.max_output_tokens,
                         worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
+                        session_id=session_id,
+                        goal_emit=self._goal_emit_live(session_id),
                     ),
                 work_mode=work_mode, language=language, autonomy=autonomy,
                 checkpointer=checkpointer, approval_store=self.approval_store,

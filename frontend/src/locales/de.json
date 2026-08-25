@@ -913,5 +913,6 @@
   "providers.temperature_hint": "Überschreibt den Modell-Standard; 0 wählt automatisch (z. B. 0.55 für qwen) oder überlässt es dem Anbieter",
   "chat.interject_queued": "Jetzt einwerfen",
   "chat.interject_badge": "Einwurf",
-  "chat.steer_injected_label": "Einwurf erhalten"
+  "chat.steer_injected_label": "Einwurf erhalten",
+  "chat.command_goal": "Ein Ziel setzen (/goal <Ziel>)"
 }

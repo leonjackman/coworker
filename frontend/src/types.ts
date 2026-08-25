@@ -415,6 +415,30 @@ export interface SessionSummary {
   autonomy?: string;
   message_count: number;
   todos?: Todo[];
+  goal?: GoalState | null;
+}
+
+export type GoalStatus =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'complete'
+  | 'budget_limited'
+  | 'usage_limited';
+
+export interface GoalState {
+  objective: string;
+  status: GoalStatus;
+  token_budget: number | null;
+  tokens_used: number;
+  time_used_seconds: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GoalResponse {
+  status: string;
+  goal: GoalState | null;
 }
 
 export type ProjectMode = 'single' | 'multi';
@@ -646,8 +670,11 @@ export interface PendingRequest {
         approval_status: string;
         session_id?: string;
       }
-    | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[] }
+    | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[]; message_id?: string }
     | { type: 'error'; error: string; session_id?: string }
+    | { type: 'goal_updated'; goal: GoalState; session_id?: string }
+    | { type: 'goal_cleared'; session_id?: string }
+    | { type: 'goal_stream_end'; session_id?: string }
     | { type: 'worker_stream_end'; worker_run_id?: string }
     | { type: 'todos'; todos: Todo[]; session_id?: string }
     | { type: 'delegate_start'; from?: string; to?: string | string[]; task?: string; parallel?: boolean; session_id?: string; worker_run_id?: string }

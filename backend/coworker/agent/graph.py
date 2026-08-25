@@ -43,9 +43,11 @@ from .core import (
     DelegateParallelArgs,
     DelegateTaskArgs,
     DelegateTaskItem,
+    GetGoalArgs,
     GitStatusArgs,
     InstallSkillArgs,
     LoadSkillArgs,
+    ManageGoalArgs,
     MemoryArgs,
     MemoryReadArgs,
     ReadFileArgs,
@@ -111,6 +113,8 @@ def build_workspace_tools(
     worker_context_window_tokens: int = 0,
     worker_max_output_tokens: int = 0,
     worker_calibration_key: str = "",
+    session_id: str = "",
+    goal_emit: Any | None = None,  # optional callback for goal_updated SSE frames
 ) -> list[Any]:
     from pathlib import Path as _Path
 
@@ -520,6 +524,54 @@ def build_workspace_tools(
             return "Team management is not available in this project (single-agent mode)."
         return delegator.create_team(id, name, lead, parent_team_id)
 
+    @tool(args_schema=ManageGoalArgs)
+    def update_goal(status: str) -> str:
+        """Declare the active session goal complete or blocked.
+
+        You may ONLY set "complete" or "blocked". Pausing/resuming the goal and
+        its token budget are user- or system-controlled — never call this tool
+        to change them.
+
+        "complete" is a strict claim: the FULL objective is finished and
+        verified requirement-by-requirement against authoritative current-state
+        evidence (files, command output, tests, rendered artifacts, runtime
+        behavior). Never mark complete merely because work is hard, slow, the
+        budget is nearly exhausted, or you are stopping work.
+
+        "blocked" is only for a true impasse: the SAME blocking condition has
+        repeated for at least three consecutive goal turns. Never use it because
+        the work is hard, uncertain, or would benefit from clarification.
+        """
+        if session_store is None or not session_id:
+            return json.dumps({"error": "goal store unavailable"}, ensure_ascii=False)
+        goal = session_store.get_goal(session_id)
+        if goal is None:
+            return json.dumps({"error": "当前没有 active 目标"}, ensure_ascii=False)
+        if goal.status not in {"active", "budget_limited"}:
+            return json.dumps({"error": f"goal status is {goal.status}, cannot update"}, ensure_ascii=False)
+        updated = session_store.update_goal_status(session_id, status)
+        if goal_emit is not None:
+            try:
+                goal_emit({"type": "goal_updated", "session_id": session_id, "goal": updated.to_dict()})
+            except Exception:  # noqa: BLE001 - never break the tool on a publish hiccup
+                pass
+        return json.dumps({"status": "ok", "goal_status": status}, ensure_ascii=False)
+
+    @tool(args_schema=GetGoalArgs)
+    def get_goal() -> str:
+        """Read the active session goal (objective, status, token budget, usage).
+
+        Read-only: use it to re-check the exact objective, token budget and how
+        many tokens/seconds have been spent before deciding whether the goal is
+        actually complete.
+        """
+        if session_store is None or not session_id:
+            return json.dumps({"error": "goal store unavailable"}, ensure_ascii=False)
+        goal = session_store.get_goal(session_id)
+        if goal is None:
+            return json.dumps({"goal": None}, ensure_ascii=False)
+        return json.dumps(goal.to_dict(), ensure_ascii=False)
+
     tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
     if readonly:
         # Reviewer/auditor sub-agents get no workspace mutation tools.
@@ -543,6 +595,19 @@ def build_workspace_tools(
         tools.append(delegate_parallel)
         tools.append(create_team_member)
         tools.append(create_team)
+
+    # Goal tools（对齐 codex spec.rs）：仅当 session 有 active/budget_limited 目标时
+    # 可见。update_goal 只能声明 complete/blocked（pause/resume/budget 归用户/系统）；
+    # get_goal 只读查询。用 factory 延迟闭包，避免在定义处绑定外部可变 state。
+    if session_store is not None and session_id:
+        _active_goal = None
+        try:
+            _active_goal = session_store.get_goal(session_id)
+        except Exception:  # noqa: BLE001 - a goal probe must never break tool building
+            _active_goal = None
+        if _active_goal is not None and _active_goal.status in {"active", "budget_limited"}:
+            tools.append(update_goal)
+            tools.append(get_goal)
     # WorkerAgent 集成（单 agent 模式）：use_worker 是只读-safe 的，
     # 但 worker 本身可以有写权限（由 WorkerConfig 控制），所以 use_worker tool 始终可挂载。
     if use_worker_enabled and worker_llm is not None:

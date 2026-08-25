@@ -54,6 +54,11 @@ from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
+from coworker.goal_prompts import (
+    render_budget_limit,
+    render_goal_continuation,
+    render_objective_updated,
+)
 from coworker.steer import SteerEntry, steer_inbox
 from coworker.skills.skill_manager import SkillManager
 from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
@@ -598,6 +603,38 @@ async def _publish_turn(
     except BaseException:  # noqa: BLE001 - incl. cancellation; must close the bus
         session_event_bus.close(session_id)
         raise
+
+
+def _emit_goal_updated(session_id: str, goal) -> dict | None:
+    """Broadcast a ``goal_updated`` event on the session bus (streaming channel)
+    and return the goal payload for the HTTP response (idle channel).
+
+    Both channels land on the same frontend ``goal`` state — no second truth.
+    """
+    if goal is None:
+        return None
+    try:
+        payload = goal.to_dict()
+    except Exception:  # noqa: BLE001 - never break on a serialization hiccup
+        return None
+    try:
+        session_event_bus.publish(
+            session_id,
+            {"type": "goal_updated", "session_id": session_id, "goal": payload},
+        )
+    except Exception:  # noqa: BLE001 - never break on a publish hiccup
+        pass
+    return payload
+
+
+def _emit_goal_cleared(session_id: str) -> None:
+    try:
+        session_event_bus.publish(
+            session_id,
+            {"type": "goal_cleared", "session_id": session_id},
+        )
+    except Exception:  # noqa: BLE001 - never break on a publish hiccup
+        pass
 
 
 class ChatRequest(BaseModel):
@@ -1764,6 +1801,15 @@ async def chat_stream(request: ChatStreamRequest):
         # Last full `context_usage` frame from the run, persisted on `done` so the
         # session-open preview shows the true request size (system + tools + …).
         last_context_usage: dict[str, Any] | None = None
+        # Per-round state (goal 多轮续跑）: the assistant message id the CURRENT
+        # round persists to. Round 0 reuses the client-supplied id (frontend
+        # bubble reconciliation); continuation rounds get a freshly generated id
+        # (never adopt as a successful client commit) and surface it via
+        # `done.message_id` so the frontend creates a new bubble per round.
+        current_round_assistant_id: str | None = request.assistant_message_id or None
+        round_index = 0
+        budget_wrapup_done = False
+        last_seen_objective: str | None = None
         stream_iter: Any
 
         # Fast-fail: when the requested provider was recently discovered as
@@ -1778,15 +1824,16 @@ async def chat_stream(request: ChatStreamRequest):
         _USE_CLIENT_MESSAGE_ID = object()
 
         def _persist_assistant(content, mode, provider, model, parts, message_id=_USE_CLIENT_MESSAGE_ID):
-            # By default the client-supplied id is used so a completed turn's
-            # persisted message reconciles 1:1 with the frontend bubble. Error /
-            # disconnect partials pass `message_id=None` so they get a freshly
-            # generated id: they must NEVER be adopted as a successful commit by
-            # the frontend's stream-settle reconciliation (which matches on the
-            # exact `assistant_message_id`).
+            # By default the CURRENT ROUND's assistant id is used so a completed
+            # turn's persisted message reconciles 1:1 with the frontend bubble
+            # (round 0 = the client-supplied id; continuation rounds = the
+            # per-round generated id). Error / disconnect partials pass
+            # `message_id=None` so they get a freshly generated id: they must
+            # NEVER be adopted as a successful commit by the frontend's
+            # stream-settle reconciliation (which matches on the exact id).
             try:
                 resolved_id = (
-                    (request.assistant_message_id or None) if message_id is _USE_CLIENT_MESSAGE_ID else message_id
+                    current_round_assistant_id if message_id is _USE_CLIENT_MESSAGE_ID else message_id
                 )
                 session = session_store.append_message(
                     session_id,
@@ -1811,7 +1858,7 @@ async def chat_stream(request: ChatStreamRequest):
                 logger.exception("Failed to persist assistant message for session %s", session_id)
 
         def _handle_event(event):
-            nonlocal terminal_sent, accumulated_content, error_emitted, interrupt_emitted, last_context_usage
+            nonlocal terminal_sent, accumulated_content, error_emitted, interrupt_emitted, last_context_usage, current_round_assistant_id
             etype = event.get("type", "")
             if etype == "context_usage":
                 # Remember the latest full measurement; persisted on `done`.
@@ -1837,6 +1884,9 @@ async def chat_stream(request: ChatStreamRequest):
                     event.get("model"),
                     event.get("parts"),
                 )
+                # 回带该轮 assistant 消息 id：前端据此识别是首轮（等于请求里的
+                # assistant_message_id）还是续跑轮（新建气泡），并对账。
+                event["message_id"] = current_round_assistant_id
                 try:
                     session_store.update_modes(session_id, work_mode, autonomy)
                 except Exception:  # noqa: BLE001 - never break the terminal event
@@ -1871,9 +1921,150 @@ async def chat_stream(request: ChatStreamRequest):
             request.mode, request.provider_id, request.model,
             resolved_workspace, referenced_ids, agent, request.project_id,
         )
-        stream_iter = runtime.stream(
-            messages, session_id, request.language, work_mode, autonomy,
-        )
+
+        def _current_history() -> list[dict[str, Any]]:
+            """Full user/assistant history from the session (post-round persist),
+            so round N sees rounds 1..N-1 output (codex rollout semantics)."""
+            try:
+                session = session_store.require(session_id)
+            except KeyError:
+                return []
+            return [
+                {"role": m.role, "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes) if m.role == "user" else m.content}
+                for m in session.messages
+                if m.role in {"user", "assistant"} and m.content
+            ]
+
+        def _goal_injection(goal) -> str | None:
+            """该续跑轮要注入的 system 首位内容（内部指令，不落库），或 None。"""
+            nonlocal last_seen_objective
+            if goal.status == "budget_limited":
+                return render_budget_limit(goal)
+            if last_seen_objective is not None and goal.objective != last_seen_objective:
+                return render_objective_updated(goal)
+            return render_goal_continuation(goal)
+
+        async def _goal_rounds_iter():
+            """单一生成器内层多轮循环（已拍板落地方式）。
+
+            每轮调用一次 ``runtime.stream`` 依序 yield；``_publish_turn`` /
+            SSE 订阅 / 会话事件总线只建一次，整个 goal 运行期保持单条 SSE 连接。
+            每轮起点重置终态旗标，每轮独立 snapshot，每轮结束记账并决定是否续跑。
+            """
+            nonlocal terminal_sent, error_emitted, interrupt_emitted, accumulated_content, last_context_usage, current_round_assistant_id, round_index, budget_wrapup_done, last_seen_objective
+
+            goal_stream_active = session_store.get_goal(session_id) is not None
+            inflight_anchor: str | None = None
+            inflight_pre: str | None = None
+
+            def _begin_round(anchor: str) -> str | None:
+                return agent_registry.snapshot_manager.begin_turn(session_id, anchor, resolved_workspace)
+
+            def _end_round(anchor: str | None, pre: str | None) -> None:
+                if pre is not None and anchor is not None:
+                    agent_registry.snapshot_manager.end_turn(session_id, anchor, resolved_workspace)
+
+            try:
+                while True:
+                    # ---- per-round reset（否则第 2 轮起 _on_error/_on_end 短路错乱）----
+                    terminal_sent = False
+                    error_emitted = False
+                    interrupt_emitted = False
+                    accumulated_content = ""
+                    last_context_usage = None
+
+                    if round_index == 0:
+                        if request.skip_user_append and session_store.get_goal(session_id) is not None:
+                            # 会话恢复 / 空闲启动：round 0 本身就是续跑轮，注入 goal 上下文。
+                            # 该轮的 assistant 消息仍复用客户端传入的 id（前端已预建气泡），
+                            # 只有真正的续跑轮（round >= 1）才用后端生成的新 id。
+                            goal = session_store.get_goal(session_id)
+                            injection = _goal_injection(goal)
+                            round_messages = ([{"role": "system", "content": injection}] if injection else []) + history
+                            current_round_assistant_id = request.assistant_message_id or None
+                            round_anchor = current_round_assistant_id or snapshot_user_message_id
+                            last_seen_objective = goal.objective
+                        else:
+                            # 普通首轮（用户消息 / interject skip_user_append 无 goal）。
+                            round_messages = messages
+                            current_round_assistant_id = request.assistant_message_id or None
+                            round_anchor = snapshot_user_message_id
+                    else:
+                        goal = session_store.get_goal(session_id)
+                        if goal is None:
+                            break
+                        if goal.status != "active" and not (goal.status == "budget_limited" and not budget_wrapup_done):
+                            break
+                        if goal.status == "budget_limited":
+                            # 预算兜底轮：注入 budget_limit，仅一轮后停。
+                            budget_wrapup_done = True
+                            injection = render_budget_limit(goal)
+                        else:
+                            injection = _goal_injection(goal)
+                        round_history = _current_history()
+                        if not round_history:
+                            break
+                        round_messages = ([{"role": "system", "content": injection}] if injection else []) + round_history
+                        current_round_assistant_id = f"goal-round-{uuid.uuid4().hex[:12]}"
+                        round_anchor = current_round_assistant_id
+                        last_seen_objective = goal.objective
+
+                    # ---- per-round snapshot（回滚按轮隔离）----
+                    inflight_anchor = round_anchor
+                    inflight_pre = await asyncio.to_thread(_begin_round, round_anchor)
+                    try:
+                        round_started = time.monotonic()
+                        round_iter = runtime.stream(round_messages, session_id, request.language, work_mode, autonomy)
+                        async for ev in round_iter:
+                            yield ev
+                        round_elapsed = time.monotonic() - round_started
+                    finally:
+                        try:
+                            await asyncio.to_thread(_end_round, inflight_anchor, inflight_pre)
+                        except Exception:  # noqa: BLE001 - best-effort
+                            logger.warning("round-end snapshot failed for %s", session_id, exc_info=True)
+                        inflight_pre = None
+                        inflight_anchor = None
+
+                    # ---- accounting（仅 session 有 goal 时）----
+                    if session_store.get_goal(session_id) is not None:
+                        token_delta = int((last_context_usage or {}).get("used_tokens", 0) or 0)
+                        try:
+                            session_store.account_goal_usage(session_id, token_delta, round_elapsed)
+                        except Exception:  # noqa: BLE001 - never break the stream
+                            logger.debug("account_goal_usage failed for %s", session_id, exc_info=True)
+
+                    # HITL：保留 interrupt checkpoint，goal 保持 active，等前端 resume。
+                    if interrupt_emitted:
+                        break
+
+                    # ---- continue decision ----
+                    goal = session_store.get_goal(session_id)
+                    if goal is None:
+                        break
+                    if goal.status == "active":
+                        round_index += 1
+                        continue
+                    if goal.status == "budget_limited" and not budget_wrapup_done:
+                        # 预算刚超限：再跑一轮兜底（注入 budget_limit）后停。
+                        round_index += 1
+                        continue
+                    break
+
+                # 自然收口（goal 达成 / 暂停 / 清除 / 预算兜底完成）：通知前端整条
+                # 续跑链结束，供其做最终 settle/收尾。HITL / error 不发（前者保持
+                # waiting，后者 error 帧即终态）。
+                if goal_stream_active and not interrupt_emitted and not error_emitted:
+                    yield {"type": "goal_stream_end", "session_id": session_id}
+            finally:
+                # 生成器被取消（客户端断开 / Stop）：当前轮 snapshot 尚未 end 则兜底关闭。
+                if inflight_pre is not None and inflight_anchor is not None:
+                    try:
+                        await asyncio.to_thread(_end_round, inflight_anchor, inflight_pre)
+                    except Exception:  # noqa: BLE001 - best-effort
+                        pass
+
+        stream_iter = _goal_rounds_iter()
 
         _raw_stream_iter = stream_iter
 
@@ -1942,6 +2133,17 @@ async def chat_stream(request: ChatStreamRequest):
                 session_store.update_modes(session_id, work_mode, autonomy)
             except Exception:  # noqa: BLE001 - never break the terminal event
                 logger.warning("update_modes failed in _on_error for session %s", session_id, exc_info=True)
+            # turn 报错（非客户端取消 / Stop）且 goal active → blocked（对标 codex
+            # TurnError→Blocked 停循环）。Stop / 客户端断开不改 goal 状态（选项 A）。
+            if not isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                try:
+                    goal = session_store.get_goal(session_id)
+                    if goal is not None and goal.status == "active":
+                        blocked = session_store.update_goal_status(session_id, "blocked")
+                        if blocked is not None:
+                            _emit_goal_updated(session_id, blocked)
+                except Exception:  # noqa: BLE001 - never break the terminal event
+                    logger.debug("error→blocked goal update failed for %s", session_id, exc_info=True)
             terminal_sent = True
             return {
                 "type": "error",
@@ -1952,17 +2154,13 @@ async def chat_stream(request: ChatStreamRequest):
                 "base_url": getattr(getattr(runtime, "llm", None), "base_url", "") or "",
             }
 
-        # Snapshot the workspace BEFORE the turn runs so editing this user
-        # message later can restore the files that turn changed (git-backed,
-        # session-scoped; a no-op for non-git workspaces).
-        snapshot_pre = await asyncio.to_thread(
-            agent_registry.snapshot_manager.begin_turn, session_id, snapshot_user_message_id, resolved_workspace,
-        )
         # The turn runs as a background task that publishes to the session bus;
         # this endpoint subscribes (replay + live). Decoupling delivery from the
         # runtime generator means tool/worker status transitions reach the client
         # the moment they happen — even while the graph is blocked awaiting a
-        # long-running tool (opencode-style session event bus).
+        # long-running tool (opencode-style session event bus). Snapshots are
+        # taken per round inside ``_goal_rounds_iter`` (round 0 anchors on the
+        # user message id; continuation rounds anchor on their own assistant id).
         subscription = session_event_bus.stream(session_id)
         turn_task = asyncio.create_task(
             _publish_turn(session_id, stream_iter, _on_event, _on_end, _on_error)
@@ -2011,10 +2209,6 @@ async def chat_stream(request: ChatStreamRequest):
                     raise
                 except Exception:  # noqa: BLE001 - best-effort cleanup
                     logger.warning("turn-end checkpoint delete failed for %s", session_id, exc_info=True)
-            if snapshot_pre is not None:
-                await asyncio.to_thread(
-                    agent_registry.snapshot_manager.end_turn, session_id, snapshot_user_message_id, resolved_workspace,
-                )
 
     return StreamingResponse(
         event_stream(),
@@ -2534,6 +2728,103 @@ async def generate_title_endpoint(session_id: str, request: GenerateTitleRequest
     final_title = new_title or session.title
     session_store.rename(session_id, final_title)
     return {"status": "ok", "title": final_title}
+
+
+class GoalSetRequest(BaseModel):
+    session_id: str
+    objective: str
+    token_budget: int | None = None
+
+
+class GoalControlRequest(BaseModel):
+    session_id: str
+
+
+class GoalEditRequest(BaseModel):
+    session_id: str
+    objective: str
+
+
+def _require_goal(session_id: str):
+    try:
+        session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return session_id
+
+
+@app.post("/goal/set")
+async def goal_set(request: GoalSetRequest):
+    """设定并激活目标：置 active、计数清零、广播 ``goal_updated``。
+
+    空闲会话下前端拿到返回的 ``active`` 后必须立即发起一次
+    ``skip_user_append=True`` 的 /chat/stream 触发续跑（见设计文档 §3.3.2）。
+    """
+    _require_goal(request.session_id)
+    objective = request.objective.strip()
+    if not objective:
+        raise HTTPException(status_code=400, detail="objective is required")
+    goal = session_store.set_goal(request.session_id, objective, request.token_budget)
+    return {"status": "ok", "goal": _emit_goal_updated(request.session_id, goal)}
+
+
+@app.post("/goal/pause")
+async def goal_pause(request: GoalControlRequest):
+    """暂停目标作用（不中止进行中的流）：仅 active/budget_limited 可暂停。"""
+    _require_goal(request.session_id)
+    current = session_store.get_goal(request.session_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="no active goal")
+    if current.status not in {"active", "budget_limited"}:
+        raise HTTPException(status_code=409, detail=f"cannot pause a {current.status} goal")
+    goal = session_store.update_goal_status(request.session_id, "paused")
+    return {"status": "ok", "goal": _emit_goal_updated(request.session_id, goal)}
+
+
+@app.post("/goal/resume")
+async def goal_resume(request: GoalControlRequest):
+    """恢复目标作用：仅 paused 可恢复。"""
+    _require_goal(request.session_id)
+    current = session_store.get_goal(request.session_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="no active goal")
+    if current.status != "paused":
+        raise HTTPException(status_code=409, detail="goal is not paused")
+    goal = session_store.update_goal_status(request.session_id, "active")
+    return {"status": "ok", "goal": _emit_goal_updated(request.session_id, goal)}
+
+
+@app.post("/goal/edit")
+async def goal_edit(request: GoalEditRequest):
+    """修改 objective（仅 active 可编辑，状态保持 active）。"""
+    _require_goal(request.session_id)
+    objective = request.objective.strip()
+    if not objective:
+        raise HTTPException(status_code=400, detail="objective is required")
+    current = session_store.get_goal(request.session_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="no active goal")
+    if current.status != "active":
+        raise HTTPException(status_code=409, detail=f"cannot edit a {current.status} goal")
+    goal = session_store.update_goal_objective(request.session_id, objective)
+    return {"status": "ok", "goal": _emit_goal_updated(request.session_id, goal)}
+
+
+@app.post("/goal/clear")
+async def goal_clear(request: GoalControlRequest):
+    """清除目标：终止一切续跑并清状态条。"""
+    _require_goal(request.session_id)
+    cleared = session_store.clear_goal(request.session_id)
+    if cleared:
+        _emit_goal_cleared(request.session_id)
+    return {"status": "ok", "cleared": cleared}
+
+
+@app.get("/goal")
+async def goal_get(session_id: str):
+    _require_goal(session_id)
+    goal = session_store.get_goal(session_id)
+    return {"status": "ok", "goal": goal.to_dict() if goal is not None else None}
 
 
 class EditMessageRequest(BaseModel):

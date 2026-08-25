@@ -915,5 +915,6 @@
   "providers.temperature_hint": "覆寫模型預設；0 自動套用（如 qwen 為 0.55）或交由提供商決定",
   "chat.interject_queued": "插话引导",
   "chat.interject_badge": "插话",
-  "chat.steer_injected_label": "收到插话"
+  "chat.steer_injected_label": "收到插话",
+  "chat.command_goal": "设定目标（/goal <目标>）"
 }

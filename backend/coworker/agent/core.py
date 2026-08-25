@@ -167,6 +167,23 @@ class CreateTeamArgs(BaseModel):
     parent_team_id: str = Field(default="", description="Optional parent team id for nested departments.")
 
 
+class ManageGoalArgs(BaseModel):
+    status: Literal["complete", "blocked"] = Field(
+        description=(
+            "Mark the active session goal complete or blocked. You may ONLY set "
+            '"complete" or "blocked" — pausing/resuming/budget are user- or '
+            'system-controlled. "complete" requires a strict requirement-by-requirement '
+            "audit against authoritative current-state evidence. "
+            '"blocked" requires the SAME blocking condition to repeat for at least '
+            "three consecutive goal turns."
+        )
+    )
+
+
+class GetGoalArgs(BaseModel):
+    """No arguments — reads the active session goal (objective, status, budget, usage)."""
+
+
 def _resolve_project_memory_dir(project_store: Any | None, workspace_root: str) -> str:
     """Resolve the memory_dir for a workspace root, or ``""`` if unknown.
 
@@ -441,10 +458,10 @@ def _open_checkpointer(checkpoints_dir: Any):
 _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser", "get_goal"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
-_EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers"}
+_EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal"}
 
 # 子代理（worker）工具集在构造期就排除的委派/spawn 工具。把这些工具塞给子代理，
 # 会允许 worker 无限嵌套 spawn 更多 worker/team（单 agent 模式没有 org.max_depth

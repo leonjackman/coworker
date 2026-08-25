@@ -55,6 +55,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteSession: (sessionId) => ipcRenderer.invoke('delete-session', sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke('rename-session', { session_id: sessionId, title }),
   stopSessionStream: (sessionId) => ipcRenderer.invoke('stop-session-stream', sessionId),
+  goalGet: (sessionId) => ipcRenderer.invoke('goal-get', sessionId),
+  goalSet: (sessionId, objective, tokenBudget) =>
+    ipcRenderer.invoke('goal-set', {
+      session_id: sessionId,
+      objective,
+      ...(tokenBudget != null ? { token_budget: tokenBudget } : {}),
+    }),
+  goalPause: (sessionId) => ipcRenderer.invoke('goal-pause', { session_id: sessionId }),
+  goalResume: (sessionId) => ipcRenderer.invoke('goal-resume', { session_id: sessionId }),
+  goalClear: (sessionId) => ipcRenderer.invoke('goal-clear', { session_id: sessionId }),
+  goalEdit: (sessionId, objective) => ipcRenderer.invoke('goal-edit', { session_id: sessionId, objective }),
   generateTitle: (sessionId, firstUserMessage, assistantResponse, language) =>
     ipcRenderer.invoke('generate-title', {
       session_id: sessionId,

@@ -913,5 +913,6 @@
   "providers.temperature_hint": "Remplace la valeur par défaut du modèle ; 0 choisit automatiquement (p. ex. 0.55 pour qwen) ou laisse au fournisseur",
   "chat.interject_queued": "Intervenir maintenant",
   "chat.interject_badge": "Intervention",
-  "chat.steer_injected_label": "Intervention reçue"
+  "chat.steer_injected_label": "Intervention reçue",
+  "chat.command_goal": "Définir un objectif (/goal <objectif>)"
 }

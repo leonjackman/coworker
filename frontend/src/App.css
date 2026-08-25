@@ -9799,6 +9799,100 @@ body.bottom-panel-resizing {
   gap: 8px;
 }
 
+/* ---- Goal section（TodoBlock 内，严格会话隔离：只渲染当前会话目标） ---- */
+.todo-block__goal {
+  border: 1px solid var(--border, rgba(120, 140, 180, 0.16));
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--surface, rgba(120, 140, 180, 0.06));
+}
+.todo-block__goal--complete {
+  border-color: rgba(80, 200, 120, 0.35);
+}
+.todo-block__goal--paused,
+.todo-block__goal--blocked,
+.todo-block__goal--budget_limited,
+.todo-block__goal--usage_limited {
+  border-color: rgba(230, 160, 70, 0.35);
+}
+.todo-block__goal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.todo-block__goal-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.todo-block__goal-objective {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.todo-block__goal-status {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  background: var(--surface, rgba(120, 140, 180, 0.08));
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.todo-block__goal-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.todo-block__goal-budget {
+  margin-top: 6px;
+}
+.todo-block__goal-budget-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface, rgba(120, 140, 180, 0.12));
+  overflow: hidden;
+}
+.todo-block__goal-budget-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.todo-block__goal--budget_limited .todo-block__goal-budget-fill {
+  background: rgba(230, 160, 70, 0.9);
+}
+.todo-block__goal-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.todo-block__goal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  background: none;
+  border: 1px solid var(--border, rgba(120, 140, 180, 0.2));
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.todo-block__goal-btn:hover {
+  color: var(--foreground);
+  border-color: var(--accent);
+}
+
 .todo-block__title {
   display: inline-flex;
   align-items: center;

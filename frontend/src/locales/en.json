@@ -915,5 +915,6 @@
   "providers.temperature_hint": "Overrides the per-model default; 0 auto-picks it (e.g. 0.55 for qwen) or leaves it to the provider",
   "chat.interject_queued": "Interject now",
   "chat.interject_badge": "Interject",
-  "chat.steer_injected_label": "Steered"
+  "chat.steer_injected_label": "Steered",
+  "chat.command_goal": "Set a persistent goal (/goal <objective>)"
 }

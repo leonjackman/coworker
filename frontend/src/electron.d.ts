@@ -60,6 +60,7 @@ import type {
   WebSettings,
   WebConfigPatch,
   WebTestResult,
+  GoalResponse,
 } from './types';
 
 export type StreamEventCallback = (event: StreamEvent) => void;
@@ -92,6 +93,12 @@ declare global {
       stopSessionStream: (sessionId: string) => Promise<{ status: string }>;
       getSession: (sessionId: string) => Promise<SessionDetailResponse>;
       getContextUsage: (sessionId: string, providerId: string, model: string) => Promise<SessionContextUsageResponse>;
+      goalGet: (sessionId: string) => Promise<GoalResponse>;
+      goalSet: (sessionId: string, objective: string, tokenBudget?: number | null) => Promise<GoalResponse>;
+      goalPause: (sessionId: string) => Promise<GoalResponse>;
+      goalResume: (sessionId: string) => Promise<GoalResponse>;
+      goalClear: (sessionId: string) => Promise<{ status: string; cleared: boolean }>;
+      goalEdit: (sessionId: string, objective: string) => Promise<GoalResponse>;
       generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string, language?: string) => Promise<{ status: string; title: string }>;
       listProjects: () => Promise<ProjectsListResponse>;
       createProject: (payload: CreateProjectRequest) => Promise<ProjectResponse>;

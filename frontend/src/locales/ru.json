@@ -913,5 +913,6 @@
   "providers.temperature_hint": "Переопределяет значение по умолчанию; 0 выбирает автоматически (например 0.55 для qwen) или оставляет провайдеру",
   "chat.interject_queued": "Вмешаться сейчас",
   "chat.interject_badge": "Вмешательство",
-  "chat.steer_injected_label": "Вмешательство получено"
+  "chat.steer_injected_label": "Вмешательство получено",
+  "chat.command_goal": "Установить цель (/goal <цель>)"
 }

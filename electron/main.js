@@ -1995,6 +1995,36 @@ ipcMain.handle('stop-session-stream', async (event, sessionId) => {
   return requestBackend(`/sessions/${encodeURIComponent(sessionId)}/stop`, 'POST', undefined, 10_000);
 });
 
+// Goal 控制（Phase 1 IPC 桥接层）：前端经 electronAPI 调后端 /goal/*，与
+// get-session / stop-session-stream 同构。
+ipcMain.handle('goal-get', async (event, sessionId) => {
+  return requestBackend(`/goal?session_id=${encodeURIComponent(sessionId)}`);
+});
+
+ipcMain.handle('goal-set', async (event, payload) => {
+  return requestBackend('/goal/set', 'POST', {
+    session_id: payload?.session_id,
+    objective: payload?.objective || '',
+    ...(payload?.token_budget != null ? { token_budget: payload.token_budget } : {}),
+  });
+});
+
+ipcMain.handle('goal-pause', async (event, payload) => {
+  return requestBackend('/goal/pause', 'POST', { session_id: payload?.session_id });
+});
+
+ipcMain.handle('goal-resume', async (event, payload) => {
+  return requestBackend('/goal/resume', 'POST', { session_id: payload?.session_id });
+});
+
+ipcMain.handle('goal-edit', async (event, payload) => {
+  return requestBackend('/goal/edit', 'POST', { session_id: payload?.session_id, objective: payload?.objective || '' });
+});
+
+ipcMain.handle('goal-clear', async (event, payload) => {
+  return requestBackend('/goal/clear', 'POST', { session_id: payload?.session_id });
+});
+
 ipcMain.handle('rename-session', async (event, payload) => {
   return requestBackend(`/sessions/${encodeURIComponent(payload.session_id)}/rename`, 'POST', { title: payload.title });
 });

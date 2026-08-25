@@ -913,5 +913,6 @@
   "providers.temperature_hint": "モデル既定を上書き；0 は自動（qwen なら 0.55）またはプロバイダー任せ",
   "chat.interject_queued": "割り込み送信",
   "chat.interject_badge": "割り込み",
-  "chat.steer_injected_label": "割り込みを受信"
+  "chat.steer_injected_label": "割り込みを受信",
+  "chat.command_goal": "目標を設定（/goal <目標>）"
 }

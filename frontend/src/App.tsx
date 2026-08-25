@@ -21,12 +21,12 @@ import { RightPanel } from './components/RightPanel';
 import type { BrowserViewHandle } from './components/BrowserView';
 import { ChangesPanel } from './components/ChangesPanel';
 import { UpdateToastCard } from './components/UpdateToastCard';
-import { getLanguage, initLanguage, t, translateError, useLanguage } from './lib/i18n';
+import { getLanguage, initLanguage, t, tOrDefault, translateError, useLanguage } from './lib/i18n';
 import { useUpdateCenter } from './lib/useUpdateCenter';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -496,6 +496,11 @@ function App() {
   const [todosBySession, setTodosBySession] = useState<Record<string, Todo[]>>({});
   const [todosOwnerBySession, setTodosOwnerBySession] = useState<Record<string, string>>({});
   const [dismissedTodoOwners, setDismissedTodoOwners] = useState<Record<string, string>>({});
+  // Goal 状态（严格会话隔离）：按 session 存，TodoBlock 只渲染当前会话 goal。
+  const [goalsBySession, setGoalsBySession] = useState<Record<string, GoalState>>({});
+  // 正在运行 goal 多轮续跑流的会话集合：期间普通消息只能排队（会话锁语义），
+  // 队列自动发送 / stream-settle 在 goal_stream_end 前不触发。
+  const [goalStreamSessions, setGoalStreamSessions] = useState<Set<string>>(new Set());
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null);
   const [runtimeStatus, setRuntimeStatus] = useState<'connecting' | 'ready' | 'error'>('connecting');
   const [runtimeError, setRuntimeError] = useState<string>('');
@@ -1006,6 +1011,37 @@ function App() {
     });
   };
 
+  const goalsSessionKey = (sid?: string | null) => sid || '__ambient__';
+  const goalsBySessionRef = useRef<Record<string, GoalState>>({});
+  useEffect(() => {
+    goalsBySessionRef.current = goalsBySession;
+  }, [goalsBySession]);
+
+  const setSessionGoal = (sessionIdValue: string | undefined, goal: GoalState | null) => {
+    const key = goalsSessionKey(sessionIdValue);
+    setGoalsBySession((current) => {
+      const next = { ...current };
+      if (goal) next[key] = goal;
+      else delete next[key];
+      return next;
+    });
+  };
+  const currentGoal = goalsBySession[goalsSessionKey(sessionId)] ?? null;
+
+  const markGoalStreamActive = (sid?: string) => {
+    if (!sid) return;
+    setGoalStreamSessions((current) => (current.has(sid) ? current : new Set(current).add(sid)));
+  };
+  const markGoalStreamEnded = (sid?: string) => {
+    if (!sid) return;
+    setGoalStreamSessions((current) => {
+      if (!current.has(sid)) return current;
+      const next = new Set(current);
+      next.delete(sid);
+      return next;
+    });
+  };
+
   // Task list of the currently-viewed session.
   const todos = todosBySession[todosSessionKey(sessionId)] ?? [];
 
@@ -1017,8 +1053,8 @@ function App() {
     () =>
       messages.some(
         (m) => (m.status === 'running' || m.status === 'waiting') && (!m.sessionId || m.sessionId === sessionId),
-      ),
-    [messages, sessionId],
+      ) || (sessionId != null && goalStreamSessions.has(sessionId)),
+    [messages, sessionId, goalStreamSessions],
   );
 
   // 任务卡仅在当前会话流式回复正常进行中（running/waiting）时显示：失败、
@@ -1340,10 +1376,25 @@ function App() {
         }
         return;
       }
+      if (chip.type === 'sys' && chip.command === '/goal') {
+        // /goal chip：组合成 `/goal <objective>`，与 raw 输入一致上墙用户命令消息，
+        // 再走命令分发（goal 设定结果以 TodoBlock 目标状态条反馈）。
+        const combined = `${chip.command}${prompt ? ` ${prompt}` : ''}`;
+        setInput('');
+        const provider = providers.find((p) => p.id === selectedModel);
+        const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
+        const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
+        setMessages((current) => [
+          ...current,
+          createMessage('user', combined, { status: 'done', autonomy, provider: providerName, model }),
+        ]);
+        handleSlashCommand(combined);
+        return;
+      }
       return;
     }
 
-    if (!typedMessage && attachments.length === 0) return;
+    if (!typedMessage && attachments.length === 0 && !override?.skipUserAppend) return;
 
     if (typedMessage.startsWith('/')) {
       // 消息墙也要显示命令令牌（/new、/help 等系统命令显示原始令牌）。
@@ -1499,6 +1550,16 @@ function App() {
     let streamedContent = '';
     let localParts: MessagePart[] = [];
     let receivedDone = false;
+    // goal 单流多轮：首轮是否已 done（避免 Stop 把已完成的轮覆盖成 stopped）、
+    // 以及本条流是否处于 goal 多轮模式（未到 goal_stream_end 前不 stream-settle）。
+    let round1Done = false;
+    let goalStreamActiveLocal = false;
+    const markLocalGoalStream = () => {
+      if (!goalStreamActiveLocal) {
+        goalStreamActiveLocal = true;
+        markGoalStreamActive(requestSessionId);
+      }
+    };
     let streamStartAt = Date.now();
     streamStartAtsRef.current[streamKey(requestSessionId)] = streamStartAt;
     // 文本渲染限频：避免每 token 全量重解析 markdown 导致主线程卡顿
@@ -1613,11 +1674,54 @@ function App() {
           sessionIdRef.current = event.session_id;
         }
         streamedContent = event.content || streamedContent;
+        let mergedParts = localParts;
         if (event.parts && event.parts.length > 0) {
-          localParts = mergeMessageParts(localParts, event.parts);
+          mergedParts = mergeMessageParts(localParts, event.parts);
         }
-        localParts = settleRunningTools(localParts);
-        commit(localParts, { status: 'done', streamEndAt: Date.now() });
+        mergedParts = settleRunningTools(mergedParts);
+        // goal 单流多轮：后端在每条 done 帧回带该轮 assistant 消息 id。若与首轮
+        // 的 assistantMessageId 不同 → 续跑轮 → 新建独立气泡；否则首轮 → commit。
+        const roundMessageId = event.message_id || assistantMessageId;
+        const isContinuationRound = Boolean(event.message_id && event.message_id !== assistantMessageId);
+        if (isContinuationRound) {
+          markLocalGoalStream();
+          const roundSessionId = event.session_id || requestSessionId;
+          setMessages((current) => [
+            ...current,
+            createMessage('assistant', event.content || '', {
+              id: roundMessageId,
+              status: 'done',
+              ...(roundSessionId ? { sessionId: roundSessionId } : {}),
+              parts: mergedParts,
+              streamStartAt: Date.now(),
+              streamEndAt: Date.now(),
+              autonomy,
+              provider: requestProvider,
+              model: requestModel,
+            }),
+          ]);
+        } else {
+          round1Done = true;
+          commit(mergedParts, { status: 'done', streamEndAt: Date.now() });
+        }
+        // 终态副作用：goal 流延后到 goal_stream_end（避免每轮播声音/清 todos）；
+        // 普通流（无 goal）在此立即执行，保持原行为。
+        const isGoalSession = goalsBySessionRef.current[goalsSessionKey(event.session_id ?? requestSessionId)] != null;
+        if (isGoalSession) {
+          markLocalGoalStream();
+        } else if (!goalStreamActiveLocal) {
+          clearSessionTodos(event.session_id ?? requestSessionId);
+          playSound('reply_done');
+        }
+      } else if (event.type === 'goal_updated') {
+        setSessionGoal(event.session_id ?? requestSessionId, event.goal);
+        markLocalGoalStream();
+      } else if (event.type === 'goal_cleared') {
+        setSessionGoal(event.session_id ?? requestSessionId, null);
+      } else if (event.type === 'goal_stream_end') {
+        // 整条 goal 续跑链结束：此刻才是终态（settle / 队列已由 goalStreamSessions
+        // 闸门保护），补终态副作用。
+        markGoalStreamEnded(event.session_id ?? requestSessionId);
         clearSessionTodos(event.session_id ?? requestSessionId);
         playSound('reply_done');
       } else if (event.type === 'steer_injected') {
@@ -1688,8 +1792,12 @@ function App() {
       if (isStreamStale(requestSessionId, myRequestSeq)) return;
       console.error('Failed to stream message:', error);
       if ((error as Error).name === 'AbortError') {
-        localParts = settleRunningTools(localParts);
-        commit(localParts, { content: streamedContent || t('chat.stopped'), status: 'stopped', streamEndAt: Date.now() });
+        // goal 多轮流中 Stop：只把仍 running 的首轮标记为 stopped；已完成的轮
+        // （round1Done）不再覆盖。
+        if (!round1Done) {
+          localParts = settleRunningTools(localParts);
+          commit(localParts, { content: streamedContent || t('chat.stopped'), status: 'stopped', streamEndAt: Date.now() });
+        }
       } else {
         setRuntimeStatus('error');
         setMessages((current) =>
@@ -1723,6 +1831,24 @@ function App() {
         delete activeAssistantMessageIdsRef.current[streamKey(requestSessionId)];
         delete streamStartAtsRef.current[streamKey(requestSessionId)];
       }
+      // 该会话的 goal 流（若有）已结束，解除会话锁语义。
+      markGoalStreamEnded(requestSessionId);
+    }
+  };
+
+  // 启动/恢复 goal 续跑流（三个入口共用：/goal set|resume、会话加载恢复、HITL
+  // resume 后重查）。防重入：该会话已有进行中 stream 或 goal 流则不重复启动。
+  const kickGoalContinuation = async (sessionIdValue: string) => {
+    const busy = messages.some(
+      (m) => (m.status === 'running' || m.status === 'waiting') && m.sessionId === sessionIdValue,
+    );
+    if (busy || goalStreamSessions.has(sessionIdValue)) return;
+    try {
+      const resp = await chatService.getGoal(sessionIdValue);
+      if (resp?.goal?.status !== 'active') return;
+      void sendMessage({ sessionId: sessionIdValue, skipUserAppend: true, skipUserBubble: true, message: '' });
+    } catch {
+      // best-effort：拉取失败不打扰用户。
     }
   };
 
@@ -1745,7 +1871,10 @@ function App() {
       const busy = messages.some(
         (m) => (m.status === 'running' || m.status === 'waiting') && m.sessionId === sessionId,
       );
-      if (busy) continue;
+      // goal 多轮续跑流：整条流未收到 goal_stream_end 前不算 settle，队列消息
+      // 必须等待（会话锁语义，见设计文档 §3.0）。
+      const goalBusy = sessionId != null && goalStreamSessions.has(sessionId);
+      if (busy || goalBusy) continue;
       const pendingSteers = pendingSteersRef.current[key];
       if (pendingSteers && pendingSteers.length > 0) {
         pendingSteersRef.current[key] = [];
@@ -1773,7 +1902,7 @@ function App() {
         });
       }
     }
-  }, [messages, queuedEntries]);
+  }, [messages, queuedEntries, goalStreamSessions]);
 
   // Queue the current composer content; it auto-sends after the stream ends.
   const handleSendQueued = () => {
@@ -2902,6 +3031,20 @@ function App() {
       if (sessionRecord.todos && sessionRecord.todos.length > 0) {
         setSessionTodos(sessionIdToOpen, `persisted:${sessionIdToOpen}`, sessionRecord.todos);
       }
+      // Goal 恢复（对标 codex restore_inherited_goal_runtime）：拉取该会话目标，
+      // 若 active 则在 TodoBlock 渲染并自动重启续跑流（3.3.1），否则只渲染不重启。
+      void chatService
+        .getGoal(sessionIdToOpen)
+        .then((resp) => {
+          if (sessionIdRef.current !== sessionIdToOpen) return;
+          setSessionGoal(sessionIdToOpen, resp?.goal ?? null);
+          if (resp?.goal?.status === 'active') {
+            void kickGoalContinuation(sessionIdToOpen);
+          }
+        })
+        .catch(() => {
+          if (sessionIdRef.current === sessionIdToOpen) setSessionGoal(sessionIdToOpen, null);
+        });
       // 后台 resume 可能仍在运行：切回时首扫可能早于新审批创建，延迟重扫兜底。
       for (const delay of [5000, 15000]) {
         setTimeout(() => {
@@ -3035,6 +3178,56 @@ function App() {
     }
   };
 
+  /** /goal 目标命令（严格会话隔离：只作用于当前会话）。 */
+  const handleGoalSlash = async (sid: string, rest: string) => {
+    const sub = rest.split(/\s+/)[0] ?? '';
+    const usage = () =>
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', tOrDefault('goal.usage', '/goal <目标> ｜ /goal pause ｜ /goal resume ｜ /goal clear ｜ /goal edit <新目标>'), { status: 'done' }),
+      ]);
+    const fail = (error: unknown) => {
+      console.error('goal command failed:', error);
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', tOrDefault('goal.command_failed', '目标操作失败，请重试。'), { status: 'error' }),
+      ]);
+    };
+    try {
+      if (sub === 'pause') {
+        const resp = await chatService.pauseGoal(sid);
+        setSessionGoal(sid, resp?.goal ?? null);
+        return;
+      }
+      if (sub === 'resume') {
+        const resp = await chatService.resumeGoal(sid);
+        setSessionGoal(sid, resp?.goal ?? null);
+        if (resp?.goal?.status === 'active') void kickGoalContinuation(sid);
+        return;
+      }
+      if (sub === 'clear') {
+        await chatService.clearGoal(sid);
+        setSessionGoal(sid, null);
+        return;
+      }
+      if (sub === 'edit') {
+        const objective = rest.slice('edit'.length).trim();
+        if (!objective) return usage();
+        const resp = await chatService.editGoal(sid, objective);
+        setSessionGoal(sid, resp?.goal ?? null);
+        return;
+      }
+      const objective = rest.trim();
+      if (!objective) return usage();
+      const resp = await chatService.setGoal(sid, objective);
+      setSessionGoal(sid, resp?.goal ?? null);
+      // 空闲启动：设定 active 后立即触发续跑流（设计文档 §3.3.2）。
+      if (resp?.goal?.status === 'active') void kickGoalContinuation(sid);
+    } catch (error) {
+      fail(error);
+    }
+  };
+
   const handleSlashCommand = (message: string) => {
     const [command] = message.split(/\s+/);
     setInput('');
@@ -3072,6 +3265,45 @@ function App() {
       } else {
         setMessages((current) => [...current, createMessage('assistant', t('skills.slash_usage'), { status: 'done' })]);
       }
+      return;
+    }
+    if (command === '/goal') {
+      const rest = message.slice('/goal'.length).trim();
+      void (async () => {
+        let sid = sessionIdRef.current;
+        // 新会话（尚无 session）：自动创建一个，让 /goal 在空会话里也能直接设定目标。
+        if (!sid) {
+          try {
+            const requestProjectId = pendingProjectIdRef.current;
+            if (!requestProjectId) {
+              setMessages((current) => [
+                ...current,
+                createMessage('assistant', tOrDefault('goal.need_workspace', '请先选择工作空间，再设置目标。'), { status: 'done' }),
+              ]);
+              return;
+            }
+            const sessionResp = await chatService.createSession({ project_id: requestProjectId, agent_id: draftAgentId });
+            const newSession = sessionResp.session;
+            if (newSession) {
+              sessionIdRef.current = newSession.id;
+              setSessionId(newSession.id);
+              // 立即加入本地会话列表，保证侧栏即时可见
+              setSessions((current) => [newSession, ...current]);
+              sid = newSession.id;
+            }
+          } catch (error) {
+            console.error('Failed to create session for /goal:', error);
+          }
+        }
+        if (!sid) {
+          setMessages((current) => [
+            ...current,
+            createMessage('assistant', tOrDefault('goal.need_session', '请先开始一个会话（发送一条消息），再设置目标。'), { status: 'done' }),
+          ]);
+          return;
+        }
+        void handleGoalSlash(sid, rest);
+      })();
       return;
     }
     // Bare "/<cmd>": a known skill sub-command first, then a full skill name.
@@ -3168,6 +3400,12 @@ function App() {
         return;
       }
       if (chip.type === 'sys') {
+        if (chip.command === '/goal') {
+          // /goal 需要 objective 参数：sys 命令不立即执行，落 chip 停留（胶囊仍标
+          // 记 sys），用户在 chip 后输入目标文本，按发送时组合成 `/goal <objective>`。
+          setCommandChip(chip);
+          return;
+        }
         setCommandChip(null);
         commandChipRef.current = null;
         handleSlashCommand(chip.command);
@@ -3620,7 +3858,7 @@ function App() {
                           checklist, shown in every mode above the composer.
                           Queued messages are listed in the same card so the user
                           sees each pending message and can remove it. */}
-                      {(showTodoCard || queuedMessagesFor(sessionId).length > 0) && (
+                      {(showTodoCard || queuedMessagesFor(sessionId).length > 0 || currentGoal != null) && (
                         <TodoBlock
                           todos={todos}
                           onToggleTodo={toggleTodo}
@@ -3638,6 +3876,19 @@ function App() {
                             if (sessionId) void interjectQueuedMessage(sessionId, id);
                           }}
                           onClose={dismissCurrentTodos}
+                          goal={currentGoal}
+                          onGoalPause={(goal) => {
+                            if (sessionId) void chatService.pauseGoal(sessionId).then((resp) => setSessionGoal(sessionId, resp?.goal ?? null)).catch(() => undefined);
+                          }}
+                          onGoalResume={(goal) => {
+                            if (sessionId) void chatService.resumeGoal(sessionId).then((resp) => {
+                              setSessionGoal(sessionId, resp?.goal ?? null);
+                              if (resp?.goal?.status === 'active') void kickGoalContinuation(sessionId);
+                            }).catch(() => undefined);
+                          }}
+                          onGoalClear={(goal) => {
+                            if (sessionId) void chatService.clearGoal(sessionId).then(() => setSessionGoal(sessionId, null)).catch(() => undefined);
+                          }}
                         />
                       )}
                       {webSetupHint && (

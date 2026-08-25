@@ -913,5 +913,6 @@
   "providers.temperature_hint": "모델 기본값을 덮어씁니다. 0은 자동(qwen은 0.55) 또는 공급자 기본값 사용",
   "chat.interject_queued": "지금 끼어들기",
   "chat.interject_badge": "끼어들기",
-  "chat.steer_injected_label": "끼어들기 수신"
+  "chat.steer_injected_label": "끼어들기 수신",
+  "chat.command_goal": "목표 설정（/goal <목표>）"
 }

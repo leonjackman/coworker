@@ -95,7 +95,7 @@ Active → Paused | Blocked | UsageLimited | BudgetLimited | Complete
 | `/goal` 命令 + set/clear/pause/resume/get API | 无 | 需加端点 |
 | `on_thread_idle` 自动续跑循环 | 无（一轮一请求 `/chat/stream`） | 需加续跑循环 |
 | continuation 内部上下文注入 | 有 `steer.py` 插话 inbox + `SteerInjectionMiddleware`（`middleware.py:498`），但仅用于用户插话 | 续跑**直接构造 `system` 首位消息**（见 3.6），不扩展 steer |
-| 模型工具 `update_goal` | 无 | 需加 `manage_goal` 工具 |
+| 模型工具 `update_goal` | 无 | 需加 `update_goal` 工具 |
 | token/time 记账 + 预算兜底 | 有 `context_usage` 帧但无 goal 维度 | 需加 goal 记账 |
 | 钉窗状态条 + 通知 | 无 | 需加前端 goal bar |
 | 严格完成/受阻审计提示词 | 无 | 移植 `continuation.md` |
@@ -207,12 +207,12 @@ class GoalState(BaseModel):
 - **HITL 后恢复续跑**：goal 运行中模型触发 `approval_required` / `question_required` → 后端跳出续跑循环但保留 interrupt checkpoint（goal 仍 `active`）；前端收到该事件后处于 `waiting` 态。用户解决审批后，前端对当前 `waiting` 消息发起 resume 流（复用现有 HITL 恢复逻辑）——**该 resume 流启动时重查 `GET /goal`，若仍 `active` 则回到 3.3 循环继续续跑**，不新增第二主链。
 - **`/goal clear` / `pause` / `budget_limited` / `complete` / `blocked`**：状态离开 `active`，续跑流在下一个轮边界 break，且**该次 break 不重建续跑**（`pause` 不 abort 当前轮，仅影响下一轮是否续跑）。
 
-## 3.4 模型工具 `manage_goal` — `backend/coworker/agent/core.py` + `graph.py`
+## 3.4 模型工具 `update_goal` — `backend/coworker/agent/core.py` + `graph.py`
 
 对齐 `spec.rs`：注册工具：
 
 ```
-manage_goal(status: "complete" | "blocked")
+update_goal(status: "complete" | "blocked")
 ```
 
 - 仅当 session 有 active goal 时可见（`build_workspace_tools` 按 session goal 开关）。
@@ -292,7 +292,7 @@ messages = [{"role": "system", "content": render_goal_continuation(goal)}] + his
 | M1 数据+API | `sessions.py`, `main.py`, `electron/{main,preload}.js`, `frontend/src/electron.d.ts`, `services/chatService.ts` | `GoalState` + `/goal/*` 端点 + `goal_updated` 广播 + **Electron IPC 桥接层（3.2.1）** |
 | M2 续跑循环 | `main.py` `event_stream` | **单一生成器内层多轮循环**（3.3 落地方式）+ `skip_user_append` + 退出条件 + **每轮新 assistant id + 每轮 snapshot 包裹 + 每轮终态旗标重置 + HITL/空闲启动/恢复入口（3.3/3.3.1/3.3.2）** |
 | M3 上下文注入 | `main.py`（续跑轮 messages 构造）+ `goal_prompts.py` | **直接拼 `system` 首位消息**（continuation / budget_limit / objective_updated），不改 `steer.py` / `middleware.py` |
-| M4 模型工具+记账 | `core.py`, `graph.py`, `runtime.py` | `manage_goal`(complete/blocked) + **只读 `get_goal`** + token/time 记账 + 预算/错误兜底 |
+| M4 模型工具+记账 | `core.py`, `graph.py`, `runtime.py` | `update_goal`(complete/blocked) + **只读 `get_goal`** + token/time 记账 + 预算/错误兜底 |
 | M5 提示词+UI | `goal_prompts.py`, 前端 TodoBlock goal section + `/goal` 命令 | 移植三份模板 + **TodoBlock goal section + 单流多轮气泡/收尾适配（3.8）** |
 
 **最小可跑闭环**：M1（含 IPC 桥接层）+ M2 + M3 + `goal_prompts.py` 即可让「`/goal X` → 逐轮自动推进 → TodoBlock goal section 显示进度 → Stop 停任务 / pause 停目标」跑通（含空闲启动与 HITL 恢复）；M4 / M5 补完成审计、get_goal 与 UI 精致度。M2 必须同时带上「单一生成器内层循环 / 每轮新 id / snapshot 包裹 / 终态旗标重置 / HITL 恢复」，否则多轮会写脏会话。
@@ -301,18 +301,20 @@ messages = [{"role": "system", "content": render_goal_continuation(goal)}] + his
 
 # 五、行为对齐校验清单（对照 codex）
 
-- [ ] `/goal <obj>` 后目标钉窗显示 active，无需用户再输入即自动开下一轮（**空闲会话下 `/goal set` 即自动起续跑流，无需刷新**）。
-- [ ] 每轮结束若仍 active 则续跑；模型不得自行缩小目标（continuation.md 约束）。
-- [ ] 模型只能 `manage_goal(complete|blocked)`；暂停 / 恢复 / 清理由用户命令控制。
-- [ ] `complete` 须经逐条需求审计；`blocked` 须连续 ≥3 轮同一阻塞。
-- [ ] 超 token 预算 → `budget_limited` 停 + 注入预算提示；turn 报错 → `blocked` 停。
-- [ ] `pause` / `resume` 正确挂起 / 恢复续跑；`clear` 立即终止循环并清状态条。
-- [ ] **双控制语义**：输入框 Stop 停当前任务、goal 保持 active、续跑需 kick（新消息 / resume / 重开会话）；TodoBlock pause 停目标作用（当前轮跑完、下一轮边界停）、不 abort 进行中的任务。
-- [ ] **goal 严格会话隔离**：TodoBlock 只显示当前会话的 goal；跨会话不显示、不影响。
-- [ ] **多轮会话无脏数据**：每轮 assistant 消息 id 唯一、每轮 snapshot 独立回滚、"编辑回滚该轮改动"不跨轮误伤。
-- [ ] **HITL 恢复**：goal 轮触发 approval/question → 消息 `waiting` → 用户解决后 resume 流重查 goal 仍 active 则继续续跑。
-- [ ] **会话锁语义明确**：goal 运行期普通消息只能排队、编辑/重生成被 409 拒、interject / 输入框 Stop / TodoBlock goal pause 可介入——与文档声明一致。
-- [ ] **续跑注入为内部上下文**：continuation/budget 提示是 system 内部指令，不落库、前端不渲染为用户泡泡。
+> 勾选依据：后端脚本化 fake runtime 端到端验证 + `/goal/*` 端点 TestClient + 前端 tsc/build + **vLLM 真机对 ailicode 项目真实任务验收（2026-08-25）**。
+
+- [x] `/goal <obj>` 后目标钉窗显示 active，无需用户再输入即自动开下一轮（**空闲会话下 `/goal set` 即自动起续跑流，无需刷新**）。
+- [x] 每轮结束若仍 active 则续跑；模型不得自行缩小目标（continuation.md 约束）。（真机：复杂目标跨 8 轮持续推进）
+- [x] 模型只能 `update_goal(complete|blocked)`；暂停 / 恢复 / 清理由用户命令控制。
+- [x] `complete` 须经逐条需求审计；`blocked` 须连续 ≥3 轮同一阻塞。（真机：逐条验证交付物后 `update_goal(complete)` 成功）
+- [x] 超 token 预算 → `budget_limited` 停 + 注入预算提示；turn 报错 → `blocked` 停。
+- [x] `pause` / `resume` 正确挂起 / 恢复续跑；`clear` 立即终止循环并清状态条。
+- [x] **双控制语义**：输入框 Stop 停当前任务、goal 保持 active、续跑需 kick（新消息 / resume / 重开会话）；TodoBlock pause 停目标作用（当前轮跑完、下一轮边界停）、不 abort 进行中的任务。
+- [x] **goal 严格会话隔离**：TodoBlock 只显示当前会话的 goal；跨会话不显示、不影响。
+- [x] **多轮会话无脏数据**：每轮 assistant 消息 id 唯一、每轮 snapshot 独立回滚、"编辑回滚该轮改动"不跨轮误伤。
+- [x] **HITL 恢复**：goal 轮触发 approval/question → 消息 `waiting` → 用户解决后 resume 流重查 goal 仍 active 则继续续跑。
+- [x] **会话锁语义明确**：goal 运行期普通消息只能排队、编辑/重生成被 409 拒、interject / 输入框 Stop / TodoBlock goal pause 可介入——与文档声明一致。
+- [x] **续跑注入为内部上下文**：continuation/budget 提示是 system 内部指令，不落库、前端不渲染为用户泡泡。
 
 ---
 

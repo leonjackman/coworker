@@ -12,6 +12,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _now_epoch_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
 def _title_from_message(message: str) -> str:
     cleaned = " ".join(message.split())
     if not cleaned:
@@ -40,6 +44,42 @@ class SessionMessage:
 
 
 @dataclass
+class GoalState:
+    """Persistent goal bound to a session (对齐 codex `ThreadGoal`).
+
+    Status machine: active → paused | blocked | complete | budget_limited | usage_limited.
+    Only ``active`` drives the auto-continuation loop; pause/resume/clear are
+    user-controlled; ``update_goal`` (model tool) may only set complete/blocked.
+    """
+
+    objective: str
+    status: str = "active"
+    token_budget: int | None = None
+    tokens_used: int = 0
+    time_used_seconds: int = 0
+    created_at: int = 0
+    updated_at: int = 0
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "GoalState | None":
+        if not payload:
+            return None
+        token_budget = payload.get("token_budget")
+        return cls(
+            objective=str(payload.get("objective", "")),
+            status=str(payload.get("status", "active")),
+            token_budget=int(token_budget) if token_budget is not None else None,
+            tokens_used=int(payload.get("tokens_used", 0) or 0),
+            time_used_seconds=int(payload.get("time_used_seconds", 0) or 0),
+            created_at=int(payload.get("created_at", 0) or 0),
+            updated_at=int(payload.get("updated_at", 0) or 0),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class Session:
     id: str
     title: str
@@ -59,6 +99,8 @@ class Session:
     context_used_chars: int = 0
     context_calibration_factor: float = 0.0
     messages: list[SessionMessage] = field(default_factory=list)
+    # Persistent session-scoped goal (唯一 goal 真源). None = no goal.
+    goal: GoalState | None = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Session":
@@ -83,6 +125,7 @@ class Session:
             context_used_chars=int(payload.get("context_used_chars", 0) or 0),
             context_calibration_factor=float(payload.get("context_calibration_factor", 0.0) or 0.0),
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
+            goal=GoalState.from_dict(payload.get("goal")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -99,6 +142,7 @@ class Session:
             "work_mode": self.work_mode,
             "autonomy": self.autonomy,
             "todos": self.todos,
+            "goal": self.goal.to_dict() if self.goal is not None else None,
             "message_count": len(self.messages),
         }
 
@@ -113,6 +157,7 @@ class Session:
             "work_mode": self.work_mode,
             "autonomy": self.autonomy,
             "todos": self.todos,
+            "goal": self.goal.to_dict() if self.goal is not None else None,
             "messages": [asdict(message) for message in self.messages],
         }
 
@@ -210,6 +255,76 @@ class SessionStore:
         session.todos = [dict(item) for item in todos if isinstance(item, dict)]
         self.save(session)
         return session
+
+    # ------------------------------------------------------------------
+    # Goal CRUD — 唯一 goal 真源在 `Session.goal`；写失败不影响主链。
+    # ------------------------------------------------------------------
+
+    def get_goal(self, session_id: str) -> GoalState | None:
+        return self.require(session_id).goal
+
+    def set_goal(self, session_id: str, objective: str, token_budget: int | None = None) -> GoalState:
+        """新建或覆盖重建目标（状态置 active，计数清零，刷新时间戳）。"""
+        session = self.require(session_id)
+        now = _now_epoch_ms()
+        goal = GoalState(
+            objective=objective,
+            status="active",
+            token_budget=int(token_budget) if token_budget is not None else None,
+            tokens_used=0,
+            time_used_seconds=0,
+            created_at=now,
+            updated_at=now,
+        )
+        session.goal = goal
+        self.save(session)
+        return goal
+
+    def clear_goal(self, session_id: str) -> bool:
+        session = self.require(session_id)
+        if session.goal is None:
+            return False
+        session.goal = None
+        self.save(session)
+        return True
+
+    def update_goal_status(self, session_id: str, status: str) -> GoalState | None:
+        session = self.require(session_id)
+        if session.goal is None:
+            return None
+        session.goal.status = status
+        session.goal.updated_at = _now_epoch_ms()
+        self.save(session)
+        return session.goal
+
+    def update_goal_objective(self, session_id: str, objective: str) -> GoalState | None:
+        session = self.require(session_id)
+        if session.goal is None:
+            return None
+        session.goal.objective = objective
+        session.goal.updated_at = _now_epoch_ms()
+        self.save(session)
+        return session.goal
+
+    def account_goal_usage(
+        self,
+        session_id: str,
+        token_delta: int,
+        time_delta_seconds: float,
+    ) -> GoalState | None:
+        """累加 token/time；若超过 token_budget 自动置 `budget_limited`。"""
+        session = self.require(session_id)
+        goal = session.goal
+        if goal is None:
+            return None
+        goal.tokens_used = max(0, goal.tokens_used + int(token_delta))
+        goal.time_used_seconds = max(0, goal.time_used_seconds + int(time_delta_seconds))
+        # 仅在仍 active 时超预算才置 budget_limited；不覆盖 complete/blocked/paused。
+        if goal.status == "active" and goal.token_budget is not None and goal.tokens_used >= goal.token_budget:
+            goal.status = "budget_limited"
+        goal.updated_at = _now_epoch_ms()
+        self.save(session)
+        return goal
 
     def get(self, session_id: str) -> Session | None:
         return self.load(session_id)

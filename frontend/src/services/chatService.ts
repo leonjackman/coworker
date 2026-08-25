@@ -70,6 +70,7 @@ import type {
   OrgSnapshot,
   OrgTeamPayload,
   OrgTeamUpdatePayload,
+  GoalResponse,
 } from '../types';
 import { getLanguage } from '../lib/i18n';
 
@@ -124,6 +125,12 @@ export interface ChatService {
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
   stopSessionStream: (sessionId: string) => Promise<void>;
   getSession: (sessionId: string) => Promise<SessionDetailResponse>;
+  getGoal: (sessionId: string) => Promise<GoalResponse>;
+  setGoal: (sessionId: string, objective: string, tokenBudget?: number | null) => Promise<GoalResponse>;
+  pauseGoal: (sessionId: string) => Promise<GoalResponse>;
+  resumeGoal: (sessionId: string) => Promise<GoalResponse>;
+  clearGoal: (sessionId: string) => Promise<{ status: string; cleared: boolean }>;
+  editGoal: (sessionId: string, objective: string) => Promise<GoalResponse>;
   getContextUsage: (sessionId: string, providerId: string, model: string) => Promise<SessionContextUsageResponse>;
   generateTitle: (sessionId: string, firstUserMessage: string, assistantResponse?: string) => Promise<string>;
   listProjects: () => Promise<ProjectsListResponse>;
@@ -332,6 +339,36 @@ class ElectronChatService implements ChatService {
   async getSession(sessionId: string): Promise<SessionDetailResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.getSession(sessionId);
+  }
+
+  async getGoal(sessionId: string): Promise<GoalResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalGet(sessionId);
+  }
+
+  async setGoal(sessionId: string, objective: string, tokenBudget?: number | null): Promise<GoalResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalSet(sessionId, objective, tokenBudget ?? null);
+  }
+
+  async pauseGoal(sessionId: string): Promise<GoalResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalPause(sessionId);
+  }
+
+  async resumeGoal(sessionId: string): Promise<GoalResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalResume(sessionId);
+  }
+
+  async clearGoal(sessionId: string): Promise<{ status: string; cleared: boolean }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalClear(sessionId);
+  }
+
+  async editGoal(sessionId: string, objective: string): Promise<GoalResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.goalEdit(sessionId, objective);
   }
 
   async getContextUsage(sessionId: string, providerId: string, model: string): Promise<SessionContextUsageResponse> {
@@ -1076,6 +1113,50 @@ class HttpChatService implements ChatService {
 
   async getSession(sessionId: string): Promise<SessionDetailResponse> {
     return this.request<SessionDetailResponse>(`/sessions/${sessionId}`);
+  }
+
+  async getGoal(sessionId: string): Promise<GoalResponse> {
+    return this.request<GoalResponse>(`/goal?session_id=${encodeURIComponent(sessionId)}`);
+  }
+
+  async setGoal(sessionId: string, objective: string, tokenBudget?: number | null): Promise<GoalResponse> {
+    return this.request<GoalResponse>('/goal/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, objective, ...(tokenBudget != null ? { token_budget: tokenBudget } : {}) }),
+    });
+  }
+
+  async pauseGoal(sessionId: string): Promise<GoalResponse> {
+    return this.request<GoalResponse>('/goal/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  async resumeGoal(sessionId: string): Promise<GoalResponse> {
+    return this.request<GoalResponse>('/goal/resume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  async clearGoal(sessionId: string): Promise<{ status: string; cleared: boolean }> {
+    return this.request<{ status: string; cleared: boolean }>('/goal/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  async editGoal(sessionId: string, objective: string): Promise<GoalResponse> {
+    return this.request<GoalResponse>('/goal/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, objective }),
+    });
   }
 
   async getContextUsage(sessionId: string, providerId: string, model: string): Promise<SessionContextUsageResponse> {
