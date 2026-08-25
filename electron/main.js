@@ -1507,6 +1507,29 @@ function requestBackend(pathname, method = 'GET', payload = undefined, timeoutMs
   });
 }
 
+/**
+ * Resilient request for idempotent polling/query endpoints: when the backend is
+ * transiently unreachable (ECONNRESET / ECONNREFUSED / timeout — e.g. it is
+ * restarting to pick up config/code changes), return `fallback` instead of
+ * rejecting. The renderer already understands the fallback's empty shape and
+ * simply re-polls next cycle, so a backend restart is invisible instead of
+ * surfacing "Failed to connect to backend: read ECONNRESET" from an
+ * `ipcMain.handle` rejection. Only use for READ/idempotent queries — never for
+ * mutations, where a silent fallback would hide a real failure.
+ */
+async function requestBackendOr(pathname, fallback, { method = 'GET', payload = undefined, timeoutMs = 10000 } = {}) {
+  try {
+    return await requestBackend(pathname, method, payload, timeoutMs);
+  } catch (err) {
+    const msg = String(err?.message || err || '');
+    const transient = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|timed out|Failed to connect|empty response/i.test(msg);
+    if (transient) {
+      return fallback;
+    }
+    throw err;
+  }
+}
+
 ipcMain.handle('get-runtime-config', async () => {
   return requestBackend('/config');
 });
@@ -1964,15 +1987,15 @@ ipcMain.handle('start-worker-stream', async (event, { requestId, worker_run_id }
 });
 
 
-ipcMain.handle('list-sessions', async () => {
-  return requestBackend('/sessions');
-});
+ ipcMain.handle('list-sessions', async () => {
+   return requestBackendOr('/sessions', { status: 'ok', sessions: [] });
+ });
 
-ipcMain.handle('list-active-sessions', async () => {
-  const envelope = await requestBackend('/sessions/active');
-  // Backend returns {status, session_ids}; unwrap so the renderer receives string[].
-  return Array.isArray(envelope?.session_ids) ? envelope.session_ids : [];
-});
+ ipcMain.handle('list-active-sessions', async () => {
+   const envelope = await requestBackendOr('/sessions/active', { session_ids: [] });
+   // Backend returns {status, session_ids}; unwrap so the renderer receives string[].
+   return Array.isArray(envelope?.session_ids) ? envelope.session_ids : [];
+ });
 
 ipcMain.handle('create-session', async (event, payload) => {
   return requestBackend('/sessions', 'POST', {
@@ -1998,7 +2021,7 @@ ipcMain.handle('stop-session-stream', async (event, sessionId) => {
 // Goal 控制（Phase 1 IPC 桥接层）：前端经 electronAPI 调后端 /goal/*，与
 // get-session / stop-session-stream 同构。
 ipcMain.handle('goal-get', async (event, sessionId) => {
-  return requestBackend(`/goal?session_id=${encodeURIComponent(sessionId)}`);
+  return requestBackendOr(`/goal?session_id=${encodeURIComponent(sessionId)}`, { status: 'ok', goal: null });
 });
 
 ipcMain.handle('goal-set', async (event, payload) => {
@@ -2039,8 +2062,9 @@ ipcMain.handle('rename-session', async (event, payload) => {
  });
 
  ipcMain.handle('get-context-usage', async (event, sessionId, providerId, model) => {
-   return requestBackend(
+   return requestBackendOr(
      `/sessions/${encodeURIComponent(sessionId)}/context-usage?provider_id=${encodeURIComponent(providerId || '')}&model=${encodeURIComponent(model || '')}`,
+     { status: 'ok', context_usage: {} },
    );
  });
 

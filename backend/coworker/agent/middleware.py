@@ -28,6 +28,7 @@ from langchain_core.messages.utils import get_buffer_string
 from pydantic import BaseModel
 
 from ..logger import get_logger
+from ..goal_prompts import is_degenerate_text
 from ..steer import steer_inbox
 from ..workspace import CommandApprovalStore, READ_ONLY_COMMANDS
 from .core import (
@@ -1499,35 +1500,31 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     * on the hard cap strips every tool so the model MUST reply with a
       text-only final answer (the same "last step" mechanism opencode uses).
 
-    It detects four loop shapes, all purely from message history:
+    It detects three genuine loop shapes, all purely from message history:
 
-    1. CONSECUTIVE identical tool calls (name + canonicalized args).
-    2. A trailing run of tool-call turns regardless of args (a model that
-       varies its command each iteration is still looping).
-    3. Consecutive assistant messages with identical text content.
-    4. A single assistant message that has already degenerated into repeated
+    1. CONSECUTIVE identical tool calls (name + canonicalized args) that keep
+       failing — a model re-emitting the exact same call is a dead loop.
+    2. Consecutive assistant messages with identical text content.
+    3. A single assistant message that has already degenerated into repeated
        text (the qwen3-on-vLLM failure mode: "讓我做X：" repeated ~40× in one
        reply, which the old tool-only guard could never catch).
 
-    IMPORTANT (2026-08-26, 对照 opencode/codex 调研）：真实多步任务（如「找 10 個
-    bug 每輪修 1 個」）天然需要大量工具调用（整条对话 100+ 次），opencode 默认
-    ``maxSteps=Infinity``、codex 的 turn loop 无上限，都不按调用次数强制停止。
-    因此「连续工具轮数」与「总调用数」只作为**提醒**（不再硬停/禁用工具），
-    阈值放宽到真实任务不会误触发的水平；只有「连续同一失败调用 / 重复文本 /
-    退化文本」这类**真死循环**才硬停。
+    IMPORTANT (2026-08-26, 对照 opencode/codex 调研）：**不按工具调用次数干预**。
+    真实多步任务（如「找 10 個 bug 每輪修 1 個」）天然需要大量工具调用（整条对话
+    100+ 次）；opencode 默认 ``maxSteps=Infinity``、codex 的 turn loop 无上限。
+    次数类守卫只会误伤正常任务（正是「多调几次工具就卡」的源头），因此只保留上述
+    三种真死循环防护，其余一律交给模型 + context compaction。
 
     Only trailing runs count, so ordinary long tasks are unaffected. Mounted
     last (innermost) so its overrides are applied after PhaseToolGateMiddleware
     / SkillMiddleware / MemoryMiddleware.
     """
 
-    def __init__(self, warn_after: int = 2, stop_after: int = 4, text_warn_after: int = 3, text_stop_after: int = 5, max_tool_turns: int = 30, max_total_tool_calls: int = 250) -> None:
+    def __init__(self, warn_after: int = 2, stop_after: int = 4, text_warn_after: int = 3, text_stop_after: int = 5) -> None:
         self.warn_after = max(1, int(warn_after))
         self.stop_after = max(self.warn_after + 1, int(stop_after))
         self.text_warn_after = max(1, int(text_warn_after))
         self.text_stop_after = max(self.text_warn_after + 1, int(text_stop_after))
-        self.max_tool_turns = max(2, int(max_tool_turns))
-        self.max_total_tool_calls = max(10, int(max_total_tool_calls))
 
     @staticmethod
     def _call_key(tool_call: Any) -> tuple[str, str]:
@@ -1576,25 +1573,6 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 break
         return count, name, last_result
 
-    def _consecutive_tool_turns(self, messages: list[Any]) -> int:
-        """Trailing run of model turns that each emitted at least one tool call,
-        regardless of whether the calls are identical (a varying-args loop)."""
-        count = 0
-        i = len(messages) - 1
-        while i >= 0:
-            msg = messages[i]
-            if isinstance(msg, ToolMessage):
-                i -= 1
-                continue
-            if isinstance(msg, AIMessage):
-                if not (getattr(msg, "tool_calls", None) or []):
-                    break
-                count += 1
-            else:
-                break
-            i -= 1
-        return count
-
     def _text_repeats(self, messages: list[Any]) -> int:
         """How many times the latest text-only assistant reply has ALREADY
         appeared in the history. A model that answers the same text every turn
@@ -1619,21 +1597,11 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                     count += 1
         return count
 
-    _TEXT_UNIT_SPLIT = re.compile(r"[\n。！？!?；;]+")
-
     @classmethod
     def _is_degenerate_text(cls, content: str) -> bool:
         """True when a single message repeats one unit several times — the
         qwen3 greedy-decoding collapse (e.g. '讓我搜索一下...' × 40)."""
-        text = (content or "").strip()
-        if len(text) < 40:
-            return False
-        units = [u.strip() for u in cls._TEXT_UNIT_SPLIT.split(text) if len(u.strip()) >= 8]
-        if len(units) < 5:
-            return False
-        from collections import Counter
-        top = Counter(units).most_common(1)[0][1]
-        return top >= 5
+        return is_degenerate_text(content, min_repeat=5)
 
     def _last_message_degenerate(self, messages: list[Any]) -> bool:
         """True when the most recent non-tool assistant message is already
@@ -1650,16 +1618,11 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             return False
         return False
 
-    def _total_tool_calls(self, messages: list[Any]) -> int:
-        return sum(len(getattr(m, "tool_calls", None) or []) for m in messages if isinstance(m, AIMessage))
-
     def _overrides(self, request: Any) -> dict[str, Any]:
         messages = list(request.messages or [])
         tool_count, tool_name, last_result = self._consecutive_repeats(messages)
-        tool_turns = self._consecutive_tool_turns(messages)
         text_count = self._text_repeats(messages)
         degenerate = self._last_message_degenerate(messages)
-        total_tools = self._total_tool_calls(messages)
 
         hard_stop = degenerate
         hard_reasons: list[str] = []
@@ -1689,18 +1652,6 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             )
         if text_count >= self.text_warn_after:
             warn_reasons.append(f"you have already given the identical reply {text_count} times")
-        if tool_turns >= max(2, self.max_tool_turns // 2):
-            warn_reasons.append(
-                f"you have made {tool_turns} consecutive tool calls without producing text. "
-                "Ensure every call makes concrete progress and periodically summarize in text; "
-                "there is no fixed tool-call budget for legitimate multi-step work."
-            )
-        if total_tools >= self.max_total_tool_calls // 2:
-            warn_reasons.append(
-                f"this conversation has already used {total_tools} tool calls. Keep working — "
-                "multi-step tasks legitimately need many calls. If a call fails, analyze the "
-                "error and change approach instead of repeating it."
-            )
         if not warn_reasons:
             return {}
 

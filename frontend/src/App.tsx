@@ -2058,6 +2058,18 @@ function App() {
         ),
       );
     }
+    // 目标多轮：Stop 时也把当前 running 的续跑轮气泡切到 stopped（这些轮由
+    // goal_round_start 创建、id 是 goal-round-*，首轮 done 后首轮标记是 no-op）。
+    setMessages((current) =>
+      current.map((item) =>
+        item.status === 'running' && item.sessionId === sessionIdRef.current && item.id !== assistantMessageId
+          ? { ...item, content: item.content || t('chat.stopped'), status: 'stopped', parts: settleRunningTools(item.parts ?? []), streamEndAt: Date.now() }
+          : item,
+      ),
+    );
+    // 立即解除 goal 流会话锁：isThinking 依赖 goalStreamSessions，不等流真正
+    // 断开就把 composer 的 Stop 按钮切回 Send，避免「停止后按钮无法切换状态」。
+    markGoalStreamEnded(sessionIdRef.current);
     clearSessionTodos(sessionIdRef.current);
     requestSeqRef.current += 1;
     bumpSessionSeq(sessionIdRef.current);

@@ -95,10 +95,10 @@ def test_identical_tool_call_warns_before_cap():
     assert "WARNING" in str(ov["messages"][-1].content)
 
 
-def test_varying_args_tool_turns_warns_not_stops():
-    # 连续工具轮（参数不同）只提醒、不硬停：真实多步任务天然需要大量工具调用，
-    # 与 opencode(默认 Infinity)/codex(无上限) 对齐，只在真死循环时硬停。
-    mw = RepeatedToolCallMiddleware(max_tool_turns=4)
+def test_varying_args_tool_turns_no_override():
+    # 连续工具轮（参数不同）完全不干预：与 opencode(默认 Infinity)/codex(无上限)
+    # 对齐——真实多步任务需要大量工具调用，只有真死循环（同一调用/重复文本/退化）才拦。
+    mw = RepeatedToolCallMiddleware()
     msgs = [
         _human("do it"),
         _ai("", [_call("run_command", {"command": "a"})]),
@@ -110,9 +110,7 @@ def test_varying_args_tool_turns_warns_not_stops():
         _ai("", [_call("run_command", {"command": "d"})]),
     ]
     ov = _overrides(mw, msgs)
-    assert ov.get("tools") is None  # 未禁用工具
-    assert "consecutive tool calls" in str(ov["messages"][-1].content)
-    assert "STOP." not in str(ov["messages"][-1].content)
+    assert ov == {}
 
 
 def test_consecutive_identical_text_stops():
@@ -159,16 +157,15 @@ def test_fresh_user_question_not_hijacked_by_stale_degenerate_history():
     assert _overrides(mw, msgs) == {}
 
 
-def test_total_tool_budget_warns_not_stops():
-    mw = RepeatedToolCallMiddleware(max_total_tool_calls=10)
+def test_many_tool_calls_no_override():
+    # 大量工具调用（即使超过任意数值）完全不干预：legit 任务可超 100+ 次调用，
+    # 次数类守卫是「多调几次工具就卡」的源头，已整体移除。
+    mw = RepeatedToolCallMiddleware()
     msgs = [_human("go")]
-    for i in range(11):
+    for i in range(60):
         msgs += [_ai("", [_call("run_command", {"command": f"cmd {i}"})]), _tool("run_command", "ok")]
-    # 11 次调用 > 10：旧版硬停；现在总调用数只提醒、不硬停（legit 任务可超 100+）。
     ov = _overrides(mw, msgs)
-    assert ov.get("tools") is None  # 未禁用工具
-    assert "already used" in str(ov["messages"][-1].content)
-    assert "STOP." not in str(ov["messages"][-1].content)
+    assert ov == {}
 
 
 def test_normal_short_task_no_override():

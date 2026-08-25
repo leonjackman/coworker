@@ -55,6 +55,7 @@ from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore
 from coworker.goal_prompts import (
+    is_degenerate_text,
     render_budget_limit,
     render_goal_continuation,
     render_objective_updated,
@@ -1952,10 +1953,11 @@ async def chat_stream(request: ChatStreamRequest):
             每轮起点重置终态旗标，每轮独立 snapshot，每轮结束记账并决定是否续跑。
             """
             nonlocal terminal_sent, error_emitted, interrupt_emitted, accumulated_content, last_context_usage, current_round_assistant_id, round_index, budget_wrapup_done, last_seen_objective
-
             goal_stream_active = session_store.get_goal(session_id) is not None
             inflight_anchor: str | None = None
             inflight_pre: str | None = None
+            # 退化回复计数（同一回复内大量重复，qwen3 模式）：累计 ≥2 轮即 blocked。
+            degenerate_rounds = 0
 
             def _begin_round(anchor: str) -> str | None:
                 return agent_registry.snapshot_manager.begin_turn(session_id, anchor, resolved_workspace)
@@ -2052,6 +2054,25 @@ async def chat_stream(request: ChatStreamRequest):
                     # HITL：保留 interrupt checkpoint，goal 保持 active，等前端 resume。
                     if interrupt_emitted:
                         break
+
+                    # ---- 退化回复检测（「一直重複說話」）----
+                    # 同一回复内大量重复（qwen3 模式）。硬停只拦一轮，循环继续会再退化；
+                    # 累计 ≥2 轮退化 → 目标 blocked，避免跨轮持续重复。
+                    if session_store.get_goal(session_id) is not None:
+                        try:
+                            session = session_store.require(session_id)
+                            if session.messages and session.messages[-1].role == "assistant":
+                                if is_degenerate_text(session.messages[-1].content):
+                                    degenerate_rounds += 1
+                                if degenerate_rounds >= 2:
+                                    goal = session_store.get_goal(session_id)
+                                    if goal is not None and goal.status == "active":
+                                        blocked = session_store.update_goal_status(session_id, "blocked")
+                                        if blocked is not None:
+                                            _emit_goal_updated(session_id, blocked)
+                                    break
+                        except Exception:  # noqa: BLE001 - never break the stream
+                            logger.debug("degenerate check failed for %s", session_id, exc_info=True)
 
                     # ---- continue decision ----
                     goal = session_store.get_goal(session_id)
