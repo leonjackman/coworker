@@ -4,6 +4,7 @@ import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { WebSetupHintBar } from './components/WebSetupHintBar';
 import { TodoBlock } from './components/TodoBlock';
+import { GoalCard } from './components/GoalCard';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { MCPPanel } from './components/MCPPanel';
 import { SkillsPanel } from './components/SkillsPanel';
@@ -1377,8 +1378,8 @@ function App() {
         return;
       }
       if (chip.type === 'sys' && chip.command === '/goal') {
-        // /goal chip：组合成 `/goal <objective>`，与 raw 输入一致上墙用户命令消息，
-        // 再走命令分发（goal 设定结果以 TodoBlock 目标状态条反馈）。
+        // /goal chip：user 消息只显示目标文本（不带 /goal 前綴，对原版前端 UI），
+        // 再走命令分发（goal 设定结果以独立 GoalCard 反馈）。
         const combined = `${chip.command}${prompt ? ` ${prompt}` : ''}`;
         setInput('');
         const provider = providers.find((p) => p.id === selectedModel);
@@ -1386,7 +1387,7 @@ function App() {
         const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
         setMessages((current) => [
           ...current,
-          createMessage('user', combined, { status: 'done', autonomy, provider: providerName, model }),
+          createMessage('user', prompt || combined, { status: 'done', autonomy, provider: providerName, model }),
         ]);
         handleSlashCommand(combined);
         return;
@@ -1407,9 +1408,11 @@ function App() {
         const provider = providers.find((p) => p.id === selectedModel);
         const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
         const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';
+        // /goal 的 user 消息只显示目标文本（不带 /goal 前綴，对原版前端 UI）。
+        const displayText = command === '/goal' ? typedMessage.slice('/goal'.length).trim() || typedMessage : typedMessage;
         setMessages((current) => [
           ...current,
-          createMessage('user', typedMessage, { status: 'done', autonomy, provider: providerName, model }),
+          createMessage('user', displayText, { status: 'done', autonomy, provider: providerName, model }),
         ]);
       }
       handleSlashCommand(typedMessage);
@@ -3858,7 +3861,7 @@ function App() {
                           checklist, shown in every mode above the composer.
                           Queued messages are listed in the same card so the user
                           sees each pending message and can remove it. */}
-                      {(showTodoCard || queuedMessagesFor(sessionId).length > 0 || currentGoal != null) && (
+                      {(showTodoCard || queuedMessagesFor(sessionId).length > 0) && (
                         <TodoBlock
                           todos={todos}
                           onToggleTodo={toggleTodo}
@@ -3876,17 +3879,22 @@ function App() {
                             if (sessionId) void interjectQueuedMessage(sessionId, id);
                           }}
                           onClose={dismissCurrentTodos}
+                        />
+                      )}
+                      {/* 独立 GoalCard：当前会话目标状态卡（对原版前端 UI） */}
+                      {currentGoal != null && (
+                        <GoalCard
                           goal={currentGoal}
-                          onGoalPause={(goal) => {
+                          onPause={() => {
                             if (sessionId) void chatService.pauseGoal(sessionId).then((resp) => setSessionGoal(sessionId, resp?.goal ?? null)).catch(() => undefined);
                           }}
-                          onGoalResume={(goal) => {
+                          onResume={() => {
                             if (sessionId) void chatService.resumeGoal(sessionId).then((resp) => {
                               setSessionGoal(sessionId, resp?.goal ?? null);
                               if (resp?.goal?.status === 'active') void kickGoalContinuation(sessionId);
                             }).catch(() => undefined);
                           }}
-                          onGoalClear={(goal) => {
+                          onDelete={() => {
                             if (sessionId) void chatService.clearGoal(sessionId).then(() => setSessionGoal(sessionId, null)).catch(() => undefined);
                           }}
                         />
