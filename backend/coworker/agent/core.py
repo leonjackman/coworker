@@ -1238,6 +1238,31 @@ def is_image_limit_error(exc: BaseException | None) -> bool:
     return any(pattern in text for pattern in IMAGE_LIMIT_PATTERNS)
 
 
+def is_provider_bad_request(exc: BaseException | None) -> bool:
+    """True for a provider ``400 BadRequest`` (request-format rejection).
+
+    Matches the openai SDK's ``BadRequestError`` (status 400) and its
+    "Error code: 400 - {...}" message. These are deterministic request-format
+    issues (e.g. "System message must be at the beginning"), not agent stalls:
+    the user can retry / edit / regenerate, so the goal must NOT be marked
+    ``blocked`` on them (otherwise the GoalCard stays stuck in the stalled
+    state even after a successful retry).
+    """
+    if exc is None:
+        return False
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        try:
+            if int(status) == 400:
+                return True
+        except (TypeError, ValueError):
+            pass
+    text = str(exc).lower()
+    if "badrequesterror" in type(exc).__name__.lower():
+        return True
+    return text.startswith("error code: 400") or "error code: 400 -" in text
+
+
 def _runtime_context_budget(provider: Any, model_override: str | None = None) -> tuple[int, int, str, str | None, int]:
     """Resolve ``(budget_chars, window_tokens, source, warning, max_output_tokens)``.
 

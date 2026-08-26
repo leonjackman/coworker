@@ -1,11 +1,18 @@
 """Goal continuation prompt templates（移植 codex ``ext/goal/templates/goals/*.md``）。
 
-Three renders, all injected as a first-position ``system`` message on continuation
-rounds (internal instruction — never persisted, never shown as a user bubble):
+Three renders, all injected as a leading ``user`` message on continuation rounds
+(internal instruction — never persisted, never shown as a user bubble):
 
 * ``render_goal_continuation`` — drive another round toward the persistent goal.
 * ``render_budget_limit``      — budget exhausted: wrap up, do not start new work.
 * ``render_objective_updated`` — user edited the objective mid-flight.
+
+Injected as ``user`` rather than ``system`` on purpose: LangChain ``create_agent``
+always prepends its own system prompt, so a ``system``-role injection would land at
+index 1 and strict providers (Qwen3.6 / vLLM) reject it with "System message must
+be at the beginning" (400). A leading ``user`` message (same convention as steer /
+compaction-summary injections) rides after the framework system prompt and is
+accepted by every provider.
 """
 
 from __future__ import annotations

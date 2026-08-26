@@ -80,7 +80,7 @@ class ReasonPreservingChatOpenAI:
     """
 
     @staticmethod
-    def create(model: str, api_key: str, base_url: str | None, *, max_tokens: int = 0, repetition_penalty: float | None = None, parallel_tool_calls: bool | None = None) -> Any:
+    def create(model: str, api_key: str, base_url: str | None, *, max_tokens: int = 0, repetition_penalty: float | None = None, parallel_tool_calls: bool | None = None, data_dir: Any = None, **overrides: Any) -> Any:
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import AIMessageChunk
 
@@ -141,10 +141,13 @@ class ReasonPreservingChatOpenAI:
             # Allow the model to emit multiple tool calls in one response — the
             # precondition for parallel use_worker / use_workers fan-out.
             kwargs["parallel_tool_calls"] = parallel_tool_calls
+        _inject_llm_request_logger(kwargs, data_dir)
+        for k, v in overrides.items():
+            kwargs[k] = v
         return ChatOpenAI(**kwargs)
 
 
-def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str | None) -> dict[str, Any]:
+def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str | None, data_dir: Any = None) -> dict[str, Any]:
     """Shared ``ChatOpenAI`` construction kwargs for the streaming runtimes.
 
     Applies the user-configured per-request output cap (max_output_tokens, default
@@ -152,10 +155,15 @@ def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str 
     endpoints only (cloud OpenAI-compatible APIs reject ``repetition_penalty``).
     The penalty is model-aware so repetition-prone families (qwen) get a stronger
     value than the 1.05 default.
+
+    When ``COWORKER_LLM_LOG=1`` the async httpx client is wrapped so every
+    request body (messages + tools + sampling params) and its response status is
+    recorded to ``<data_dir>/llm-requests.log`` — the authoritative record for
+    diffing what CW actually sent vs what the provider received.
     """
     max_tokens = provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS
     use_penalty = ProviderManager._is_local(provider) or provider.provider_type in ("ollama", "llamacpp", "llmstudio", "lmstudio")
-    return dict(
+    kwargs = dict(
         model=model_name,
         api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
         base_url=base_url,
@@ -167,3 +175,31 @@ def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str 
         parallel_tool_calls=True,
         repetition_penalty=repetition_penalty_for(model_name) if use_penalty else None,
     )
+    _inject_llm_request_logger(kwargs, data_dir)
+    return kwargs
+
+
+def _inject_llm_request_logger(kwargs: dict[str, Any], data_dir: Any) -> None:
+    """Inject the request-logging async client into ``kwargs`` when enabled.
+
+    Builds the inner client through langchain's own default-builder so socket
+    options / timeouts / SSRF-safe transport are preserved; only the HTTP layer
+    is wrapped to capture the serialized request body.
+    """
+    if os.environ.get("COWORKER_LLM_LOG", "0").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    if kwargs.get("http_async_client") is not None:
+        # Already injected (e.g. provider_llm_kwargs → create double path);
+        # avoid double-wrapping the httpx client.
+        return
+    try:
+        from langchain_openai.chat_models._client_utils import _get_default_async_httpx_client
+
+        from ..llm_request_logger import wrap_async_client
+
+        base_url = kwargs.get("base_url")
+        timeout = kwargs.get("timeout") or kwargs.get("request_timeout")
+        inner = _get_default_async_httpx_client(base_url, timeout)
+        kwargs["http_async_client"] = wrap_async_client(inner, data_dir)
+    except Exception:  # noqa: BLE001 - logging must never break LLM construction
+        kwargs.pop("http_async_client", None)

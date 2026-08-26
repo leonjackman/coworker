@@ -47,6 +47,11 @@ for _ in {1..20}; do
   sleep 0.25
 done
 
+# Persistent LLM request logging (messages + tools + sampling params → data_dir/llm-requests.log).
+# Off by default; set COWORKER_LLM_LOG=1 to capture the exact bodies CW sends so they
+# can be diffed against the provider side when diagnosing tool-call / degradation issues.
+export COWORKER_LLM_LOG="${COWORKER_LLM_LOG:-1}"
+
 "$ROOT_DIR/backend/venv/bin/python" -m uvicorn main:app --host 127.0.0.1 --port "$BACKEND_PORT" --app-dir "$ROOT_DIR/backend" &
 BACKEND_PID="$!"
 DESKTOP_PID=""

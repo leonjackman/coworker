@@ -111,7 +111,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.provider_id = provider.id
         self.provider_name = provider.name
         self.model_name = model_override or provider.model
-        self.llm = llm_cls(**provider_llm_kwargs(self.model_name, provider, self._openai_compatible_base_url(provider)))
+        self.llm = llm_cls(**provider_llm_kwargs(self.model_name, provider, self._openai_compatible_base_url(provider), data_dir=data_dir))
         self.workspace = workspace
         self.approval_store = approval_store
         self.trace_store = trace_store

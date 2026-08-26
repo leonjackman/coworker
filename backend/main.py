@@ -41,6 +41,7 @@ from coworker.agent.core import (
     context_budget_chars,
     context_budget_tokens,
     format_user_message,
+    is_provider_bad_request,
     normalize_autonomy,
     normalize_work_mode,
     _runtime_context_budget,
@@ -2126,7 +2127,12 @@ async def chat_stream(request: ChatStreamRequest):
                             # 只有真正的续跑轮（round >= 1）才用后端生成的新 id。
                             goal = session_store.get_goal(session_id)
                             injection = _goal_injection(goal)
-                            round_messages = ([{"role": "system", "content": injection}] if injection else []) + history
+                            # 以 user 角色注入（而非 system）：create_agent 总会把自带的
+                            # system prompt 前置，system 角色注入会落在第 1 位，被严格
+                            # provider（Qwen3.6/vLLM）以 "System message must be at the
+                            # beginning" 400 拒绝。user 角色注入（同 steer/压缩摘要惯例）
+                            # 紧随框架 system 之后，任何 provider 均接受。
+                            round_messages = ([{"role": "user", "content": injection}] if injection else []) + history
                             current_round_assistant_id = request.assistant_message_id or None
                             round_anchor = current_round_assistant_id or snapshot_user_message_id
                             last_seen_objective = goal.objective
@@ -2150,7 +2156,7 @@ async def chat_stream(request: ChatStreamRequest):
                         round_history = _current_history()
                         if not round_history:
                             break
-                        round_messages = ([{"role": "system", "content": injection}] if injection else []) + round_history
+                        round_messages = ([{"role": "user", "content": injection}] if injection else []) + round_history
                         current_round_assistant_id = f"goal-round-{uuid.uuid4().hex[:12]}"
                         round_anchor = current_round_assistant_id
                         last_seen_objective = goal.objective
@@ -2169,6 +2175,16 @@ async def chat_stream(request: ChatStreamRequest):
                     inflight_anchor = round_anchor
                     inflight_pre = await asyncio.to_thread(_begin_round, round_anchor)
                     try:
+                        # 每轮从完整历史重建（codex rollout 语义）：上一轮跑完会以
+                        # exit-durability 写盘同一个 <session>.json checkpoint。若直接复用
+                        # 该 thread，add_messages reducer 会把本轮完整历史“追加”到旧 state
+                        # 上，造成整段上下文每轮重复膨胀。先删掉 checkpoint 让每轮全新起跑。
+                        # 中断轮（approval/question）的 checkpoint 在本轮内新写、且循环
+                        # 立即 break，不会被这里的删除波及。
+                        try:
+                            await agent_registry.forget_runtime_checkpoint(session_id)
+                        except Exception:  # noqa: BLE001 - fresh-start delete is best-effort
+                            logger.warning("round-start checkpoint delete failed for %s", session_id, exc_info=True)
                         round_started = time.monotonic()
                         round_iter = runtime.stream(round_messages, session_id, request.language, work_mode, autonomy)
                         async for ev in round_iter:
@@ -2315,7 +2331,10 @@ async def chat_stream(request: ChatStreamRequest):
                 logger.warning("update_modes failed in _on_error for session %s", session_id, exc_info=True)
             # turn 报错（非客户端取消 / Stop）且 goal active → blocked（对标 codex
             # TurnError→Blocked 停循环）。Stop / 客户端断开不改 goal 状态（选项 A）。
-            if not isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+            # provider 400 BadRequest（请求格式问题，如 strict 模板拒绝 system 位置）
+            # 除外：这是确定性、可重试的请求问题而非 agent 停滞，标 blocked 会让
+            # GoalCard 停在错误态（即使重试成功也不切回 active）。
+            if not isinstance(exc, (asyncio.CancelledError, GeneratorExit)) and not is_provider_bad_request(exc):
                 try:
                     goal = session_store.get_goal(session_id)
                     if goal is not None and goal.status == "active":
