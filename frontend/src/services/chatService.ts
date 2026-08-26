@@ -111,7 +111,7 @@ export interface ChatService {
   sendMessageStream: (request: ChatRequest, onEvent: StreamEventCallback, signal?: AbortSignalLike) => Promise<void>;
   interject: (request: InterjectRequest) => Promise<{ status: string; steer_id: string; session_id: string }>;
   listProviders: () => Promise<ProvidersListResponse>;
-  createProvider: (request: ProviderPayload) => Promise<void>;
+  createProvider: (request: ProviderPayload) => Promise<{ status: string; provider: ProviderEntry }>;
   updateProvider: (providerId: string, request: ProviderUpdatePayload) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
   setDefaultProvider: (providerId: string, model: string) => Promise<void>;
@@ -895,9 +895,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.listProviders();
   }
 
-  async createProvider(request: ProviderPayload): Promise<void> {
+  async createProvider(request: ProviderPayload): Promise<{ status: string; provider: ProviderEntry }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    await window.electronAPI.createProvider(request);
+    return await window.electronAPI.createProvider(request);
   }
 
   async updateProvider(providerId: string, request: ProviderUpdatePayload): Promise<void> {

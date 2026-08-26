@@ -550,7 +550,13 @@ class ProviderManager:
         failed (``error``) so the UI can tell the user their local server is
         unreachable instead of silently falling back."""
         model = (model or provider.model or "").strip()
-        # Probe the server FIRST (cached, 60s TTL) so a stale or over-sized
+        # For known cloud models with pre-configured context windows, skip
+        # discovery entirely since the table value is authoritative and
+        # remote endpoints rarely expose context window info.
+        from_table = ProviderManager.table_context_window(model)
+        if from_table and not ProviderManager._is_local(provider):
+            return from_table, "table", None
+        # Probe the server (cached, 60s TTL) so a stale or over-sized
         # stored window can never exceed the server's real max_model_len —
         # oversized prompts make some servers (e.g. vLLM) hang silently instead
         # of returning a context-length error.
@@ -576,13 +582,12 @@ class ProviderManager:
                 # through. Non-local providers keep a silent fallback — a probe
                 # failure there does not imply chat is down.
                 note = discovered_error
-            elif effective > _UNVERIFIED_CONTEXT_WINDOW_WARN:
+            elif effective > _UNVERIFIED_CONTEXT_WINDOW_WARN and not from_table:
                 note = (
                     f"上下文窗口 {effective} 未经服务端验证且偏大。若出现卡死或流式超时，"
                     "请在下方把“上下文窗口”调小（例如 128000），并点“重新探测”验证。"
                 )
             return effective, "user", note
-        from_table = ProviderManager.table_context_window(model)
         if from_table:
             return from_table, "table", None
         if discovered and discovered > 0:

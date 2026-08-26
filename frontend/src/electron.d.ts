@@ -79,7 +79,7 @@ declare global {
       streamApprovalEvents: (requestId: string, resumeId: string, onEvent: StreamEventCallback) => Promise<void>;
       streamWorkerEvents: (requestId: string, workerRunId: string, onEvent: StreamEventCallback) => Promise<void>;
       listProviders: () => Promise<ProvidersListResponse>;
-      createProvider: (payload: ProviderPayload) => Promise<{ status: string }>;
+      createProvider: (payload: ProviderPayload) => Promise<{ status: string; provider: ProviderEntry }>;
       updateProvider: (providerId: string, params: ProviderUpdatePayload) => Promise<{ status: string }>;
       discoverProviderContext: (providerId: string) => Promise<{ status: string; provider: ProviderEntry }>;
       deleteProvider: (providerId: string) => Promise<{ status: string }>;

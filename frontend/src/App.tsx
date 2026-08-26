@@ -1382,6 +1382,8 @@ function App() {
         // 并生成持久化 id 随 /goal/set 落库（重载/重进会话后泡泡不消失）。
         const combined = `${chip.command}${prompt ? ` ${prompt}` : ''}`;
         setInput('');
+        setCommandChip(null);
+        commandChipRef.current = null;
         const provider = providers.find((p) => p.id === selectedModel);
         const model = provider?.model ?? runtimeConfig?.selected_model ?? '';
         const providerName = provider?.name ?? runtimeConfig?.agent_provider ?? '';

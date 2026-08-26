@@ -96,7 +96,7 @@ def temperature_for(model_name: str) -> float | None:
         return None
     if "glm-4.6" in model_id or "glm-4.7" in model_id:
         return 1.0
-    if "minimax-m2" in model_id:
+    if "minimax" in model_id:
         return 1.0
     if "kimi-k2" in model_id:
         # kimi-k2-thinking & kimi-k2.5 && kimi-k2p5 && kimi-k2-5

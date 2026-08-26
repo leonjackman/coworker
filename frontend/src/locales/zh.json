@@ -881,7 +881,6 @@
   "providers.max_output_tokens_placeholder": "如 16384",
   "providers.max_output_tokens_hint": "限制单次生成上限，防止无限/重复生成；自定义值需 ≤ 模型实际输出上限",
   "providers.vision": "多模态（视觉）模型",
-  "providers.vision_hint": "开启后，截图与图片以原生图像发送给模型（模型能看见）；关闭则存盘并以路径引用。",
   "sidebar.project_drag_handle": "拖拽以排序",
   "chat.idle_warning": "流式连接已空闲超过 4 分钟 — {seconds} 秒后断开。请留在本页继续等待。",
   "settings.logging": "运行时日志",

@@ -871,7 +871,6 @@
   "providers.max_output_tokens_placeholder": "z. B. 16384",
   "providers.max_output_tokens_hint": "Begrenzt eine einzelne Generierung gegen Endlos-/Wiederholungsausgaben; benutzerdefinierte Werte dürfen die echte Ausgabelimit des Modells nicht überschreiten",
   "providers.vision": "Multimodales (Vision-)Modell",
-  "providers.vision_hint": "Wenn aktiviert, werden Screenshots und Bilder als native Bilder an das Modell gesendet (es kann sie sehen); sonst werden sie auf der Festplatte gespeichert und per Pfad referenziert.",
   "sidebar.project_drag_handle": "Drag to reorder",
   "titlebar.context": "Context",
   "titlebar.context_usage": "Kontext genutzt {used} / {window} ({pct} %)",

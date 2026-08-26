@@ -879,7 +879,6 @@
   "providers.max_output_tokens_placeholder": "如 16384",
   "providers.max_output_tokens_hint": "限制單次生成上限，防止無限/重複生成；自訂值需 ≤ 模型實際輸出上限",
   "providers.vision": "多模態（視覺）模型",
-  "providers.vision_hint": "開啟後，截圖與圖片以原生圖像發送給模型（模型能看見）；關閉則存盤並以路徑引用。",
   "sidebar.project_drag_handle": "拖曳以排序",
   "chat.idle_warning": "串流已空閒超過 4 分鐘 — {seconds} 秒後中斷。請停留在本頁繼續等待。",
   "settings.logging": "執行階段日誌",

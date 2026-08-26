@@ -5,6 +5,7 @@ import anthropicIcon from '@lobehub/icons-static-svg/icons/anthropic.svg?url';
 import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg?url';
 import geminiIcon from '@lobehub/icons-static-svg/icons/gemini-color.svg?url';
 import lmstudioIcon from '@lobehub/icons-static-svg/icons/lmstudio.svg?url';
+import minimaxIcon from '@lobehub/icons-static-svg/icons/minimax-color.svg?url';
 import ollamaIcon from '@lobehub/icons-static-svg/icons/ollama.svg?url';
 import openaiIcon from '@lobehub/icons-static-svg/icons/openai.svg?url';
 import openrouterIcon from '@lobehub/icons-static-svg/icons/openrouter-color.svg?url';
@@ -68,6 +69,18 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
     base_url: 'https://api.siliconflow.cn/v1',
     icon: siliconflowIcon,
   },
+  minimax: {
+    key: 'minimax',
+    name: 'Minimax (International)',
+    base_url: 'https://api.minimax.chat/v1',
+    icon: minimaxIcon,
+  },
+  minimax_cn: {
+    key: 'minimax_cn',
+    name: 'Minimax (China)',
+    base_url: 'https://api.minimaxi.com/v1',
+    icon: minimaxIcon,
+  },
   qwen: {
     key: 'qwen',
     name: 'Qwen / DashScope',
@@ -91,6 +104,8 @@ export const PROVIDER_TEMPLATE_ORDER = [
   'vllm',
   'openrouter',
   'siliconflow',
+  'minimax',
+  'minimax_cn',
   'qwen',
   'custom',
 ];
@@ -100,6 +115,8 @@ const PROVIDER_ICON_ALIASES: Record<string, string | null> = {
   claude: anthropicIcon,
   custom: null,
   dashscope: qwenIcon,
+  minimax: minimaxIcon,
+  minimax_cn: minimaxIcon,
   gemini: geminiIcon,
   google: geminiIcon,
   lm_studio: lmstudioIcon,

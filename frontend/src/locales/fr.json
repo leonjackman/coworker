@@ -871,7 +871,6 @@
   "providers.max_output_tokens_placeholder": "ex. 16384",
   "providers.max_output_tokens_hint": "Limite une génération pour éviter les sorties infinies/répétées; une valeur personnalisée ne doit pas dépasser la limite réelle du modèle",
   "providers.vision": "Modèle multimodal (vision)",
-  "providers.vision_hint": "Si activé, les captures d'écran et images sont envoyées au modèle comme images natives (il peut les voir) ; sinon elles sont enregistrées sur disque et référencées par chemin.",
   "sidebar.project_drag_handle": "Drag to reorder",
   "titlebar.context": "Context",
   "titlebar.context_usage": "Contexte utilisé {used} / {window} ({pct} %)",

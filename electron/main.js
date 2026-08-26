@@ -2194,15 +2194,27 @@ ipcMain.handle('create-provider', async (event, payload) => {
 });
 
 ipcMain.handle('update-provider', async (event, payload) => {
-  return requestBackend(`/providers/${encodeURIComponent(payload.provider_id)}`, 'PUT', payload.params);
+  try {
+    return await requestBackend(`/providers/${encodeURIComponent(payload.provider_id)}`, 'PUT', payload.params);
+  } catch (error) {
+    throw new Error(error.message || 'Failed to update provider');
+  }
 });
 
 ipcMain.handle('discover-provider-context', async (event, providerId) => {
-  return requestBackend(`/providers/${encodeURIComponent(providerId)}/discover-context`, 'POST', {});
+  try {
+    return await requestBackend(`/providers/${encodeURIComponent(providerId)}/discover-context`, 'POST', {});
+  } catch (error) {
+    throw new Error(error.message || 'Failed to discover context window');
+  }
 });
 
 ipcMain.handle('delete-provider', async (event, providerId) => {
-  return requestBackend(`/providers/${encodeURIComponent(providerId)}`, 'DELETE');
+  try {
+    return await requestBackend(`/providers/${encodeURIComponent(providerId)}`, 'DELETE');
+  } catch (error) {
+    throw new Error(error.message || 'Failed to delete provider');
+  }
 });
 
 ipcMain.handle('set-default-provider', async (event, payload) => {

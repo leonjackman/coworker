@@ -871,7 +871,6 @@
   "providers.max_output_tokens_placeholder": "例: 16384",
   "providers.max_output_tokens_hint": "単一生成を制限して無限・反復出力を防止。カスタム値はモデルの実際の出力上限以下にする必要があります",
   "providers.vision": "マルチモーダル（ビジョン）モデル",
-  "providers.vision_hint": "有効にすると、スクリーンショットや画像をネイティブ画像としてモデルに送信します（モデルが見えます）。無効の場合はディスクに保存しパスで参照します。",
   "sidebar.project_drag_handle": "Drag to reorder",
   "titlebar.context": "Context",
   "titlebar.context_usage": "コンテキスト使用量 {used} / {window}（{pct}% 使用）",

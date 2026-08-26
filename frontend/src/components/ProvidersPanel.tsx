@@ -80,12 +80,16 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
     // an update into a new-provider creation.
     setForm((current) => ({
       ...emptyForm(),
-      ...(current?.id ? { id: current.id, api_key: current.api_key, model: current.model } : {}),
+      ...(current?.id && current.id !== '' ? { id: current.id, api_key: current.api_key, model: current.model } : {}),
       provider_type: key,
       name: key === 'custom' ? '' : template.name,
       base_url: template.base_url,
     }));
   }
+
+  const hasValidProviderId = (id: string | null): boolean => {
+    return !!id && id !== '';
+  };
 
   function startAdd() {
     setForm(emptyForm());
@@ -131,7 +135,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
         base_url: form.base_url,
         api_key: form.api_key,
         provider_type: form.provider_type,
-        provider_id: form.id ?? '',
+        provider_id: hasValidProviderId(form.id) ? form.id : '',
       });
       setForm((current) => ({
         ...current,
@@ -148,9 +152,11 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
 
   async function handleSave() {
     if (!form.name.trim() || !form.base_url.trim() || !form.model.trim()) return;
+    if (form.id === "") return;
     setSaving(true);
     setMessage(null);
     try {
+      let newProviderId: string | null = null;
       if (form.id) {
         await chatService.updateProvider(form.id, {
           name: form.name,
@@ -162,8 +168,9 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           vision: Boolean(form.vision),
           temperature: form.temperature ?? 0,
         });
+        newProviderId = form.id;
       } else {
-        await chatService.createProvider({
+        const created = await chatService.createProvider({
           name: form.name,
           provider_type: form.provider_type,
           base_url: form.base_url,
@@ -174,10 +181,14 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           vision: Boolean(form.vision),
           temperature: form.temperature ?? 0,
         });
+        newProviderId = created.id;
       }
       await load();
       onProviderChange();
       setViewMode('list');
+      if (newProviderId) {
+        setForm((current) => ({ ...current, id: newProviderId }));
+      }
     } catch (error) {
       setMessage(translateError(error) || t('common.operation_failed'));
     } finally {
@@ -186,7 +197,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   }
 
   async function handleDiscoverContext() {
-    if (!form.id) return;
+    if (!form.id || form.id === "") return;
     setDiscoveringCtx(true);
     setMessage(null);
     try {
@@ -201,6 +212,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   }
 
   async function handleDelete(providerId: string) {
+    if (!hasValidProviderId(providerId)) return;
     setSaving(true);
     try {
       await chatService.deleteProvider(providerId);
@@ -216,6 +228,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   }
 
   async function handleToggle(provider: ProviderEntry) {
+    if (!hasValidProviderId(provider.id)) return;
     try {
       await chatService.updateProvider(provider.id, { enabled: !provider.enabled });
       await load();
@@ -226,7 +239,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   }
 
   async function handleSetDefault(provider: ProviderEntry) {
-    if (!provider.model) return;
+    if (!provider.model || !hasValidProviderId(provider.id)) return;
     try {
       await chatService.setDefaultProvider(provider.id, provider.model);
       await load();
@@ -245,7 +258,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
         base_url: form.base_url,
         api_key: form.api_key,
         model: form.model,
-        provider_id: form.id ?? '',
+        provider_id: hasValidProviderId(form.id) ? form.id : '',
       });
       setTestResult(result);
     } catch (error) {
@@ -345,7 +358,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                   placeholder={t('providers.context_window_placeholder')}
                   disabled={saving}
                 />
-                <Button variant="icon" onClick={handleDiscoverContext} disabled={discoveringCtx || !form.id} title={t('providers.context_discover')}>
+                <Button variant="icon" onClick={handleDiscoverContext} disabled={discoveringCtx || !hasValidProviderId(form.id)} title={t('providers.context_discover')}>
                   <RefreshCw size={14} className={discoveringCtx ? 'animate-spin' : ''} />
                 </Button>
               </div>
@@ -434,7 +447,6 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                 />
                 <span>{t('providers.vision')}</span>
               </div>
-              <small>{t('providers.vision_hint')}</small>
             </label>
 
             <div className="provider-test-row">
@@ -450,7 +462,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
             </div>
 
             <div className="provider-form-footer">
-              {form.id && (
+              {hasValidProviderId(form.id) && (
                 <Button variant="ghost" className="provider-danger-button" onClick={() => setDeleteConfirm(form.id)} disabled={saving}>
                   <Trash2 size={14} />
                   {t('common.delete')}

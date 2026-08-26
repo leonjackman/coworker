@@ -882,7 +882,6 @@
   "providers.max_output_tokens_placeholder": "e.g. 16384",
   "providers.max_output_tokens_hint": "Caps a single generation to prevent runaway/repetitive output; a custom value must not exceed the model's real output limit",
   "providers.vision": "Multimodal (vision) model",
-  "providers.vision_hint": "When enabled, screenshots and images are sent to the model as native images (it can see them); otherwise they are saved to disk and referenced by path.",
   "sidebar.project_drag_handle": "Drag to reorder",
   "settings.logging": "Runtime Logging",
   "settings.log_level": "Log Level",

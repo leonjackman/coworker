@@ -871,7 +871,6 @@
   "providers.max_output_tokens_placeholder": "예: 16384",
   "providers.max_output_tokens_hint": "단일 생성을 제한하여 무한/반복 출력 방지. 사용자 지정 값은 모델의 실제 출력 한도를 초과할 수 없습니다",
   "providers.vision": "멀티모달(비전) 모델",
-  "providers.vision_hint": "활성화하면 스크린샷과 이미지를 원본 이미지로 모델에 전송합니다(모델이 볼 수 있음). 비활성화 시 디스크에 저장하고 경로로 참조합니다.",
   "sidebar.project_drag_handle": "Drag to reorder",
   "titlebar.context": "Context",
   "titlebar.context_usage": "컨텍스트 사용량 {used} / {window}（{pct}% 사용）",
