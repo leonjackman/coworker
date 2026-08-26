@@ -38,7 +38,6 @@ def build_extract_llm(provider_entry: Any | None, extract_model: str = "") -> An
         base_url = f"{base_url}/v1"
     return ChatOpenAI(
         model=model,
-        temperature=0,
         api_key=provider_entry.api_key or "not-needed",
         base_url=base_url,
         timeout=120,

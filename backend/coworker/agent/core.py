@@ -942,7 +942,7 @@ def generate_title(first_user_message: str, assistant_response: str = "", langua
         provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
         dp = provider_manager.default_provider()
         if dp and dp.api_key and (dp.base_url or dp.provider_type):
-            llm = ChatOpenAI(model=dp.model, temperature=0, api_key=dp.api_key, base_url=dp.base_url or None)
+            llm = ChatOpenAI(model=dp.model, api_key=dp.api_key, base_url=dp.base_url or None)
             response = llm.invoke([
                 {"role": "system", "content": title_prompt},
                 {"role": "user", "content": conversation},

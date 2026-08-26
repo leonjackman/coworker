@@ -56,7 +56,6 @@ body = {
     "tools": TOOLS,
     "tool_choice": "auto",
     "stream": True,
-    "temperature": 0,
 }
 
 request = urllib.request.Request(

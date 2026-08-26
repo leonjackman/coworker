@@ -59,11 +59,6 @@ class ProviderEntry:
     # as truncated base64 text (which is both a corrupted image and ~36k tokens
     # of waste per shot). Default False keeps text-only providers safe.
     vision: bool = False
-    # Sampling temperature for this provider, 0 = auto. When >0 it overrides the
-    # per-model-family default (see agent.model_defaults.temperature_for); when 0
-    # the family default applies (or the temperature is omitted entirely, letting
-    # the provider choose). Mirrors cline's per-model temperature override.
-    temperature: float = 0
 
 
 # ---------------------------------------------------------------------------
@@ -195,20 +190,6 @@ DEFAULT_MAX_OUTPUT_TOKENS = 8192
 MAX_OUTPUT_TOKENS_MIN = 0
 MAX_OUTPUT_TOKENS_MAX = 1_000_000
 
-# Sampling-temperature clamp bounds (0 = auto → family default).
-TEMPERATURE_MIN = 0.0
-TEMPERATURE_MAX = 1.5
-
-
-def _clamp_temperature(temperature: float) -> float:
-    try:
-        value = float(temperature or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    if value <= 0:
-        return 0.0
-    return round(min(TEMPERATURE_MAX, max(TEMPERATURE_MIN, value)), 2)
-
 
 @dataclass
 class ProviderConfig:
@@ -307,6 +288,12 @@ class ProviderManager:
             if provider.api_key and not provider.key_in_secrets:
                 self._store_secret(provider)
                 migrated = True
+        # Migration: remove deprecated 'temperature' field from stored config.
+        if payload.get("providers"):
+            for p in payload["providers"]:
+                if "temperature" in p:
+                    migrated = True
+                    break
         if migrated:
             # Write directly (NOT via save()): save() would see the just-emptied
             # api_key + key_in_secrets and _clear_secret() the brand-new Keychain
@@ -372,7 +359,7 @@ class ProviderManager:
             provider.model = config.default_model
         return provider
 
-    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0, vision: bool = False, temperature: float = 0) -> dict[str, Any]:
+    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0, vision: bool = False) -> dict[str, Any]:
         base_url = self.validate_base_url(base_url, provider_type)
         if not name.strip():
             raise ValueError("provider name is required")
@@ -394,7 +381,6 @@ class ProviderManager:
             context_window=max(0, int(context_window or 0)),
             max_output_tokens=max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens or 0))),
             vision=bool(vision),
-            temperature=_clamp_temperature(temperature),
         )
         config.providers.append(provider)
         if not config.default_provider_id:
@@ -403,7 +389,7 @@ class ProviderManager:
         self.save(config)
         return self.public_provider(provider)
 
-    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None, max_output_tokens: int | None = None, vision: bool | None = None, temperature: float | None = None) -> dict[str, Any]:
+    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None, max_output_tokens: int | None = None, vision: bool | None = None) -> dict[str, Any]:
         config = self.load()
         provider = self.require_provider(config, provider_id)
         if name is not None:
@@ -427,8 +413,6 @@ class ProviderManager:
             provider.max_output_tokens = max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens)))
         if vision is not None:
             provider.vision = bool(vision)
-        if temperature is not None:
-            provider.temperature = _clamp_temperature(temperature)
         if enabled is not None:
             provider.enabled = enabled
             if not enabled and config.default_provider_id == provider.id:
@@ -771,7 +755,6 @@ class ProviderManager:
             "context_error": error,
             "max_output_tokens": provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS,
             "vision": bool(provider.vision),
-            "temperature": float(provider.temperature or 0),
             "created_at": provider.created_at,
             "updated_at": provider.updated_at,
         }

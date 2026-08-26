@@ -695,14 +695,13 @@ class RuntimeConfigUpdate(BaseModel):
 
 class ProviderCreate(BaseModel):
     name: str
-    provider_type: str = "custom"
+    provider_type: str
     base_url: str
     api_key: str = ""
     model: str = ""
     context_window: int = 0
     max_output_tokens: int = 0
     vision: bool = False
-    temperature: float = 0
 
 class ProviderUpdate(BaseModel):
     name: Optional[str] = None
@@ -713,7 +712,6 @@ class ProviderUpdate(BaseModel):
     context_window: Optional[int] = None
     max_output_tokens: Optional[int] = None
     vision: Optional[bool] = None
-    temperature: Optional[float] = None
 
 class DefaultProviderPayload(BaseModel):
     provider_id: str
@@ -4458,7 +4456,6 @@ def create_provider(request: ProviderCreate):
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
             vision=request.vision,
-            temperature=request.temperature,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -4488,7 +4485,6 @@ def update_provider(provider_id: str, request: ProviderUpdate):
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
             vision=request.vision,
-            temperature=request.temperature,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -3,14 +3,10 @@
 Centralizes every provider-sampling decision in one leaf module so the runtimes
 and middleware never hard-code temperatures / penalties:
 
-* :func:`temperature_for` — per-model-family sampling defaults ported from
-  opencode's ``transform.ts`` (qwen → 0.55, gemini/glm/minimax/kimi/north →
-  1.0, claude → None, everything else → ``None`` = omit, provider default).
 * :func:`repetition_penalty_for` — repetition-prone families (qwen) get a
   stronger penalty on self-hosted endpoints.
 * :func:`provider_llm_kwargs` — builds the ``ChatOpenAI`` kwargs for a provider,
-  resolving the temperature (per-provider override > family default > omit) and
-  the repetition penalty (self-hosted only).
+  resolving the repetition penalty (self-hosted only).
 * :class:`ReasonPreservingChatOpenAI` — the reasoning-preserving ChatOpenAI
   factory used by every runtime.
 
@@ -63,57 +59,6 @@ def repetition_penalty_for(model_name: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Per-family sampling temperatures (ported from opencode transform.ts)
-# ---------------------------------------------------------------------------
-
-_GEMINI_WITH_SAMPLING_DEFAULTS = [
-    re.compile(r"gemini-2[.-]5(?:[.-]|$)"),
-    re.compile(r"gemini-3-(?:flash|pro)(?:[.-]|$)"),
-    re.compile(r"gemini-3[.-]1(?:[.-]|$)"),
-    re.compile(r"gemini-3[.-]5-flash(?!-lite)(?:[.-]|$)"),
-]
-
-
-def temperature_for(model_name: str) -> float | None:
-    """Per-model-family sampling temperature default, or ``None`` to omit the
-    field entirely and let the provider use its own default.
-
-    Mirrors opencode's ``ProviderTransform.temperature``: only families known to
-    need an explicit value get one; everything else falls back to the provider
-    default (and for reasoning models like ``o1``/``gpt-5``, omitting the field
-    is the only universally-safe choice).
-    """
-    model_id = (model_name or "").lower()
-    if "north-mini-code" in model_id:
-        return 1.0
-    if "qwen" in model_id:
-        return 0.55
-    if "claude" in model_id:
-        return None
-    if "gemini" in model_id:
-        if any(pattern.search(model_id) for pattern in _GEMINI_WITH_SAMPLING_DEFAULTS):
-            return 1.0
-        return None
-    if "glm-4.6" in model_id or "glm-4.7" in model_id:
-        return 1.0
-    if "minimax" in model_id:
-        return 1.0
-    if "kimi-k2" in model_id:
-        # kimi-k2-thinking & kimi-k2.5 && kimi-k2p5 && kimi-k2-5
-        if any(s in model_id for s in ("thinking", "k2.", "k2p", "k2-5")):
-            return 1.0
-        return 0.6
-    return None
-
-
-def _resolve_temperature(provider: ProviderEntry, model_name: str) -> float | None:
-    """Per-provider override > family default > omit (provider default)."""
-    if provider is not None and (provider.temperature or 0) > 0:
-        return float(provider.temperature)
-    return temperature_for(model_name)
-
-
-# ---------------------------------------------------------------------------
 # LLM construction
 # ---------------------------------------------------------------------------
 
@@ -135,7 +80,7 @@ class ReasonPreservingChatOpenAI:
     """
 
     @staticmethod
-    def create(model: str, temperature: float | None, api_key: str, base_url: str | None, *, max_tokens: int = 0, repetition_penalty: float | None = None, parallel_tool_calls: bool | None = None) -> Any:
+    def create(model: str, api_key: str, base_url: str | None, *, max_tokens: int = 0, repetition_penalty: float | None = None, parallel_tool_calls: bool | None = None) -> Any:
         from langchain_openai import ChatOpenAI
         from langchain_core.messages import AIMessageChunk
 
@@ -163,7 +108,7 @@ class ReasonPreservingChatOpenAI:
         ChatOpenAI._convert_chunk_to_generation_chunk = _patched_convert
 
         kwargs: dict[str, Any] = dict(
-            model=model, temperature=temperature, api_key=api_key, base_url=base_url,
+            model=model, api_key=api_key, base_url=base_url,
             # LangChain's built-in retry covers transient 5xx / connection
             # resets (default max_retries=2 with exponential backoff); a local
             # provider blip no longer fails the whole turn.
@@ -203,8 +148,7 @@ def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str 
     """Shared ``ChatOpenAI`` construction kwargs for the streaming runtimes.
 
     Applies the user-configured per-request output cap (max_output_tokens, default
-    ``DEFAULT_MAX_OUTPUT_TOKENS``), the resolved sampling temperature (per-provider
-    override > per-family default > omit), and a repetition penalty on self-hosted
+    ``DEFAULT_MAX_OUTPUT_TOKENS``), and a repetition penalty on self-hosted
     endpoints only (cloud OpenAI-compatible APIs reject ``repetition_penalty``).
     The penalty is model-aware so repetition-prone families (qwen) get a stronger
     value than the 1.05 default.
@@ -213,7 +157,6 @@ def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str 
     use_penalty = ProviderManager._is_local(provider) or provider.provider_type in ("ollama", "llamacpp", "llmstudio", "lmstudio")
     return dict(
         model=model_name,
-        temperature=_resolve_temperature(provider, model_name),
         api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
         base_url=base_url,
         max_tokens=max_tokens,

@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from coworker.agent.model_defaults import provider_llm_kwargs, temperature_for  # noqa: E402
+from coworker.agent.model_defaults import provider_llm_kwargs  # noqa: E402
 from coworker.providers import (  # noqa: E402
     DEFAULT_MAX_OUTPUT_TOKENS,
     MAX_OUTPUT_TOKENS_MAX,
@@ -80,16 +80,12 @@ def test_provider_llm_kwargs_applies_cap_and_local_penalty():
     kwargs = provider_llm_kwargs("qwen3.6-35b", _entry(max_output_tokens=0), "http://192.168.1.100:8000/v1")
     assert kwargs["max_tokens"] == DEFAULT_MAX_OUTPUT_TOKENS
     assert kwargs["repetition_penalty"] == 1.15
-    # qwen family also resolves a non-greedy temperature (the 降智 fix).
-    assert kwargs["temperature"] == 0.55
-    # Non-qwen local model keeps the milder penalty; unknown family omits the
-    # temperature (provider default).
+    # Temperature is no longer set by the app; provider default applies.
+    assert "temperature" not in kwargs or kwargs["temperature"] is None
+    # Non-qwen local model keeps the milder penalty.
     kwargs = provider_llm_kwargs("nemotron3-super", _entry(max_output_tokens=0, model="nemotron3-super"), "http://192.168.1.100:8000/v1")
     assert kwargs["repetition_penalty"] == 1.05
-    assert kwargs["temperature"] is None
-    # A per-provider temperature override beats the family default.
-    kwargs = provider_llm_kwargs("qwen3.6-35b", _entry(max_output_tokens=0, temperature=0.7), "http://192.168.1.100:8000/v1")
-    assert kwargs["temperature"] == 0.7
+    assert "temperature" not in kwargs or kwargs["temperature"] is None
     # Cloud provider → cap still applies, but NO repetition penalty (OpenAI/DeepSeek reject it).
     cloud = _entry(base_url="https://api.openai.com/v1", provider_type="openai", max_output_tokens=128000)
     kwargs = provider_llm_kwargs("gpt-5.1", cloud, "https://api.openai.com/v1")
@@ -97,27 +93,10 @@ def test_provider_llm_kwargs_applies_cap_and_local_penalty():
     assert kwargs["repetition_penalty"] is None
 
 
-def test_temperature_family_table():
-    assert temperature_for("qwen3.6-35b") == 0.55
-    assert temperature_for("Qwen2.5-coder-32b") == 0.55
-    assert temperature_for("claude-sonnet-4") is None
-    assert temperature_for("gemini-2.5-pro") == 1.0
-    assert temperature_for("gemini-3-flash") == 1.0
-    assert temperature_for("glm-4.6") == 1.0
-    assert temperature_for("minimax-m2") == 1.0
-    assert temperature_for("kimi-k2-thinking") == 1.0
-    assert temperature_for("kimi-k2-0905") == 0.6
-    assert temperature_for("north-mini-code") == 1.0
-    # Unknown families → None (omit the field, provider default).
-    assert temperature_for("deepseek-v4-flash") is None
-    assert temperature_for("gpt-5.1") is None
-    assert temperature_for("nemotron3-super") is None
-
-
 def test_reasoning_create_passes_max_tokens():
     from coworker.agent.model_defaults import ReasonPreservingChatOpenAI
 
-    llm = ReasonPreservingChatOpenAI.create(model="m", temperature=0, api_key="k", base_url="http://127.0.0.1:1/v1", max_tokens=4096)
+    llm = ReasonPreservingChatOpenAI.create(model="m", api_key="k", base_url="http://127.0.0.1:1/v1", max_tokens=4096)
     assert llm.max_tokens == 4096
-    llm_unset = ReasonPreservingChatOpenAI.create(model="m", temperature=0, api_key="k", base_url="http://127.0.0.1:1/v1")
+    llm_unset = ReasonPreservingChatOpenAI.create(model="m", api_key="k", base_url="http://127.0.0.1:1/v1")
     assert llm_unset.max_tokens is None

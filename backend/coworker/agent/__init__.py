@@ -3,8 +3,7 @@
 Split out of the former monolithic ``coworker/agents.py``:
 
 * ``core`` — shared types, tool-arg schemas, message/context helpers;
-* ``model_defaults`` — sampling parameters (temperature / repetition penalty)
-  and LLM construction;
+* ``model_defaults`` — repetition penalty and LLM construction;
 * ``prompts`` — system / phase / title prompts;
 * ``middleware`` — phase gating, HITL approval, compaction, loop guards;
 * ``graph`` — workspace tool set + ``create_agent`` graph builder;

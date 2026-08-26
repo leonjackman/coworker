@@ -789,7 +789,6 @@ def _summarizer_candidates(data_dir: Path | None, primary_llm: Any) -> list[Any]
                     _push(
                         ReasonPreservingChatOpenAI.create(
                             model=p.model,
-                            temperature=0,
                             api_key=p.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
                             base_url=openai_compatible_base_url(p),
                         )

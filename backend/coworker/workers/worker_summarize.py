@@ -55,7 +55,7 @@ async def summarize_result(
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda m=model, p=prompt: m.invoke(p, max_tokens=4096, temperature=0),
+                lambda m=model, p=prompt: m.invoke(p, max_tokens=4096),
             )
             summary = str(getattr(response, "content", "") or "").strip()
             if summary and len(summary) > 50:
