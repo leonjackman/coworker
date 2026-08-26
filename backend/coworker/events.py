@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,14 @@ from coworker.logger import get_logger
 logger = get_logger(__name__)
 
 SSE_HEARTBEAT_SECONDS = float(os.environ.get("COWORKER_SSE_HEARTBEAT_SECONDS", "15.0"))
+
+# Disk retention for persisted worker-run JSONL files. The bus purges in-memory
+# state aggressively (refcount-driven) but the on-disk replay files are never
+# deleted anywhere — over a long-lived backend they grow unboundedly. Cap both
+# the number of kept runs and the total directory size; the oldest runs are
+# removed first (see WorkerEventBus.prune_disk).
+WORKER_EVENTS_MAX_RUNS = int(os.environ.get("COWORKER_WORKER_EVENTS_MAX_RUNS", "200"))
+WORKER_EVENTS_MAX_BYTES = int(os.environ.get("COWORKER_WORKER_EVENTS_MAX_BYTES", str(100 * 1024 * 1024)))  # 100 MB
 
 
 class WorkerEventBus:
@@ -202,6 +211,78 @@ class WorkerEventBus:
             self._loaded.discard(run_id)
             self._seen.discard(run_id)
             self._expected.discard(run_id)
+
+    def prune_disk(
+        self,
+        max_runs: int | None = None,
+        max_bytes: int | None = None,
+        *,
+        grace_seconds: float = 300.0,
+    ) -> dict[str, int]:
+        """Rolling disk retention for persisted worker-run JSONL files.
+
+        The in-memory state is refcount-purged, but the on-disk replay files
+        (``<data_dir>/worker_events/<run_id>.jsonl``) are never deleted — without
+        this, completed runs accumulate forever. Delete oldest-first until the
+        number of runs is within ``max_runs`` AND the total size is within
+        ``max_bytes``.
+
+        Safety: runs with live subscribers, runs still expecting/publishing
+        events, and files modified within ``grace_seconds`` are skipped so a
+        prune can never race an active writer. Best-effort; never raises.
+        """
+        max_runs = max(1, int(max_runs or WORKER_EVENTS_MAX_RUNS))
+        max_bytes = max(1, int(max_bytes or WORKER_EVENTS_MAX_BYTES))
+        if self._data_dir is None or not self._data_dir.exists():
+            return {"removed": 0, "runs": 0, "bytes": 0, "skipped": 0}
+
+        with self._lock:
+            active = set(self._expected)
+            active.update(self._subs.keys())
+            for run_id, buf in self._buffers.items():
+                if run_id not in self._closed:
+                    active.add(run_id)
+
+        now = time.time()
+        files: list[Path] = []
+        for path in self._data_dir.glob("*.jsonl"):
+            if not path.is_file():
+                continue
+            if path.stem in active:
+                continue
+            try:
+                if now - path.stat().st_mtime < grace_seconds:
+                    continue
+            except OSError:
+                continue
+            files.append(path)
+
+        try:
+            files.sort(key=lambda p: p.stat().st_mtime)  # oldest first
+        except OSError:
+            return {"removed": 0, "runs": 0, "bytes": 0, "skipped": 0}
+
+        count = len(files)
+        total_bytes = 0
+        sizes: dict[Path, int] = {}
+        for path in files:
+            try:
+                sizes[path] = path.stat().st_size
+                total_bytes += sizes[path]
+            except OSError:
+                continue
+
+        removed = 0
+        for path in files:
+            if count - removed <= max_runs and total_bytes <= max_bytes:
+                break
+            try:
+                path.unlink()
+                removed += 1
+                total_bytes -= sizes.get(path, 0)
+            except OSError:
+                continue
+        return {"removed": removed, "runs": count, "bytes": total_bytes, "skipped": 0}
 
     async def stream(self, run_id: str):
         """Async generator: replay persisted history, follow live, then terminate.

@@ -281,6 +281,27 @@ Agent 流式回覆期間，從佇列中任選一條消息點「插話」(↳)，
 
 ---
 
+## 日志与可观测性
+
+所有日志默认落盘到应用数据目录（macOS：`~/Library/Application Support/Coworker`，可用 `COWORKER_DATA_DIR` 覆盖）。
+
+| 文件 | 内容 | 治理 |
+| --- | --- | --- |
+| `app.log` + `app.log.N` | 运行时主日志（默认 JSON，逐行一条记录） | 按大小轮转（默认 10 MB × 5 份） |
+| `agent_trace.jsonl` | Agent 活动轨迹（事件/状态/上下文） | 滚动保留，默认最近 100 条（可在设置中调整） |
+| `tool_audit.jsonl` | 工具调用审计 | 滚动保留，默认最近 100 条（可在设置中调整） |
+| `command_approvals.json` | 命令审批记录 | 保留最近 100 条 + 保底 25 条 |
+| `worker_events/<run>.jsonl` | 子 Agent 运行流事件（可重放） | 保留最近 200 个运行 / 总大小 ≤ 100 MB |
+
+控制方式：
+
+- **环境变量**：`COWORKER_LOG_LEVEL`（级别）、`COWORKER_LOG_MAX_BYTES`、`COWORKER_LOG_BACKUP_COUNT`、`COWORKER_JSON_LOG`、`COWORKER_HTTP_LOG`（请求日志开关）、`COWORKER_WORKER_EVENTS_MAX_RUNS` / `COWORKER_WORKER_EVENTS_MAX_BYTES`。
+- **运行时 API**：`POST /settings/log-level`（切换级别并持久化）、`POST /settings/log-config`（级别/轮转/JSON/请求日志，立即生效并持久化）、`POST /settings/truncate-log`（清空或保留末尾 N 字节）、`GET /settings/log-file`（分页读取）。
+- **请求日志**：每条 HTTP 请求以 `coworker.http` 记录 method/path/status/耗时与 `request_id`；健康检查与日志读取端点自动跳过；查询串中的 token/key 等敏感参数会被打码。
+- **会话关联**：`app.log` 的 JSON 记录会自动带上 `session_id`（会话相关请求及 `/chat/stream` / `/chat/interject` 全程），可直接 `grep '"session_id":"<会话ID>"'` 拉出单个会话的运行时日志。
+
+---
+
 ## 技术栈
 
 | 层级 | 技术 |

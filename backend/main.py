@@ -2,6 +2,7 @@ import asyncio
 import atexit
 import json
 import os
+import re
 import time
 from pathlib import Path
 import shlex
@@ -14,7 +15,7 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 from dataclasses import replace
 
 import uvicorn
@@ -89,7 +90,7 @@ from coworker.web import (
 )
 from coworker.workspace import COMMAND_APPROVAL_FILENAME, MAX_TOOL_AUDIT_LINES, TOOL_AUDIT_FILENAME, CommandApprovalStore, list_tool_audit_events, trim_jsonl_file, workspace_git_branch, workspace_git_diff
 from coworker.workspace_controller import WorkspaceController
-from coworker.logger import get_logger, get_log_level, init_logger, set_log_level as _set_log_level, truncate_log as _truncate_log
+from coworker.logger import apply_log_config, current_session_id, get_logger, get_log_settings as _runtime_log_settings, init_logger, is_sensitive_key, redact, set_log_level as _set_log_level, truncate_log as _truncate_log
 
 # ---------------------------------------------------------------------------
 # HTTPS trust store fix for PyInstaller bundles.
@@ -123,9 +124,126 @@ try:
 except Exception:  # pragma: no cover - certifi is a hard dependency
     pass
 
+# ---------------------------------------------------------------------------
+# HTTP request logging.
+#
+# uvicorn.access is pinned to WARNING, so Starlette's per-request access lines
+# never land anywhere. This lightweight ASGI middleware restores request-level
+# observability (one INFO line per request: method/path/status/duration) with a
+# per-request id, while masking sensitive query params. Toggleable at runtime
+# via ``set_http_log`` / persisted settings (default on: ``COWORKER_HTTP_LOG``).
+# ---------------------------------------------------------------------------
+_HTTP_LOG_ENABLED = os.getenv("COWORKER_HTTP_LOG", "1").strip().lower() not in {"0", "false", "no", "off"}
+_HTTP_LOG_SKIP_PATHS = frozenset({"/health", "/settings/log-file", "/favicon.ico"})
+http_logger = get_logger("http")
+
+
+def _masked_query(query: str) -> str:
+    if not query:
+        return ""
+    try:
+        pairs = parse_qsl(query, keep_blank_values=True)
+    except Exception:  # noqa: BLE001 - never let a malformed query break logging
+        return query
+    parts: list[str] = []
+    for key, value in pairs:
+        if is_sensitive_key(key):
+            parts.append(f"{key}=***")
+        else:
+            parts.append(f"{key}={value}")
+    return "&".join(parts)
+
+
+def _request_session_id(path: str, query: str) -> str:
+    """Best-effort session id for a request, for log correlation.
+
+    Sources, in order: a ``session_id`` query/body param seen in the query string,
+    or the ``/sessions/{session_id}[/...]`` path segment. Empty when absent.
+    """
+    try:
+        for key, value in parse_qsl(query, keep_blank_values=True):
+            if key == "session_id" and value:
+                return value
+    except Exception:  # noqa: BLE001
+        pass
+    match = re.match(r"^/sessions/([^/]+)", path)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def set_http_log(enabled: bool) -> None:
+    """Flip request logging on/off at runtime (no restart required)."""
+    global _HTTP_LOG_ENABLED
+    _HTTP_LOG_ENABLED = bool(enabled)
+
+
+class HTTPRequestLogMiddleware:
+    """Pure-ASGI middleware: one INFO record per HTTP request.
+
+    Emits ``coworker.http`` lines with method, path (query masked), status,
+    duration_ms and a per-request request_id. A logging hiccup must never break
+    request handling, so the whole path is best-effort.
+    """
+
+    def __init__(self, app: Any):
+        self.app = app
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or not _HTTP_LOG_ENABLED:
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "?")
+        if path in _HTTP_LOG_SKIP_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        request_id = uuid.uuid4().hex[:12]
+        method = scope.get("method", "?")
+        raw_query = scope.get("query_string", b"")
+        if isinstance(raw_query, (bytes, bytearray)):
+            raw_query = raw_query.decode("latin-1", errors="replace")
+        masked_query = _masked_query(str(raw_query))
+        session_id = _request_session_id(path, str(raw_query))
+        # Correlate every app.log record emitted by this request with the session.
+        token = current_session_id.set(session_id) if session_id else None
+        started = time.perf_counter()
+        status: Any = "?"
+
+        async def send_wrapper(message: dict) -> None:
+            nonlocal status
+            if message.get("type") == "http.response.start":
+                status = message.get("status", status)
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            try:
+                suffix = f"?{masked_query}" if masked_query else ""
+                sid = f" session_id={session_id}" if session_id else ""
+                http_logger.info(
+                    "%s %s%s -> %s %.1fms request_id=%s%s",
+                    method, path, suffix, status, duration_ms, request_id, sid,
+                )
+            except Exception:  # noqa: BLE001 - logging must never break a request
+                pass
+            finally:
+                if token is not None:
+                    try:
+                        current_session_id.reset(token)
+                    except ValueError:
+                        # A nested handler bound a newer session id without
+                        # resetting (e.g. body-provided in /chat/stream); the
+                        # per-request task context is discarded anyway.
+                        pass
+
+
 settings = load_settings()
 logger = get_logger(__name__)
 app = FastAPI()
+app.add_middleware(HTTPRequestLogMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -212,6 +330,16 @@ atexit.register(mcp_sessions.shutdown)
 command_approval_store.prune()
 trim_jsonl_file(tool_audit_path, MAX_TOOL_AUDIT_LINES)
 trim_jsonl_file(settings.data_dir / AGENT_TRACE_FILENAME, MAX_TRACE_LINES)
+worker_event_bus.prune_disk()
+
+# Remove a legacy orphan log (frontend_stream.log) written by an old launcher
+# version — nothing in the current codebase references it, it only wastes disk.
+_legacy_orphan_log = settings.data_dir / "frontend_stream.log"
+if _legacy_orphan_log.exists():
+    try:
+        _legacy_orphan_log.unlink()
+    except OSError:
+        pass
 
 # ---- Checkpoint lifecycle maintenance ----------------------------------- #
 # The LangGraph runtime checkpoint DB grows unboundedly; a background sweep
@@ -230,6 +358,12 @@ async def _checkpoint_sweep_loop() -> None:
             logger.info("checkpoint sweep: %s", stats)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("checkpoint sweep failed: %s", exc)
+        try:
+            prune_stats = await asyncio.to_thread(worker_event_bus.prune_disk)
+            if prune_stats.get("removed"):
+                logger.info("worker event disk prune: %s", prune_stats)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("worker event disk prune failed: %s", exc)
 
 
 async def _snapshot_gc_loop() -> None:
@@ -269,6 +403,12 @@ async def _tracked_stream(stream_iter: Any, session_id: str):
 @app.on_event("startup")
 async def _startup_checkpoint_maintenance() -> None:
     global _checkpoint_sweep_task
+    # Apply persisted logging overrides (level/rotation/json/http) now that the
+    # whole module is loaded — init_logger() ran at import time with env defaults.
+    try:
+        apply_stored_log_settings()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("stored log settings apply failed: %s", exc)
     try:
         stats = await asyncio.to_thread(agent_registry.checkpoint_manager.sweep)
         logger.info("checkpoint sweep (startup): %s", stats)
@@ -1765,6 +1905,12 @@ async def chat_stream(request: ChatStreamRequest):
         session = session_store.create("", project_id=request.project_id or "", agent_id=agent)
         session_id = session.id
 
+    # Correlate this turn's app.log records with the session. The id arrives in
+    # the request body (the middleware can only see path/query), so bind it here.
+    # Per-request task context is discarded after the response, so no reset is
+    # needed; the middleware's reset is guarded against this nested set.
+    current_session_id.set(session_id)
+
     # A session may only have ONE in-flight stream writing its checkpoint; a
     # second concurrent /chat/stream (e.g. a misbehaving client or a double
     # submit) would race the graph's SQLite writes on the same thread_id.
@@ -2279,6 +2425,8 @@ async def interject(request: InterjectRequest):
     session_id = request.session_id
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
+    # Correlate this interject's app.log records with the session (body-provided).
+    current_session_id.set(session_id)
     try:
         session_store.require(session_id)
     except KeyError as exc:
@@ -2341,6 +2489,14 @@ class SettingsUpdate(BaseModel):
 
 class LogSettingsUpdate(BaseModel):
     log_level: str = "INFO"
+
+
+class LogConfigUpdate(BaseModel):
+    log_level: str | None = None
+    log_max_bytes: int | None = Field(default=None, ge=1_048_576, le=1_073_741_824)
+    log_backup_count: int | None = Field(default=None, ge=0, le=100)
+    json_log: bool | None = None
+    http_log: bool | None = None
 
 
 SETTING_FILE = str(settings.data_dir / ".coworker_settings.json")
@@ -2449,6 +2605,59 @@ def apply_stored_retention_settings() -> None:
     if stored:
         set_trace_retention(stored.get("trace_lines", 0))
         set_tool_audit_retention(stored.get("audit_lines", 0))
+
+
+# Logging settings are persisted under the "logging" key of .coworker_settings.json
+# (same pattern as memory/retention). Precedence at startup: explicit env var >
+# persisted value > product default. Runtime writes go through /settings/log-config
+# and /settings/log-level.
+LOG_SETTING_ENV = {
+    "log_level": "COWORKER_LOG_LEVEL",
+    "log_max_bytes": "COWORKER_LOG_MAX_BYTES",
+    "log_backup_count": "COWORKER_LOG_BACKUP_COUNT",
+    "json_log": "COWORKER_JSON_LOG",
+    "http_log": "COWORKER_HTTP_LOG",
+}
+
+
+def read_user_log_settings() -> dict:
+    """Read persisted logging overrides from .coworker_settings.json."""
+    data = _load_user_settings_file()
+    stored = data.get("logging")
+    if not isinstance(stored, dict):
+        return {}
+    return {k: v for k, v in stored.items() if k in LOG_SETTING_ENV and v is not None}
+
+
+def save_user_log_settings(settings: dict) -> None:
+    """Merge logging settings into .coworker_settings.json and apply at runtime."""
+    merged = {**read_user_log_settings(), **{k: v for k, v in settings.items() if v is not None}}
+    existing = _load_user_settings_file()
+    existing["logging"] = {k: v for k, v in merged.items() if k in LOG_SETTING_ENV}
+    _save_user_settings_file(existing)
+    _apply_user_log_settings(merged)
+
+
+def _apply_user_log_settings(stored: dict) -> None:
+    """Apply logging overrides to the running process (env vars always win)."""
+    level = stored.get("log_level") if "COWORKER_LOG_LEVEL" not in os.environ else None
+    max_bytes = stored.get("log_max_bytes") if "COWORKER_LOG_MAX_BYTES" not in os.environ else None
+    backup_count = stored.get("log_backup_count") if "COWORKER_LOG_BACKUP_COUNT" not in os.environ else None
+    json_log = stored.get("json_log") if "COWORKER_JSON_LOG" not in os.environ else None
+    apply_log_config(
+        level=level,
+        max_bytes=max_bytes,
+        backup_count=backup_count,
+        json_log=json_log,
+    )
+    http_log = stored.get("http_log")
+    if http_log is not None and "COWORKER_HTTP_LOG" not in os.environ:
+        set_http_log(bool(http_log))
+
+
+def apply_stored_log_settings() -> None:
+    """Apply persisted logging overrides at startup (after init_logger)."""
+    _apply_user_log_settings(read_user_log_settings())
 
 
 def apply_stored_memory_settings() -> None:
@@ -4063,19 +4272,16 @@ async def save_retention_settings(request: RetentionUpdate):
 
 @app.get("/settings/log")
 async def get_log_settings():
-    """Current logging configuration."""
-    return {
-        "log_level": get_log_level(),
-        "log_file": str(log_path),
-        "log_max_bytes": settings.log_max_bytes,
-        "log_backup_count": settings.log_backup_count,
-        "json_log": settings.json_log,
-    }
+    """Current logging configuration (runtime-effective + persisted)."""
+    effective = _runtime_log_settings()
+    effective["http_log"] = _HTTP_LOG_ENABLED
+    effective["persisted"] = read_user_log_settings()
+    return effective
 
 
 @app.post("/settings/log-level")
 async def set_log_level(request: LogSettingsUpdate):
-    """Change the log level at runtime. Returns current level after the change."""
+    """Change the log level at runtime (also persisted). Returns current level."""
     level = request.log_level.strip().upper()
     valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
     if level not in valid_levels:
@@ -4083,7 +4289,22 @@ async def set_log_level(request: LogSettingsUpdate):
     result = _set_log_level(level)
     if result != "ok":
         raise HTTPException(status_code=400, detail=result)
+    # Persist so the level survives a restart (unless overridden by env).
+    save_user_log_settings({"log_level": level})
     return {"status": "ok", "log_level": level}
+
+
+@app.post("/settings/log-config")
+async def set_log_config(request: LogConfigUpdate):
+    """Update logging config (level/rotation/json/http) at runtime and persist."""
+    fields = request.model_dump(exclude_unset=True)
+    level = fields.get("log_level")
+    if level is not None:
+        level = str(level).strip().upper()
+        if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise HTTPException(status_code=400, detail=f"Invalid log level: {level}. Must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL.")
+    save_user_log_settings(fields)
+    return {"status": "ok", **_runtime_log_settings(), "http_log": _HTTP_LOG_ENABLED}
 
 
 class TruncateLogRequest(BaseModel):

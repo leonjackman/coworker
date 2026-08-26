@@ -30,6 +30,7 @@ import os
 import sys
 import time
 import traceback
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,46 @@ _DEFAULT_MAX_BYTES = int(os.environ.get("COWORKER_LOG_MAX_BYTES", "10485760"))  
 _DEFAULT_BACKUP_COUNT = int(os.environ.get("COWORKER_LOG_BACKUP_COUNT", "5"))
 _DEFAULT_JSON_LOG = os.environ.get("COWORKER_JSON_LOG", "1").strip().lower() not in {"0", "false", "no", "off"}
 _DEFAULT_LOG_FILE_PREFIX = "app"
+
+# Per-request session correlation: when a request handler (or the HTTP logging
+# middleware) binds a session id here, every app.log record emitted while it is
+# set carries a ``session_id`` field — so a whole session's runtime logs can be
+# grepped out of app.log instead of aligned by timestamp. Async-local (ContextVar),
+# so it never leaks across concurrent requests; thread-pool workers inherit it
+# because asyncio copies the current context into spawned threads.
+current_session_id: ContextVar[str] = ContextVar("current_session_id", default="")
+
+# Keys whose values must never be logged in plaintext (structured fields, query
+# strings, contexts). Matching is substring-based on the lowercased key.
+_SENSITIVE_KEY_HINTS = frozenset((
+    "token", "access_token", "refresh_token", "api_key", "apikey",
+    "authorization", "auth", "secret", "password", "passwd", "pwd", "pat",
+    "credential", "bearer", "private_key", "session_key", "client_secret",
+    "cookie", "cookies", "pin",
+))
+
+
+def is_sensitive_key(key: Any) -> bool:
+    """True when a field name hints at a secret (substring match, case/sep-agnostic)."""
+    normalized = str(key).lower().replace("-", "_")
+    return any(hint in normalized for hint in _SENSITIVE_KEY_HINTS)
+
+
+def redact(value: Any) -> Any:
+    """Recursively replace the values of sensitive-looking keys with ``***``.
+
+    Non-sensitive values are returned untouched (dicts/lists are traversed so
+    secrets nested deeper are caught too). Used by ``JsonFormatter`` for
+    structured fields and by request logging for query strings.
+    """
+    if isinstance(value, dict):
+        return {
+            k: ("***" if is_sensitive_key(k) else redact(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [redact(v) for v in value]
+    return value
 
 
 class JsonFormatter(logging.Formatter):
@@ -80,12 +121,17 @@ class JsonFormatter(logging.Formatter):
             entry["message_id"] = record.message_id
         if hasattr(record, "session_id"):
             entry["session_id"] = record.session_id
+        elif current_session_id.get():
+            # No explicit extra on the record: fall back to the request-scoped
+            # session correlation (bound by handlers / the HTTP middleware).
+            entry["session_id"] = current_session_id.get()
         if hasattr(record, "tool_name"):
             entry["tool_name"] = record.tool_name
         if hasattr(record, "context"):
-            entry["context"] = record.context
+            entry["context"] = redact(record.context)
 
-        # Include any extra keys
+        # Include any extra keys (values on sensitive-looking keys are redacted
+        # so an accidental token/secret in an extra field never lands in plaintext)
         for key, value in record.__dict__.items():
             if key not in (
                 "name", "msg", "args", "created", "relativeCreated",
@@ -94,11 +140,43 @@ class JsonFormatter(logging.Formatter):
                 "message", "getMessage",
             ):
                 try:
-                    entry[key] = value
+                    # Key-aware masking: a sensitive extra key is redacted outright;
+                    # otherwise recurse so nested dicts/lists are redacted too.
+                    entry[key] = "***" if is_sensitive_key(key) else redact(value)
                 except Exception:  # noqa: BLE001
                     entry[key] = repr(value)
 
         return json.dumps(entry, ensure_ascii=False, default=str)
+
+
+class FilePlainFormatter(logging.Formatter):
+    """Plain-text file formatter used when ``json_log`` is off.
+
+    Unlike ``PlainFormatter`` (console, ANSI colours) this carries a timestamp
+    and logger name so the on-disk file stays greppable without colour codes.
+    """
+
+    def __init__(
+        self,
+        fmt: str | None = None,
+        datefmt: str | None = None,
+        style: str = "%",
+        *,
+        validate: bool = True,
+    ) -> None:
+        logging.Formatter.__init__(
+            self,
+            "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s",
+            "%Y-%m-%d %H:%M:%S",
+            "%",
+            False,
+        )
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = record.getMessage()
+        if record.exc_info and record.exc_info[0] is not None:
+            msg += "\n" + self.formatException(record.exc_info)
+        return f"{self.formatTime(record)} [{record.levelname:<8s}] {record.name}: {msg}"
 
 
 class PlainFormatter(logging.Formatter):
@@ -170,11 +248,19 @@ def _build_logger_config(
         "plain": {
             "class": f"{PlainFormatter.__module__}.{PlainFormatter.__name__}",
         },
+        "file_plain": {
+            "class": f"{FilePlainFormatter.__module__}.{FilePlainFormatter.__name__}",
+        },
     }
     if json_log:
         formatters["json"] = {
             "class": f"{JsonFormatter.__module__}.{JsonFormatter.__name__}",
         }
+    # File formatter: JSON when json_log=True, plain text otherwise. A missing
+    # "json" formatter reference would make dictConfig raise and silently fall
+    # back to basicConfig (console-only), killing file logging entirely — so the
+    # file handler must never point at a formatter that isn't registered.
+    file_formatter = "json" if json_log else "file_plain"
 
     # Console: always human-readable (coloured plain-text)
     # File: JSON only when json_log=True
@@ -187,7 +273,7 @@ def _build_logger_config(
         },
         "file": {
             "class": "logging.handlers.RotatingFileHandler",
-            "formatter": "json",
+            "formatter": file_formatter,
             "level": log_level,
             "filename": log_file,
             "maxBytes": log_max_bytes,
@@ -374,6 +460,66 @@ def set_log_level(level: str) -> str:
 def get_log_level() -> str:
     """Return the current effective runtime log level."""
     return _current_level
+
+
+def _file_handler() -> logging.handlers.RotatingFileHandler | None:
+    """Locate the configured ``RotatingFileHandler`` (on coworker or root)."""
+    for lg in (logging.getLogger("coworker"), logging.getLogger("")):
+        for h in lg.handlers:
+            if isinstance(h, logging.handlers.RotatingFileHandler):
+                return h
+    return None
+
+
+def _set_file_formatter(json_log: bool) -> None:
+    """Swap the file handler's formatter live (JSON <-> plain text)."""
+    handler = _file_handler()
+    if handler is None:
+        return
+    handler.setFormatter(JsonFormatter() if json_log else FilePlainFormatter())
+
+
+def apply_log_config(
+    *,
+    level: str | None = None,
+    max_bytes: int | None = None,
+    backup_count: int | None = None,
+    json_log: bool | None = None,
+) -> dict[str, Any]:
+    """Apply any subset of runtime log settings without a restart.
+
+    ``RotatingFileHandler.maxBytes/backupCount`` are plain attributes read on
+    each write, so rotation caps take effect immediately. Returns the effective
+    settings (see :func:`get_log_settings`).
+    """
+    global _current_level
+    if level:
+        _set_level(level)
+        _current_level = level.upper()
+    handler = _file_handler()
+    if handler is not None:
+        if max_bytes is not None:
+            handler.maxBytes = max(1024, int(max_bytes))
+        if backup_count is not None:
+            handler.backupCount = max(0, int(backup_count))
+    if json_log is not None:
+        _set_file_formatter(bool(json_log))
+    return get_log_settings()
+
+
+def get_log_settings() -> dict[str, Any]:
+    """Return the effective runtime logging configuration (mirrors /settings/log)."""
+    handler = _file_handler()
+    max_bytes = handler.maxBytes if handler is not None else _DEFAULT_MAX_BYTES
+    backup_count = handler.backupCount if handler is not None else _DEFAULT_BACKUP_COUNT
+    json_log = isinstance(handler.formatter, JsonFormatter) if handler is not None else _DEFAULT_JSON_LOG
+    return {
+        "log_level": _current_level,
+        "log_file": str(_log_file or _DEFAULT_LOG_FILE_PREFIX),
+        "log_max_bytes": max_bytes,
+        "log_backup_count": backup_count,
+        "json_log": json_log,
+    }
 
 
 def truncate_log(max_bytes: int = 0) -> dict[str, Any]:
