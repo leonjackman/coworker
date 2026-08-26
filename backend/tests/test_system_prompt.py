@@ -97,5 +97,9 @@ def test_build_project_context_md_carries_identity(tmp_path: Path):
     md = build_project_context_md(tmp_path)
     assert tmp_path.name in md  # project name
     assert str(tmp_path) in md  # root path
-    assert "backend/" in md
-    assert "frontend/" in md
+    # A static directory tree is deliberately NOT snapshotted (it goes stale as
+    # the repo evolves); the live layout comes from the per-request Workspace
+    # section instead. The template tells the agent to use live tool listing.
+    assert "backend/" not in md
+    assert "项目结构" not in md
+    assert "以当前实时结构为准" in md

@@ -151,85 +151,32 @@ def build_project_context_md(workspace_root: str | Path) -> str:
     """Generate the default ``CONTEXT.md`` body for a newly created project.
 
     Written into ``BASE/PROJECT/CONTEXT.md`` at project creation so the project
-    memory (which is injected to the agent) always carries the project's real
-    identity, root path and layout — the agent never has to guess what or where
-    the project is.
+    memory (which is injected to the agent) always carries the project's STABLE
+    identity (name + root path). The directory tree is deliberately NOT snapshotted
+    here — it changes continuously during development, so a static tree would go
+    stale. The live project layout is injected per-request via the ``## Workspace``
+    system-prompt section (see ``build_workspace_context``).
     """
     root = Path(workspace_root)
     name = root.name
-    lines = [
-        "# 项目背景与约束",
-        "",
-        "（由系统生成与维护 — 记录项目的高层级背景、约束与上下文）",
-        "",
-        "## 项目信息",
-        "",
-        f"- **项目名**: {name}",
-        f"- **项目根路径**: `{root}`",
-        "",
-        "## 项目结构",
-        "",
-        "以下为项目根目录的布局（前两层，已忽略 node_modules/.git 等）。所有工具路径均相对项目根。",
-        "",
-        "```",
-    ]
-    try:
-        tree_lines = _tree_lines(root, max_depth=2, max_entries=80)
-        if tree_lines:
-            lines.extend(tree_lines)
-        else:
-            lines.append("(空项目或无法读取)")
-    except Exception:  # noqa: BLE001 - best-effort
-        lines.append("(无法生成目录树)")
-    lines.append("```")
-    return "\n".join(lines)
-
-
-def _tree_lines(root: Path, max_depth: int, max_entries: int) -> list[str]:
-    """Bounded directory tree for the project context file."""
-    out: list[str] = []
-    count = 0
-
-    def walk(path: Path, depth: int, prefix: str) -> None:
-        nonlocal count
-        if depth > max_depth or count >= max_entries:
-            return
-        try:
-            children = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-        except OSError:
-            return
-        for child in children:
-            if _default_ignored(child.name):
-                continue
-            if count >= max_entries:
-                return
-            try:
-                is_dir = child.is_dir()
-            except OSError:
-                continue
-            out.append(f"{prefix}{child.name}/" if is_dir else f"{prefix}{child.name}")
-            count += 1
-            if is_dir:
-                walk(child, depth + 1, prefix + "  ")
-
-    try:
-        children = sorted(root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-    except OSError:
-        return out
-    for child in children:
-        if _default_ignored(child.name):
-            continue
-        if count >= max_entries:
-            break
-        try:
-            is_dir = child.is_dir()
-        except OSError:
-            continue
-        out.append(f"{child.name}/" if is_dir else child.name)
-        count += 1
-        if is_dir:
-            walk(child, 1, "  ")
-    return out
+    return "\n".join(
+        [
+            "# 项目背景与约束",
+            "",
+            "（由系统生成与维护 — 记录项目的高层级背景、约束与上下文）",
+            "",
+            "## 项目信息",
+            "",
+            f"- **项目名**: {name}",
+            f"- **项目根路径**: `{root}`",
+            "",
+            "## 开发提示",
+            "",
+            "- 项目目录结构会随开发持续变化，请以当前实时结构为准（用工具列出目录），"
+            "不要依赖本文件中的静态路径。",
+            "- 如需补充项目的技术栈、运行/测试指令、约定等稳定信息，请在此文件维护。",
+        ]
+    )
 
 
 def build_tool_context(tools: list[Any]) -> str:
