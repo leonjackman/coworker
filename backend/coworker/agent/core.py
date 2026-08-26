@@ -81,6 +81,16 @@ class SearchFilesArgs(BaseModel):
 
 class ReadFileArgs(BaseModel):
     file_path: str = Field(description="Workspace-relative UTF-8 text file path.")
+    offset: int = Field(
+        default=1,
+        description="Line number to start reading from (1-indexed). Use the 'next_offset' hint "
+        "returned by a truncated read to page through a large file.",
+    )
+    limit: int = Field(
+        default=200,
+        description="Maximum number of lines to read (defaults to 200). Reads are capped at a few "
+        "hundred lines so a large file never floods the context; page with offset to continue.",
+    )
 
 
 class WriteFileArgs(BaseModel):

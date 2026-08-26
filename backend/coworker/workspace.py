@@ -40,6 +40,11 @@ MAX_COMMAND_OUTPUT_CHARS = 12_000
 # single oversized file never floods the model context. Matches the spirit of
 # opencode's TOOL_OUTPUT_MAX_CHARS=2000 and run_command's MAX_COMMAND_OUTPUT_CHARS.
 READ_FILE_MAX_CHARS = 50_000
+# Truncated tool outputs are persisted here (workspace-relative) so the model can
+# be pointed at the full file instead of losing data to the char cap — opencode's
+# "truncate → save to disk → give the path" pattern. Hidden from normal browsing
+# and git (see the workspace .gitignore advice in the project README).
+TOOL_OUTPUT_DIR = ".coworker-tool-output"
 TOOL_AUDIT_FILENAME = "tool_audit.jsonl"
 COMMAND_APPROVAL_FILENAME = "command_approvals.json"
 
@@ -467,6 +472,29 @@ class Workspace:
             return
         self._persist_fingerprints()
 
+    def persist_truncated_output(self, name: str, content: str) -> str:
+        """Persist a truncated tool output to the workspace ``tool_output`` dir.
+
+        Returns a workspace-relative path the model can be pointed at (e.g.
+        ``.coworker-tool-output/run_<hash>.txt``). Mirror of opencode's
+        "truncate → save to disk → hand the path to the model" flow, so a large
+        command/fetch result is not lost when the char cap cuts it.
+        """
+        import hashlib
+
+        directory = self.root / TOOL_OUTPUT_DIR
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return ""
+        digest = hashlib.sha1(f"{name}:{len(content)}:{content[:256]}".encode("utf-8")).hexdigest()[:12]
+        rel = f"{TOOL_OUTPUT_DIR}/{name}_{digest}.txt"
+        try:
+            (self.root / rel).write_text(content or "", encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        return rel
+
     def _ensure_fresh(self, target: Path) -> None:
         """Reject edits to files that changed since the agent last read them.
 
@@ -791,6 +819,14 @@ class Workspace:
                 "stdout_truncated": len(stdout) > MAX_COMMAND_OUTPUT_CHARS,
                 "stderr_truncated": len(stderr) > MAX_COMMAND_OUTPUT_CHARS,
             }
+            if result["stdout_truncated"]:
+                saved = self.persist_truncated_output("run_stdout", stdout)
+                if saved:
+                    result["stdout"] += f"\n\n[stdout truncated; full output saved to: {saved}]"
+            if result["stderr_truncated"]:
+                saved = self.persist_truncated_output("run_stderr", stderr)
+                if saved:
+                    result["stderr"] += f"\n\n[stderr truncated; full output saved to: {saved}]"
             self.audit_tool_action(
                 "run_command",
                 "success",
@@ -1155,7 +1191,15 @@ class Workspace:
             return True
         return False
 
-    def read_preview(self, file_path: str, max_chars: int = 100_000) -> dict[str, Any]:
+    def read_preview(self, file_path: str, max_chars: int = 100_000, offset: int = 1, limit: int = 0) -> dict[str, Any]:
+        """Read a text file preview, optionally paged by line.
+
+        ``offset`` is 1-indexed (start line). ``limit`` caps the number of lines
+        (0 = unlimited, up to ``max_chars``). Returns the content, total line
+        count, and ``next_offset`` (line to start the next page at, or 0 when
+        the file is fully read) so large files can be paged without flooding
+        the model context.
+        """
         target = self.resolve_read_path(file_path)
         if not target.is_file():
             raise ValueError(f"Not a file: {file_path}")
@@ -1163,10 +1207,43 @@ class Workspace:
             return {"content": None, "binary": True, "size": target.stat().st_size}
         content = target.read_text(encoding="utf-8", errors="replace")
         self._record_fingerprint(target)
-        truncated = len(content) > max_chars
-        if truncated:
-            content = content[:max_chars]
-        return {"content": content, "binary": False, "size": target.stat().st_size, "truncated": truncated}
+        total_lines = content.count("\n") + (0 if content.endswith("\n") else 1) if content else 0
+        offset = max(1, int(offset or 1))
+        lines = content.splitlines()
+        if offset > 1:
+            lines = lines[offset - 1 :]
+        truncated = False
+        if limit and limit > 0 and len(lines) > limit:
+            lines = lines[:limit]
+            truncated = True
+        paged = "\n".join(lines)
+        char_truncated = len(paged) > max_chars
+        if char_truncated:
+            paged = paged[:max_chars]
+            truncated = True
+        shown_start = offset
+        shown_end = offset + len(lines) - 1
+        next_offset = shown_end + 1 if truncated and shown_end < total_lines else 0
+        return {
+            "content": paged,
+            "binary": False,
+            "size": target.stat().st_size,
+            "truncated": truncated,
+            "total_lines": total_lines,
+            "offset": shown_start,
+            "end_line": shown_end,
+            "next_offset": next_offset,
+            "hint": (
+                f"(Showing lines {shown_start}-{shown_end} of {total_lines}. "
+                f"Use offset={next_offset} to continue reading.)"
+                if truncated and next_offset
+                else (
+                    f"(Showing lines {shown_start}-{shown_end} of {total_lines})"
+                    if total_lines > 0
+                    else "(Empty file)"
+                )
+            ),
+        }
 
     def search_text(
         self,

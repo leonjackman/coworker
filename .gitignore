@@ -59,6 +59,9 @@ pyinstaller_cache/
 # Project-level long-term memory (app data, per-project)
 .coworker/
 
+# Truncated tool-output dumps (run_command/fetch over the char cap)
+.coworker-tool-output/
+
 # User runtime settings (persisted by the app; per-machine, must not ship)
 .coworker_settings.json
 

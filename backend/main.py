@@ -1895,11 +1895,16 @@ async def chat_stream(request: ChatStreamRequest):
     if request.session_id:
         try:
             session = session_store.require(request.session_id)
-            history = [
-                {"role": m.role, "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes) if m.role == "user" else m.content}
-                for m in session.messages
-                if m.role in {"user", "assistant"} and m.content
-            ]
+            for m in session.messages:
+                if m.role == "user" and m.content:
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes),
+                        }
+                    )
+                elif m.role == "assistant" and (m.content or getattr(m, "parts", None)):
+                    history.extend(_parts_to_conversation(m))
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     else:
@@ -2075,11 +2080,18 @@ async def chat_stream(request: ChatStreamRequest):
                 session = session_store.require(session_id)
             except KeyError:
                 return []
-            return [
-                {"role": m.role, "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes) if m.role == "user" else m.content}
-                for m in session.messages
-                if m.role in {"user", "assistant"} and m.content
-            ]
+            history: list[dict[str, Any]] = []
+            for m in session.messages:
+                if m.role == "user" and m.content:
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes),
+                        }
+                    )
+                elif m.role == "assistant" and (m.content or getattr(m, "parts", None)):
+                    history.extend(_parts_to_conversation(m))
+            return history
 
         def _goal_injection(goal) -> str | None:
             """该续跑轮要注入的 system 首位内容（内部指令，不落库），或 None。"""
@@ -3245,6 +3257,87 @@ def _resolve_run_provider(session, provider_id: str, model: str) -> tuple[str, s
     return "", ""
 
 
+def _parts_to_conversation(message) -> list[dict[str, Any]]:
+    """Reconstruct an assistant turn's full tool-call conversation from its
+    stored ``parts``.
+
+    A persisted assistant message stores the turn's interleaved text and tool
+    results as ``parts`` (``{"type":"text","content"}`` and
+    ``{"type":"tool","id","name","input","output","status"}``). Replaying only
+    ``message.content`` would collapse every tool round into bare chatter, which
+    invites the model to imitate that on continuation rounds (the observed
+    "degraded / spinning" failure mode). Rebuild the standard
+    ``assistant(tool_calls) → tool(result)`` pairs instead, mirroring codex
+    (``reconstruct_history_from_rollout`` keeps response roles intact) and
+    opencode (``toModelMessagesEffect`` preserves tool parts).
+    """
+    parts = getattr(message, "parts", None) or []
+    if not parts:
+        # No structured parts — fall back to the plain content.
+        return [{"role": "assistant", "content": message.content or ""}]
+
+    import json as _json
+
+    out: list[dict[str, Any]] = []
+    text_buf: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        nonlocal text_buf, tool_calls
+        if tool_calls:
+            # Narration + tool calls belong to ONE assistant message (the
+            # standard LangChain/OpenAI shape): content carries the text, and
+            # tool_calls carry the parallel tool invocations.
+            content = "\n".join(text_buf) if text_buf else None
+            out.append(
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": [dict(tc) for tc in tool_calls],
+                }
+            )
+            for tc in tool_calls:
+                out.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": str(tc.get("result") or ""),
+                    }
+                )
+            text_buf = []
+            tool_calls = []
+            return
+        if text_buf:
+            out.append({"role": "assistant", "content": "\n".join(text_buf)})
+            text_buf = []
+
+    for part in parts:
+        ptype = part.get("type")
+        if ptype == "text":
+            content = part.get("content") or ""
+            if tool_calls:
+                # Text interleaved after a tool call: close the current batch,
+                # then buffer the narration for the next assistant turn.
+                flush()
+            text_buf.append(str(content))
+        elif ptype == "tool":
+            args = part.get("input")
+            try:
+                args_str = args if isinstance(args, str) else _json.dumps(args, ensure_ascii=False)
+            except Exception:  # noqa: BLE001 - best-effort serialization
+                args_str = str(args)
+            tool_calls.append(
+                {
+                    "id": part.get("id") or f"tool-{len(out)}",
+                    "type": "function",
+                    "function": {"name": part.get("name") or "", "arguments": args_str},
+                    "result": part.get("output") or part.get("result") or "",
+                }
+            )
+    flush()
+    return out or [{"role": "assistant", "content": message.content or ""}]
+
+
 def _session_message_history(session) -> list[dict[str, Any]]:
     """Build the message history (role/content) that should be replayed when
     re-running the agent from a truncated point."""
@@ -3255,7 +3348,7 @@ def _session_message_history(session) -> list[dict[str, Any]]:
         if message.role == "user":
             history.append({"role": "user", "content": format_user_message(message.content, message.attachments, message.references)})
         else:
-            history.append({"role": "assistant", "content": message.content})
+            history.extend(_parts_to_conversation(message))
     return history
 
 

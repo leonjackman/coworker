@@ -134,11 +134,18 @@ def build_workspace_tools(
             return _error_result(exc, "search_files")
 
     @tool(args_schema=ReadFileArgs)
-    def read_file(file_path: str) -> str:
+    def read_file(file_path: str, offset: int = 1, limit: int = 200) -> str:
         """Read a text file from the workspace (binary files return a hint; large
-        text files are truncated)."""
+        files are read as a bounded line window so a single call never floods the
+        model context). Use the returned ``next_offset``/``hint`` to page further
+        into a large file instead of dumping the whole thing at once."""
         try:
-            preview = workspace.read_preview(file_path, max_chars=READ_FILE_MAX_CHARS)
+            preview = workspace.read_preview(
+                file_path,
+                max_chars=READ_FILE_MAX_CHARS,
+                offset=offset,
+                limit=limit,
+            )
             if preview.get("binary"):
                 return json.dumps(
                     {
