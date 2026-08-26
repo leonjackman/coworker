@@ -125,14 +125,7 @@ MODEL_CONTEXT_TABLE: list[tuple[str, int]] = [
     ("llama3.1", 128_000),
     ("llama3", 8_192),
     # ---- Qwen (specific variants before broad prefixes) --------------------
-    ("qwen3.8", 262_144),
-    ("qwen3.6", 262_144),
-    ("qwen3.5", 262_144),
-    ("qwen3:4b", 262_144),
-    ("qwen3:30b", 262_144),
-    ("qwen3:235b", 262_144),
-    ("qwen3:32b", 262_144),
-    ("qwen3", 40_960),
+    ("qwen3", 262_144),
     ("qwen2.5-coder", 131_072),
     ("qwen2.5", 131_072),
     ("qwen2", 131_072),
@@ -550,12 +543,6 @@ class ProviderManager:
         failed (``error``) so the UI can tell the user their local server is
         unreachable instead of silently falling back."""
         model = (model or provider.model or "").strip()
-        # For known cloud models with pre-configured context windows, skip
-        # discovery entirely since the table value is authoritative and
-        # remote endpoints rarely expose context window info.
-        from_table = ProviderManager.table_context_window(model)
-        if from_table and not ProviderManager._is_local(provider):
-            return from_table, "table", None
         # Probe the server (cached, 60s TTL) so a stale or over-sized
         # stored window can never exceed the server's real max_model_len —
         # oversized prompts make some servers (e.g. vLLM) hang silently instead
@@ -566,6 +553,8 @@ class ProviderManager:
             discovered, discovered_error = ProviderManager._discover_context_window_cached(provider, model)
         except Exception:  # noqa: BLE001 - discovery is best-effort
             discovered, discovered_error = 0, None
+        # User-provided context window always takes priority over table values.
+        from_table = ProviderManager.table_context_window(model)
         if provider.context_window and provider.context_window > 0:
             effective = provider.context_window
             note: str | None = None
@@ -576,11 +565,6 @@ class ProviderManager:
                         f"服务端实际 max_model_len={discovered}，上下文窗口已按 {discovered} 计算"
                     )
             elif ProviderManager._is_local(provider) and discovered_error:
-                # A local server with a user-configured window failed the probe:
-                # surface the reason so the UI (composer warning / provider card)
-                # agrees with the chat fast-fail guard instead of silently falling
-                # through. Non-local providers keep a silent fallback — a probe
-                # failure there does not imply chat is down.
                 note = discovered_error
             elif effective > _UNVERIFIED_CONTEXT_WINDOW_WARN and not from_table:
                 note = (

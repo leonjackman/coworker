@@ -1797,6 +1797,12 @@ function App() {
           pendingTerminalGoal = g;
         } else {
           setSessionGoal(event.session_id ?? requestSessionId, event.goal);
+          // 非流式场景（例如 /goal 命令）下 goal 已完成：展示「已完成」片刻后自动关闭 GoalCard。
+          if (g && g.status === 'complete') {
+            window.setTimeout(() => {
+              setSessionGoal(event.session_id ?? requestSessionId, null);
+            }, 2500);
+          }
         }
         markLocalGoalStream();
       } else if (event.type === 'goal_cleared') {
