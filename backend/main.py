@@ -2246,6 +2246,22 @@ async def chat_stream(request: ChatStreamRequest):
                         except Exception:  # noqa: BLE001 - never break the stream
                             logger.debug("degenerate check failed for %s", session_id, exc_info=True)
 
+                    # ---- 空转停止（防空转退化）----
+                    # goal 模式每轮都会无条件续跑，但若模型本轮**没有执行任何实质
+                    # 工具**（只输出纯文字回答），说明它要么认为任务已完成、要么在
+                    # 空转（qwen3 碎片文字「Done. Key improvements…」即此模式）。此时
+                    # 继续续跑只会无限重复、撑爆上下文，最终 recursion error。
+                    # 保护合法的「每轮修 1 个 bug」多轮任务：那些轮都有 replace/write
+                    # 等实质工具执行（parts 含 tool），不受影响。
+                    if session_store.get_goal(session_id) is not None:
+                        try:
+                            _sess = session_store.require(session_id)
+                            if not _goal_round_has_tool_execution(_sess):
+                                # 本轮纯文字、无工具执行 → 视为完成/空转，停止续跑。
+                                break
+                        except Exception:  # noqa: BLE001 - never break the stream
+                            logger.debug("idle-stop check failed for %s", session_id, exc_info=True)
+
                     # ---- continue decision ----
                     goal = session_store.get_goal(session_id)
                     if goal is None:
@@ -3336,6 +3352,27 @@ def _parts_to_conversation(message) -> list[dict[str, Any]]:
             )
     flush()
     return out or [{"role": "assistant", "content": message.content or ""}]
+
+
+def _goal_round_has_tool_execution(session) -> bool:
+    """Whether the latest assistant turn actually executed any tool.
+
+    goal 续跑只有在模型本轮执行了实质工具（parts 含 ``tool``，如
+    read/write/replace/run/search）时才继续；纯文字回答（碎片空转、或模型认为
+    任务已完成的总结）没有可推进的事项，应停止续跑，避免 goal 无限续跑退化。
+    ``write_todos`` / ``update_goal`` 不产生 tool part（前者由 TodoListMiddleware
+    单独处理），所以「只整理列表」的轮同样被视为无实质进展。
+    """
+    try:
+        if not session or not getattr(session, "messages", None):
+            return False
+        last = session.messages[-1]
+        if getattr(last, "role", "") != "assistant":
+            return False
+        parts = getattr(last, "parts", None) or []
+        return any(isinstance(p, dict) and p.get("type") == "tool" for p in parts)
+    except Exception:  # noqa: BLE001 - best-effort, never break the stream
+        return False
 
 
 def _session_message_history(session) -> list[dict[str, Any]]:
