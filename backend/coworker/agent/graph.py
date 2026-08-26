@@ -894,15 +894,14 @@ def build_coworker_agent_graph(
     )
     middleware.append(context_guard)
 
-    system_prompt = (
-        "You are Coworker, a local coding assistant. "
-        "Reply in the same language as the user's message. "
-        "Use workspace tools only when they are needed and keep answers concise. "
-        "If a tool call fails, do NOT re-run the exact same call; analyze the error and "
-        "change approach (narrow the scope, pick a different tool) or summarize and answer directly. "
-        "When you delegate independent research/analysis to sub-agent workers, run them in PARALLEL: "
-        "for 2+ independent tasks call use_workers with all tasks at once (or issue multiple use_worker "
-        "calls in the same response) instead of calling one at a time and waiting."
+    from .system_prompt import build_cw_system_prompt
+
+    system_prompt = build_cw_system_prompt(
+        tools=tools,
+        workspace=workspace,
+        work_mode=work_mode,
+        language=language,
+        include_workspace=True,
     )
 
     kwargs: dict[str, Any] = {

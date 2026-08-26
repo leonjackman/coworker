@@ -57,12 +57,16 @@ class MemoryRegistry:
     def project_dir(self, memory_dir: str) -> Path:
         return self.root / memory_dir
 
-    def ensure_project(self, memory_dir: str) -> Path:
+    def ensure_project(self, memory_dir: str, workspace_root: str | Path | None = None) -> Path:
         """Create the project dir with ``BASE/`` (template only) + ``BASE/PROJECT/``.
 
         Also converges legacy lowercase system files from earlier layouts:
         empty skeleton files are removed, and user-edited files are either kept
         (BASE) or renamed to the current ALL-CAPS name (PROJECT).
+
+        When ``workspace_root`` is given, ``BASE/PROJECT/CONTEXT.md`` is seeded
+        with the project's real identity (root path + layout tree) so the project
+        memory injected to the agent always knows what/where the project is.
         """
         with self._lock:
             project_dir = self.project_dir(memory_dir)
@@ -82,7 +86,32 @@ class MemoryRegistry:
                 path = project_subdir / name
                 if not path.exists():
                     _write_skeleton(path, content)
+            if workspace_root is not None:
+                self._seed_project_context(project_subdir, workspace_root)
         return project_dir
+
+    def _seed_project_context(self, project_subdir: Path, workspace_root: str | Path) -> None:
+        """Write a default CONTEXT.md carrying the project's real identity.
+
+        Only fills when CONTEXT.md is still the empty skeleton (never clobbers
+        user/system-maintained content).
+        """
+        ctx_path = project_subdir / "CONTEXT.md"
+        try:
+            existing = ctx_path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return
+        skeleton = (PROJECT_SKELETON.get("CONTEXT.md") or "").strip()
+        if existing not in ("", skeleton):
+            # Already customised — never clobber.
+            return
+        try:
+            from ..agent.system_prompt import build_project_context_md
+
+            body = build_project_context_md(Path(workspace_root))
+            _write_skeleton(ctx_path, body)
+        except Exception:  # noqa: BLE001 - seeding is best-effort
+            logger.warning("project CONTEXT.md seeding failed for %s", workspace_root, exc_info=True)
 
     # -- agent --------------------------------------------------------------
 

@@ -4107,7 +4107,7 @@ async def create_project(request: ProjectCreateRequest):
         memory_dir = _unique_memory_dir(datetime.now(timezone.utc).isoformat(), request.mode)
         project = project_store.create(request.name, workspace_path, memory_dir=memory_dir)
         try:
-            memory_manager.registry.ensure_project(project.memory_dir)
+            memory_manager.registry.ensure_project(project.memory_dir, workspace_root=workspace_path)
             _ensure_org(project.memory_dir, request.mode)
             memory_manager.registry.ensure_agent(memory_manager.root / project.memory_dir, DEFAULT_AGENT)
         except Exception:  # noqa: BLE001 - memory scaffold must not block project creation

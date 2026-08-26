@@ -59,6 +59,7 @@ from .core import (
 )
 from .model_defaults import ReasonPreservingChatOpenAI, openai_compatible_base_url
 from .prompts import phase_system_prompt
+from .system_prompt import build_tool_context, build_workspace_context
 
 logger = get_logger(__name__)
 
@@ -1334,9 +1335,33 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 setattr(self.workspace, "_current_phase", phase)
             except Exception:  # noqa: BLE001 - phase tracking must never gate tools
                 pass
-        prompt = phase_system_prompt(language, phase, autonomy)
+        # Base behaviour prompt (graph-level, set via create_agent's system_prompt)
+        # is preserved and prepended; the phase prompt refines it for this phase.
+        base = ""
+        try:
+            base_sys = getattr(request, "system_message", None)
+            if base_sys is not None:
+                base = str(getattr(base_sys, "text", "") or "")
+        except Exception:  # noqa: BLE001 - never break on a missing base prompt
+            base = ""
+        prompt = base
+        phase_block = phase_system_prompt(language, phase, autonomy)
+        if prompt:
+            prompt = f"{prompt}\n\n{phase_block}"
+        else:
+            prompt = phase_block
         if self.capabilities:
             prompt = f"{prompt}\n\n{self.capabilities}"
+        # Workspace layout + the phase-filtered tool catalogue ride along so the
+        # model always knows the real project layout and exactly which tools it
+        # can call (never guesses paths or hallucinates tools).
+        if self.workspace is not None:
+            ws_ctx = build_workspace_context(self.workspace)
+            if ws_ctx:
+                prompt = f"{prompt}\n\n{ws_ctx}"
+        tool_ctx = build_tool_context(tools)
+        if tool_ctx:
+            prompt = f"{prompt}\n\n{tool_ctx}"
         return {
             "tools": tools,
             "system_message": SystemMessage(prompt),
