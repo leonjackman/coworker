@@ -37,6 +37,12 @@ BASE_DIR = "BASE"
 PROJECT_SUBDIR = "PROJECT"
 SESSIONS_DIR = "SESSIONS"
 
+# SINGLE SOURCE of truth for the default single-agent id (the agent folder name
+# under a project). Re-exported by memory_discovery / memory_manager (as
+# DEFAULT_AGENT) and the agent core (DEFAULT_AGENT_NAME) — never redefine the
+# literal elsewhere.
+DEFAULT_AGENT_NAME = "default_agent"
+
 # Agent-level subdirectory holding the core files.
 AGENT_BASE_DIR = BASE_DIR
 

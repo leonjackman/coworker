@@ -399,6 +399,22 @@
 
 **驗證**：`tests/` pytest **240 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `tsc` **0 錯誤**。
 
+### 2026-08-27 — 變量衡量/定義/引用審計（重複定義、多處定義、語意不一 → 唯一真源）
+
+**審計**：掃描 13 區改動引入/觸及的常數與符號——檢查重複定義、多處定義（同值不同源）、重複/錯誤/缺少引用、語意混亂。逐項收斂為**唯一真源**並補全引用。
+
+**修復**：
+1. **`DEFAULT_AGENT` / `DEFAULT_AGENT_NAME` 三處定義**（memory_manager / memory_discovery / agent.core 各寫 `"default_agent"`）→ 唯一真源移至 `memory/layout.py`（agent 資料夾名的佈局常數）；memory_discovery/memory_manager（alias `DEFAULT_AGENT`）與 runtime 直接引用；core 移除重複定義（避免 re-export 未用）。
+2. **命令 timeout 三處定義**（workspace.py `DEFAULT/MAX_COMMAND_TIMEOUT_SECONDS` vs core.py `RunCommandArgs Field(default=60, le=300)` vs graph.py run_command 預設 60）→ 唯一真源在 workspace.py（執行器強制 `safe_timeout`）；core.py `Field(default=DEFAULT_COMMAND_TIMEOUT_SECONDS, le=MAX_COMMAND_TIMEOUT_SECONDS)`、graph.py 預設皆引用之（不再魔數）。
+3. **`loop_reason` 值集散落 3 處字串**（loop_guard/runtime/core 註解）→ 集中為 core.py `LOOP_REASON_*` 常數；loop_guard（repeated/degenerate）、runtime（overflow/hitl/final）引用；前端 types.ts union 同步（值集一致）。
+4. **標題規則重複定義**（sessions `_title_from_message` 簡單截斷 vs prompts `_default_title_from_message` N4 規則，行為不一）→ 唯一真源 = prompts 的 N4 規則；sessions 的 `_default_title_from_message` 改為委託（auto-title 與 `/sessions` 端點標題一致）。
+5. **前端 `CHARS_PER_TOKEN=3.5` vs 後端 `LATIN_CHARS_PER_TOKEN=3.8`**（語意不一）→ 前端改 3.8（chars fallback 與後端估算一致）。
+6. **`MAX_TREE_ENTRIES`(總量) vs `MAX_DIR_ENTRIES`(單目錄兄弟)** 語意混淆 → 註解明確兩者不同。
+
+**核對無問題**：`SUMMARY_*`/`TOOL_OUTPUT_*`/`SYSTEM_FIXED_BUDGET_TOKENS`/`MAX_TOOL_DESCRIPTION_CHARS`/`MAX_STEPS_PROMPT`/`RUNTIME_CACHE_MAX`/`MAX_IMAGES_PER_PROMPT`/`SKILL_BODY_MAX_CHARS`/`SKILLS_CATALOG_MAX_TOKENS` 皆單一定義+正確引用；`context_usage`/`done.compaction`/`loop_reason` 前端型別與後端 shape 一致。
+
+**驗證**：`tests/` pytest **240 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `tsc` **0 錯誤**。`pyflakes` 乾淨。
+
 ---
 
 ## 追蹤約定
@@ -423,3 +439,4 @@
 | 2026-08-27 | 完整驗收：45 項逐項核對通過；根治 2 項既有 selftest 失敗（_cap_summary off-by-one、telemetry 錯誤預期）；append_message 冪等化 |
 | 2026-08-27 | 前端↔後端合約審計：tool_end 顯示/持久化拆分（output/output_full）、done 型別同步、context_usage budget_chars 修正 |
 | 2026-08-27 | 上游/主次關係連路審計：修復 delegation turn_index 斷裂、steer/delegation buffer 跨輪洩漏、P2-B 增量緩衝強化 |
+| 2026-08-27 | 變量衡量/定義/引用審計：DEFAULT_AGENT·timeout·loop_reason·標題規則 收斂唯一真源；前端 CHARS_PER_TOKEN 對齊 3.8 |

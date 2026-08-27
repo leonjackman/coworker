@@ -20,13 +20,15 @@ from typing import Any
 # repos. opencode caps the skill list at ~18k chars; we cap the workspace tree
 # harder because it is a fixed preamble, not a per-skill on-demand read.
 MAX_TREE_DEPTH = 3
-# Bounded workspace tree (P3): the layout is a hint, not a snapshot — the model
-# is told to list directories before reading. Keep it small so a huge repo
-# cannot make the resident tree a context bomb.
+# Bounded workspace tree (P3): TOTAL entries across the whole rendered tree.
+# The layout is a hint, not a snapshot — the model is told to list directories
+# before reading. Keep it small so a huge repo cannot make the resident tree a
+# context bomb.
 MAX_TREE_ENTRIES = 60
 MAX_TREE_CHARS = 4_000
-# Cap the number of sibling entries shown per directory (else a 10k-file flat
-# repo floods the tree).
+# SIBLING cap (per directory, distinct from the total MAX_TREE_ENTRIES): limits
+# the entries shown under ONE directory, else a 10k-file flat repo floods the
+# tree even when the total-entry cap is small.
 MAX_DIR_ENTRIES = 60
 
 _IGNORED_TOP_LEVEL = {

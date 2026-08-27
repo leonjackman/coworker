@@ -27,6 +27,7 @@ from ..context import CalibrationStore
 from ..events import session_event_bus, worker_event_bus
 from ..logger import get_logger
 from ..mcp.mcp import McpManager
+from ..memory.layout import DEFAULT_AGENT_NAME
 from ..project_snapshot import ProjectSnapshotManager
 from ..providers import ProviderEntry, ProviderManager
 from ..sessions import SessionStore
@@ -39,7 +40,9 @@ from ..workspace import (
     fingerprint_path_for,
 )
 from .core import (
-    DEFAULT_AGENT_NAME,
+    LOOP_REASON_FINAL,
+    LOOP_REASON_HITL,
+    LOOP_REASON_OVERFLOW,
     AgentMode,
     AgentStreamRuntime,
     Autonomy,
@@ -739,7 +742,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         "error_code": "context_overflow",
                         "measured_tokens": exc.measured_tokens,
                         "limit_tokens": exc.limit_tokens,
-                        "loop_reason": "overflow",
+                        "loop_reason": LOOP_REASON_OVERFLOW,
                     }
                     return
                 except Exception as exc:
@@ -803,7 +806,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage, "loop_reason": loop_reason or "final", "compaction": {"summary": compact_summary, "count": compact_count, "fingerprints": compact_fingerprints, "failed": compact_failed}}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage, "loop_reason": loop_reason or LOOP_REASON_FINAL, "compaction": {"summary": compact_summary, "count": compact_count, "fingerprints": compact_fingerprints, "failed": compact_failed}}
 
     def _compiled_graph(
         self,
@@ -998,7 +1001,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     "provider": self.provider_name,
                     "model": self.model_name,
                     "parts": [],
-                    "loop_reason": "hitl",
+                    "loop_reason": LOOP_REASON_HITL,
                 }
                 return
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
@@ -1063,7 +1066,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts)), "loop_reason": "hitl"}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts)), "loop_reason": LOOP_REASON_HITL}
         return
 
 

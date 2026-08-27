@@ -24,6 +24,7 @@ from .layout import (
     AGENT_BASE_DIR,
     AGENT_CORE_FILES,
     BASE_DIR,
+    DEFAULT_AGENT_NAME,
     PROJECT_SUBDIR,
     SESSIONS_DIR,
     SYSTEM_FILES,
@@ -142,8 +143,8 @@ TEAM_FILES = ("GOALS.md", "CONTEXT.md", "MEMORY.md")
 
 # The single-mode project has exactly one agent under this name; when a project
 # is scanned as ``mode="single"`` the scanner only surfaces this agent and
-# never scans team containers.
-DEFAULT_AGENT_NAME = "default_agent"
+# never scans team containers. (DEFAULT_AGENT_NAME imported from layout.py — the
+# single source of truth for the default agent id.)
 
 
 @dataclass(frozen=True)

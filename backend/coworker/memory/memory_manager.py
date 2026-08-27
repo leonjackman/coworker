@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .layout import MEMORY_ROOT_NAME
+from .layout import DEFAULT_AGENT_NAME, MEMORY_ROOT_NAME
 from .memory_discovery import MemoryScanner
 from .memory_store import MemoryStore
 from .registry import MemoryRegistry
@@ -26,7 +26,8 @@ from .registry import MemoryRegistry
 from coworker.logger import get_logger
 logger = get_logger(__name__)
 
-DEFAULT_AGENT = "default_agent"
+# Alias for the default single-agent id — canonical value lives in layout.py.
+DEFAULT_AGENT = DEFAULT_AGENT_NAME
 
 
 def _transcript_fingerprint(messages: list[dict[str, Any]] | None) -> str:

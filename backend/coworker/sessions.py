@@ -16,11 +16,17 @@ def _now_epoch_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-def _title_from_message(message: str) -> str:
-    cleaned = " ".join(message.split())
-    if not cleaned:
-        return "新会话"
-    return cleaned[:20] + ("…" if len(cleaned) > 20 else "")
+def _default_title_from_message(message: str) -> str:
+    """SINGLE SOURCE of truth for rule-based session titles.
+
+    Canonical implementation lives in ``coworker.agent.prompts`` (the N4 rule:
+    strips framing, cuts at a sentence boundary / ~20 chars). Imported here so
+    the auto-title path and the ``/sessions`` title endpoint produce identical
+    titles — never redefine the rule in two places.
+    """
+    from .agent.prompts import _default_title_from_message as _rule
+
+    return _rule(message)
 
 
 @dataclass
@@ -483,7 +489,7 @@ class SessionStore:
             )
         )
         if role == "user" and session.title == "新会话":
-            session.title = _title_from_message(content)
+            session.title = _default_title_from_message(content)
             session.title_auto = True
         self.save(session)
         return session

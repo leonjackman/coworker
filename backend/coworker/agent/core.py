@@ -33,6 +33,9 @@ from pydantic import BaseModel, Field
 
 from .types import AgentMode, Autonomy, Language, Phase, VALID_LANGUAGES, WorkMode
 
+# SINGLE SOURCE of truth for command timeouts (the executor owns them).
+from ..workspace import DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_TIMEOUT_SECONDS
+
 
 MAX_ATTACHMENT_CHARS = 120_000
 MAX_REFERENCE_SESSION_CHARS = 60_000
@@ -74,12 +77,21 @@ class CoworkerAgentState(AgentState[Any]):
     # loop guard survives middleware rebuilds across turns (the middleware is
     # rebuilt every turn; a per-instance set would reset the guard each turn).
     context_summarized_fingerprints: NotRequired[list[str]]
-    # W2/N1: explicit reason the turn's tool loop stopped — "tool_calls" (last
-    # step made a tool call), "repeated" / "degenerate" (loop guard), "overflow"
-    # (context guard), "hitl" (approval interrupt), "step_cap" (recursion
-    # limit), or "final" (no tool calls → natural stop). Surfaced on the done
-    # event so the UI/continuation knows exactly WHY the loop ended.
+    # W2/N1: explicit reason the turn's tool loop stopped (single source of
+    # truth for the value set — see LOOP_REASON_* constants below). Surfaced on
+    # the done event so the UI/continuation knows exactly WHY the loop ended.
     loop_reason: NotRequired[str]
+
+
+# Single source of truth for the loop_reason value set (referenced by the loop
+# guard, the runtime done event and mirrored in frontend types.ts).
+LOOP_REASON_TOOL_CALLS = "tool_calls"
+LOOP_REASON_REPEATED = "repeated"
+LOOP_REASON_DEGENERATE = "degenerate"
+LOOP_REASON_OVERFLOW = "overflow"
+LOOP_REASON_HITL = "hitl"
+LOOP_REASON_STEP_CAP = "step_cap"
+LOOP_REASON_FINAL = "final"
 
 
 @dataclass(frozen=True)
@@ -163,10 +175,12 @@ class RunCommandArgs(BaseModel):
         )
     )
     cwd: str = Field(default="", description="Optional workspace-relative working directory.")
-    timeout_seconds: int = Field(default=60, ge=1, le=300, description="Command timeout in seconds. Use background=true for long-running builds.")
+    timeout_seconds: int = Field(default=DEFAULT_COMMAND_TIMEOUT_SECONDS, ge=1, le=MAX_COMMAND_TIMEOUT_SECONDS, description="Command timeout in seconds. Use background=true for long-running builds.")
 
 
-DEFAULT_AGENT_NAME = "default_agent"
+# Default single-agent id — SINGLE SOURCE of truth lives in the memory layout
+# (the agent folder name). Re-exported here so the runtime/workers import it
+# from the agent core as before.
 
 # W2/N1: explicit tool-loop step cap (recursion_limit in the run config).
 # create_agent's internal default is 9_999; this bounds a runaway loop even

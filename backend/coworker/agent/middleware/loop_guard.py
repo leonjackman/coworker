@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from ...logger import get_logger
 from .base import _is_degenerate_text, _msg_tokens
-from ..core import CoworkerAgentState, normalize_autonomy
+from ..core import CoworkerAgentState, LOOP_REASON_DEGENERATE, LOOP_REASON_REPEATED, normalize_autonomy
 
 logger = get_logger(__name__)
 
@@ -311,7 +311,7 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             msg = "STOP. " + "；".join(hard_reasons) + ". " + guidance
             overrides: dict[str, Any] = {"messages": [*messages, HumanMessage(content=msg)]}
             # W2/N1: surface the loop-stop reason on the state (→ done event).
-            overrides["loop_reason"] = "degenerate" if degenerate else "repeated"
+            overrides["loop_reason"] = LOOP_REASON_DEGENERATE if degenerate else LOOP_REASON_REPEATED
             if tool_count >= self.stop_after and tool_name:
                 # Block only the repeated tool; keep every other tool (incl. ask_user).
                 overrides["tools"] = [t for t in request.tools if getattr(t, "name", "") != tool_name]

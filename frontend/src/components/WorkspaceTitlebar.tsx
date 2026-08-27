@@ -51,7 +51,10 @@ const STATUS_COLORS = {
 } as const;
 
 function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
-  const CHARS_PER_TOKEN = 3.5;
+  // chars/token used only as a LAST-resort fallback for the token meter. Must
+  // match the backend estimator's Latin ratio (LATIN_CHARS_PER_TOKEN=3.8,
+  // coworker/context.py) so the fallback never disagrees with the token path.
+  const CHARS_PER_TOKEN = 3.8;
   // Prefer the CALIBRATED token estimate (raw estimate × the factor learned
   // from the provider's real usage for this model) — that is what the provider
   // actually bills. Falls back to the raw estimate, then char-based values for

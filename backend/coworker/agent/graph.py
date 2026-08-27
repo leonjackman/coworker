@@ -23,6 +23,7 @@ from ..logger import get_logger
 from ..mcp.mcp import McpManager
 from ..sessions import SessionStore
 from ..workspace import (
+    DEFAULT_COMMAND_TIMEOUT_SECONDS,
     READ_FILE_MAX_CHARS,
     TOOL_AUDIT_FILENAME,
     CommandApprovalStore,
@@ -194,7 +195,7 @@ def build_workspace_tools(
             return _error_result(exc, "apply_text_edits")
 
     @tool(args_schema=RunCommandArgs)
-    def run_command(command: str | list[str], cwd: str = "", timeout_seconds: int = 60, background: bool = False) -> str:
+    def run_command(command: str | list[str], cwd: str = "", timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS, background: bool = False) -> str:
         """Run an allowlisted command in the workspace after runtime policy approval.
 
         Returns JSON with ``return_code`` (0 = success), ``stdout``, ``stderr``,
