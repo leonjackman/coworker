@@ -20,6 +20,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from langgraph.errors import GraphRecursionError
+
 from ..changes import ChangeStore
 from ..checkpoints import CheckpointManager
 from ..config import BackendSettings
@@ -43,6 +45,7 @@ from .core import (
     LOOP_REASON_FINAL,
     LOOP_REASON_HITL,
     LOOP_REASON_OVERFLOW,
+    LOOP_REASON_STEP_CAP,
     AgentMode,
     AgentStreamRuntime,
     Autonomy,
@@ -745,6 +748,20 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         "loop_reason": LOOP_REASON_OVERFLOW,
                     }
                     return
+                except GraphRecursionError as exc:
+                    # MAX_STEPS_PROMPT backstop reached (W2/N1): a legitimately
+                    # long turn that outlives the step cap must NOT surface a raw
+                    # langgraph GRAPH_RECURSION_LIMIT error. Stop gracefully with
+                    # loop_reason="step_cap" and a user note, then fall through to
+                    # the normal done emission.
+                    logger.warning("step cap reached for session %s: %s", session_id, str(exc)[:200])
+                    loop_reason = LOOP_REASON_STEP_CAP
+                    if not content_parts:
+                        content_parts.append(
+                            "\n（已達單次任務的最大工具步驟數上限，已安全停止。"
+                            "可讓任務更聚焦或分步後繼續。）"
+                        )
+                    break
                 except Exception as exc:
                     if (
                         _attempt == 0
@@ -1006,6 +1023,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 return
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
             tool_state: dict[str, dict[str, Any]] = {}
+            resumed_loop_reason: str = LOOP_REASON_HITL
             try:
                 # ``update`` seeds the session_id so the steer middleware can
                 # resolve the interjection inbox during a resumed (HITL) turn too.
@@ -1052,6 +1070,17 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                 event = stream_event_from_interrupt(item)
                                 yield event
                             continue
+            except GraphRecursionError as exc:
+                # Step-cap backstop hit during a resumed turn — stop gracefully
+                # (same note as the main stream) instead of surfacing a raw
+                # langgraph GRAPH_RECURSION_LIMIT error.
+                logger.warning("step cap reached during resume for %s: %s", session_id, str(exc)[:200])
+                resumed_loop_reason = LOOP_REASON_STEP_CAP
+                if not content_parts:
+                    content_parts.append(
+                        "\n（已達單次任務的最大工具步驟數上限，已安全停止。"
+                        "可讓任務更聚焦或分步後繼續。）"
+                    )
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})
                 raise
@@ -1066,7 +1095,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts)), "loop_reason": LOOP_REASON_HITL}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts)), "loop_reason": resumed_loop_reason}
         return
 
 

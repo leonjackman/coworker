@@ -1,6 +1,8 @@
-"""Loop protection middleware: tool-call cleaning, stall retry, repeated-call guard."""
+"""Loop protection middleware: tool-call cleaning, stall retry, repeated-call guard, idle-stuck guard."""
 
+import hashlib
 import json
+from collections import deque
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
@@ -9,9 +11,71 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from ...logger import get_logger
 from .base import _is_degenerate_text, _msg_tokens
-from ..core import CoworkerAgentState, LOOP_REASON_DEGENERATE, LOOP_REASON_REPEATED, normalize_autonomy
+from ..core import (
+    CoworkerAgentState,
+    LOOP_REASON_DEGENERATE,
+    LOOP_REASON_IDLE_HARD,
+    LOOP_REASON_REPEATED,
+    normalize_autonomy,
+)
 
 logger = get_logger(__name__)
+
+
+def _hash(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def _tc_name(tc: Any) -> str:
+    if isinstance(tc, dict):
+        fn = tc.get("function")
+        if isinstance(fn, dict):
+            return str(fn.get("name") or tc.get("name") or "")
+        return str(tc.get("name") or "")
+    return str(getattr(tc, "name", "") or "")
+
+
+def _tc_args(tc: Any) -> str:
+    if isinstance(tc, dict):
+        fn = tc.get("function")
+        if isinstance(fn, dict):
+            return str(fn.get("arguments") or "")
+        return json.dumps(tc.get("args", {}), sort_keys=True, ensure_ascii=False)
+    return json.dumps(getattr(tc, "args", {}), sort_keys=True, ensure_ascii=False)
+
+
+def _last_step_signature(messages: list[Any]) -> tuple[str, str] | None:
+    """Return ``(outputs_hash, signature)`` for the last completed model step.
+
+    A step = the trailing assistant message (with tool calls) + the tool results
+    that follow it. Pure-text steps use the text content. Returns ``None`` when
+    there is no usable last step.
+    """
+    last_idx: int | None = None
+    last_ai: Any = None
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if getattr(m, "type", "") == "ai" and (getattr(m, "tool_calls", None) or getattr(m, "content", "")):
+            last_ai = m
+            last_idx = i
+            break
+    if last_ai is None or last_idx is None:
+        return None
+    tool_calls = getattr(last_ai, "tool_calls", None) or []
+    if tool_calls:
+        outputs: list[str] = []
+        for m in messages[last_idx + 1 :]:
+            if getattr(m, "type", "") == "tool":
+                outputs.append(str(getattr(m, "content", "") or ""))
+        names = sorted(_tc_name(tc) for tc in tool_calls)
+        args = json.dumps(sorted((_tc_args(tc) for tc in tool_calls), key=str), sort_keys=True, ensure_ascii=False)
+        outputs_hash = _hash("|".join(outputs))
+        signature = _hash(f"{names}|{args}|{outputs_hash}")
+    else:
+        text = str(getattr(last_ai, "content", "") or "")
+        outputs_hash = _hash(text)
+        signature = _hash(f"text:{outputs_hash}")
+    return outputs_hash, signature
 
 
 class ToolCallCleanerMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
@@ -335,6 +399,103 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             "(different path, different tool, narrower scope) or answer directly."
         )
         return {"messages": [*messages, HumanMessage(content=msg)]}
+
+    def wrap_model_call(self, request: Any, handler: Any) -> Any:
+        overrides = self._overrides(request)
+        if not overrides:
+            return handler(request)
+        return handler(request.override(**overrides))
+
+    async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        overrides = self._overrides(request)
+        if not overrides:
+            return await handler(request)
+        return await handler(request.override(**overrides))
+
+
+class IdleLoopMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Progress-aware stuck-loop guard (NO step cap).
+
+    Detects an agent that is "stuck" without needing identical calls: within ANY
+    consecutive 10 steps, ≥7 steps produced NO new information (identical tool
+    output) or regularly repeated a prior call (same name+args+output).
+
+    Two phases:
+      1. First ≥7/10 hit → soft warning ("似乎卡住") — the model may recover.
+      2. If, once a 20-step sliding window fills, ANY 10-slice still has ≥7 stuck
+         steps → HARD STOP (tools stripped, loop_reason="idle_hard", summary
+         forced).
+    If the ≥7/10 condition clears within the 20-step window (progress slides the
+    stuck flags out) → recover to unlimited steps with a FRESH window.
+    """
+
+    def __init__(self, window: int = 10, stuck_threshold: int = 7, hard_limit: int = 20):
+        self.window = window
+        self.stuck_threshold = stuck_threshold
+        self.hard_limit = hard_limit
+        # (stuck, outputs_hash, signature) for the last steps (sliding).
+        self._history: deque[tuple[bool, str, str]] = deque()
+        self._warned = False
+
+    def reset_per_turn(self) -> None:
+        self._history.clear()
+        self._warned = False
+
+    def _stuck10(self) -> bool:
+        # TRAILING 10 steps (sliding current window). The hard-stop "20-step
+        # limit" is the observation bound after the warn; a recoverable agent
+        # slides its stuck flags out of THIS trailing window → recover.
+        hist = list(self._history)[-self.window :]
+        if len(hist) < self.window:
+            return False
+        return sum(1 for stuck, _h, _s in hist if stuck) >= self.stuck_threshold
+
+    def _overrides(self, request: Any) -> dict[str, Any]:
+        state = getattr(request, "state", None) or {}
+        messages = list(state.get("messages", []) or [])
+        if not messages:
+            return {}
+        step = _last_step_signature(messages)
+        if step is None:
+            return {}
+        outputs_hash, signature = step
+
+        recent_outputs = {h for _, h, _ in self._history}
+        recent_sigs = {s for _, _, s in self._history}
+        stuck = (outputs_hash in recent_outputs) or (signature in recent_sigs)
+        self._history.append((stuck, outputs_hash, signature))
+        while len(self._history) > self.hard_limit:
+            self._history.popleft()
+        stuck10 = self._stuck10()
+
+        if self._warned:
+            if not stuck10:
+                # Progress slid the stuck flags out within the 20-step window →
+                # recover to unlimited steps with a fresh window.
+                self._warned = False
+                self._history.clear()
+                return {}
+            if len(self._history) >= self.hard_limit:
+                # 20-step limit reached and ≥7/10 still holds → HARD STOP.
+                msg = (
+                    "已達卡住硬停門檻：20 步限值內仍有任意連續 10 步中 ≥7 步未產生新進展或規律重複。"
+                    "請停止工具呼叫，總結已完成與剩餘事項。"
+                )
+                return {
+                    "messages": [*messages, HumanMessage(content=msg)],
+                    "tools": [],
+                    "loop_reason": LOOP_REASON_IDLE_HARD,
+                }
+            return {}
+        else:
+            if stuck10:
+                self._warned = True
+                msg = (
+                    "WARNING: 你似乎卡住了——過去 10 步中有 7 步未產生新進展或規律重複。"
+                    "請改變策略（不同工具/更聚焦/直接總結），不要重複同一做法。"
+                )
+                return {"messages": [*messages, HumanMessage(content=msg)]}
+            return {}
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         overrides = self._overrides(request)

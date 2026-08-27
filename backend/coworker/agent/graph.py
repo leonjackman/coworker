@@ -70,6 +70,7 @@ from .core import (
 )
 from .middleware import (
     ContextGuardMiddleware,
+    IdleLoopMiddleware,
     CoworkerSummarizationMiddleware,
     NormalizeMessagesMiddleware,
     PhaseToolGateMiddleware,
@@ -843,6 +844,12 @@ def build_coworker_agent_graph(
     # unguarded loop effectively infinite, so cap identical consecutive calls
     # here and force a text-only final turn on the hard cap.
     middleware.append(RepeatedToolCallMiddleware())
+
+    # Idle-stuck guard: catches loops that keep VARYING (different args / tools /
+    # re-planning) — which the identical-call guard cannot see — via a progress
+    # signal (≥7/10 steps with no new info or regular repetition). Soft warning
+    # first, hard stop if the pattern holds through a 20-step window.
+    middleware.append(IdleLoopMiddleware())
 
     # Interjection (插話) steering: drains the per-session steer inbox at every
     # model-call boundary and folds pending user messages into the next request

@@ -30,7 +30,12 @@ from .context_compaction import CoworkerSummarizationMiddleware, _summarizer_can
 from .context_guard import ContextGuardMiddleware, ContextOverflowError
 
 # Loop protection
-from .loop_guard import RepeatedToolCallMiddleware, StallRetryMiddleware, ToolCallCleanerMiddleware
+from .loop_guard import (
+    IdleLoopMiddleware,
+    RepeatedToolCallMiddleware,
+    StallRetryMiddleware,
+    ToolCallCleanerMiddleware,
+)
 
 # Phase-gated tool selection
 from .phase_gate import PhaseToolGateMiddleware
@@ -78,6 +83,7 @@ __all__ = [
     "ContextGuardMiddleware",
     "ContextOverflowError",
     # Loop
+    "IdleLoopMiddleware",
     "RepeatedToolCallMiddleware",
     "StallRetryMiddleware",
     "ToolCallCleanerMiddleware",

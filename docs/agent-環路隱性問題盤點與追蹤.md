@@ -423,6 +423,31 @@
 
 **驗證**：`tests/test_phase8_13.py` 新增 `test_skills_catalog_clip_frozen_dataclass` + `test_resume_runtime_positional_mapping`。`tests/` pytest **242 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `App.tsx`/`types.ts` `tsc` **0 錯誤**（chatService.ts 2 錯誤為既有）。
 
+### 2026-08-27 — Recursion limit 200 撞限修復（N1 過嚴）
+
+**報錯**（session e553ecce…）：`Recursion limit of 200 reached without hitting a stop condition`（GRAPH_RECURSION_LIMIT）。**根因**：N1 把 `MAX_STEPS_PROMPT=200` 作為 `agent_run_config` 的 `recursion_limit`——200 對真實長任務（>200 次不同工具呼叫的 read/edit/run/fix 循環）太低，撞限直接硬錯。
+
+**修復（源頭）**：
+1. **`MAX_STEPS_PROMPT 200 → 2000`**：它是**後備保險**（runaway 迴圈由 RepeatedToolCall/退化偵測在遠早於此就攔住），不是主要終止機制；須寬鬆到真實長任務不會誤撞。
+2. **撞限優雅收尾**：runtime 主 stream 與 resume 路徑新增 `except GraphRecursionError`——設 `loop_reason="step_cap"`、附使用者提示（「已達單次任務的最大工具步驟數上限，已安全停止」）、落入正常 `done` 發射，**不再把原始 langgraph 錯誤丟給前端**。
+
+**驗證**：`tests/test_phase8_13.py` 新增 `test_step_cap_generous_backstop_and_graceful`（MAX_STEPS≥1000、config 帶 recursion_limit、兩處 GraphRecursionError 捕獲）。`tests/` pytest **243 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。
+
+### 2026-08-27 — IdleLoopMiddleware：無上限 + 進度感知卡死守門（N1 改版）
+
+**設計（依確認）**：**無 step 上限、不設可配置**——移除 `agent_run_config` 的 `recursion_limit`（回歸 create_agent 內建 9999 絕對硬界）；runaway 迴圈由守門層治理。
+
+**IdleLoopMiddleware**（`middleware/loop_guard.py`，RepeatedToolCall 之後、ContextGuard 之前）：
+- **卡死判據**（每步）：`outputs_hash`（工具輸出 canonical hash）∈ 最近窗口輸出集合（**無新資訊**）**或** `signature`（工具名+args+輸出）∈ 最近窗口 signature 集合（**規律重複**）。
+- **三態**：
+  1. **warn**：滑動窗口**尾 10 步** ≥7 步卡住 → 注入「你似乎卡住了…請改變策略」（非終止，一次）。
+  2. **硬停**：warn 後 **20 步限值**內尾 10 仍 ≥7（`len(history)>=20` 閘）→ `tools=[]` 剝工具 + `loop_reason="idle_hard"` + 停止/總結訊息。
+  3. **恢復**：進展步把卡住旗標滑出尾 10 窗口（<7）→ `warned` 重置、清空窗口、**無上限繼續 + 重新 7/10 監測**。
+- `reset_per_turn()` 清窗口（W1 快取相容）；`LOOP_REASON_IDLE="idle"` / `LOOP_REASON_IDLE_HARD="idle_hard"`（前端 types.ts done union 同步）。
+- 覆蓋 RepeatedToolCall 的缺口：**變體循環**（不同 args/工具/重新規劃但無新資訊）在 step 計數前被精準攔截；`_cap_summary` 等既有守門不變。
+
+**驗證**：`tests/test_phase8_13.py` 4 組（連續卡死→硬停 / 滑出恢復→無上限 / 中間卡住→warn 後恢復 / 5 步早段卡住→不觸發）+ `test_no_step_cap_and_graceful_recursion_backstop`。`tests/` pytest **247 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `tsc` **0 錯誤**。
+
 ---
 
 ## 追蹤約定
@@ -449,3 +474,5 @@
 | 2026-08-27 | 上游/主次關係連路審計：修復 delegation turn_index 斷裂、steer/delegation buffer 跨輪洩漏、P2-B 增量緩衝強化 |
 | 2026-08-27 | 變量衡量/定義/引用審計：DEFAULT_AGENT·timeout·loop_reason·標題規則 收斂唯一真源；前端 CHARS_PER_TOKEN 對齊 3.8 |
 | 2026-08-27 | 前端回報兩 bug：skill 凍結 dataclass 裁剪（dataclasses.replace）、get_stream_runtime 位置參數錯位（resume/rerun 補 session_id） |
+| 2026-08-27 | Recursion limit 200 撞限修復：MAX_STEPS_PROMPT→2000 後備值 + GraphRecursionError 優雅收尾（step_cap） |
+| 2026-08-27 | N1 改版：移除 step 上限（無上限），新增 IdleLoopMiddleware 進度感知卡死守門（warn→20 步限值硬停→滑出恢復無上限） |

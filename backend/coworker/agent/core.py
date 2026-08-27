@@ -91,6 +91,10 @@ LOOP_REASON_DEGENERATE = "degenerate"
 LOOP_REASON_OVERFLOW = "overflow"
 LOOP_REASON_HITL = "hitl"
 LOOP_REASON_STEP_CAP = "step_cap"
+# IdleLoopMiddleware: "idle" = the soft "seems stuck" warning (non-terminal),
+# "idle_hard" = the terminal hard stop (tools stripped, summary forced).
+LOOP_REASON_IDLE = "idle"
+LOOP_REASON_IDLE_HARD = "idle_hard"
 LOOP_REASON_FINAL = "final"
 
 
@@ -182,10 +186,12 @@ class RunCommandArgs(BaseModel):
 # (the agent folder name). Re-exported here so the runtime/workers import it
 # from the agent core as before.
 
-# W2/N1: explicit tool-loop step cap (recursion_limit in the run config).
-# create_agent's internal default is 9_999; this bounds a runaway loop even
-# when every individual tool call is valid.
-MAX_STEPS_PROMPT = 200
+# NOTE: NO tool-loop step cap is configured (recursion_limit is left to
+# create_agent's built-in 9_999 absolute bound). Runaway loops are governed by
+# the loop guards: RepeatedToolCall (consecutive identical calls), degenerate
+# text detection, and IdleLoopMiddleware (progress-aware stuck detection with a
+# sliding 10-in-20 window). See LOOP_REASON_* below.
+
 
 
 class CommandStatusArgs(BaseModel):
@@ -432,9 +438,9 @@ def agent_run_config(
 ) -> dict[str, Any]:
     return {
         "run_name": "coworker_agent" + ("_stream" if streaming else ""),
-        # W2/N1: explicit step cap (opencode-aligned) — the tool loop must not
-        # run unbounded even if every tool call "succeeds".
-        "recursion_limit": MAX_STEPS_PROMPT,
+        # NO explicit recursion_limit: runaways are governed by the loop guards
+        # (RepeatedToolCall / degenerate / IdleLoopMiddleware); create_agent's
+        # built-in 9_999 stays as the absolute bound.
         "tags": [
             "coworker",
             "agent",
