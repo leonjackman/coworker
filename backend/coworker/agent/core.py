@@ -42,6 +42,12 @@ MAX_REFERENCE_SESSION_CHARS = 60_000
 # are source-bounded already (read ≤READ_FILE_MAX_CHARS, run_command externalizes
 # >MAX_COMMAND_OUTPUT_CHARS), so this only guards pathological tools.
 TOOL_OUTPUT_PERSIST_MAX_CHARS = 128_000
+# Display cap for the LIVE ``tool_end`` SSE event / ``done.parts`` — the frontend
+# bubble renders this, so a 128k output would flood it. The FULL output rides
+# alongside as ``output_full`` and is what gets persisted + replayed to the model
+# (O1's "full at persist, truncate at replay" contract is unchanged; only the
+# wire/display size is bounded back to the pre-O1 preview).
+TOOL_OUTPUT_DISPLAY_MAX_CHARS = 2_000
 
 PLAN_MARKER = "[CW-PLAN]"
 
@@ -827,12 +833,11 @@ def _message_chunk_events(
                     if mapped == tc_id:
                         idx_map.pop(idx, None)
             tool_state[tc_id]["status"] = tool_status
-            # O1: persist the FULL (fused) output — truncation to the model
-            # happens at replay time via truncate_to_token_budget. Truncating at
-            # persist lost the original forever (summaries / rollback / follow-up
-            # turns could only see 2000 chars). The fuse guards pathological
-            # tools; real outputs are already source-bounded (read ≤40k chars,
-            # run_command externalizes >12k).
+            # O1: persist the FULL (fused) output in ``output_full`` — truncation
+            # to the model happens at replay time via truncate_to_token_budget.
+            # The wire/display ``output`` stays at the pre-O1 preview cap so the
+            # frontend bubble never floods; the full copy is what gets persisted
+            # and replayed (frontend-backend size contract preserved).
             tool_state[tc_id]["output"] = str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS]
             started_at = tool_state[tc_id].get("started_at")
             duration_ms = round((time.time() - started_at) * 1000) if started_at else None
@@ -841,7 +846,8 @@ def _message_chunk_events(
                 "type": "tool_end",
                 "id": tc_id,
                 "name": msg_name,
-                "output": str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS],
+                "output": str(content)[:TOOL_OUTPUT_DISPLAY_MAX_CHARS],
+                "output_full": str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS],
                 "status": tool_status,
                 "input": str(tool_state[tc_id].get("input") or ""),
             }
@@ -856,7 +862,8 @@ def _message_chunk_events(
                 "type": "tool_end",
                 "id": tc_id,
                 "name": getattr(msg, "name", "") or "",
-                "output": str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS],
+                "output": str(content)[:TOOL_OUTPUT_DISPLAY_MAX_CHARS],
+                "output_full": str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS],
                 "status": tool_status,
             }
             parts.append(part)

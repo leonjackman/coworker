@@ -364,6 +364,17 @@
 
 **驗證**：`tests/test_runtime_cache.py`（6：快取 key/預算恢復/steer 重置/assembler 清快取/workspace 穩定/controller 穩定）、`tests/test_phase8_13.py`（4：merge O(1)/規則標題/後台命令/status）。`tests/` pytest **237 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：無新增孤兒（清理 `_strip_compaction_echo`/`_title_system_prompt`/`_default_title_from_message` 未用 import）。
 
+### 2026-08-27 — 完整驗收（45 項全量核對 + 2 項既有失敗根治）
+
+**逐項驗收**：以自動化腳本核對全部 45 項的程式碼實作（66 個檢查點，全過）——含 M1 優先級、M2 `scan_scoped`/render 快取、P1 目錄移除、P2 desc≤650、P3 `_ws_cache`、P4 12k/catalog cap、R1 串流/binary/40k、R2 `inline_attachments`、R3 rg+ignore/256KB、E1 `run_extract_and_merge`、E2 verify 移除、C1 session `context_summary`/`update_compaction`/prepend、C2 20k、C3 預設模型+`context_compact_failed`、C4 token 截斷、T1 無 3.5、T2 ≥8 區間、T3 `_normalize_usage_total`、T4 128、A MCP 組裝、B/C 行為-only、D `_system_text`、D1 編譯快取/registry/`reset_per_turn`、D3 `tool_index`、D4 memoize、D5 `_clean_final_content`、S1 權限門、S2 `get_goal`、S3 保留最近 MCP、L3 300/60+後台+`run_command_status`、V1 0.9、V5 16k、N1 `loop_reason`+MAX_STEPS=200+done 帶出、N2 `replace_assistant_parts`、N3 分類重試、N4 規則標題。
+
+**驗收期間修復**：
+1. **`_cap_summary` off-by-one**（既有失敗「summary capped to budget: 4097」）：估算器 `int()` 截斷使 `est(a)+est(b) ≠ est(a+b)`；二分解改為對**最終形式（body+marker）**直接評估 → 精確 ≤4096。
+2. **selftest telemetry 錯誤預期**（既有失敗「context_usage telemetry emitted」）：`context_usage` 由 **ContextGuardMiddleware**（`request.runtime.stream_writer`）發出、非摘要 middleware；修正 selftest 期望 + 新增 `tests/test_context_guard.py::test_guard_emits_context_usage_telemetry` 補覆蓋。
+3. **P2-B 重複寫入防護**：`SessionStore.append_message` 改為**按 id 冪等**（已存在的 assistant 訊息更新而非追加），`replace_assistant_parts`(tool_end) + `_persist_assistant`(done) 不再產生同 id 重複訊息。
+
+**驗收結果**：`tests/` pytest **238 passed**。`selftest.py` **247 PASS、0 FAIL**（2 項既有失敗根治）。`stress_test.py` **120 passed**。前端 `App.tsx`/`types.ts`（C3 `compaction_notice`）`tsc --noEmit` **0 錯誤**。`pyflakes`：無新增孤兒（餘項皆既有）。
+
 ---
 
 ## 追蹤約定
@@ -385,3 +396,4 @@
 | 2026-08-27 | Token 計數 T1–T4 已修復（單一常數 / CJK 擴充 / cache-aware 校準 / base64 門檻），含實作紀錄 |
 | 2026-08-27 | Prompt build 殘留收尾（A–D：MCP 段組裝位置 / 行為-only / 刪 tool_registry 孤兒 / list-content base），含實作紀錄 |
 | 2026-08-27 | 八–十三 全量分階段開發（P0-A 編譯快取 → P2-B 增量落盤），含實作紀錄 |
+| 2026-08-27 | 完整驗收：45 項逐項核對通過；根治 2 項既有 selftest 失敗（_cap_summary off-by-one、telemetry 錯誤預期）；append_message 冪等化 |

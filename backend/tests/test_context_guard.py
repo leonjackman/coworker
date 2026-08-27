@@ -489,3 +489,40 @@ def test_guard_incident_shape_regression():
     assert measured <= effective_input_limit(262_144, 8192)
     joined = "".join(str(m.content) for m in seen[0].messages)
     assert "K" * 100 not in joined
+
+
+def test_guard_emits_context_usage_telemetry():
+    """The context_usage UI telemetry is emitted by ContextGuardMiddleware via
+    request.runtime.stream_writer (not by the summarizer)."""
+    from langchain_core.messages import HumanMessage
+
+    from coworker.agent.middleware.context_guard import ContextGuardMiddleware
+
+    emitted: list[dict] = []
+
+    class _Runtime:
+        stream_writer = emitted.append
+
+    class _Request:
+        def __init__(self):
+            self.runtime = _Runtime()
+            self.messages = [HumanMessage(content="hello")]
+            self.tools = []
+
+        def override(self, **kwargs):
+            return kwargs
+
+    guard = ContextGuardMiddleware(
+        window_tokens=128_000,
+        max_output_tokens=8192,
+        mcp_tool_names_provider=lambda: set(),
+    )
+    guard._emit_context_usage_event(_Request(), raw=100, measured=95, factor=1.2, over=False)
+    assert len(emitted) == 1
+    ev = emitted[0]
+    assert ev["type"] == "context_usage"
+    assert ev["used_tokens"] == 100
+    assert ev["used_tokens_calibrated"] == 95
+    assert ev["calibration_factor"] == 1.2
+    assert ev["budget_tokens"] == guard.limit_tokens
+    assert ev["window_tokens"] == 128_000

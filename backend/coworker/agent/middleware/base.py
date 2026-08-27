@@ -170,13 +170,14 @@ def _cap_summary(text: str) -> str:
     if _estimate_tokens(text) <= SUMMARY_OUTPUT_TOKENS:
         return text
     marker = "\n[summary truncated by Coworker to fit context]"
-    budget = max(1, SUMMARY_OUTPUT_TOKENS - _estimate_tokens(marker))
-    # Trim trailing characters until the estimate fits. CJK is dense (~0.6
-    # tokens/char), so walk in small steps to avoid over-trimming.
+    # Trim trailing characters until the FINAL capped form fits. Evaluate the
+    # combined text (body + marker) directly: the estimator truncates via int(),
+    # so est(a)+est(b) can exceed est(a+b) by 1 — measuring the final string
+    # removes the off-by-one.
     low, high = 0, len(text)
     while low < high:
         mid = (low + high + 1) // 2
-        if _estimate_tokens(text[:mid]) <= budget:
+        if _estimate_tokens(text[:mid].rstrip() + marker) <= SUMMARY_OUTPUT_TOKENS:
             low = mid
         else:
             high = mid - 1

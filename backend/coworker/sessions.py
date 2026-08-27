@@ -441,6 +441,29 @@ class SessionStore:
         # 保证前端展示的 message id 与后端持久化 id 一致，避免按 id 检索（回退/重生成）时 404。
         resolved_id = message_id or str(uuid.uuid4())
         resolved_agent = agent_id or session.agent_id
+        # Idempotent by id: W6/N2-P1 incremental persistence may have already
+        # created this assistant message at a tool boundary — update it instead of
+        # appending a duplicate with the same id.
+        existing_idx = next((i for i, m in enumerate(session.messages) if m.id == resolved_id), None)
+        if existing_idx is not None:
+            existing = session.messages[existing_idx]
+            existing.role = role
+            existing.content = content or existing.content
+            existing.mode = mode or existing.mode
+            existing.provider = provider or existing.provider
+            existing.model = model or existing.model
+            existing.work_mode = work_mode or existing.work_mode
+            existing.autonomy = autonomy or existing.autonomy
+            if parts is not None:
+                existing.parts = list(parts)
+            if references is not None:
+                existing.references = list(references)
+            if attachments is not None:
+                existing.attachments = list(attachments)
+            if agent_id:
+                existing.agent_id = agent_id
+            self.save(session)
+            return session
         session.messages.append(
             SessionMessage(
                 id=resolved_id,

@@ -903,7 +903,10 @@ def main() -> int:
                 check("flush reminder is HumanMessage", bool(kept) and kept[-1].type == "human" and getattr(kept[-1], "id", "") == "__compaction_flush__", "")
                 check("compact count incremented", result.get("context_compact_count") == 1, str(result.get("context_compact_count")))
                 check("context_summary persisted", result.get("context_summary") == good_summary, str(result.get("context_summary")))
-                check("context_usage telemetry emitted", any(e.get("type") == "context_usage" for e in rt.events), "")
+                # The `context_usage` telemetry is the ContextGuardMiddleware's job
+                # (request.runtime.stream_writer), NOT the summarizer's — assert the
+                # correct responsibility split.
+                check("summarizer does NOT emit context_usage (guard's job)", not any(e.get("type") == "context_usage" for e in rt.events), "")
             # Degenerate (numeric) summary must fall back to trim — never injected.
             mw_bad = CoworkerSummarizationMiddleware(
                 budget_chars=1000, llm=_FakeCompModel("4 3 12 55 24 66 236 183 38 2453 375"), language="zh", context_window_tokens=1000,
