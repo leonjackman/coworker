@@ -797,12 +797,33 @@ def _message_chunk_events(
             if not tc_id:
                 # Continuation chunk: args stream incrementally, only the first
                 # chunk of a tool call carries the id. Route by index to the
-                # tool it belongs to; drop only if the index is unknown.
+                # tool it belongs to. Fallback: when the index is unknown (some
+                # providers emit the first chunk without an index, so its index
+                # was never registered), route by NAME to the most recent
+                # RUNNING tool with that name — this fixes the empty-input
+                # capture for the single-tool common case (continuation args
+                # were being silently dropped, persisting tool parts with no
+                # input and losing the edit/audit trail).
                 idx_map = tool_state.get(_TOOL_INDEX_MAP_KEY) or {}
-                if tc_index is None or tc_index not in idx_map:
-                    continue
-                tc_id = idx_map[tc_index]
-                tc_name = tool_state.get(tc_id, {}).get("name", "") or tc_name
+                if tc_index is not None and tc_index in idx_map:
+                    tc_id = idx_map[tc_index]
+                    tc_name = tool_state.get(tc_id, {}).get("name", "") or tc_name
+                else:
+                    running = [
+                        k for k, v in tool_state.items()
+                        if k != _TOOL_INDEX_MAP_KEY and v.get("status") == "running"
+                        and (v.get("name") == tc_name or not tc_name)
+                    ]
+                    if not running:
+                        continue
+                    if len(running) == 1:
+                        tc_id = running[0]
+                    else:
+                        named = [k for k in running if tool_state[k].get("name") == tc_name]
+                        if not named:
+                            continue
+                        tc_id = max(named, key=lambda k: tool_state[k].get("started_at", 0))
+                    tc_name = tool_state.get(tc_id, {}).get("name", "") or tc_name
 
             if tc_name == "write_todos":
                 if tc_id in tool_state:

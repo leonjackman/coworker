@@ -260,3 +260,62 @@ def test_idle_loop_early_stuck_slides_out():
     out = _run_idle(mw, steps)
     assert all(not o for o in out)
     assert all(o.get("loop_reason") is None for o in out)
+
+
+def test_tool_input_capture_without_index_continuation():
+    """Bug 1 regression: continuation tool-call chunks whose index was never
+    registered (first chunk lacks an index) were silently dropped → the
+    persisted tool part had EMPTY input. The name-based fallback routing must
+    accumulate the args so the write/edit trail survives."""
+    from langchain_core.messages import AIMessageChunk, ToolMessage
+
+    from coworker.agent.core import _message_chunk_events
+
+    parts: list = []
+    content_parts: list = []
+    tool_state: dict = {}
+
+    def _emit(msg):
+        return _message_chunk_events(msg, content_parts, tool_state, parts, "s1")
+
+    # First chunk: id present, empty args, NO index → index never registered.
+    _emit(AIMessageChunk(content="", tool_call_chunks=[{"id": "tc1", "name": "write_file", "args": "", "index": None}]))
+    # Continuation chunks: args arrive with index=0 (not in the map).
+    _emit(AIMessageChunk(content="", tool_call_chunks=[{"name": "write_file", "args": '{"file_path": "/tmp/test-preload.ts", "content": "let x=1"', "index": 0}]))
+    _emit(AIMessageChunk(content="", tool_call_chunks=[{"name": "write_file", "args": '"}', "index": 0}]))
+    # Tool end.
+    _emit(ToolMessage(content='{"error": "Write denied"}', tool_call_id="tc1", name="write_file"))
+
+    tool_ends = [p for p in parts if p.get("type") == "tool_end"]
+    assert len(tool_ends) == 1
+    captured = tool_ends[0].get("input") or ""
+    assert "file_path" in captured, captured
+    assert "/tmp/test-preload.ts" in captured, captured
+    assert "let x=1" in captured, captured
+
+
+def test_tool_input_capture_with_index_routing_still_works():
+    """The indexed routing path (index registered on the first chunk) must keep
+    working for parallel tool calls."""
+    from langchain_core.messages import AIMessageChunk, ToolMessage
+
+    from coworker.agent.core import _message_chunk_events
+
+    parts: list = []
+    content_parts: list = []
+    tool_state: dict = {}
+
+    def _emit(msg):
+        return _message_chunk_events(msg, content_parts, tool_state, parts, "s1")
+
+    # Two parallel tool calls, each with a registered index from the first chunk.
+    _emit(AIMessageChunk(content="", tool_call_chunks=[{"id": "t1", "name": "read_file", "args": '{"file_path": "a"', "index": 0}]))
+    _emit(AIMessageChunk(content="", tool_call_chunks=[{"id": "t2", "name": "run_command", "args": '{"command": "ls"', "index": 1}]))
+    _emit(AIMessageChunk(content="", tool_call_chunks=[{"name": "read_file", "args": '"}', "index": 0}]))
+    _emit(AIMessageChunk(content="", tool_call_chunks=[{"name": "run_command", "args": '"}', "index": 1}]))
+    _emit(ToolMessage(content="c", tool_call_id="t1", name="read_file"))
+    _emit(ToolMessage(content="ok", tool_call_id="t2", name="run_command"))
+
+    inputs = {p.get("id"): (p.get("input") or "") for p in parts if p.get("type") == "tool_end"}
+    assert '"file_path": "a"' in inputs["t1"], inputs
+    assert '"command": "ls"' in inputs["t2"], inputs

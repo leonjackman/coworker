@@ -448,6 +448,18 @@
 
 **驗證**：`tests/test_phase8_13.py` 4 組（連續卡死→硬停 / 滑出恢復→無上限 / 中間卡住→warn 後恢復 / 5 步早段卡住→不觸發）+ `test_no_step_cap_and_graceful_recursion_backstop`。`tests/` pytest **247 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `tsc` **0 錯誤**。
 
+### 2026-08-27 — 真機會話審查 + 工具 input 捕獲修復（session 81d44c5c）
+
+**真機會話審查**（「查找1個bug並修復」）：
+- **13 區成效全確認**：N4 規則標題（`查找1個bug，並修復`）、T3 cache-aware 校準（factor 1.135、17900→20313）、O1 顯示/持久化拆分（output≤2000 + output_full 全文）、R1 有界讀取、P2-B 增量 parts（140 parts）、D5 內容清理、沙箱防禦（`Write denied: /tmp/test-preload.ts is outside the workspace sandbox`）。
+- 長 turn（140 parts、~60+ 工具呼叫）無 IdleLoopMiddleware 誤觸發、無 Recursion limit——無上限+進度守門設計正確。
+
+**Bug 1（既有非本次回歸）修復 — 工具呼叫 `input` 捕獲為空**：
+- 會話中 `write_file` part `input=''`（file_path/content 未持久化）；根因：續段工具 args chunk 的 index 未註冊（首 chunk 無 index）時被靜默丟棄（core.py:802 `continue`）→ `tool_state["input"]` 為空。
+- 引入 commit `056badb8`（本 session 之前），非 13 區回歸。
+- **修復**：`_message_chunk_events` 續段路由加 **name 回落**——index 未知時路由到「最近 running 且同 name」的工具（單工具常見情形），不再丟棄；多工具同 index 註冊路徑不變。
+- **驗證**：`tests/test_phase8_13.py` 新增 `test_tool_input_capture_without_index_continuation`（無 index 續段 args 累積）+ `test_tool_input_capture_with_index_routing_still_works`（並行 index 路由不退化）。`tests/` pytest **249 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。
+
 ---
 
 ## 追蹤約定
@@ -476,3 +488,4 @@
 | 2026-08-27 | 前端回報兩 bug：skill 凍結 dataclass 裁剪（dataclasses.replace）、get_stream_runtime 位置參數錯位（resume/rerun 補 session_id） |
 | 2026-08-27 | Recursion limit 200 撞限修復：MAX_STEPS_PROMPT→2000 後備值 + GraphRecursionError 優雅收尾（step_cap） |
 | 2026-08-27 | N1 改版：移除 step 上限（無上限），新增 IdleLoopMiddleware 進度感知卡死守門（warn→20 步限值硬停→滑出恢復無上限） |
+| 2026-08-27 | 真機會話審查（13 區成效全確認）+ 修復工具 input 捕獲為空（續段 chunk name 回落路由） |
