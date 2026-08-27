@@ -16,7 +16,6 @@ from ..core import (
     _estimate_tokens,
     _msg_chars,
     _msg_tokens,
-    _truncate_message,
     context_budget_chars,
     context_budget_tokens,
 )
@@ -37,17 +36,12 @@ SUMMARY_OUTPUT_TOKENS = 4_096
 # Serialized summarizer input budget. Tool results are truncated to
 # TOOL_OUTPUT_MAX_CHARS before formatting; if the serialized head still exceeds
 # this, the oldest messages are dropped until it fits (opencode feeds the full
-# head subject to the summarizer's own context window).
-SUMMARY_INPUT_MAX_TOKENS = 32_000
+# head subject to the summarizer's own context window). 20k aligns with codex
+# COMPACT_USER_MESSAGE_MAX_TOKENS (C2).
+SUMMARY_INPUT_MAX_TOKENS = 20_000
 # Tool output truncation length when serializing messages for the summary
 # (opencode TOOL_OUTPUT_MAX_CHARS=2000).
 TOOL_OUTPUT_MAX_CHARS = 2_000
-# Conservative chars/token used when TRUNCATING an oversized message to fit a
-# token budget. CJK is ~1.6 chars/token (0.6 tokens/char); truncating to
-# ``budget * 1.5`` chars keeps the result under ``budget`` tokens for pure CJK
-# (1.5 * 0.6 = 0.9) and well under for Latin — unlike ``budget * CHARS_PER_TOKEN``,
-# which leaves a CJK message ~2.2x over its token budget.
-TRUNCATE_CHARS_PER_TOKEN = 1.5
 
 
 # ---------------------------------------------------------------------------

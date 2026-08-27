@@ -676,7 +676,7 @@ export interface PendingRequest {
         approval_status: string;
         session_id?: string;
       }
-    | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[]; message_id?: string }
+    | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[]; message_id?: string; compaction_notice?: string }
     | { type: 'error'; error: string; session_id?: string }
     | { type: 'goal_updated'; goal: GoalState; session_id?: string }
     | { type: 'goal_cleared'; session_id?: string }

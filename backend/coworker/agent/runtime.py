@@ -73,6 +73,32 @@ from .middleware import (
     record_runtime_interrupts,
     stream_event_from_interrupt,
 )
+
+
+def _prepend_compaction_summary(
+    prepared_messages: list[Any], summary: str, language: Language
+) -> list[Any]:
+    """C1: prepend the prior compaction summary as a HumanMessage.
+
+    The model sees the previous "先前对话摘要" so anchored-update compaction
+    accumulates (codex keeps the summary in the replacement history; opencode
+    reorders via filterCompacted). Never raises — a hiccup just keeps the
+    prepared messages unchanged.
+    """
+    if not summary:
+        return prepared_messages
+    try:
+        from langchain_core.messages import HumanMessage
+
+        from .middleware.base import _compaction_summary_prefix
+
+        summary_msg = HumanMessage(
+            content=f"{_compaction_summary_prefix(language)}{summary}",
+            additional_kwargs={"lc_source": "summarization"},
+        )
+        return [summary_msg, *prepared_messages]
+    except Exception:  # noqa: BLE001 - summary injection must never break a turn
+        return prepared_messages
 from .model_defaults import ReasonPreservingChatOpenAI, openai_compatible_base_url, provider_llm_kwargs
 
 logger = get_logger(__name__)
@@ -424,13 +450,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         return openai_compatible_base_url(provider)
 
     async def stream(
-        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, compaction_state: dict[str, Any] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        async for event in self._stream(messages, session_id, language, work_mode, autonomy, rerun=False):
+        async for event in self._stream(messages, session_id, language, work_mode, autonomy, rerun=False, compaction_state=compaction_state):
             yield event
 
     async def stream_rerun(
-        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, compaction_state: dict[str, Any] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Re-run the agent from a full message history (rollback/regenerate/edit).
 
@@ -438,11 +464,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         state (no checkpoint append). The session checkpoint must already have
         been reset by the caller so the history is rebuilt from scratch.
         """
-        async for event in self._stream(messages, session_id, language, work_mode, autonomy, rerun=True):
+        async for event in self._stream(messages, session_id, language, work_mode, autonomy, rerun=True, compaction_state=compaction_state):
             yield event
 
     async def _stream(
-        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool,
+        self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy, *, rerun: bool, compaction_state: dict[str, Any] | None = None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         audit_context = {
             "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
@@ -521,13 +547,28 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             steer_emit=self._steer_emit_live(session_id),
             )
 
+            # C1: re-inject the persisted compaction summary from a previous turn
+            # so (a) the model sees the prior context ("先前对话摘要" message —
+            # codex keeps the summary in the replacement history) and (b) the
+            # anchored-update summarizer accumulates instead of re-summarizing
+            # the full history every turn. The per-turn checkpoint is discarded,
+            # so this session-sourced state is the source of truth.
+            messages_for_input = prepared_messages
+            compaction_state = compaction_state or {}
+            if compaction_state.get("summary"):
+                messages_for_input = _prepend_compaction_summary(
+                    prepared_messages, compaction_state["summary"], language
+                )
+
             inputs = {
-                "messages": prepared_messages,
+                "messages": messages_for_input,
                 "work_mode": work_mode,
                 "language": language,
                 "phase": normalize_phase(None, work_mode),
                 "autonomy": autonomy,
                 "session_id": session_id,
+                "context_summary": str(compaction_state.get("summary") or ""),
+                "context_summarized_fingerprints": [str(x) for x in compaction_state.get("fingerprints") or []],
             }
             config = agent_run_config(
                 session_id=session_id, provider=self.provider_name, model=self.model_name,
@@ -541,6 +582,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             # AIMessage usage_metadata so each model call inside the tool loop is
             # counted exactly once.
             run_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+            # C1: compaction state captured from node updates so the turn's done
+            # event can persist it to the session (the per-turn checkpoint is
+            # discarded, so without this the summary never survives a turn).
+            compact_summary = ""
+            compact_count = 0
+            compact_fingerprints: list[str] = []
+            compact_failed = False
 
             # Overflow recovery: run the stream, and if the provider rejects the
             # request for being too long before anything was emitted, force a
@@ -619,6 +667,18 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                             # the guard's raw pre-send estimate of
                                             # the very same request.
                                             self._fold_calibration(graph, p)
+                                    cs = node_update.get("context_summary")
+                                    if cs:
+                                        compact_summary = str(cs)
+                                    cc = node_update.get("context_compact_count")
+                                    if cc:
+                                        compact_count = int(cc)
+                                    fp = node_update.get("context_summarized_fingerprints")
+                                    if isinstance(fp, list):
+                                        compact_fingerprints = [str(x) for x in fp]
+                                    cf = node_update.get("context_compact_failed")
+                                    if cf:
+                                        compact_failed = True
                     break
                 except asyncio.CancelledError:
                     raise
@@ -695,7 +755,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage, "compaction": {"summary": compact_summary, "count": compact_count, "fingerprints": compact_fingerprints, "failed": compact_failed}}
 
     def _handle_message_chunk(
         self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]], session_id: str = "",

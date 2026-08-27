@@ -2075,6 +2075,28 @@ async def chat_stream(request: ChatStreamRequest):
                         )
                     except Exception:  # noqa: BLE001 - telemetry must never break the stream
                         logger.debug("update_context_usage failed for session %s", session_id, exc_info=True)
+                # C1: persist the compaction state so the summary + fingerprint
+                # set survive across turns / goal rounds (the per-turn LangGraph
+                # checkpoint is discarded — this session record is the source of
+                # truth for anchored-update compaction).
+                compaction = event.get("compaction") or {}
+                if compaction.get("summary") or compaction.get("count"):
+                    try:
+                        session_store.update_compaction(
+                            session_id,
+                            summary=str(compaction.get("summary") or ""),
+                            fingerprints=compaction.get("fingerprints") or None,
+                            count=compaction.get("count") or None,
+                        )
+                    except Exception:  # noqa: BLE001 - telemetry must never break the stream
+                        logger.debug("update_compaction failed for session %s", session_id, exc_info=True)
+                if compaction.get("failed"):
+                    notice = (
+                        "上下文压缩摘要生成失败（当前默认模型不可用或出错），已改用截断方式。"
+                        "请在设置中确认模型可用性或更换模型。"
+                    )
+                    logger.warning("compaction failed for session %s: %s", session_id, notice)
+                    event["compaction_notice"] = notice
                 terminal_sent = True
             elif etype == "error":
                 # The runtime yields an explicit error event BEFORE re-raising so
@@ -2091,6 +2113,24 @@ async def chat_stream(request: ChatStreamRequest):
             request.mode, request.provider_id, request.model,
             resolved_workspace, referenced_ids, agent, request.project_id,
         )
+
+        def _compaction_state() -> dict[str, Any] | None:
+            """C1: the session-persisted compaction state to re-inject this turn.
+
+            The per-turn checkpoint is discarded, so this is the only place the
+            prior compaction summary survives — re-inject it so the anchored
+            update accumulates instead of re-summarizing the full history.
+            """
+            try:
+                session = session_store.require(session_id)
+            except KeyError:
+                return None
+            if not session.context_summary:
+                return None
+            return {
+                "summary": session.context_summary,
+                "fingerprints": list(session.context_summarized_fingerprints),
+            }
 
         def _current_history() -> list[dict[str, Any]]:
             """Full user/assistant history from the session (post-round persist),
@@ -2217,7 +2257,7 @@ async def chat_stream(request: ChatStreamRequest):
                         except Exception:  # noqa: BLE001 - fresh-start delete is best-effort
                             logger.warning("round-start checkpoint delete failed for %s", session_id, exc_info=True)
                         round_started = time.monotonic()
-                        round_iter = runtime.stream(round_messages, session_id, request.language, work_mode, autonomy)
+                        round_iter = runtime.stream(round_messages, session_id, request.language, work_mode, autonomy, compaction_state=_compaction_state())
                         async for ev in round_iter:
                             yield ev
                         round_elapsed = time.monotonic() - round_started

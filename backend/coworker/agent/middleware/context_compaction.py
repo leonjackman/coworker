@@ -18,7 +18,6 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages.utils import get_buffer_string
 
 from ...logger import get_logger
-from ...providers import ProviderManager
 from .base import (
     COMPACTION_PROMPTS,
     _COMPACTION_FLUSH,
@@ -26,7 +25,6 @@ from .base import (
     SUMMARY_INPUT_MAX_TOKENS,
     SUMMARY_OUTPUT_TOKENS,
     TOOL_OUTPUT_MAX_CHARS,
-    TRUNCATE_CHARS_PER_TOKEN,
     _anchored_summary_prompt,
     _cap_summary,
     _compaction_summary_prefix,
@@ -38,62 +36,27 @@ from ..core import (
     CoworkerAgentState,
     _estimate_tokens,
     _msg_tokens,
-    _truncate_message,
     context_budget_chars,
     context_budget_tokens,
 )
-from ..model_defaults import ReasonPreservingChatOpenAI, openai_compatible_base_url
 
 logger = get_logger(__name__)
 
 
 def _summarizer_candidates(data_dir: Path | None, primary_llm: Any) -> list[Any]:
-    """Ordered compaction-model candidates: user default model first, then other
-    configured providers, then the primary (per-turn) model.
+    """The compaction summarizer runs on the USER'S DEFAULT MODEL — the same
+    model driving the turn. No separate compaction-model selection (C3
+    decision): codex uses the session model, opencode's ``compaction`` agent
+    defaults to the session model, and LangChain's SummarizationMiddleware only
+    takes a dedicated ``model`` when you opt in. If the default model fails,
+    the runtime flags ``context_compact_failed`` so the UI can prompt the user
+    to switch to an available model.
 
-    The summarizer tries each candidate in turn until one produces a valid
-    summary (fallback-until-success), so a broken default model never blocks
-    compaction. Falls back to just the primary model with no config present.
+    ``data_dir`` is kept for call-site compatibility but no longer used.
     """
-    candidates: list[Any] = []
-    seen: set[tuple[str, str]] = set()
-
-    def _push(llm: Any) -> None:
-        key = (getattr(llm, "model_name", "") or "", getattr(llm, "base_url", "") or "")
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append(llm)
-
-    if data_dir is not None:
-        try:
-            import os
-
-            pm = ProviderManager(data_dir / "providers.json", data_dir)
-            config = pm.load()
-            default = pm.default_provider()
-            ordered: list[Any] = []
-            if default is not None:
-                ordered.append(default)
-            for p in config.providers:
-                if p.enabled and (default is None or p.id != default.id):
-                    ordered.append(p)
-            for p in ordered:
-                try:
-                    _push(
-                        ReasonPreservingChatOpenAI.create(
-                            model=p.model,
-                            api_key=p.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",
-                            base_url=openai_compatible_base_url(p),
-                        )
-                    )
-                except Exception:  # noqa: BLE001 - one bad provider must not kill the chain
-                    continue
-        except Exception:  # noqa: BLE001 - config resolution is best-effort
-            pass
-    if not candidates and primary_llm is not None:
-        _push(primary_llm)
-    return candidates
+    if primary_llm is None:
+        return []
+    return [primary_llm]
 
 
 class CoworkerSummarizationMiddleware(SummarizationMiddleware):
@@ -236,6 +199,31 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             id="__compaction_flush__",
         )
 
+    @staticmethod
+    def _truncate_message_to_tokens(msg: Any, budget_tokens: int) -> Any:
+        """Return a copy of ``msg`` with string content token-accurately bounded.
+
+        C4: uses ``truncate_to_token_budget`` (CJK/Latin/base64 aware) instead of
+        a chars×ratio heuristic. Only safe for plain-text user/system messages.
+        """
+        try:
+            content = msg.content
+        except Exception:  # noqa: BLE001
+            return msg
+        if not isinstance(content, str) or getattr(msg, "type", "") not in ("human", "system", "user"):
+            return msg
+        if _estimate_tokens(content) <= budget_tokens:
+            return msg
+        from langchain_core.messages import HumanMessage
+
+        from ...context import truncate_to_token_budget
+
+        truncated, _ = truncate_to_token_budget(content, budget_tokens)
+        return HumanMessage(
+            content=truncated,
+            id=getattr(msg, "id", None),
+        )
+
     def _trim(self, state: CoworkerAgentState) -> Any:
         from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
 
@@ -255,10 +243,9 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         for msg in messages[:1]:
             tokens = _msg_tokens(msg)
             if tokens > budget:
-                # Convert the token budget to a conservative char cap. CJK is
-                # denser than the flat 3.5 chars/token, so use TRUNCATE_CHARS_PER_TOKEN
-                # to guarantee the truncated message fits the token budget.
-                msg = _truncate_message(msg, max(200, int(budget * TRUNCATE_CHARS_PER_TOKEN)))
+                # C4: truncate to the token budget exactly (CJK/Latin/base64 aware
+                # via estimate_text_tokens) instead of a chars×ratio heuristic.
+                msg = self._truncate_message_to_tokens(msg, budget)
             head.append(msg)
             budget -= _msg_tokens(msg)
 
@@ -268,7 +255,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             if tokens >= self.budget_tokens:
                 # Oversized message: truncate user/system, drop tool/AI.
                 if getattr(msg, "type", "") in ("human", "system", "user"):
-                    kept_tail.append(_truncate_message(msg, max(200, int(self.budget_tokens * TRUNCATE_CHARS_PER_TOKEN))))
+                    kept_tail.append(self._truncate_message_to_tokens(msg, self.budget_tokens))
                     budget = 0
                     break
                 continue
@@ -355,7 +342,18 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
 
             return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
-        return self._finish_compact(a, b, self._create_summary(a, previous_summary=self.last_summary))
+        summary = self._create_summary(a, previous_summary=self.last_summary)
+        compacted = self._finish_compact(a, b, summary)
+        if compacted is not None:
+            return compacted
+        # Summarize plan ran but produced no usable summary (default model
+        # failed / degenerate). Still trim so the turn is not lost, and flag the
+        # failure so the runtime can prompt the user about the default model.
+        updates: dict[str, Any] = {"context_compact_failed": True}
+        trimmed = self._trim(state)
+        if trimmed is not None:
+            updates.update(trimmed)
+        return updates
 
     async def _compact_async(self, state: CoworkerAgentState) -> dict[str, Any] | None:
         messages = state.get("messages", [])
@@ -370,7 +368,14 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
 
             return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
         summary = await self._acreate_summary(a, previous_summary=self.last_summary)
-        return self._finish_compact(a, b, summary)
+        compacted = self._finish_compact(a, b, summary)
+        if compacted is not None:
+            return compacted
+        updates: dict[str, Any] = {"context_compact_failed": True}
+        trimmed = self._trim(state)
+        if trimmed is not None:
+            updates.update(trimmed)
+        return updates
 
     def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         self.last_summary = str(state.get("context_summary", "") or "")

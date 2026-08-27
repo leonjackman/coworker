@@ -1388,45 +1388,6 @@ def _estimate_tokens(text: str) -> int:
     return estimate_text_tokens(text)
 
 
-def _truncate_message(msg: Any, budget: int) -> Any:
-    """Return a copy of ``msg`` with string content truncated to ``budget``.
-
-    Only safe for plain-text user/system messages (not tool calls / tool results,
-    which must stay intact for pairing). Falls back to the original message when
-    the content is not trimmable.
-    """
-    try:
-        content = msg.content
-    except Exception:  # noqa: BLE001
-        return msg
-    if isinstance(content, str) and len(content) > budget:
-        from langchain_core.messages import HumanMessage
-
-        if getattr(msg, "type", "") in ("human", "system"):
-            return HumanMessage(
-                content=content[:budget] + "\n[content truncated by Coworker to fit context]",
-                id=getattr(msg, "id", None),
-            )
-        return msg
-    return msg
-
-
-
-# ---------------------------------------------------------------------------
-# ToolCallCleanerMiddleware – drops empty/invalid tool calls before execution.
-# ---------------------------------------------------------------------------
-
-
-
-
-# ---------------------------------------------------------------------------
-# PhaseToolGateMiddleware – phase-driven tool gating (Codex-style autonomy).
-# ---------------------------------------------------------------------------
-
-
-
-
-
 def _normalize_usage(usage: dict[str, Any]) -> tuple[int, int]:
     """Normalize a provider usage dict into (prompt_tokens, completion_tokens).
 

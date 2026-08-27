@@ -1758,6 +1758,11 @@ function App() {
           round1Done = true;
         }
         commit(mergedParts, { status: 'done', streamEndAt: Date.now() });
+        // C3: 压缩摘要生成失败（默认模型不可用/出错）时提示用户更换可用模型。
+        // 与既有错误提示一致使用 window.alert（该场景罕见，无需去重）。
+        if (event.compaction_notice) {
+          window.alert(event.compaction_notice);
+        }
         // 终态副作用：goal 流延后到 goal_stream_end（避免每轮播声音/清 todos）；
         // 普通流（无 goal）在此立即执行，保持原行为。
         const isGoalSession = goalsBySessionRef.current[goalsSessionKey(event.session_id ?? requestSessionId)] != null;

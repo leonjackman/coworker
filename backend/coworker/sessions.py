@@ -102,6 +102,15 @@ class Session:
     context_used_tokens_calibrated: int = 0
     context_used_chars: int = 0
     context_calibration_factor: float = 0.0
+    # Persistent compaction state (C1): the compaction summary + fingerprint set
+    # survive across turns/goal rounds even though the per-turn LangGraph
+    # checkpoint is discarded. Re-injected at turn start so anchored-update
+    # compaction accumulates instead of re-summarizing the full history every
+    # turn. Mirrors codex (summary lives in the rollout) / opencode (compaction
+    # marker persisted in the DB) / LangChain's persistent-thread design.
+    context_summary: str = ""
+    context_compact_count: int = 0
+    context_summarized_fingerprints: list[str] = field(default_factory=list)
     messages: list[SessionMessage] = field(default_factory=list)
     # Persistent session-scoped goal (唯一 goal 真源). None = no goal.
     goal: GoalState | None = None
@@ -128,6 +137,9 @@ class Session:
             context_used_tokens_calibrated=int(payload.get("context_used_tokens_calibrated", 0) or 0),
             context_used_chars=int(payload.get("context_used_chars", 0) or 0),
             context_calibration_factor=float(payload.get("context_calibration_factor", 0.0) or 0.0),
+            context_summary=str(payload.get("context_summary", "") or ""),
+            context_compact_count=int(payload.get("context_compact_count", 0) or 0),
+            context_summarized_fingerprints=[str(x) for x in payload.get("context_summarized_fingerprints", []) if isinstance(x, str)],
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
             goal=GoalState.from_dict(payload.get("goal")),
         )
@@ -212,6 +224,31 @@ class SessionStore:
         session.context_used_chars = int(used_chars)
         session.context_calibration_factor = float(calibration_factor)
         # Persist without bumping updated_at (this is telemetry, not activity).
+        atomic_write_text(
+            self._path(session.id),
+            json.dumps(session.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        )
+
+    def update_compaction(
+        self,
+        session_id: str,
+        *,
+        summary: str,
+        fingerprints: list[str] | None = None,
+        count: int | None = None,
+    ) -> None:
+        """Persist the compaction state (C1) so it survives across turns / goal
+        rounds (the per-turn LangGraph checkpoint is discarded)."""
+        try:
+            session = self.require(session_id)
+        except KeyError:
+            return
+        if summary:
+            session.context_summary = summary
+        if fingerprints is not None:
+            session.context_summarized_fingerprints = [str(x) for x in fingerprints]
+        if count is not None:
+            session.context_compact_count = int(count)
         atomic_write_text(
             self._path(session.id),
             json.dumps(session.to_dict(), ensure_ascii=False, indent=2) + "\n",

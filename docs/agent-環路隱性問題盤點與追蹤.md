@@ -69,10 +69,10 @@
 
 | ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
 |---|---|---|---|---|---|
-| C1 | main.py:1949、2216 vs runtime.py:687-698 | **壓縮摘要跨輪/跨 goal round 失效（架構性 bug）**：`context_summary` / `context_summarized_fingerprints` 只在 LangGraph checkpoint state；main.py 在**每 turn 開頭**（1949）與**每個 goal round**（2216）都 `forget_runtime_checkpoint`，且 session messages 不持久化摘要 HumanMessage。→ **每輪都從全量歷史重新壓縮、摘要永遠不累積**，長 goal 任務上下文無界增長、壓縮成本每輪重付。 | codex rollout 常駐、摘要持久化；opencode compaction marker 持久在 DB | 把摘要狀態持久化到 session（或新增可重放機制）；或 goal round 之間保留 checkpoint | 高 |
-| C2 | context_compaction.py:41、414-433 | **摘要輸入被雙重截斷**：工具輸出先被持久化截到 2000 chars（O1），`_serialize_for_summary` 又截到 2000，摘要資訊量偏低。 | opencode 全文落盤後截斷 | 摘要讀原始全文（見 O1 改造） | 低 |
-| C3 | context_compaction.py:50-96、424-433 | **摘要模型 fallback 鏈首選「使用者預設模型」**（可能最貴/最大），輸入 32k tokens。 | opencode compaction 用獨立小 agent/model | 摘要優先用小模型；限制輸入 | 中 |
-| C4 | context_compaction.py:261-273、base.py:50 | **`_trim` 截斷倍率一刀切**：`TRUNCATE_CHARS_PER_TOKEN=1.5` 對拉丁文遠低於真實 3.8（砍過頭、損失內容），對 CJK 較安全。 | — | 截斷倍率按內容類別（CJK/Latin/base64） | 低 |
+| C1 | main.py:1949、2216 vs runtime.py:687-698 | **壓縮摘要跨輪/跨 goal round 失效（架構性 bug）**：`context_summary` / `context_summarized_fingerprints` 只在 LangGraph checkpoint state；main.py 在**每 turn 開頭**（1949）與**每個 goal round**（2216）都 `forget_runtime_checkpoint`，且 session messages 不持久化摘要 HumanMessage。→ **每輪都從全量歷史重新壓縮、摘要永遠不累積**，長 goal 任務上下文無界增長、壓縮成本每輪重付。 | codex rollout 常駐、摘要持久化；opencode compaction marker 持久在 DB；LangGraph 官方設計需 persistent thread | **摘要狀態持久化到 session**（`context_summary`/fingerprints/`update_compaction`）＋ turn 開始重注入（`先前对话摘要` HumanMessage + `context_summary` state）→ anchored update 跨輪累積 | 高 | ☑ |
+| C2 | context_compaction.py:41、414-433 | **摘要輸入被雙重截斷**：工具輸出先被持久化截到 2000 chars（O1），`_serialize_for_summary` 又截到 2000，摘要資訊量偏低。 | opencode 全文落盤後截斷 | 摘要讀原始全文（見 O1 改造）；`SUMMARY_INPUT_MAX_TOKENS 32k→20k`（對齊 codex） | 低 | ☑ |
+| C3 | context_compaction.py:50-96、424-433 | **摘要模型 fallback 鏈首選「使用者預設模型」**（可能最貴/最大），輸入 32k tokens。 | opencode compaction agent 預設 session model；LangChain 官方 `model` 才獨立指定 | **摘要直接用使用者預設模型**（不另設壓縮模型，依決策）；預設模型不可用 → `context_compact_failed` → SSE/notice 提示更換模型 | 中 | ☑ |
+| C4 | context_compaction.py:261-273、base.py:50 | **`_trim` 截斷倍率一刀切**：`TRUNCATE_CHARS_PER_TOKEN=1.5` 對拉丁文遠低於真實 3.8（砍過頭、損失內容），對 CJK 較安全。 | — | 改用 `truncate_to_token_budget`（token 精確）；移除 `TRUNCATE_CHARS_PER_TOKEN`/`_truncate_message`（孤兒清理） | 低 | ☑ |
 
 ### 六、Token 計數不正確／不一致
 
@@ -150,7 +150,7 @@
 
 ### P0 — 修架構性缺陷（正確性／成本）
 
-1. **C1**：壓縮摘要跨輪存活（持久化 `context_summary` 到 session，或 goal round 間保留 checkpoint）。
+1. **C1**：壓縮摘要跨輪存活（持久化 `context_summary` 到 session，或 goal round 間保留 checkpoint）。 ~~→ ☑ 已修（2026-08-27：session 持久化 + turn 重注入）~~
 2. **R2**：大附件不再永久內聯重放（改摘要 + 路徑，模型按需 `read_file`）。
 3. **M1**：記憶注入截斷改「agent 核心檔優先 + 每檔保底」。 ~~→ ☑ 已修（2026-08-27）~~
 
@@ -190,10 +190,10 @@
 | R3 | 讀取 | 搜尋 1MB/檔掃描、無 ignore | 低 | P2 | ☑ | rg 快路徑 + ignore-aware fallback + 256KB |
 | E1 | 摘取 | dream 每輪最多 4 次主模型 LLM call | 中 | P2 | ☑ | 單一合併 call（4→1）|
 | E2 | 摘取 | consolidation 輸入過大且多 call | 中 | P2 | ☑ | 移除 verify LLM；規則 guardrail |
-| C1 | 壓縮 | 壓縮摘要跨輪失效（架構 bug） | 高 | P0 | ☐ | |
-| C2 | 壓縮 | 摘要輸入雙重截斷 | 低 | P2 | ☐ | |
-| C3 | 壓縮 | 摘要模型首選主模型 | 中 | P2 | ☐ | |
-| C4 | 壓縮 | trim 截斷倍率一刀切 | 低 | P2 | ☐ | |
+| C1 | 壓縮 | 壓縮摘要跨輪失效（架構 bug） | 高 | P0 | ☑ | session 持久化 + turn 重注入 |
+| C2 | 壓縮 | 摘要輸入雙重截斷 | 低 | P2 | ☑ | O1 已根治；輸入 32k→20k |
+| C3 | 壓縮 | 摘要模型首選主模型 | 中 | P2 | ☑ | 用預設模型 + 不可用提示（依決策）|
+| C4 | 壓縮 | trim 截斷倍率一刀切 | 低 | P2 | ☑ | token 精確截斷 + 孤兒清理 |
 | T1 | 計數 | chars/token 常數多套矛盾 | 中 | P2 | ☐ | |
 | T2 | 計數 | CJK 偵測範圍過窄 | 中 | P2 | ☐ | |
 | T3 | 計數 | 校準受 prompt-cache 干擾 | 低 | P2 | ☐ | |
@@ -310,6 +310,19 @@
 
 **驗證**：`tests/test_memory_extract.py` 新增 5 組測試（單 call 合併 / 覆蓋率拒回 + 無第二 call / 預算拒回 / unparseable 降級 / 無 transcript 跳過）；`tests/` pytest **208 passed**。`selftest.py` **247 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。
 
+### 2026-08-27 — 壓縮精簡不正確（C1–C4，依確認決策）
+
+改動檔案：`sessions.py`、`agent/runtime.py`、`main.py`、`agent/middleware/context_compaction.py`、`agent/middleware/base.py`、`agent/core.py`、`agent/middleware/__init__.py`、`tests/test_compaction_persistence.py`（新）。
+
+| 項目 | 實作內容 |
+|---|---|
+| **C1** | 摘要狀態**持久化到 session**：`Session` 新增 `context_summary` / `context_compact_count` / `context_summarized_fingerprints` + `update_compaction()`。runtime 在 `updates` stream mode 捕捉壓縮狀態 → `done` event 附 `compaction{summary,count,fingerprints,failed}` → main.py `session_store.update_compaction()`。turn 開始 `_compaction_state()` 讀回 → `runtime.stream(compaction_state=…)` → 初始 inputs 設 `context_summary`/fingerprints **並 prepend `先前对话摘要` HumanMessage**（`_prepend_compaction_summary`，對齊 codex replacement-history / opencode filterCompacted）。**anchored update 跨輪累積、fingerprint 跨輪去重、goal 續跑不再每輪全量重壓縮**。 |
+| **C3** | `_summarizer_candidates` **簡化為只用主模型（= 使用者預設模型）**，移除多 provider fallback 鏈（依決策，不另設壓縮模型；codex/opencode 同）。摘要失敗 → `_compact_sync/_compact_async` 回傳 `context_compact_failed=True`（同時仍 trim 保底）→ main.py 於 `done.compaction.failed` 記 log + `done.compaction_notice`；**前端**：`App.tsx` 主 done handler 收到 `event.compaction_notice` → `window.alert` 提示更換模型（`types.ts` done 事件型別新增 `compaction_notice?`）。 |
+| **C4** | `_trim` 改用 `_truncate_message_to_tokens`（`truncate_to_token_budget` token 精確、CJK/拉丁/base64 皆準），移除 `TRUNCATE_CHARS_PER_TOKEN` 常數與 `_truncate_message` 函式（孤兒清理）。 |
+| **C2** | `SUMMARY_INPUT_MAX_TOKENS 32_000 → 20_000`（對齊 codex `COMPACT_USER_MESSAGE_MAX_TOKENS`）；O1 已根治 persist 雙重截斷。 |
+
+**驗證**：`tests/test_compaction_persistence.py` 6 組（session 持久化 round-trip / runtime 重注入 / 摘要用預設模型 / 摘要失敗 flag + trim / token 截斷有界 / C2 常數對齊）。`tests/` pytest **214 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：改動檔案無新增孤兒。
+
 ---
 
 ## 追蹤約定
@@ -327,3 +340,4 @@
 | 2026-08-27 | Prompt 注入 P1–P5 / B1–B3 / V5 / O2 已修復（檔次 1+2：純減法 + SystemAssembler），含實作紀錄與量化對比 |
 | 2026-08-27 | 檔案讀取 R1–R3 / O1 / L2 已修復（源頭優化：有界串流 + 附件 inline-once + rg/ignore），含實作紀錄與量化 |
 | 2026-08-27 | 摘取 E1/E2 已修復（一步到位：dream 單一合併 call + 規則 guardrail 移除 verify LLM），含實作紀錄 |
+| 2026-08-27 | 壓縮 C1–C4 已修復（摘要 session 持久化 + 跨輪重注入 / 預設模型 + 失敗提示 / token 精確截斷 / 輸入預算），含實作紀錄與孤兒清理 |
