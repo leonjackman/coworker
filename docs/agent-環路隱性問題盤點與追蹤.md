@@ -415,6 +415,14 @@
 
 **驗證**：`tests/` pytest **240 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `tsc` **0 錯誤**。`pyflakes` 乾淨。
 
+### 2026-08-27 — 前端回報兩 bug 修復
+
+**Bug 1 — 發送請求時 `cannot assign to field 'description'`**：P4 的 `format_skills_prompt_bounded`（skill 目錄超 1500-token 預算的裁剪路徑）對 `SkillEntry`（`@dataclass(frozen=True)`）用 `copy.copy` + 賦值 → 凍結 dataclass 不可賦值。**修復**：改用 `dataclasses.replace(s, description=_clip_description(...))`。
+
+**Bug 2 — 重試時 `Provider qwen3.6-35b is not enabled or not found`**：W1 把 `AgentRuntimeRegistry.get_stream_runtime` 簽名改為 `(mode, session_id, provider_id, model, workspace, …)`（session_id 第 2 參數），但 `resume_interrupt`（runtime.py:1257）與 `_stream_runtime_from_context`（:1273）仍以舊位置順序 `(mode, provider_id, model, workspace)` 呼叫 → `provider_id` 收到 **model 字串**（qwen3.6-35b）→ `find_enabled(model名)` 失敗。**修復**：兩處補 `session_id`（context 已含 `session_id`）；`rerun_stream` 的 context 也補 `session_id`（讓 retry/regenerate 可命中 runtime 快取）。
+
+**驗證**：`tests/test_phase8_13.py` 新增 `test_skills_catalog_clip_frozen_dataclass` + `test_resume_runtime_positional_mapping`。`tests/` pytest **242 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `App.tsx`/`types.ts` `tsc` **0 錯誤**（chatService.ts 2 錯誤為既有）。
+
 ---
 
 ## 追蹤約定
@@ -440,3 +448,4 @@
 | 2026-08-27 | 前端↔後端合約審計：tool_end 顯示/持久化拆分（output/output_full）、done 型別同步、context_usage budget_chars 修正 |
 | 2026-08-27 | 上游/主次關係連路審計：修復 delegation turn_index 斷裂、steer/delegation buffer 跨輪洩漏、P2-B 增量緩衝強化 |
 | 2026-08-27 | 變量衡量/定義/引用審計：DEFAULT_AGENT·timeout·loop_reason·標題規則 收斂唯一真源；前端 CHARS_PER_TOKEN 對齊 3.8 |
+| 2026-08-27 | 前端回報兩 bug：skill 凍結 dataclass 裁剪（dataclasses.replace）、get_stream_runtime 位置參數錯位（resume/rerun 補 session_id） |

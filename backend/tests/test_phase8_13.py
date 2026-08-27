@@ -105,3 +105,47 @@ def test_delegation_build_workspace_tools_kwargs(tmp_path: Path):
         session_id="s",
     )
     assert len(tools) > 0  # tools built without the removed turn_index kwarg
+
+
+def test_skills_catalog_clip_frozen_dataclass(tmp_path: Path):
+    """P4 regression: format_skills_prompt_bounded clips descriptions of the
+    FROZEN SkillEntry — copy.copy+assign raised 'cannot assign to field
+    description'; must use dataclasses.replace."""
+    from coworker.skills.skills import SkillEntry, format_skills_prompt_bounded
+
+    skills = [
+        SkillEntry(name=f"s{i}", description="d" * 400, file_path=tmp_path / f"s{i}" / "SKILL.md", base_dir=tmp_path / f"s{i}", source="user")
+        for i in range(80)
+    ]
+    out = format_skills_prompt_bounded(skills)
+    assert isinstance(out, str) and out
+
+
+def test_resume_runtime_positional_mapping(monkeypatch):
+    """W1 regression: resume/rerun built a runtime with the OLD positional order
+    (mode, provider, model, workspace); after adding session_id the provider
+    field received the MODEL string -> 'Provider <model> is not enabled'."""
+    from coworker.agent import runtime as rt_module
+    from coworker.agent.runtime import AgentRuntimeRegistry
+
+    calls: list[tuple] = []
+
+    def _fake_get_stream_runtime(self, *a, **kw):
+        calls.append((a, kw))
+        return object()
+
+    monkeypatch.setattr(AgentRuntimeRegistry, "get_stream_runtime", _fake_get_stream_runtime)
+    registry = object.__new__(AgentRuntimeRegistry)
+    registry.settings = type("S", (), {"data_dir": Path("/tmp/coworker-nonexistent")})()
+    # _stream_runtime_from_context with the run context (includes session_id)
+    ctx = {
+        "session_id": "sess-1", "provider_id": "qwen-provider", "model": "qwen3.6-35b",
+        "project_id": "p1", "workspace_path": None, "referenced_sessions": [], "agent": "a",
+    }
+    registry._stream_runtime_from_context(ctx)
+    assert calls, "get_stream_runtime must be invoked"
+    args, kwargs = calls[0]
+    # positional: mode, session_id, provider_id, model, workspace
+    assert args[1] == "sess-1", args
+    assert args[2] == "qwen-provider", args  # provider_id must NOT be the model
+    assert args[3] == "qwen3.6-35b", args

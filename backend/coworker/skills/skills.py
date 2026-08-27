@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -345,11 +345,9 @@ def format_skills_prompt_bounded(skills: list["SkillEntry"]) -> str:
 
     clipped: list = []
     for s in skills:
-        import copy
-
-        c = copy.copy(s)
-        if hasattr(c, "description"):
-            c.description = _clip_description(c.description or "", SKILL_DESCRIPTION_CLIP_CHARS)
+        # SkillEntry is a frozen dataclass — copy.copy + assignment raises
+        # "cannot assign to field 'description'". Use dataclasses.replace.
+        c = replace(s, description=_clip_description(s.description or "", SKILL_DESCRIPTION_CLIP_CHARS))
         clipped.append(c)
     rendered = _render(clipped)
     if estimate_text_tokens(rendered) <= SKILLS_CATALOG_MAX_TOKENS:

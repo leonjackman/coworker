@@ -1242,6 +1242,7 @@ class AgentRuntimeRegistry:
         Events are forwarded in real time from the runtime generator.
         """
         context = approval.get("context") if isinstance(approval.get("context"), dict) else {}
+        session_id = str(context.get("session_id") or "")
         provider_id = str(context.get("provider_id") or "")
         model = str(context.get("model") or "")
         project_id = str(context.get("project_id") or "") or None
@@ -1252,15 +1253,17 @@ class AgentRuntimeRegistry:
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
         # Runtime construction resolves the context window with a synchronous
-        # network probe (cold cache); keep it off the event loop.
+        # network probe (cold cache); keep it off the event loop. Positional
+        # order: (mode, session_id, provider_id, model, workspace).
         runtime = await asyncio.to_thread(
-            self.get_stream_runtime, "single", provider_id or None, model or None, workspace,
+            self.get_stream_runtime, "single", session_id, provider_id or None, model or None, workspace,
             referenced_sessions=referenced_sessions, project_id=project_id,
         )
         async for event in runtime.resume_interrupt(approval, decisions):
             yield event
 
     def _stream_runtime_from_context(self, context: dict[str, Any]) -> AgentStreamRuntime:
+        session_id = str(context.get("session_id") or "")
         provider_id = str(context.get("provider_id") or "")
         model = str(context.get("model") or "")
         project_id = str(context.get("project_id") or "") or None
@@ -1270,7 +1273,8 @@ class AgentRuntimeRegistry:
             from pathlib import Path
             workspace = Workspace(Path(str(workspace_path)), self.settings.data_dir / TOOL_AUDIT_FILENAME, fingerprint_path_for(self.settings.data_dir, Path(str(workspace_path))))
         referenced_sessions = set(str(item) for item in (context.get("referenced_sessions") or []))
-        return self.get_stream_runtime("single", provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions, agent=str(context.get("agent") or "") or None, project_id=project_id)
+        # Positional order: (mode, session_id, provider_id, model, workspace).
+        return self.get_stream_runtime("single", session_id, provider_id or None, model or None, workspace, referenced_sessions=referenced_sessions, agent=str(context.get("agent") or "") or None, project_id=project_id)
 
     async def rerun_stream(
         self, messages: list[dict[str, Any]], session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy,
@@ -1283,6 +1287,7 @@ class AgentRuntimeRegistry:
         # contends on SQLite's file-level write lock.
         await self.forget_runtime_checkpoint(session_id)
         context = {
+            "session_id": session_id,
             "provider_id": provider_id or "",
             "model": model or "",
             "referenced_sessions": list(referenced_sessions or []),
