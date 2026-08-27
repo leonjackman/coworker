@@ -118,11 +118,11 @@ def estimate_text_tokens(text: str) -> int:
     density (~1.4 chars/token measured) instead of the prose rate (~3.8),
     which previously under-counted a single truncated screenshot by ~2.8x.
     """
+
     if not text:
         return 0
     tokens = 0.0
     rest = text
-
     def _count(body: str) -> None:
         nonlocal tokens
         if not body:
@@ -169,6 +169,38 @@ def contains_binary_blob(text: str) -> bool:
     if _DATA_URL_RE.search(text):
         return True
     return any(_is_likely_base64(m.group(0)) for m in _BASE64_RUN_RE.finditer(text))
+
+
+def truncate_to_token_budget(text: str, budget_tokens: int) -> tuple[str, bool]:
+    """Keep the leading part of ``text`` within ``budget_tokens``.
+
+    codex ``TruncationPolicy::Tokens`` equivalent (tools/src/response_history.rs):
+    the model-visible window is bounded by TOKENS — not raw chars, which
+    misbehave across CJK / dense code / base64 (T1). Returns ``(text, truncated)``.
+    """
+    budget = max(1, int(budget_tokens))
+    if not text or estimate_text_tokens(text) <= budget:
+        return text, False
+
+    lines = text.split("\n")
+    kept: list[str] = []
+    used = 0
+    for line in lines:
+        cost = max(1, estimate_text_tokens(line))
+        if used + cost > budget:
+            if not kept and line:
+                # Single giant line (e.g. one long base64 run): slice proportionally.
+                keep_chars = max(1, int(len(line) * (budget - used) / cost))
+                kept.append(line[:keep_chars])
+            break
+        kept.append(line)
+        used += cost
+        if used >= budget:
+            break
+
+    out = "\n".join(kept)
+    out += "\n…[content truncated to fit the token budget]"
+    return out, True
 
 
 def scrub_text(text: str, placeholder: str = BLOB_PLACEHOLDER) -> tuple[str, int]:

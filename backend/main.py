@@ -1919,7 +1919,7 @@ async def chat_stream(request: ChatStreamRequest):
                     history.append(
                         {
                             "role": "user",
-                            "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes),
+                            "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes, inline_attachments=False),
                         }
                     )
                 elif m.role == "assistant" and (m.content or getattr(m, "parts", None)):
@@ -2105,7 +2105,7 @@ async def chat_stream(request: ChatStreamRequest):
                     history.append(
                         {
                             "role": "user",
-                            "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes),
+                            "content": format_user_message(m.content, m.attachments, m.references, max_attachment_bytes=max_attachment_bytes, inline_attachments=False),
                         }
                     )
                 elif m.role == "assistant" and (m.content or getattr(m, "parts", None)):
@@ -3303,6 +3303,23 @@ def _resolve_run_provider(session, provider_id: str, model: str) -> tuple[str, s
     return "", ""
 
 
+# Cross-turn tool-result replay is token-bounded (codex TruncationPolicy). Full
+# output is persisted (O1); only what the model re-sees on LATER turns is
+# windowed here — generous enough to keep genuinely useful results visible while
+# preventing a replayed 40k-char read from becoming a fixed per-turn cost.
+TOOL_REPLAY_MAX_TOKENS = 4000
+
+
+def _truncate_tool_result(text: str) -> str:
+    try:
+        from coworker.context import truncate_to_token_budget
+
+        truncated, _ = truncate_to_token_budget(text, TOOL_REPLAY_MAX_TOKENS)
+        return truncated
+    except Exception:  # noqa: BLE001 - never break history replay on a truncator hiccup
+        return text
+
+
 def _parts_to_conversation(message) -> list[dict[str, Any]]:
     """Reconstruct an assistant turn's full tool-call conversation from its
     stored ``parts``.
@@ -3377,7 +3394,7 @@ def _parts_to_conversation(message) -> list[dict[str, Any]]:
                     "id": part.get("id") or f"tool-{len(out)}",
                     "type": "function",
                     "function": {"name": part.get("name") or "", "arguments": args_str},
-                    "result": part.get("output") or part.get("result") or "",
+                    "result": _truncate_tool_result(part.get("output") or part.get("result") or ""),
                 }
             )
     flush()
@@ -3413,7 +3430,7 @@ def _session_message_history(session) -> list[dict[str, Any]]:
         if message.role not in {"user", "assistant"} or not message.content:
             continue
         if message.role == "user":
-            history.append({"role": "user", "content": format_user_message(message.content, message.attachments, message.references)})
+            history.append({"role": "user", "content": format_user_message(message.content, message.attachments, message.references, inline_attachments=False)})
         else:
             history.extend(_parts_to_conversation(message))
     return history

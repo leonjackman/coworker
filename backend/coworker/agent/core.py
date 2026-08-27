@@ -38,6 +38,12 @@ from .types import AgentMode, Autonomy, Language, Phase, VALID_LANGUAGES, WorkMo
 MAX_ATTACHMENT_CHARS = 120_000
 MAX_REFERENCE_SESSION_CHARS = 60_000
 
+# O1: tool outputs are persisted in FULL up to this fuse (truncation to the
+# model happens at replay time via ``truncate_to_token_budget``). Real outputs
+# are source-bounded already (read ≤READ_FILE_MAX_CHARS, run_command externalizes
+# >MAX_COMMAND_OUTPUT_CHARS), so this only guards pathological tools.
+TOOL_OUTPUT_PERSIST_MAX_CHARS = 128_000
+
 PLAN_MARKER = "[CW-PLAN]"
 
 
@@ -791,7 +797,13 @@ def _message_chunk_events(
                     if mapped == tc_id:
                         idx_map.pop(idx, None)
             tool_state[tc_id]["status"] = tool_status
-            tool_state[tc_id]["output"] = str(content)[:2000]
+            # O1: persist the FULL (fused) output — truncation to the model
+            # happens at replay time via truncate_to_token_budget. Truncating at
+            # persist lost the original forever (summaries / rollback / follow-up
+            # turns could only see 2000 chars). The fuse guards pathological
+            # tools; real outputs are already source-bounded (read ≤40k chars,
+            # run_command externalizes >12k).
+            tool_state[tc_id]["output"] = str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS]
             started_at = tool_state[tc_id].get("started_at")
             duration_ms = round((time.time() - started_at) * 1000) if started_at else None
             files = real_file_changes(tc_id, tool_state, session_id)
@@ -799,7 +811,7 @@ def _message_chunk_events(
                 "type": "tool_end",
                 "id": tc_id,
                 "name": msg_name,
-                "output": str(content)[:2000],
+                "output": str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS],
                 "status": tool_status,
                 "input": str(tool_state[tc_id].get("input") or ""),
             }
@@ -814,7 +826,7 @@ def _message_chunk_events(
                 "type": "tool_end",
                 "id": tc_id,
                 "name": getattr(msg, "name", "") or "",
-                "output": str(content)[:2000],
+                "output": str(content)[:TOOL_OUTPUT_PERSIST_MAX_CHARS],
                 "status": tool_status,
             }
             parts.append(part)
@@ -1058,6 +1070,7 @@ def format_user_message(
     attachments: list[dict[str, Any]] | None = None,
     references: list[dict[str, Any]] | None = None,
     max_attachment_bytes: int = 25 * 1024 * 1024,
+    inline_attachments: bool = True,
 ) -> str | list[dict[str, Any]]:
     """把用户文本、引用、附件拼成发给 LLM 的内容。
 
@@ -1067,6 +1080,11 @@ def format_user_message(
     ``max_attachment_bytes`` 来自设置页的「文件体积上限」（前端换算成字节后随请求
     传入）。超过该体积的二进制附件不内联字节，仅在提示词中如实说明「未转发」，
     作为防 OOM 的安全网；模型仍可在回复中说明自己无法处理该文件。
+
+    ``inline_attachments``（R2 源頭修復）：附件全文**只在首次提供的那一輪**内联
+    （``True``）；歷史重放時傳 ``False``，把附件渲染為緊湊 stub（opencode
+    stripMedia/compaction 佔位符），避免「附件全文持久化 + 每轮重放重發」的永久
+    成本。模型仍可要求用户重新附上，或用文件工具按需读取工作区内的文件。
 
     返回：
     - ``str``：无附件且无引用时，保持纯文本（向后兼容历史消息）。
@@ -1088,12 +1106,20 @@ def format_user_message(
 
     text = (message or "").strip()
     if attachments:
-        header = (
-            "The user attached the following files; forward all of them to the model "
-            "and let it decide whether to use each:"
-            if not text
-            else "Attached files (all forwarded; the model decides whether to use each):"
-        )
+        if inline_attachments:
+            header = (
+                "The user attached the following files; forward all of them to the model "
+                "and let it decide whether to use each:"
+                if not text
+                else "Attached files (all forwarded; the model decides whether to use each):"
+            )
+        else:
+            header = (
+                "Earlier attachments are referenced below; their full contents were "
+                "provided when first attached and are NOT repeated here. Ask the user to "
+                "re-attach a file (or read it with the file tools if it lives in the "
+                "workspace) when you need its content again:"
+            )
         text = f"{text}\n\n{header}" if text else header
 
     if text:
@@ -1104,9 +1130,21 @@ def format_user_message(
         size = int(attachment.get("size") or 0)
         kind = str(attachment.get("type") or "file")
         content = attachment.get("content")
+        exceeds_limit = bool(attachment.get("tooLarge")) or size > max_attachment_bytes
+
+        # R2: history replay renders compact stubs, never the raw bytes.
+        if not inline_attachments:
+            if kind.startswith("image/"):
+                stub = f"[Image: {name} ({size} bytes, {kind})]"
+            elif attachment.get("binary") or exceeds_limit:
+                stub = f"[Binary attachment: {name} ({size} bytes, {kind})]"
+            else:
+                stub = f"[Attachment: {name} ({size} bytes, {kind})]"
+            blocks.append({"type": "text", "text": f"\n- {stub}"})
+            continue
+
         # 超过体积上限的二进制附件：不内联字节，如实说明（前端已拦截添加，
         # 这里作为后端兜底，覆盖 web/直接 API 等不经过前端拦截的路径）。
-        exceeds_limit = bool(attachment.get("tooLarge")) or size > max_attachment_bytes
         if isinstance(content, str) and content and not exceeds_limit:
             if kind.startswith("image/"):
                 blocks.append({"type": "image_url", "image_url": {"url": content}})

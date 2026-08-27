@@ -54,9 +54,9 @@
 
 | ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
 |---|---|---|---|---|---|
-| R1 | workspace.py:42、agent/core.py:82-93、graph.py:144 | **`read_file` 單次可注入 50k chars**（`READ_FILE_MAX_CHARS=50_000`），code-heavy ≈ 38k tokens（~15% 的 256k 窗口），且該工具結果進 history 直到被清理。 | opencode 按行讀（預設 ~100–1000 行）+ 輸出截斷 | cap 改以 token 估算為準（如 ≤10k tokens）；或縮小預設 limit | 中 |
-| R2 | agent/core.py:38、1108-1133、main.py:1957-1958 | **附件 120k chars 內聯且永久重放**：`MAX_ATTACHMENT_CHARS=120_000`（≈90k+ tokens）；文字附件內聯進 user 訊息 content 並**連同附件持久化**，之後**每一輪請求都重新內聯重發**。 | opencode 文字檔以 Read 工具按需讀 | 大附件只給摘要/路徑，模型用 read_file 按需讀；或限制僅當輪內聯 | 高 |
-| R3 | workspace.py:34-35、1277 | **搜尋讀檔上限 1MB/檔**：`DEFAULT_SEARCH_MAX_FILE_BYTES=1_000_000`，逐行掃描 1MB 檔成本高（輸出僅 240 chars/行、80 結果）。 | codex/opencode 檔案搜尋有索引或更嚴的上限 | 上限降到 ~256KB；或對無命中行提前跳過 | 低 |
+| R1 | workspace.py:42、agent/core.py:82-93、graph.py:144 | **`read_file` 整檔 `read_text` 載入記憶體**再切窗，輸出上限 50k chars（code-heavy ≈ 38k tokens），且該工具結果進 history。 | opencode 按行/位元組有界串流 + offset 分頁（read.ts:137-180）；codex 插入前 token 截斷 | `read_preview` 改**有界串流**（不整檔載入）+ binary 4KB 偵測 + 插入前 token 截斷 | 中 | ☑ |
+| R2 | agent/core.py:38、1108-1133、main.py:1957-1958 | **附件 120k chars 內聯且永久重放**：`MAX_ATTACHMENT_CHARS=120_000`（≈90k+ tokens）；文字附件內聯進 user 訊息 content 並**連同附件持久化**，之後**每一輪請求都重新內聯重發**。 | opencode 附件=part 引用 + stripMedia/compaction 降級為 `[Attached <mime>: <filename>]` | inline-once + 歷史 stub 重放（`format_user_message(inline_attachments=False)`） | 高 | ☑ |
+| R3 | workspace.py:34-35、1277 | **搜尋每檔讀 1MB 掃描、不 respect ignore**：`DEFAULT_SEARCH_MAX_FILE_BYTES=1_000_000`，Python 逐行掃描無 `.gitignore` 感知。 | opencode grep 走 ripgrep + ignore + limit 100（grep.ts）；codex 走 shell grep | rg 快路徑（有 rg 時）+ ignore-aware fallback + 上限降到 256KB + 串流掃描 | 低 | ☑ |
 
 ### 四、摘取／抽取過大
 
@@ -114,7 +114,7 @@
 | ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
 |---|---|---|---|---|---|
 | L1 | middleware/hitl.py:132-165 | **guarded 模式對工作區內寫入/命令全自動放行**：`_needs_write_approval` guarded 只查外部路徑、`_needs_command_approval` guarded/autonomous 全放行。CW 的 guarded 實質接近 autonomous。 | opencode 預設 ask；codex approval policy | 若為產品決策可保留，建議增加「寫入後 diff 摘要回饋」對沖；或對高風險命令（rm/clean 等）回升需審批 | 低(設計) |
-| L2 | agent/core.py:38、974、1105-1106 | **圖片 data URL 原樣內聯**：每張 ~1200+ tokens 估算（實際 qwen 720p 可達 1.1–1.6k），5 張 ≈ 6k+ tokens 固定注入，還隨 history 重放。 | — | 圖片進 history 時外置/降檔，或僅當輪保留 | 中 |
+| L2 | agent/core.py:38、974、1105-1106 | **圖片 data URL 原樣內聯**：每張 ~1200+ tokens 估算（實際 qwen 720p 可達 1.1–1.6k），5 張 ≈ 6k+ tokens 固定注入，還隨 history 重放。 | — | 圖片進 history 時外置/降檔，或僅當輪保留 | 中 | ☑ |
 | L3 | agent/core.py:149、workspace.py:37 | **`run_command` timeout 上限 60s、預設 20s**：對 `npm install`/`build`/`test` 常不足，模型被迫反覆重跑，反而製造更多重複步驟。 | — | 放寬上限（如 120–300s）或對長任務支援非同步/後台執行 | 低 |
 
 ### 十一、不合理值
@@ -131,7 +131,7 @@
 
 | ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
 |---|---|---|---|---|---|
-| O1 | core.py:769-815 | **工具輸出持久化即截斷 2000 chars**：`_message_chunk_events` 在 `tool_end` 就 `output[:2000]` 存進 parts → 原始工具輸出在 session 就丟失，後續摘要/重放/回滾都只有 2000 chars。 | opencode **全文落盤**、只在轉模型時截斷 | 全文存 session（或落盤檔案），截斷只在模型轉換時 | 中 |
+| O1 | core.py:769-815 | **工具輸出持久化即截斷 2000 chars**：`_message_chunk_events` 在 `tool_end` 就 `output[:2000]` 存進 parts → 原始工具輸出在 session 就丟失，後續摘要/重放/回滾都只有 2000 chars。 | opencode **全文落盤**、只在轉模型時截斷 | 全文存 session（或落盤檔案），截斷只在模型轉換時 | 中 | ☑ |
 | O2 | graph.py:851-867 | **記憶 middleware 掛在 Skills 之後**，注入在 phase 之後，導致行為 prompt 墊底（B2）；記憶與技能的組合順序靠隱式鏈，不易維護。 | — | 顯式定義 system 組合順序（見 B2） | 低 | ☑ |
 
 ### 十三、不符合主流做法
@@ -185,9 +185,9 @@
 | P3 | Prompt | workspace 目錄樹每 call 重 walk | 中(效能) | P1 | ☑ | turn 快取 + 60 entries/4000 chars |
 | P4 | Prompt | activated skill 上限 80k 過大 | 中 | P1 | ☑ | 12k + catalog 1500 token cap |
 | P5 | Prompt | 每 step 重複注入記憶+技能+工具 | 中 | P2 | ☑ | SystemAssembler 單點組裝 |
-| R1 | 讀取 | read_file 單次 50k chars 過大 | 中 | P2 | ☐ | |
-| R2 | 讀取 | 附件 120k chars 永久重放 | 高 | P0 | ☐ | |
-| R3 | 讀取 | 搜尋讀檔上限 1MB | 低 | P2 | ☐ | |
+| R1 | 讀取 | read_file 整檔載入 + 輸出過大 | 中 | P2 | ☑ | 有界串流 + binary 4KB 偵測 + 插入前 token 截斷 |
+| R2 | 讀取 | 附件 120k chars 永久重放 | 高 | P0 | ☑ | inline-once + 歷史 stub（重放 -99.7%）|
+| R3 | 讀取 | 搜尋 1MB/檔掃描、無 ignore | 低 | P2 | ☑ | rg 快路徑 + ignore-aware fallback + 256KB |
 | E1 | 摘取 | 自動記憶抽取用主模型 | 中 | P2 | ☐ | |
 | E2 | 摘取 | consolidation 輸入過大且多 call | 中 | P2 | ☐ | |
 | C1 | 壓縮 | 壓縮摘要跨輪失效（架構 bug） | 高 | P0 | ☐ | |
@@ -210,11 +210,11 @@
 | S2 | 過度嚴格 | discuss 不可用 goal 查詢 | 低 | P2 | ☐ | |
 | S3 | 過度嚴格 | guard S4 靜默丟全部 MCP schema | 中 | P2 | ☐ | |
 | L1 | 過度寬鬆 | guarded 對工作區內全放行 | 低(設計) | P2 | ☐ | |
-| L2 | 過度寬鬆 | 圖片 data URL 永久內聯 | 中 | P2 | ☐ | |
+| L2 | 過度寬鬆 | 圖片 data URL 永久內聯 | 中 | P2 | ☑ | 歷史重放 stub（R2）|
 | L3 | 過度寬鬆 | run_command timeout 上限偏小 | 低 | P2 | ☐ | |
 | V1 | 數值 | safety factor 0.75 偏保守 | 低 | P2 | ☐ | |
 | V5 | 數值 | 固定注入總量無預算 | 中 | P2 | ☑ | SystemAssembler 16k token 總預算 |
-| O1 | 順序 | 工具輸出持久化即截斷 2000 | 中 | P1 | ☐ | |
+| O1 | 順序 | 工具輸出持久化即截斷 2000 | 中 | P1 | ☑ | 全文持久化 + 重放 token 截斷 |
 | O2 | 順序 | 記憶/技能組合順序隱式 | 低 | P2 | ☑ | SystemAssembler 顯式順序 |
 | N1 | 主流 | 迴圈決策顯式化缺失 | 中 | P2 | ☐ | |
 | N2 | 主流 | 訊息級儲存 vs part 級 | 中 | P2 | ☐ | |
@@ -278,6 +278,23 @@
 
 **驗證**：`tests/` pytest **188 passed**（+5：phase-gate 可見性測試、desc guard、SystemAssembler 4 組）。`stress_test.py` **120 passed**。`selftest.py` 僅餘 2 項既有失敗（與本改動無關）。
 
+### 2026-08-27 — 檔案讀取過大（R1–R3 / O1 / L2，源頭優化）
+
+改動檔案：`workspace.py`、`context.py`、`agent/core.py`、`main.py`、`tests/test_read_streaming.py`、`tests/test_attachments.py`、`tests/test_search_ripgrep.py`（新）。
+
+| 項目 | 實作內容 |
+|---|---|
+| **R1** | `read_preview` 改**有界串流**：`_read_window`（`for line in fh` 逐行 + `max_chars` 位元組累積封頂）＋ `_count_lines`（串流計行），**不再 `read_text` 整檔載入**；`_is_binary_bytes`（NUL / 30% 非可列印）讀前 4KB 偵測（opencode isBinaryFile）；`READ_FILE_MAX_CHARS 50k→40k`。 |
+| **R1/codex 對齊** | `context.truncate_to_token_budget(text, budget)`（`TruncationPolicy::Tokens` 等價）：跨輪重放的工具結果在 `_parts_to_conversation` 以 `TOOL_REPLAY_MAX_TOKENS=4000` **token 預算**截斷，取代固定 char 切片。 |
+| **O1** | 工具輸出**全文持久化**（`TOOL_OUTPUT_PERSIST_MAX_CHARS=128k` fuse），`tool_end output[:2000]` 移除——摘要/回滾/續跑都有全文；重放時才 token 截斷。 |
+| **R2** | `format_user_message(inline_attachments=…)`：`True`（當前輪）全文/圖片內聯；`False`（歷史重放）渲染**緊湊 stub**（`[Attachment]/[Image]/[Binary attachment]` + 重附指引，opencode stripMedia/compaction 模式）。三處重放接線（main.py:1922/2108/3433）改 `False`；當前請求（1957）維持 `True`。 |
+| **R3** | `search_text` 加 **rg 快路徑**（`rg --json`，respect `.gitignore`，`--max-count 1`，有 `rg` 才走）；fallback 改 **ignore-aware**（`.gitignore`/`.ignore`/`.rgignore` 解析，`walk_files` 依祖先規則跳過）＋**串流逐行掃描**（不 `read_text` 整檔）；`DEFAULT_SEARCH_MAX_FILE_BYTES 1MB→256KB`。 |
+| **L2** | 圖片 data URL 隨 R2 歷史 stub 不再每輪重放。 |
+
+**量化**：120k 附件重放 **31,635 → 99 tokens/輪（-99.7%）**；40k 讀取重放 token 封頂 ~4000。
+
+**驗證**：`tests/` pytest **203 passed**（+15 新測試：read 串流/binary/分頁、附件 stub、rg+fallback/ignore、token 截斷）。`stress_test.py` **120 passed**。`selftest.py` 僅餘 2 項既有失敗（與本改動無關）。
+
 ---
 
 ## 追蹤約定
@@ -293,3 +310,4 @@
 | 2026-08-27 | 初版：全環路隱性問題盤點（45 項），基於與 codex / opencode-dev 對照 |
 | 2026-08-27 | 記憶注入 M1–M5 已修復（方案 A+B 對齊 codex），含實作紀錄與驗證 |
 | 2026-08-27 | Prompt 注入 P1–P5 / B1–B3 / V5 / O2 已修復（檔次 1+2：純減法 + SystemAssembler），含實作紀錄與量化對比 |
+| 2026-08-27 | 檔案讀取 R1–R3 / O1 / L2 已修復（源頭優化：有界串流 + 附件 inline-once + rg/ignore），含實作紀錄與量化 |

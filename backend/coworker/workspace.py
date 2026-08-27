@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import fnmatch
 import mimetypes
 import hashlib
 import json
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,14 +34,26 @@ DEFAULT_IGNORED_DIRS = {
     "coverage",
 }
 DEFAULT_SEARCH_MAX_RESULTS = 80
-DEFAULT_SEARCH_MAX_FILE_BYTES = 1_000_000
+# Per-file scan budget for the fallback (no-`rg`) search path. `rg` itself
+# streams and has no such limit; this bounds the pure-Python line scan so a
+# huge file cannot become an unbounded per-call IO cost (R3).
+DEFAULT_SEARCH_MAX_FILE_BYTES = 256_000
+# Ignore-file names respected by the search walk (gitignore-style).
+IGNORE_FILE_NAMES = (".gitignore", ".ignore", ".rgignore")
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 20
 MAX_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_OUTPUT_CHARS = 12_000
 # Agent-facing file reads (`read_file` tool) are truncated at the source so a
 # single oversized file never floods the model context. Matches the spirit of
 # opencode's TOOL_OUTPUT_MAX_CHARS=2000 and run_command's MAX_COMMAND_OUTPUT_CHARS.
-READ_FILE_MAX_CHARS = 50_000
+# 40k chars ≈ ~10-12k tokens on dense code — a bounded window that pages via
+# `next_offset` instead of a per-request bomb.
+READ_FILE_MAX_CHARS = 40_000
+# First N bytes of a file are sniffed for binary before a read (NUL byte or a
+# high ratio of non-printable bytes) so we never stream-load a whole binary file
+# just to discover it is not text.
+BINARY_SNIFF_BYTES = 4096
+_BINARY_NONPRINTABLE_RATIO = 0.3
 # Truncated tool outputs are persisted here (workspace-relative) so the model can
 # be pointed at the full file instead of losing data to the char cap — opencode's
 # "truncate → save to disk → give the path" pattern. Hidden from normal browsing
@@ -318,6 +332,44 @@ class CommandApprovalStore:
 
     def is_always_allowed(self, digest: str) -> bool:
         return digest in self.allowlist()
+
+
+def _load_ignore_patterns(directory: Path) -> list[tuple[bool, str]]:
+    """Parse ``.gitignore`` / ``.ignore`` / ``.rgignore`` into ``(negated, pattern)``."""
+    patterns: list[tuple[bool, str]] = []
+    for name in IGNORE_FILE_NAMES:
+        f = directory / name
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            patterns.append((line.startswith("!"), line[1:].strip() if line.startswith("!") else line))
+    return patterns
+
+
+def _match_ignore_pattern(rel: str, segs: list[str], pat: str) -> bool:
+    pat = pat.rstrip("/")
+    if not pat:
+        return False
+    if pat.startswith("/"):
+        return fnmatch.fnmatch(rel, pat[1:])
+    if "/" in pat:
+        return fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(rel, f"**/{pat}")
+    return any(fnmatch.fnmatch(seg, pat) for seg in segs)
+
+
+def _ignored_by_any(rel: str, patterns: list[tuple[bool, str]]) -> bool:
+    """gitignore semantics (simplified): last matching rule wins (negation)."""
+    ignored = False
+    segs = rel.split("/")
+    for negated, pat in patterns:
+        if _match_ignore_pattern(rel, segs, pat):
+            ignored = not negated
+    return ignored
 
 
 class Workspace:
@@ -1191,6 +1243,61 @@ class Workspace:
             return True
         return False
 
+    @staticmethod
+    def _is_binary_bytes(data: bytes) -> bool:
+        """NUL byte or >30% non-printable bytes ⇒ binary (opencode isBinaryFile)."""
+        if not data:
+            return False
+        if b"\x00" in data:
+            return True
+        nonprintable = sum(1 for b in data if b < 9 or (13 < b < 32))
+        return nonprintable / len(data) > _BINARY_NONPRINTABLE_RATIO
+
+    @staticmethod
+    def _count_lines(target: Path) -> int:
+        """Streaming line count — memory-bounded even for very large files."""
+        try:
+            with open(target, "r", encoding="utf-8", errors="replace") as fh:
+                return sum(1 for _ in fh)
+        except OSError:
+            return 0
+
+    @staticmethod
+    def _read_window(
+        target: Path,
+        offset: int,
+        limit: int,
+        max_chars: int,
+    ) -> tuple[list[str], int, bool]:
+        """Stream the line window ``[offset, offset+limit)``, char-capped.
+
+        Never loads the whole file (R1): the file is iterated line by line and
+        reading stops once ``limit`` lines are collected or ``max_chars`` chars
+        are reached. Returns ``(collected, chars_used, char_capped)``.
+        """
+        collected: list[str] = []
+        used = 0
+        char_capped = False
+        with open(target, "r", encoding="utf-8", errors="replace") as fh:
+            if offset > 1:
+                for _ in range(offset - 1):
+                    if not fh.readline():
+                        break
+            for raw in fh:
+                if limit > 0 and len(collected) >= limit:
+                    break
+                line = raw.rstrip("\n")
+                if used + len(line) > max_chars:
+                    char_capped = True
+                    remaining = max_chars - used
+                    if remaining > 0:
+                        collected.append(line[:remaining])
+                        used += remaining
+                    break
+                collected.append(line)
+                used += len(line)
+        return collected, used, char_capped
+
     def read_preview(self, file_path: str, max_chars: int = 100_000, offset: int = 1, limit: int = 0) -> dict[str, Any]:
         """Read a text file preview, optionally paged by line.
 
@@ -1198,36 +1305,42 @@ class Workspace:
         (0 = unlimited, up to ``max_chars``). Returns the content, total line
         count, and ``next_offset`` (line to start the next page at, or 0 when
         the file is fully read) so large files can be paged without flooding
-        the model context.
+        the model context. Reads are STREAMING (bounded memory — a huge file is
+        never fully loaded, only the requested line window).
         """
         target = self.resolve_read_path(file_path)
         if not target.is_file():
             raise ValueError(f"Not a file: {file_path}")
+        stat = target.stat()
+        # Binary detection: extension/mime first, then sniff the first bytes so
+        # an unknown binary never gets stream-loaded as text.
+        binary = False
         if not self.is_text_file(target):
-            return {"content": None, "binary": True, "size": target.stat().st_size}
-        content = target.read_text(encoding="utf-8", errors="replace")
+            binary = True
+        else:
+            try:
+                with open(target, "rb") as fh:
+                    head = fh.read(BINARY_SNIFF_BYTES)
+                binary = self._is_binary_bytes(head)
+            except OSError:
+                binary = True
+        if binary:
+            return {"content": None, "binary": True, "size": stat.st_size}
         self._record_fingerprint(target)
-        total_lines = content.count("\n") + (0 if content.endswith("\n") else 1) if content else 0
+        max_chars = max_chars or READ_FILE_MAX_CHARS
         offset = max(1, int(offset or 1))
-        lines = content.splitlines()
-        if offset > 1:
-            lines = lines[offset - 1 :]
-        truncated = False
-        if limit and limit > 0 and len(lines) > limit:
-            lines = lines[:limit]
-            truncated = True
-        paged = "\n".join(lines)
-        char_truncated = len(paged) > max_chars
-        if char_truncated:
-            paged = paged[:max_chars]
-            truncated = True
+        limit = int(limit or 0)
+        total_lines = self._count_lines(target)
+        collected, used_chars, char_capped = self._read_window(target, offset, limit, max_chars)
+        paged = "\n".join(collected)
         shown_start = offset
-        shown_end = offset + len(lines) - 1
+        shown_end = offset + len(collected) - 1
+        truncated = char_capped or (limit > 0 and len(collected) >= limit and shown_end < total_lines)
         next_offset = shown_end + 1 if truncated and shown_end < total_lines else 0
         return {
             "content": paged,
             "binary": False,
-            "size": target.stat().st_size,
+            "size": stat.st_size,
             "truncated": truncated,
             "total_lines": total_lines,
             "offset": shown_start,
@@ -1243,6 +1356,70 @@ class Workspace:
                     else "(Empty file)"
                 )
             ),
+        }
+
+    def search_text_rg(
+        self,
+        needle: str,
+        target: Path,
+        limit: int,
+        max_results: int,
+    ) -> dict[str, Any] | None:
+        """Ripgrep fast path (respects ``.gitignore``, streams, is fast).
+
+        Returns the search result dict, or ``None`` to signal the caller to
+        fall back to the pure-Python scan (rg absent / non-zero failure).
+        """
+        rg = shutil.which("rg")
+        if not rg:
+            return None
+        try:
+            proc = subprocess.run(
+                [rg, "--json", "-n", "-i", "--max-count", "1", "--", needle, str(target)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode not in (0, 1):
+            return None
+
+        results: list[dict[str, Any]] = []
+        searched_files = 0
+        for line in proc.stdout.splitlines():
+            try:
+                obj = json.loads(line)
+            except Exception:  # noqa: BLE001 - tolerate stray output
+                continue
+            if obj.get("type") != "match":
+                continue
+            data = obj.get("data", {})
+            try:
+                path = Path(data.get("path", {}).get("text", ""))
+            except Exception:  # noqa: BLE001
+                continue
+            line_no = int(data.get("line_number") or 0)
+            text = (data.get("lines", {}).get("text", "") or "").rstrip("\n")
+            searched_files += 1
+            results.append(
+                {
+                    "path": self._safe_rel_path(path),
+                    "line": line_no,
+                    "preview": text.strip()[:240],
+                }
+            )
+            if len(results) >= limit:
+                break
+
+        return {
+            "query": needle,
+            "path": self._safe_rel_path(target) if target != self.root else "",
+            "results": results,
+            "result_count": len(results),
+            "searched_files": searched_files,
+            "skipped_files": 0,
+            "truncated": len(results) >= max(1, min(max_results, DEFAULT_SEARCH_MAX_RESULTS)),
         }
 
     def search_text(
@@ -1261,6 +1438,14 @@ class Workspace:
             raise ValueError(f"Path not found: {rel_path or '.'}")
 
         limit = max(1, min(max_results, DEFAULT_SEARCH_MAX_RESULTS))
+
+        # Fast path: ripgrep (respects .gitignore, streams, capped results).
+        rg_result = self.search_text_rg(needle, target, limit, max_results)
+        if rg_result is not None:
+            return rg_result
+
+        # Fallback: ignore-aware walk + STREAMING line scan (never loads a whole
+        # file via read_text; skips files over max_file_bytes).
         results: list[dict[str, Any]] = []
         searched_files = 0
         skipped_files = 0
@@ -1280,18 +1465,19 @@ class Workspace:
 
             searched_files += 1
             try:
-                for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
-                    if needle_lower not in line.lower():
-                        continue
-                    results.append(
-                        {
-                            "path": self._safe_rel_path(path),
-                            "line": line_number,
-                            "preview": line.strip()[:240],
-                        }
-                    )
-                    if len(results) >= limit:
-                        break
+                with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                    for line_number, line in enumerate(fh, start=1):
+                        if needle_lower not in line.lower():
+                            continue
+                        results.append(
+                            {
+                                "path": self._safe_rel_path(path),
+                                "line": line_number,
+                                "preview": line.strip()[:240],
+                            }
+                        )
+                        if len(results) >= limit:
+                            break
             except OSError:
                 skipped_files += 1
 
@@ -1316,6 +1502,30 @@ class Workspace:
         # the resolved real path of every directory we descend into and skip
         # any already-visited one, so a cycle cannot recurse forever.
         visited: set[str] = set()
+        # gitignore-aware descent (R3): a path is skipped when a .gitignore /
+        # .ignore / .rgignore in any ancestor directory (down from the walk
+        # root) matches its root-relative path. Patterns are loaded once per dir.
+        pattern_cache: dict[Path, list[tuple[bool, str]]] = {}
+
+        def _dir_patterns(d: Path) -> list[tuple[bool, str]]:
+            if d not in pattern_cache:
+                pattern_cache[d] = _load_ignore_patterns(d)
+            return pattern_cache[d]
+
+        def _ignored(path: Path) -> bool:
+            try:
+                rel = path.relative_to(root)
+            except ValueError:
+                return False
+            cur = root
+            acc = ""
+            parts = list(rel.parts)
+            for i, part in enumerate(parts):
+                acc = f"{acc}/{part}" if i > 0 else part
+                if _ignored_by_any(acc, _dir_patterns(cur)):
+                    return True
+                cur = cur / part
+            return False
 
         def _walk(dirpath: Path) -> Any:
             try:
@@ -1334,8 +1544,12 @@ class Workspace:
                     if child.is_dir():
                         if child.name in DEFAULT_IGNORED_DIRS:
                             continue
+                        if _ignored(child):
+                            continue
                         yield from _walk(child)
                     elif child.is_file():
+                        if _ignored(child):
+                            continue
                         yield child
                 except OSError:
                     continue
