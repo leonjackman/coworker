@@ -84,12 +84,22 @@ class SteerInjectionMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         super().__init__()
         # Runtime callback that buffers a ``steer_injected`` frame for ``parts``
         # persistence and publishes it to the session event bus (mirrors the
-        # delegation emit wiring in the runtime).
+        # delegation emit wiring in the runtime). Set per turn via
+        # ``reset_per_turn`` when the middleware is compiled once (W1).
         self._emit = steer_emit
         # Steers already folded into this turn's conversation (persist across
         # every model call of the turn).
         self._injected: list[HumanMessage] = []
         self._injected_ids: set[str] = set()
+
+    def reset_per_turn(self, steer_emit: Callable[[dict[str, Any]], None] | None = None) -> None:
+        """W1 (compile-cache prerequisite): start a turn with no injected steers
+        and the per-turn emit callback (the build-time callback is session/turn
+        specific and must not be pinned at compile)."""
+        self._injected = []
+        self._injected_ids = set()
+        if steer_emit is not None:
+            self._emit = steer_emit
 
     def _steer_message(self, entry: Any) -> HumanMessage:
         content = format_user_message(

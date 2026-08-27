@@ -78,10 +78,25 @@ def phase_system_prompt(language: Language, phase: Phase, autonomy: Autonomy) ->
 
 
 def _default_title_from_message(user_message: str) -> str:
+    """Rule-based title (N4): no LLM call — cost-free, instant, deterministic.
+
+    Strips common framing ("请/帮我/please/…"), cuts at the first sentence end
+    or ~20 chars on a word boundary, and normalizes whitespace.
+    """
+    import re
+
     text = user_message.strip()
-    if len(text) <= 20:
-        return text
-    return text[:20].rstrip()[:20]
+    if not text:
+        return "新会话"
+    text = re.sub(r"^(请|帮我|请帮我|能不能|麻烦|please|can you|could you|help me)\s*", "", text, flags=re.I).strip() or text
+    cut = 20
+    for sep in ("\n", "。", "！", "？", "；", "!", "?", ". ", "; "):
+        idx = text.find(sep)
+        if 0 < idx <= cut:
+            cut = idx
+    title = text[:cut].strip()
+    title = re.sub(r"\s+", " ", title).rstrip()
+    return title[:20] if title else "新会话"
 
 
 __all__ = ["SYSTEM_PROMPT", "_title_system_prompt", "phase_system_prompt", "_default_title_from_message", "language_name"]

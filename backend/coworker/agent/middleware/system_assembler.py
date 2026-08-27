@@ -103,6 +103,12 @@ class SystemAssembler(AgentMiddleware):
         # Per-turn memo of SKILL.md body reads (shared with build_skill_section).
         self._skill_body_cache: dict[tuple[str, str], tuple[str, str] | None] = {}
 
+    def reset_per_turn(self) -> None:
+        """W1 (compile-cache prerequisite): clear per-turn fragment caches so a
+        reused assembler never serves last turn's workspace/skill reads."""
+        self._ws_cache.clear()
+        self._skill_body_cache.clear()
+
     # -- fragment providers ---------------------------------------------------
 
     def _workspace_section(self, phase: Any) -> str:

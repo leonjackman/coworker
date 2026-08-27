@@ -6,6 +6,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,8 +41,8 @@ DEFAULT_SEARCH_MAX_RESULTS = 80
 DEFAULT_SEARCH_MAX_FILE_BYTES = 256_000
 # Ignore-file names respected by the search walk (gitignore-style).
 IGNORE_FILE_NAMES = (".gitignore", ".ignore", ".rgignore")
-DEFAULT_COMMAND_TIMEOUT_SECONDS = 20
-MAX_COMMAND_TIMEOUT_SECONDS = 60
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
+MAX_COMMAND_TIMEOUT_SECONDS = 300
 MAX_COMMAND_OUTPUT_CHARS = 12_000
 # Agent-facing file reads (`read_file` tool) are truncated at the source so a
 # single oversized file never floods the model context. Matches the spirit of
@@ -395,6 +396,20 @@ class Workspace:
         # per model call. Used by use_worker to decide whether a spawned worker
         # runs read-only (same as the main agent in discuss phase).
         self._current_phase: str = "execute"
+        # L3: background command jobs (id → result). Bounded; oldest pruned.
+        self._bg_jobs: dict[str, dict[str, Any]] = {}
+        self._bg_lock = threading.Lock()
+
+    def begin_turn(self) -> None:
+        """Reset per-turn in-memory state (W1: stable workspace reuse).
+
+        The Workspace object is now cached per path across turns (compile-cache
+        prerequisite), so per-turn flags must be reset at each turn start:
+        ``_current_phase`` (fresh turns start in execute) and any in-flight
+        external-write approval. Fingerprints are disk-persisted and stay.
+        """
+        self._current_phase = "execute"
+        self._allow_external_write = False
 
     def _resolve(self, file_path: str) -> Path:
         """Resolve a path against workspace root without boundary check."""
@@ -897,6 +912,90 @@ class Workspace:
         except Exception as exc:
             self.audit_tool_action("run_command", "error", {**details, "error": str(exc)[:240]}, audit_context)
             raise
+
+    def run_command_bg(
+        self,
+        command: list[str],
+        cwd: str = "",
+        timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """L3: run an allowlisted command in a background thread.
+
+        Returns immediately with a ``job_id``; poll via ``command_status``.
+        The job runs with the same path/executable resolution as ``run_command``
+        but no approval flow (approval was already granted by the HITL layer
+        before the tool executed). Bounded job store (oldest pruned).
+        """
+        import uuid as _uuid
+
+        if not command or not all(isinstance(part, str) and part for part in command):
+            raise ValueError("command must be a non-empty string array")
+        working_dir = self.resolve_write_path(cwd)
+        if not working_dir.is_dir():
+            raise ValueError(f"Command cwd is not a directory: {cwd or '.'}")
+        executable = self.resolve_executable(command[0], working_dir)
+        safe_timeout = max(1, min(int(timeout_seconds or DEFAULT_COMMAND_TIMEOUT_SECONDS), MAX_COMMAND_TIMEOUT_SECONDS))
+        safe_command = [executable, *command[1:]]
+        job_id = _uuid.uuid4().hex[:12]
+
+        def _worker() -> None:
+            try:
+                completed = subprocess.run(
+                    safe_command,
+                    cwd=str(working_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=safe_timeout,
+                    shell=False,
+                )
+                result = {
+                    "status": "done",
+                    "job_id": job_id,
+                    "return_code": int(completed.returncode or 0),
+                    "stdout": (completed.stdout or "")[:MAX_COMMAND_OUTPUT_CHARS],
+                    "stderr": (completed.stderr or "")[:MAX_COMMAND_OUTPUT_CHARS],
+                    "timed_out": False,
+                }
+            except subprocess.TimeoutExpired:
+                result = {
+                    "status": "done",
+                    "job_id": job_id,
+                    "return_code": None,
+                    "stdout": "",
+                    "stderr": f"Command timed out after {safe_timeout}s",
+                    "timed_out": True,
+                }
+            except Exception as exc:  # noqa: BLE001 - surface as job error
+                result = {
+                    "status": "error",
+                    "job_id": job_id,
+                    "return_code": None,
+                    "stdout": "",
+                    "stderr": str(exc)[:240],
+                    "timed_out": False,
+                }
+            with self._bg_lock:
+                self._bg_jobs[job_id] = result
+                while len(self._bg_jobs) > 50:
+                    self._bg_jobs.pop(next(iter(self._bg_jobs)))
+
+        with self._bg_lock:
+            self._bg_jobs[job_id] = {"status": "running", "job_id": job_id}
+        threading.Thread(target=_worker, daemon=True).start()
+        return {
+            "background": True,
+            "job_id": job_id,
+            "status": "running",
+            "hint": "Poll with the run_command_status tool using this job_id.",
+        }
+
+    def command_status(self, job_id: str) -> dict[str, Any]:
+        """L3: poll a background command job (or report it missing/expired)."""
+        with self._bg_lock:
+            job = self._bg_jobs.get(job_id)
+        if job is None:
+            return {"status": "not_found", "job_id": job_id}
+        return dict(job)
 
     @staticmethod
     def command_digest(command: list[str], cwd: str) -> str:

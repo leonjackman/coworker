@@ -31,7 +31,6 @@ from typing_extensions import NotRequired
 from langchain.agents.middleware.types import AgentState
 from pydantic import BaseModel, Field
 
-from .prompts import _default_title_from_message, _title_system_prompt
 from .types import AgentMode, Autonomy, Language, Phase, VALID_LANGUAGES, WorkMode
 
 
@@ -69,6 +68,12 @@ class CoworkerAgentState(AgentState[Any]):
     # loop guard survives middleware rebuilds across turns (the middleware is
     # rebuilt every turn; a per-instance set would reset the guard each turn).
     context_summarized_fingerprints: NotRequired[list[str]]
+    # W2/N1: explicit reason the turn's tool loop stopped — "tool_calls" (last
+    # step made a tool call), "repeated" / "degenerate" (loop guard), "overflow"
+    # (context guard), "hitl" (approval interrupt), "step_cap" (recursion
+    # limit), or "final" (no tool calls → natural stop). Surfaced on the done
+    # event so the UI/continuation knows exactly WHY the loop ended.
+    loop_reason: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -152,10 +157,19 @@ class RunCommandArgs(BaseModel):
         )
     )
     cwd: str = Field(default="", description="Optional workspace-relative working directory.")
-    timeout_seconds: int = Field(default=20, ge=1, le=60, description="Command timeout in seconds.")
+    timeout_seconds: int = Field(default=60, ge=1, le=300, description="Command timeout in seconds. Use background=true for long-running builds.")
 
 
 DEFAULT_AGENT_NAME = "default_agent"
+
+# W2/N1: explicit tool-loop step cap (recursion_limit in the run config).
+# create_agent's internal default is 9_999; this bounds a runaway loop even
+# when every individual tool call is valid.
+MAX_STEPS_PROMPT = 200
+
+
+class CommandStatusArgs(BaseModel):
+    job_id: str = Field(description="The job_id returned by run_command(background=true).")
 
 
 class DelegateTaskArgs(BaseModel):
@@ -398,6 +412,9 @@ def agent_run_config(
 ) -> dict[str, Any]:
     return {
         "run_name": "coworker_agent" + ("_stream" if streaming else ""),
+        # W2/N1: explicit step cap (opencode-aligned) — the tool loop must not
+        # run unbounded even if every tool call "succeeds".
+        "recursion_limit": MAX_STEPS_PROMPT,
         "tags": [
             "coworker",
             "agent",
@@ -486,7 +503,7 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 MAX_TOOL_DESCRIPTION_CHARS = 650
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser", "get_goal"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser", "get_goal", "run_command_status"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
 _EXEC_TOOLS = {"run_command", "install_skill", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal"}
@@ -554,28 +571,41 @@ def _strip_plan_leak(content: str, parts: list[dict[str, Any]]) -> str:
     providers/graph modes re-stream that injected message as ordinary content
     deltas, duplicating the plan that was already delivered through the
     ``plan_*`` events. This strips that leading segment when it matches the
-    plan text emitted through the plan events.
+    plan text emitted through the plan events (checked against ALL plan
+    fragments, longest first — D5).
     """
     if not content:
         return content
-    plan_text = ""
+    plan_texts: list[str] = []
     for part in parts:
-        if part.get("type") == "plan_end" and part.get("content"):
-            plan_text = str(part["content"])
-            break
-        if part.get("type") == "plan" and part.get("content"):
-            plan_text = str(part["content"])
-            break
-    if not plan_text:
+        if part.get("type") in ("plan_end", "plan") and part.get("content"):
+            t = str(part["content"])
+            if t not in plan_texts:
+                plan_texts.append(t)
+    if not plan_texts:
         return content
-
-    if content.startswith(plan_text):
-        return content[len(plan_text):].lstrip("\n")
+    # Longest plan text first (a later full plan is more authoritative).
+    for plan_text in sorted(plan_texts, key=len, reverse=True):
+        if content.startswith(plan_text):
+            return content[len(plan_text):].lstrip("\n")
     stripped = content.lstrip("\n")
     if stripped.startswith(PLAN_MARKER):
         stripped = stripped[len(PLAN_MARKER):].lstrip("\n")
-        if stripped.startswith(plan_text):
-            return stripped[len(plan_text):].lstrip("\n")
+        for plan_text in plan_texts:
+            if stripped.startswith(plan_text):
+                return stripped[len(plan_text):].lstrip("\n")
+    return content
+
+
+def _clean_final_content(content: str, parts: list[dict[str, Any]], summary: str) -> str:
+    """D5: one combined final-content cleanup — strip any leaked plan segment
+    AND a verbatim echo of the injected compaction summary (single pass).
+    """
+    content = _strip_plan_leak(content, parts)
+    if content and summary:
+        s = summary.strip()
+        if len(s) >= 20 and s in content:
+            content = content.replace(s, "").strip()
     return content
 
 
@@ -838,6 +868,10 @@ def _message_chunk_events(
 def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: list[dict[str, Any]] = []
     pending_text: list[str] = []
+    # D3: id → merged-index map so tool_delta/tool_end resolve the running tool
+    # in O(1) instead of a linear scan of `merged` per chunk (O(n²) on long
+    # streamed tool inputs).
+    tool_index: dict[str, int] = {}
 
     def _flush_text() -> None:
         if pending_text:
@@ -872,16 +906,19 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
             else:
                 merged.append({"type": "plan", "content": part.get("content", "")})
         elif part.get("type") == "tool_delta":
-            existing_tool = next((p for p in merged if p.get("type") == "tool" and p.get("id") == part.get("id")), None)
-            if existing_tool:
+            idx = tool_index.get(part.get("id", ""))
+            if idx is not None and idx < len(merged):
+                existing_tool = merged[idx]
                 existing_tool["input"] = (existing_tool.get("input", "") or "") + (part.get("input") or "")
             elif merged and merged[-1].get("type") == "tool_start":
                 merged[-1]["type"] = "tool"
                 merged[-1]["input"] = (merged[-1].get("input", "") or "") + (part.get("input") or "")
         elif part.get("type") == "tool_start":
             merged.append({"type": "tool", "id": part.get("id", ""), "name": part.get("name", ""), "status": "running", "input": part.get("input", "")})
+            tool_index[str(part.get("id", ""))] = len(merged) - 1
         elif part.get("type") == "tool_end":
-            existing_tool = next((p for p in merged if p.get("type") == "tool" and p.get("id") == part.get("id")), None)
+            idx = tool_index.get(part.get("id", ""))
+            existing_tool = merged[idx] if idx is not None and idx < len(merged) else None
             if existing_tool:
                 existing_tool["status"] = "success" if part.get("status") == "success" else "error"
                 if part.get("output") is not None:
@@ -957,30 +994,17 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def generate_title(first_user_message: str, assistant_response: str = "", language: Language = "zh") -> str:
-    from langchain_openai import ChatOpenAI
-    if assistant_response and assistant_response.strip():
-        conversation = f"用户: {first_user_message}\n\nAI: {assistant_response}"
-    else:
-        conversation = first_user_message
-    title_prompt = _title_system_prompt(language)
-    try:
-        from ..config import load_settings
-        from ..providers import ProviderManager
-        settings = load_settings()
-        provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
-        dp = provider_manager.default_provider()
-        if dp and dp.api_key and (dp.base_url or dp.provider_type):
-            llm = ChatOpenAI(model=dp.model, api_key=dp.api_key, base_url=dp.base_url or None)
-            response = llm.invoke([
-                {"role": "system", "content": title_prompt},
-                {"role": "user", "content": conversation},
-            ])
-            title = coerce_message_content(response).strip().strip('"').strip("'")
-            if title and 3 <= len(title) <= 50:
-                return title
-    except Exception:
-        pass
-    return _default_title_from_message(first_user_message)
+    """Generate a session title by RULE only (N4) — no model chat call.
+
+    Previously this ran a full chat completion on the default provider's model
+    for every new session (a disproportionate cost for a 20-char label). The
+    rule-based title is deterministic, instant and free; the assistant response
+    is accepted but unused to keep the call signature stable.
+    """
+    from .prompts import _default_title_from_message
+
+    title = _default_title_from_message(first_user_message)
+    return title
 
 
 
@@ -1208,7 +1232,12 @@ def format_user_message(
 # messages are dropped first (the first system message is always kept). The
 # checkpoint still holds full history; this only bounds what the model sees and
 # what gets replayed into the checkpoint.
-CONTEXT_SAFETY_FACTOR = 0.75
+# Fraction of ``window − max_output`` used as the resident-message budget.
+# 0.75 was over-conservative (openqueue compacts at ``window − reserved``, codex
+# at 90%): with token-accurate measurement + calibration the extra margin is
+# unnecessary and caused premature trimming (V1). 0.9 keeps a safety edge for
+# estimation error without starving the resident window.
+CONTEXT_SAFETY_FACTOR = 0.9
 # Compaction keeps a FIXED small recent-window of raw messages (opencode-aligned;
 # opencode uses DEFAULT_KEEP_TOKENS=8000). The compacted resident set is then
 # roughly ``recent + summary`` instead of the old ``budget × 0.6`` (≈118k for a

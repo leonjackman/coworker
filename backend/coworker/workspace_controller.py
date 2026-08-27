@@ -16,6 +16,15 @@ class WorkspaceController:
         self.audit_path = data_dir / TOOL_AUDIT_FILENAME
         self.data_dir = data_dir
         self.org_store = org_store
+        # W1 (compile-cache prerequisite): a stable Workspace per path so tool
+        # closures compiled once can be reused across turns without pinning a
+        # per-turn object. Per-turn state is reset via ``Workspace.begin_turn()``
+        # at turn start; fingerprints are disk-persisted so reuse is safe.
+        self._workspace_cache: dict[str, Workspace] = {}
+
+    def evict_workspace(self, workspace_path: str) -> None:
+        """Drop a cached Workspace (called when a project/session is deleted)."""
+        self._workspace_cache.pop(str(Path(workspace_path).expanduser().resolve()), None)
 
     def validate_workspace_path(self, workspace_path: str) -> str:
         cleaned = workspace_path.strip()
@@ -35,11 +44,19 @@ class WorkspaceController:
         return str(path)
 
     def create_workspace(self, workspace_path: str) -> Workspace:
-        return Workspace(
-            Path(workspace_path),
+        """Return a STABLE Workspace for a path (cached; per-turn reset via
+        ``begin_turn()``). Compile-cache prerequisite (W1)."""
+        key = str(Path(workspace_path).expanduser().resolve())
+        cached = self._workspace_cache.get(key)
+        if cached is not None:
+            return cached
+        ws = Workspace(
+            Path(key),
             self.audit_path,
-            fingerprint_path_for(self.data_dir, Path(workspace_path)),
+            fingerprint_path_for(self.data_dir, Path(key)),
         )
+        self._workspace_cache[key] = ws
+        return ws
 
     def default(self) -> Workspace:
         return self.create_workspace(str(self.default_workspace))

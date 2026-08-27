@@ -266,8 +266,12 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             changed += 1
         return new_messages, changed
 
-    def _drop_mcp_tools(self, tools: list[Any] | None) -> tuple[list[Any] | None, int]:
+    def _drop_mcp_tools(self, tools: list[Any] | None, messages: list[Any] | None = None) -> tuple[list[Any] | None, int]:
         """S4: drop optional MCP tool schemas (they ride on EVERY request).
+
+        W5/S3: keeps the MCP tools the model actually CALLED recently (from the
+        trailing tool-call history) so an in-flight MCP round is never stripped
+        mid-turn; only never-used MCP schemas are dropped.
 
         Handles both ``BaseTool`` instances and raw schema dicts (ModelRequest
         accepts either, and the phase gate passes dicts through untouched).
@@ -281,6 +285,20 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         if not mcp_names:
             return tools, 0
 
+        recent: set[str] = set()
+        for msg in reversed(messages or []):
+            for tc in getattr(msg, "tool_calls", None) or []:
+                name = ""
+                if isinstance(tc, dict):
+                    fn = tc.get("function") or {}
+                    name = str(fn.get("name") or "") if isinstance(fn, dict) else ""
+                else:
+                    name = str(getattr(tc, "name", "") or "")
+                if name and name in mcp_names:
+                    recent.add(name)
+            if len(recent) >= 8:
+                break
+
         def _tool_name(tool: Any) -> str:
             name = getattr(tool, "name", "")
             if name:
@@ -292,7 +310,7 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 return str(tool.get("name") or "")
             return ""
 
-        kept = [t for t in tools if _tool_name(t) not in mcp_names]
+        kept = [t for t in tools if _tool_name(t) not in mcp_names or _tool_name(t) in recent]
         return kept, len(tools) - len(kept)
 
     def _emergency_drop_oldest(self, messages: list[Any], limit: int, factor: float) -> tuple[list[Any], int]:
@@ -394,8 +412,8 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             if measured <= self.limit_tokens * self.TARGET_RATIO:
                 return self._finalize(request, overrides, measured)
 
-        # S4 — drop optional MCP tool schemas.
-        tools, n4 = self._drop_mcp_tools(tools)
+        # S4 — drop optional MCP tool schemas (keeps recently-used MCP tools).
+        tools, n4 = self._drop_mcp_tools(tools, messages)
         if n4:
             overrides["tools"] = tools
             self.last_steps.append(f"drop_mcp_tools:{n4}")

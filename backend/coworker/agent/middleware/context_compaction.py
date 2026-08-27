@@ -97,6 +97,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             context_window_tokens if context_window_tokens and context_window_tokens > 0 else 128_000,
             self.max_output_tokens,
         )
+        self.configured_budget_tokens = self.budget_tokens
         self.language: Language = language if language in ("zh", "en") else "zh"
         # Real model context window (tokens) + how it was resolved, surfaced to the
         # UI so the meter shows usage against the ACTUAL window (not just the 75%
@@ -112,6 +113,10 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         self.calibration_store = calibration_store
         self.calibration_key = calibration_key or ""
         self._summarized_segments: set[str] = set()
+        # D4/W4: memoize the generated summary per (segment fingerprint,
+        # previous-summary) so a stall RETRY of the same model call reuses the
+        # already-computed summary instead of running the summarizer LLM again.
+        self._summary_cache: dict[tuple[str, str], str] = {}
         # Cheap layer: ClearToolUsesEdit (Anthropic-style context editing) used
         # BOTH by this middleware (prune-aware trigger, CJK-counted) and by the
         # mounted ContextEditingMiddleware (transient per-call slimming).
@@ -145,6 +150,19 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             self._partial_token_counter = self._cjk_token_counter
             self.summary_prompt = COMPACTION_PROMPTS.get(self.language, COMPACTION_PROMPTS["en"])
             self.trim_tokens_to_summarize = 4000
+
+    def reset_per_turn(self) -> None:
+        """W1 (compile-cache prerequisite): restore per-turn mutable state.
+
+        The middleware is compiled ONCE and reused across turns, so the
+        overflow-retry budget halving (``_force_compact``) must NOT leak into the
+        next turn, and the anchored-summary/segment caches must start clean.
+        """
+        self.budget_chars = self.configured_budget
+        self.budget_tokens = self.configured_budget_tokens
+        self.last_summary = ""
+        self._summarized_segments.clear()
+        self._summary_cache.clear()
 
     @staticmethod
     def _cjk_token_counter(messages: Iterable[Any]) -> int:
@@ -437,10 +455,22 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
                 return candidate
         return formatted
 
+    @staticmethod
+    def _segment_fingerprint(messages: list[Any]) -> str:
+        return "|".join(getattr(m, "id", "") or "" for m in messages)
+
     def _create_summary(self, messages_to_summarize: list[Any], previous_summary: str = "") -> str:
-        """Synchronous summarizer with the fallback model chain (anchored)."""
+        """Synchronous summarizer with the fallback model chain (anchored).
+
+        Memoized per (segment, previous-summary) so a stall retry reuses the
+        already-computed summary instead of re-running the summarizer LLM (D4).
+        """
         if not messages_to_summarize:
             return ""
+        cache_key = (self._segment_fingerprint(messages_to_summarize), previous_summary)
+        cached = self._summary_cache.get(cache_key)
+        if cached is not None:
+            return cached
         formatted = self._serialize_for_summary(messages_to_summarize)
         if not formatted:
             return ""
@@ -463,6 +493,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
                 text = str(getattr(response, "content", "") or response or "").strip()
                 text = _cap_summary(text)
                 if _summary_ok(text):
+                    self._summary_cache[cache_key] = text
                     return text
                 logger.warning("summarizer output rejected (degenerate): %.120s", text)
             except Exception as exc:  # noqa: BLE001 - try the next candidate
@@ -473,6 +504,10 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         """Async summarizer with the fallback model chain (anchored)."""
         if not messages_to_summarize:
             return ""
+        cache_key = (self._segment_fingerprint(messages_to_summarize), previous_summary)
+        cached = self._summary_cache.get(cache_key)
+        if cached is not None:
+            return cached
         formatted = self._serialize_for_summary(messages_to_summarize)
         if not formatted:
             return ""
@@ -493,6 +528,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
                 text = str(getattr(response, "content", "") or response or "").strip()
                 text = _cap_summary(text)
                 if _summary_ok(text):
+                    self._summary_cache[cache_key] = text
                     return text
                 logger.warning("summarizer output rejected (degenerate): %.120s", text)
             except Exception as exc:  # noqa: BLE001 - try the next candidate

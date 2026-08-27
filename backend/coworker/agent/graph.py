@@ -55,6 +55,7 @@ from .core import (
     ReadSessionArgs,
     ReplaceInFileArgs,
     RunCommandArgs,
+    CommandStatusArgs,
     SearchFilesArgs,
     TextEditArgs,
     WriteFileArgs,
@@ -85,7 +86,6 @@ def build_workspace_tools(
     workspace: Workspace,
     audit_context: dict[str, Any] | None = None,
     change_store: ChangeStore | None = None,
-    turn_index: int = 1,
     session_store: SessionStore | None = None,
     referenced_sessions: set[str] | None = None,
     skill_manager: Any | None = None,
@@ -164,7 +164,7 @@ def build_workspace_tools(
     def write_file(file_path: str, content: str) -> str:
         """Write a full UTF-8 text file."""
         try:
-            workspace.write_text(file_path, content, audit_context, change_store, turn_index)
+            workspace.write_text(file_path, content, audit_context, change_store, int(audit_context.get("turn_index", 1) if audit_context else 1))
             return f"Wrote {file_path}"
         except Exception as exc:
             return _error_result(exc, "write_file")
@@ -173,7 +173,7 @@ def build_workspace_tools(
     def replace_in_file(file_path: str, old_text: str, new_text: str, replace_all: bool = False) -> str:
         """Replace exact text in a UTF-8 workspace file."""
         try:
-            result = workspace.replace_text(file_path, old_text, new_text, replace_all, audit_context, change_store, turn_index)
+            result = workspace.replace_text(file_path, old_text, new_text, replace_all, audit_context, change_store, int(audit_context.get("turn_index", 1) if audit_context else 1))
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "replace_in_file")
@@ -187,20 +187,22 @@ def build_workspace_tools(
                 [edit.model_dump() if isinstance(edit, TextEditArgs) else edit for edit in edits],
                 audit_context,
                 change_store,
-                turn_index,
+                int(audit_context.get("turn_index", 1) if audit_context else 1),
             )
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "apply_text_edits")
 
     @tool(args_schema=RunCommandArgs)
-    def run_command(command: str | list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
+    def run_command(command: str | list[str], cwd: str = "", timeout_seconds: int = 60, background: bool = False) -> str:
         """Run an allowlisted command in the workspace after runtime policy approval.
 
         Returns JSON with ``return_code`` (0 = success), ``stdout``, ``stderr``,
         ``timed_out``. A non-zero ``return_code`` means FAILURE — never blindly
         re-run the exact same command; adjust the path/scope or use another tool.
         ``command`` may be an argv array or a plain shell string (shlex-normalized).
+        Set ``background=true`` for long-running builds/tests: the tool returns a
+        ``job_id`` immediately; poll with the run_command_status tool.
         """
         import shlex as _shlex
 
@@ -212,10 +214,26 @@ def build_workspace_tools(
         try:
             # Runtime policy approval (HITL) is owned by HumanInTheLoopMiddleware;
             # this tool call is not the sync bottom-panel approval flow.
-            result = workspace.run_command(command, cwd, timeout_seconds, audit_context)
+            if background:
+                result = workspace.run_command_bg(command, cwd, timeout_seconds)
+            else:
+                result = workspace.run_command(command, cwd, timeout_seconds, audit_context)
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "run_command")
+
+    @tool(args_schema=CommandStatusArgs)
+    def run_command_status(job_id: str) -> str:
+        """Poll a background command job started with ``run_command(background=true)``.
+
+        Returns JSON with ``status`` (running | done | error | not_found) and,
+        when done, ``return_code`` / ``stdout`` / ``stderr`` / ``timed_out``.
+        """
+        try:
+            result = workspace.command_status(job_id)
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "run_command_status")
 
     # Platform-aware command vocabulary: tell the model which OS it is on and
     # which commands are actually allowlisted, so it stops guessing `ls` on
@@ -703,7 +721,6 @@ def build_coworker_agent_graph(
     browser_capability: str = "",
     max_output_tokens: int = 0,
     calibration_key: str = "",
-    steer_emit: Any | None = None,  # interjection (插話) live-emit callback
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -830,8 +847,10 @@ def build_coworker_agent_graph(
     # model-call boundary and folds pending user messages into the next request
     # — WITHOUT aborting the in-flight stream. Mounted AFTER compaction (so the
     # steer survives any trim) and BEFORE the context guard (so the guard
-    # measures the full final request including injected steers).
-    middleware.append(SteerInjectionMiddleware(steer_emit=steer_emit))
+    # measures the full final request including injected steers). The emit
+    # callback is session/turn specific and injected per turn via
+    # ``reset_per_turn`` (W1 — the graph is compiled once).
+    middleware.append(SteerInjectionMiddleware())
 
     # Context guard (INNERMOST — last in the chain, so it measures the request
     # after every other middleware's overrides): calibrated measurement of the
@@ -875,6 +894,29 @@ def build_coworker_agent_graph(
     try:
         setattr(graph, "_cw_context_middleware", context_middleware)
         setattr(graph, "_cw_context_guard", context_guard)
+        setattr(graph, "_cw_middleware_list", list(middleware))
+    except Exception:  # noqa: BLE001 - best-effort hook
+        pass
+
+    def _cw_reset_per_turn(steer_emit: Any = None) -> None:
+        """W1 (compile-cache prerequisite): reset every per-turn mutable
+        middleware state so a compiled-once graph can be reused across turns.
+
+        Called by the runtime right before each ``astream``.
+        """
+        for mw in middleware:
+            try:
+                reset = getattr(mw, "reset_per_turn", None)
+                if reset is not None:
+                    if isinstance(mw, SteerInjectionMiddleware):
+                        reset(steer_emit=steer_emit)
+                    else:
+                        reset()
+            except Exception:  # noqa: BLE001 - a reset failure must never break a turn
+                continue
+
+    try:
+        setattr(graph, "_cw_reset_per_turn", _cw_reset_per_turn)
     except Exception:  # noqa: BLE001 - best-effort hook
         pass
     return graph

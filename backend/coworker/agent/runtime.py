@@ -15,6 +15,7 @@ Depends on ``agent.core``, ``agent.graph``, ``agent.middleware`` and
 import asyncio
 import os
 from collections.abc import AsyncGenerator
+
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,7 @@ from .core import (
     _normalize_usage_total,
     _open_checkpointer,
     _resolve_project_memory_dir,
-    _strip_plan_leak,
+    _clean_final_content,
     _terminate_stray_tools,
     agent_run_config,
     is_context_overflow_error,
@@ -69,7 +70,6 @@ from .core import (
 from .graph import _change_to_public, _path_from_tool_input, build_coworker_agent_graph, build_workspace_tools
 from .middleware import (
     ContextOverflowError,
-    _strip_compaction_echo,
     mcp_policy_resolver,
     record_runtime_interrupts,
     stream_event_from_interrupt,
@@ -103,6 +103,31 @@ def _prepend_compaction_summary(
 from .model_defaults import ReasonPreservingChatOpenAI, openai_compatible_base_url, provider_llm_kwargs
 
 logger = get_logger(__name__)
+
+# W1: LRU bound for the per-session runtime/graph cache. One entry per active
+# session; evicts least-recently-used first. Deleted sessions are evicted via
+# ``AgentRuntimeRegistry.evict_runtime``.
+RUNTIME_CACHE_MAX = 128
+
+# W4/N3: classified retry policy for the sampling loop. Overflow compacts and
+# retries once (unchanged); rate-limit / transient errors back off
+# exponentially and retry up to RETRY_RETRIES times; fatal errors raise
+# immediately. Retries only apply BEFORE anything was emitted.
+RETRY_RETRIES = 2
+RETRY_BACKOFF_BASE = 2.0
+
+
+def _classify_retry_error(exc: BaseException) -> str:
+    """Classify a provider error into ``overflow`` / ``rate_limit`` /
+    ``transient`` / ``fatal`` (N3: no one-size-fits-all max_retries)."""
+    if is_context_overflow_error(exc):
+        return "overflow"
+    msg = str(exc).lower()
+    if "429" in msg or "rate limit" in msg or "rate_limit" in msg or "too many requests" in msg:
+        return "rate_limit"
+    if any(k in msg for k in ("500", "502", "503", "504", "connection", "timeout", "temporarily", "overloaded", "try again")):
+        return "transient"
+    return "fatal"
 
 
 async def _aclose_on_exit(agen: AsyncGenerator[Any, None]) -> AsyncGenerator[Any, None]:
@@ -160,6 +185,26 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self._steer_buffer: list[dict[str, Any]] = []
         self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning, self.max_output_tokens = _runtime_context_budget(provider, model_override)
         self.provider_vision = bool(getattr(provider, "vision", False))
+        # W1 (compile-cache prerequisite): the compiled graph is cached per
+        # (work_mode, language, autonomy, references, web/browser names) and
+        # reused across turns after ``reset_per_turn``. Per-turn data that the
+        # tool closures must see CURRENT values of (turn_index) rides on the
+        # STABLE audit-context dict, updated each turn.
+        self._graph_cache: dict[tuple[Any, ...], Any] = {}
+        # Stable audit-context dict captured by the compiled tool closures; the
+        # per-turn ``session_id``/``turn_index`` fields are updated at each
+        # ``_stream`` so cached closures always read CURRENT values (W1).
+        self._audit_context: dict[str, Any] = {
+            "session_id": "",
+            "provider": self.provider_name,
+            "provider_id": self.provider_id,
+            "model": self.model_name,
+            "workspace_path": str(self.workspace.root),
+            "project_id": self.project_id or "",
+            "turn_index": 1,
+        }
+        self._delegator: Any | None = None
+        self._delegator_key: tuple[Any, ...] | None = None
 
     def _resolve_project_dir(self) -> str:
         """Resolve the project memory dir for this runtime.
@@ -496,56 +541,21 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         prepared_messages = prepare_agent_messages(messages)
         turn_index = self._next_turn_index(session_id)
         memory_view, memory_store, memory_rel = self._memory
-        delegator = self._build_delegator(session_id, language, work_mode, autonomy)
+        # W1: cached tool closures read CURRENT values from the stable
+        # audit-context dict; session_id/turn_index are updated each turn.
+        self._audit_context["session_id"] = session_id
+        self._audit_context["turn_index"] = turn_index
 
         async with _open_checkpointer(self.checkpoints_dir) as checkpointer:
-            graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(
-                    self.workspace, audit_context, change_store=self.change_store, turn_index=turn_index,
-                    session_store=self.session_store, referenced_sessions=self.referenced_sessions,
-                    skill_manager=self.skill_manager,
-                    memory_store=memory_store,
-                    memory_rel=memory_rel,
-                    delegator=delegator,
-                    caller_agent=self.agent,
-                    web_tools=self._web_tools_for(session_id),
-                    browser_tool=self._browser_tool_for(session_id),
-                    # WorkerAgent 集成
-                    use_worker_enabled=True,
-                    language=language,
-                    max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
-                    worker_llm=self.llm,
-                    worker_session_id=session_id,
-                    worker_work_mode=work_mode,
-                    worker_autonomy=autonomy,
-                    worker_provider_name=self.provider_name,
-                    worker_approval_store=self.approval_store,
-                    worker_data_dir=self.data_dir,
-                    worker_mcp_session_manager=self.mcp_session_manager,
-                    delegation_emit=self._delegation_emit_live(session_id),
-                    worker_bus=worker_event_bus,
-                    worker_context_window_tokens=self.context_window_tokens,
-                    worker_max_output_tokens=self.max_output_tokens,
-                    worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
-                    session_id=session_id,
-                    goal_emit=self._goal_emit_live(session_id),
-                ),
-                work_mode=work_mode, language=language, autonomy=autonomy,
-                checkpointer=checkpointer, approval_store=self.approval_store,
-                data_dir=self.data_dir,
-                mcp_session_manager=self.mcp_session_manager,
-                skill_manager=self.skill_manager,
-                memory_manager=memory_view,
-                workspace=self.workspace,
-                context_budget=self.context_budget_chars,
-                context_window_tokens=self.context_window_tokens,
-                context_window_source=self.context_window_source,
-                context_window_warning=self.context_window_warning,
-                web_capability=self._web_capability_line,
-            browser_capability=self._browser_capability_line,
-            max_output_tokens=self.max_output_tokens,
-            calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
-            steer_emit=self._steer_emit_live(session_id),
+            graph = self._compiled_graph(
+                session_id=session_id,
+                language=language,
+                work_mode=work_mode,
+                autonomy=autonomy,
+                checkpointer=checkpointer,
+                memory_view=memory_view,
+                memory_store=memory_store,
+                memory_rel=memory_rel,
             )
 
             # C1: re-inject the persisted compaction summary from a previous turn
@@ -590,11 +600,24 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             compact_count = 0
             compact_fingerprints: list[str] = []
             compact_failed = False
+            loop_reason = ""
 
-            # Overflow recovery: run the stream, and if the provider rejects the
-            # request for being too long before anything was emitted, force a
-            # tighter budget (compact once) and retry the graph a single time.
-            for _attempt in range(2):
+            # W1: the compiled graph + stable workspace are reused across turns;
+            # reset per-turn mutable state (budget halving, steer buffers, phase,
+            # fragment caches) and inject this turn's steer-emit callback.
+            try:
+                self.workspace.begin_turn()
+                reset = getattr(graph, "_cw_reset_per_turn", None)
+                if reset is not None:
+                    reset(steer_emit=self._steer_emit_live(session_id))
+            except Exception:  # noqa: BLE001 - a reset failure must never break a turn
+                logger.warning("per-turn graph reset failed for %s", session_id, exc_info=True)
+
+            # Overflow recovery / classified retry (W4/N3): run the stream, and if
+            # the provider rejects the request for being too long before anything
+            # was emitted, force a tighter budget (compact once); rate-limit /
+            # transient errors back off exponentially. Retries never re-emit.
+            for _attempt in range(RETRY_RETRIES + 1):
                 try:
                     async for stream_mode, chunk in _aclose_on_exit(graph.astream(inputs, config=config, stream_mode=["messages", "custom", "updates"])):
                         # Drain any delegation SSE frames buffered by the delegate
@@ -682,6 +705,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                     cf = node_update.get("context_compact_failed")
                                     if cf:
                                         compact_failed = True
+                                    lr = node_update.get("loop_reason")
+                                    if lr:
+                                        loop_reason = str(lr)
                     break
                 except asyncio.CancelledError:
                     raise
@@ -706,6 +732,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         "error_code": "context_overflow",
                         "measured_tokens": exc.measured_tokens,
                         "limit_tokens": exc.limit_tokens,
+                        "loop_reason": "overflow",
                     }
                     return
                 except Exception as exc:
@@ -736,6 +763,20 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         prepared_messages = prepare_agent_messages(messages, max_images=1)
                         inputs["messages"] = prepared_messages
                         continue
+                    retry_kind = _classify_retry_error(exc)
+                    if (
+                        retry_kind in ("rate_limit", "transient")
+                        and _attempt < RETRY_RETRIES
+                        and not content_parts
+                        and not parts
+                    ):
+                        delay = RETRY_BACKOFF_BASE * (2 ** _attempt)
+                        logger.warning(
+                            "transient provider error (%s); backing off %.1fs and retrying attempt %d: %s",
+                            retry_kind, delay, _attempt + 1, str(exc)[:200],
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
                     # Do NOT yield an error event here before raising: every consumer
                     # of this stream wraps it in `_sse_events`, whose producer already
@@ -748,17 +789,112 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     raise
 
         final_content = "".join(content_parts)
-        final_content = _strip_plan_leak(final_content, parts)
-        # Local models sometimes "continue" the injected compaction summary into
-        # their reply; drop any verbatim echo before persisting/displaying.
+        # D5: combined final-content cleanup (plan leak + compaction echo).
         _mw = getattr(graph, "_cw_context_middleware", None)
-        if _mw is not None:
-            final_content = _strip_compaction_echo(final_content, getattr(_mw, "last_summary", "") or "")
+        final_content = _clean_final_content(final_content, parts, getattr(_mw, "last_summary", "") or "")
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content)})
         merged_parts = _merge_event_parts(_terminate_stray_tools(parts))
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage, "compaction": {"summary": compact_summary, "count": compact_count, "fingerprints": compact_fingerprints, "failed": compact_failed}}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage, "loop_reason": loop_reason or "final", "compaction": {"summary": compact_summary, "count": compact_count, "fingerprints": compact_fingerprints, "failed": compact_failed}}
+
+    def _compiled_graph(
+        self,
+        *,
+        session_id: str,
+        language: Language,
+        work_mode: WorkMode,
+        autonomy: Autonomy,
+        checkpointer: Any,
+        memory_view: Any | None,
+        memory_store: Any | None,
+        memory_rel: str,
+    ) -> Any:
+        """W1 (compile cache): build the agent graph ONCE per turn-dependency
+        fingerprint and reuse it across turns after ``reset_per_turn``.
+
+        The graph is cached on ``(work_mode, language, autonomy, references,
+        web/browser names)``. Per-turn data the tool closures must see CURRENT
+        values of (turn_index) rides on the stable ``self._audit_context``;
+        the delegator is built once per session (it spawns fresh worker runs
+        per call, so reuse is safe). The checkpointer is the shared JSON saver
+        and threads are reset per turn, so baking it is safe.
+        """
+        web_tools = self._web_tools_for(session_id)
+        browser_tool = self._browser_tool_for(session_id)
+        key = (
+            work_mode,
+            language,
+            autonomy,
+            frozenset(self.referenced_sessions),
+            tuple(sorted(getattr(t, "name", "") for t in web_tools)),
+            bool(browser_tool),
+        )
+        cached = self._graph_cache.get(key)
+        if cached is not None:
+            return cached
+
+        delegator_key = (session_id, language, work_mode, autonomy)
+        if self._delegator_key != delegator_key or self._delegator is None:
+            self._delegator = self._build_delegator(session_id, language, work_mode, autonomy)
+            self._delegator_key = delegator_key
+
+        audit = self._audit_context
+        graph = build_coworker_agent_graph(
+            self.llm,
+            build_workspace_tools(
+                self.workspace,
+                audit,
+                change_store=self.change_store,
+                session_store=self.session_store,
+                referenced_sessions=self.referenced_sessions,
+                skill_manager=self.skill_manager,
+                memory_store=memory_store,
+                memory_rel=memory_rel,
+                delegator=self._delegator,
+                caller_agent=self.agent,
+                web_tools=web_tools,
+                browser_tool=browser_tool,
+                use_worker_enabled=True,
+                language=language,
+                max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
+                worker_llm=self.llm,
+                worker_session_id=session_id,
+                worker_work_mode=work_mode,
+                worker_autonomy=autonomy,
+                worker_provider_name=self.provider_name,
+                worker_approval_store=self.approval_store,
+                worker_data_dir=self.data_dir,
+                worker_mcp_session_manager=self.mcp_session_manager,
+                delegation_emit=self._delegation_emit_live(session_id),
+                worker_bus=worker_event_bus,
+                worker_context_window_tokens=self.context_window_tokens,
+                worker_max_output_tokens=self.max_output_tokens,
+                worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
+                session_id=session_id,
+                goal_emit=self._goal_emit_live(session_id),
+            ),
+            work_mode=work_mode,
+            language=language,
+            autonomy=autonomy,
+            checkpointer=checkpointer,
+            approval_store=self.approval_store,
+            data_dir=self.data_dir,
+            mcp_session_manager=self.mcp_session_manager,
+            skill_manager=self.skill_manager,
+            memory_manager=memory_view,
+            workspace=self.workspace,
+            context_budget=self.context_budget_chars,
+            context_window_tokens=self.context_window_tokens,
+            context_window_source=self.context_window_source,
+            context_window_warning=self.context_window_warning,
+            web_capability=self._web_capability_line,
+            browser_capability=self._browser_capability_line,
+            max_output_tokens=self.max_output_tokens,
+            calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
+        )
+        self._graph_cache[key] = graph
+        return graph
 
     def _handle_message_chunk(
         self, msg: Any, content_parts: list[str], tool_state: dict[str, dict[str, Any]], parts: list[dict[str, Any]], session_id: str = "",
@@ -802,10 +938,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         language = normalize_language(context.get("language"))
         work_mode = normalize_work_mode(str(context.get("work_mode") or "build"))
         autonomy = normalize_autonomy(context.get("autonomy"))
-        audit_context = {
-            "session_id": session_id, "provider": self.provider_name, "provider_id": self.provider_id,
-            "model": self.model_name, "workspace_path": str(self.workspace.root), "project_id": self.project_id,
-        }
         current_trace_context = trace_context(
             session_id=session_id, provider=self.provider_name, provider_id=self.provider_id,
             model=self.model_name, language=language, work_mode=work_mode, autonomy=autonomy, streaming=True,
@@ -833,51 +965,16 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         async with _open_checkpointer(self.checkpoints_dir) as checkpointer:
             memory_view, memory_store, memory_rel = self._memory
-            graph = build_coworker_agent_graph(
-                self.llm, build_workspace_tools(
-                        self.workspace, audit_context, change_store=self.change_store,
-                        session_store=self.session_store, referenced_sessions=self.referenced_sessions,
-                        skill_manager=self.skill_manager,
-                        memory_store=memory_store,
-                        memory_rel=memory_rel,
-                        web_tools=self._web_tools_for(session_id),
-                        browser_tool=self._browser_tool_for(session_id),
-                        # WorkerAgent 集成
-                        use_worker_enabled=True,
-                        language=language,
-                        max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
-                        worker_llm=self.llm,
-                        worker_session_id=session_id,
-                        worker_work_mode=work_mode,
-                        worker_autonomy=autonomy,
-                        worker_provider_name=self.provider_name,
-                        worker_approval_store=self.approval_store,
-                        worker_data_dir=self.data_dir,
-                        worker_mcp_session_manager=self.mcp_session_manager,
-                        delegation_emit=self._delegation_emit_live(session_id),
-                        worker_bus=worker_event_bus,
-                        worker_context_window_tokens=self.context_window_tokens,
-                        worker_max_output_tokens=self.max_output_tokens,
-                        worker_calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
-                        session_id=session_id,
-                        goal_emit=self._goal_emit_live(session_id),
-                    ),
-                work_mode=work_mode, language=language, autonomy=autonomy,
-                checkpointer=checkpointer, approval_store=self.approval_store,
-                data_dir=self.data_dir,
-                mcp_session_manager=self.mcp_session_manager,
-                skill_manager=self.skill_manager,
-                memory_manager=memory_view,
-                workspace=self.workspace,
-                context_budget=self.context_budget_chars,
-                context_window_tokens=self.context_window_tokens,
-                context_window_source=self.context_window_source,
-                context_window_warning=self.context_window_warning,
-                web_capability=self._web_capability_line,
-            browser_capability=self._browser_capability_line,
-            max_output_tokens=self.max_output_tokens,
-            calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
-            steer_emit=self._steer_emit_live(session_id),
+            self._audit_context["session_id"] = session_id
+            graph = self._compiled_graph(
+                session_id=session_id,
+                language=language,
+                work_mode=work_mode,
+                autonomy=autonomy,
+                checkpointer=checkpointer,
+                memory_view=memory_view,
+                memory_store=memory_store,
+                memory_rel=memory_rel,
             )
             interrupt_id = str(context.get("interrupt_id") or "")
             # If a question was rejected, stop the turn immediately instead of
@@ -894,6 +991,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     "provider": self.provider_name,
                     "model": self.model_name,
                     "parts": [],
+                    "loop_reason": "hitl",
                 }
                 return
             resume_map: dict[str, Any] = {interrupt_id: {"decisions": decisions}} if interrupt_id else {"decisions": decisions}
@@ -952,15 +1050,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 self.workspace._allow_external_write = False
 
         final_content = "".join(content_parts)
-        final_content = _strip_plan_leak(final_content, parts)
-        # Drop any verbatim echo of the injected compaction summary.
+        # D5: combined final-content cleanup (plan leak + compaction echo).
         _mw = getattr(graph, "_cw_context_middleware", None)
-        if _mw is not None:
-            final_content = _strip_compaction_echo(final_content, getattr(_mw, "last_summary", "") or "")
+        final_content = _clean_final_content(final_content, parts, getattr(_mw, "last_summary", "") or "")
         self.trace_store.record("agent_activity", "done", current_trace_context, {"content_chars": len(final_content), "resumed": True})
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
-        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts))}
+        yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts)), "loop_reason": "hitl"}
         return
 
 
@@ -1051,6 +1147,10 @@ class AgentRuntimeRegistry:
             self.checkpoints_dir,
             sessions_dir=settings.data_dir / "sessions",
         )
+        # W1: per-session runtime/graph cache (LRU-bounded; evicted on session
+        # delete). Each entry holds a compiled graph + middleware instances whose
+        # per-turn state is reset via ``reset_per_turn`` at every turn start.
+        self._runtime_cache: dict[tuple[Any, ...], AgentStreamRuntime] = {}
 
     async def forget_runtime_checkpoint(self, session_id: str) -> bool:
         """Best-effort checkpoint reset; returns whether the delete completed.
@@ -1086,7 +1186,20 @@ class AgentRuntimeRegistry:
     def list_agent_traces(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.trace_store.list(limit)
 
-    def get_stream_runtime(self, mode: AgentMode, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None, project_id: str | None = None) -> AgentStreamRuntime:
+    def get_stream_runtime(self, mode: AgentMode, session_id: str | None = None, provider_id: str | None = None, model: str | None = None, workspace: Workspace | None = None, referenced_sessions: set[str] | None = None, agent: str | None = None, project_id: str | None = None) -> AgentStreamRuntime:
+        # W1: reuse the per-session runtime (and its compiled graph) across turns
+        # when nothing that changes the build differs. Keyed on the session +
+        # everything the compiled graph depends on; LRU-bounded, evicted on
+        # session delete. Per-turn state is reset via ``reset_per_turn``.
+        if session_id:
+            key = (
+                session_id, mode, provider_id, model,
+                str(workspace.root) if workspace is not None else None,
+                project_id, agent, frozenset(referenced_sessions or ()),
+            )
+            cached = self._runtime_cache.get(key)
+            if cached is not None:
+                return cached
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if not provider and self.settings.agent_provider == "openai":
@@ -1096,8 +1209,20 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            return OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoints_dir, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings, checkpoint_manager=self.checkpoint_manager)
+            runtime = OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoints_dir, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings, checkpoint_manager=self.checkpoint_manager)
+            if session_id:
+                self._runtime_cache[key] = runtime
+                if len(self._runtime_cache) > RUNTIME_CACHE_MAX:
+                    self._runtime_cache.popitem(last=False)
+            return runtime
         raise RuntimeError(f"Unsupported agent mode for streaming: {mode}")
+
+    def evict_runtime(self, session_id: str) -> None:
+        """Drop the cached runtime for a session (called on session delete)."""
+        if not session_id:
+            return
+        for key in [k for k in self._runtime_cache if k[0] == session_id]:
+            self._runtime_cache.pop(key, None)
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
         """Resume an interrupted agent turn (HITL approval) using the stream runtime.

@@ -465,6 +465,36 @@ class SessionStore:
         self.save(session)
         return session
 
+    def replace_assistant_parts(self, session_id: str, message_id: str, parts: list[dict[str, Any]]) -> None:
+        """W6/N2-P1: persist the CURRENT merged parts of an in-flight assistant
+        message at tool boundaries (crash-resilience).
+
+        Creates the assistant message if it does not exist; otherwise REPLACES
+        its parts with the cumulative merged view (idempotent across boundaries).
+        Best-effort — a failure must never break the live stream; ``done``
+        reconciliation finalizes the message.
+        """
+        if not parts:
+            return
+        try:
+            session = self.require(session_id)
+        except KeyError:
+            return
+        idx = next((i for i, m in enumerate(session.messages) if m.id == message_id), None)
+        if idx is None:
+            session.messages.append(
+                SessionMessage(
+                    id=message_id,
+                    role="assistant",
+                    content="",
+                    created_at=_now(),
+                    parts=list(parts),
+                )
+            )
+        else:
+            session.messages[idx].parts = list(parts)
+        self.save(session)
+
     def find_message_index(self, session_id: str, message_id: str) -> int:
         session = self.require(session_id)
         for index, message in enumerate(session.messages):

@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from ...logger import get_logger
 from .base import _is_degenerate_text, _msg_tokens
-from ..core import CoworkerAgentState
+from ..core import CoworkerAgentState, normalize_autonomy
 
 logger = get_logger(__name__)
 
@@ -291,12 +291,31 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             hard_reasons.append(f"you have already given the identical reply {text_count} times")
 
         if hard_stop:
-            msg = (
-                "STOP. " + "；".join(hard_reasons) + ". "
-                "Do NOT make any more tool calls and do NOT repeat yourself. "
-                "Provide your final answer as plain text now and explain what went wrong."
-            )
-            return {"tools": [], "messages": [*messages, HumanMessage(content=msg)]}
+            state = getattr(request, "state", None) or {}
+            autonomy = normalize_autonomy(state.get("autonomy"))            # W3: do NOT strip ALL tools (irreversible — a legitimately repeated
+            # task could no longer call anything). Instead, block ONLY the repeated
+            # tool (opencode doom-loop: permission-gated, the model can continue
+            # with a different approach or ask the user). In guarded/supervised the
+            # model is directed to `ask_user`; autonomous must self-correct.
+            if tool_count >= self.stop_after and autonomy != "autonomous":
+                guidance = (
+                    "You have repeated the same action too many times. Use the `ask_user` "
+                    "tool to ask the user whether to continue or stop, then follow their "
+                    "answer. Do NOT call the blocked tool again."
+                )
+            else:
+                guidance = (
+                    "Stop repeating. Change strategy (a different tool, a narrower scope, "
+                    "or a direct final answer) — do NOT make the same call again."
+                )
+            msg = "STOP. " + "；".join(hard_reasons) + ". " + guidance
+            overrides: dict[str, Any] = {"messages": [*messages, HumanMessage(content=msg)]}
+            # W2/N1: surface the loop-stop reason on the state (→ done event).
+            overrides["loop_reason"] = "degenerate" if degenerate else "repeated"
+            if tool_count >= self.stop_after and tool_name:
+                # Block only the repeated tool; keep every other tool (incl. ask_user).
+                overrides["tools"] = [t for t in request.tools if getattr(t, "name", "") != tool_name]
+            return overrides
 
         warn_reasons: list[str] = []
         if tool_count >= self.warn_after:

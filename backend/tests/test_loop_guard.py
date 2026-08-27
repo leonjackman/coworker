@@ -52,6 +52,8 @@ def _call(name: str, args: dict):
 class _FakeRequest:
     def __init__(self, messages):
         self.messages = messages
+        self.tools = []
+        self.state = {"autonomy": "guarded"}
 
     def override(self, **kwargs):
         return kwargs
@@ -78,6 +80,7 @@ def test_identical_tool_call_loop_stops_after_cap():
     ov = _overrides(mw, msgs)
     assert "tools" in ov and ov["tools"] == []
     assert "STOP" in str(ov["messages"][-1].content)
+    assert "ask_user" in str(ov["messages"][-1].content)  # W3: permission gate
 
 
 def test_identical_tool_call_warns_before_cap():
@@ -126,7 +129,7 @@ def test_consecutive_identical_text_stops():
         _ai("same answer"),
     ]
     ov = _overrides(mw, msgs)
-    assert ov.get("tools") == []
+    assert "tools" not in ov  # W3: text-repeat does not strip tools
     assert "identical reply" in str(ov["messages"][-1].content)
 
 
@@ -140,7 +143,7 @@ def test_single_message_degenerate_repetition_stops():
         _ai(degenerate),
     ]
     ov = _overrides(mw, msgs)
-    assert ov.get("tools") == []
+    assert "tools" not in ov  # W3: degenerate text does not strip tools
     assert "degenerated into endless repetition" in str(ov["messages"][-1].content)
 
 

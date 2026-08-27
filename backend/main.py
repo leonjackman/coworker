@@ -38,6 +38,7 @@ except ImportError:  # pragma: no cover - non-POSIX platforms (e.g. Windows)
 from coworker.agent.core import (
     AgentMode,
     Language,
+    _merge_event_parts,
     context_budget_chars,
     context_budget_tokens,
     format_user_message,
@@ -1630,6 +1631,7 @@ async def org_delete_agent(request: OrgAgentDeleteRequest):
         if session.get("agent_id") != request.id:
             continue
         await agent_registry.forget_runtime_checkpoint(session["id"])
+        agent_registry.evict_runtime(session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
         _cleanup_session_screenshots(session["id"])
@@ -1846,6 +1848,7 @@ def _cached_provider_unreachable(provider_id: str | None, model: str | None) -> 
 
 async def _build_stream_runtime(
     mode: str,
+    session_id: str | None,
     provider_id: str | None,
     model: str | None,
     workspace: Any,
@@ -1853,16 +1856,20 @@ async def _build_stream_runtime(
     agent: str,
     project_id: str | None,
 ) -> Any:
-    """Build a stream runtime WITHOUT blocking the event loop.
+    """Build (or reuse from the W1 per-session cache) a stream runtime WITHOUT
+    blocking the event loop.
 
     Runtime construction resolves the provider's context window, which performs
     a synchronous network probe whenever the discovery cache is cold (up to the
     3s probe timeout). That must never freeze the event loop that also serves
     other sessions' SSE streams/heartbeats, so the whole init runs on a thread.
+    The per-session cache keyed on ``session_id`` makes later turns reuse the
+    compiled graph (W1).
     """
     return await asyncio.to_thread(
         agent_registry.get_stream_runtime,
         mode,
+        session_id,
         provider_id,
         model,
         workspace,
@@ -1901,7 +1908,7 @@ async def chat_stream(request: ChatStreamRequest):
         if project_dir:
             _ensure_agent_skeleton(project_dir, agent)
             _ensure_org(project_dir)
-        runtime = await _build_stream_runtime(request.mode, request.provider_id, request.model, resolved_workspace, referenced_ids, agent, request.project_id)
+        runtime = await _build_stream_runtime(request.mode, request.session_id, request.provider_id, request.model, resolved_workspace, referenced_ids, agent, request.project_id)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -1980,6 +1987,9 @@ async def chat_stream(request: ChatStreamRequest):
         round_index = 0
         budget_wrapup_done = False
         last_seen_objective: str | None = None
+        # W6/N2-P1: raw streaming events buffered for the incremental tool-boundary
+        # persist; reset each goal round.
+        _partial_parts: list[dict[str, Any]] = []
         stream_iter: Any
 
         # Fast-fail: when the requested provider was recently discovered as
@@ -2046,6 +2056,17 @@ async def chat_stream(request: ChatStreamRequest):
                     session_store.update_todos(session_id, event.get("todos") or [])
                 except Exception:  # noqa: BLE001 - a todo persist hiccup must not kill the stream
                     logger.warning("update_todos(todos) failed for session %s", session_id, exc_info=True)
+            if etype == "tool_end":
+                # W6/N2-P1: at tool boundaries persist the current merged parts so a
+                # mid-turn crash leaves a recoverable partial reply. Buffers the raw
+                # streaming events and writes the cumulative merged view.
+                try:
+                    _partial_parts.append(event)
+                    if current_round_assistant_id:
+                        merged = _merge_event_parts(list(_partial_parts))
+                        session_store.replace_assistant_parts(session_id, current_round_assistant_id, merged)
+                except Exception:  # noqa: BLE001 - incremental persist is best-effort
+                    logger.debug("incremental tool persist failed for %s", session_id, exc_info=True)
             if etype == "done":
                 _persist_assistant(
                     event.get("content", ""),
@@ -2110,7 +2131,7 @@ async def chat_stream(request: ChatStreamRequest):
                 error_emitted = True
 
         runtime = await _build_stream_runtime(
-            request.mode, request.provider_id, request.model,
+            request.mode, request.session_id, request.provider_id, request.model,
             resolved_workspace, referenced_ids, agent, request.project_id,
         )
 
@@ -2190,6 +2211,8 @@ async def chat_stream(request: ChatStreamRequest):
                     interrupt_emitted = False
                     accumulated_content = ""
                     last_context_usage = None
+                    # W6/N2-P1: clear the raw-event buffer for this round.
+                    _partial_parts.clear()
 
                     if round_index == 0:
                         if request.skip_user_append and _session_goal(session_id) is not None:
@@ -3008,6 +3031,7 @@ async def delete_session(session_id: str):
     # the background so a huge file never pushes the delete past the caller's
     # timeout (the session record is already gone, so cleanup is safe).
     asyncio.create_task(agent_registry.forget_runtime_checkpoint(session_id))
+    agent_registry.evict_runtime(session_id)
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
     _cleanup_session_screenshots(session_id)
@@ -4264,6 +4288,7 @@ async def delete_project(project_id: str):
         raise HTTPException(status_code=404, detail=f"project {project_id} not found")
     for session in session_store.list_sessions(project_id):
         await agent_registry.forget_runtime_checkpoint(session["id"])
+        agent_registry.evict_runtime(session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
         _cleanup_session_screenshots(session["id"])

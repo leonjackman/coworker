@@ -201,26 +201,26 @@
 | B1 | Prompt build | system 被多 middleware 整段覆寫 | 中 | P2 | ☑ | SystemAssembler 單一組裝點 |
 | B2 | Prompt build | 行為 prompt 排最尾 | 低 | P2 | ☑ | behaviour→phase→capabilities→MCP→workspace→memory→skills |
 | B3 | Prompt build | 工具目錄 MCP 退回全 description | 中 | P2 | ☑ | 目錄整體移除（P1） |
-| D1 | 重複 | 每 turn 重建一切 | 高 | P1 | ☐ | |
-| D2 | 重複 | goal 多輪每輪重複 | 高 | P1 | ☐ | |
-| D3 | 重複 | `_merge_event_parts` O(n²) | 中(效能) | P2 | ☐ | |
-| D4 | 重複 | stall 重試重跑 compaction 鏈 | 低 | P2 | ☐ | |
-| D5 | 重複 | plan leak / compaction echo 清理重複 | 低 | P2 | ☐ | |
-| S1 | 過度嚴格 | 死迴圈硬停剝光工具 | 中 | P2 | ☐ | |
-| S2 | 過度嚴格 | discuss 不可用 goal 查詢 | 低 | P2 | ☐ | |
-| S3 | 過度嚴格 | guard S4 靜默丟全部 MCP schema | 中 | P2 | ☐ | |
-| L1 | 過度寬鬆 | guarded 對工作區內全放行 | 低(設計) | P2 | ☐ | |
+| D1 | 重複 | 每 turn 重建一切 | 高 | P1 | ☑ | 編譯快取（W1） |
+| D2 | 重複 | goal 多輪每輪重複 | 高 | P1 | ☑ | goal 多輪共享快取 |
+| D3 | 重複 | `_merge_event_parts` O(n²) | 中(效能) | P2 | ☑ | id→index O(1) |
+| D4 | 重複 | stall 重試重跑 compaction 鏈 | 低 | P2 | ☑ | 摘要 memoize + 分類重試 |
+| D5 | 重複 | plan leak / compaction echo 清理重複 | 低 | P2 | ☑ | _clean_final_content 合併 |
+| S1 | 過度嚴格 | 死迴圈硬停剝光工具 | 中 | P2 | ☑ | 權限門（autonomy-aware） |
+| S2 | 過度嚴格 | discuss 不可用 goal 查詢 | 低 | P2 | ☑ | get_goal 已讀唯讀工具 |
+| S3 | 過度嚴格 | guard S4 靜默丟全部 MCP schema | 中 | P2 | ☑ | 保留最近使用 MCP |
+| L1 | 過度寬鬆 | guarded 對工作區內全放行 | 低(設計) | P2 | ☑ | tool_end.files diff 回饋（既有） |
 | L2 | 過度寬鬆 | 圖片 data URL 永久內聯 | 中 | P2 | ☑ | 歷史重放 stub（R2）|
-| L3 | 過度寬鬆 | run_command timeout 上限偏小 | 低 | P2 | ☐ | |
-| V1 | 數值 | safety factor 0.75 偏保守 | 低 | P2 | ☐ | |
+| L3 | 過度寬鬆 | run_command timeout 上限偏小 | 低 | P2 | ☑ | timeout 300 + 後台 run_command_status |
+| V1 | 數值 | safety factor 0.75 偏保守 | 低 | P2 | ☑ | 0.75→0.9 |
 | V5 | 數值 | 固定注入總量無預算 | 中 | P2 | ☑ | SystemAssembler 16k token 總預算 |
 | O1 | 順序 | 工具輸出持久化即截斷 2000 | 中 | P1 | ☑ | 全文持久化 + 重放 token 截斷 |
 | O2 | 順序 | 記憶/技能組合順序隱式 | 低 | P2 | ☑ | SystemAssembler 顯式順序 |
-| N1 | 主流 | 迴圈決策顯式化缺失 | 中 | P2 | ☐ | |
-| N2 | 主流 | 訊息級儲存 vs part 級 | 中 | P2 | ☐ | |
-| N3 | 主流 | 重試策略單薄 | 中 | P2 | ☐ | |
-| N4 | 主流 | 標題生成用主模型 | 低 | P2 | ☐ | |
-| N5 | 主流 | 每 turn 冷啟動（重構主線） | 高 | P1 | ☐ | |
+| N1 | 主流 | 迴圈決策顯式化缺失 | 中 | P2 | ☑ | loop_reason 顯式化 + MAX_STEPS |
+| N2 | 主流 | 訊息級儲存 vs part 級 | 中 | P2 | ☑ | 增量落盤 P1 |
+| N3 | 主流 | 重試策略單薄 | 中 | P2 | ☑ | 分類重試 policy |
+| N4 | 主流 | 標題生成用主模型 | 低 | P2 | ☑ | 規則標題（無模型 call） |
+| N5 | 主流 | 每 turn 冷啟動（重構主線） | 高 | P1 | ☑ | 編譯快取 + reset_per_turn（W1） |
 
 ---
 
@@ -349,6 +349,21 @@
 
 **驗證**：`tests/test_prompt_build.py` 7 組（MCP 在行為/capabilities 後、discuss 隱藏、MCP middleware 不再覆寫 system_message、無 stale「listed ones」、行為-only、`build_tool_context` 已移除、list-content base）。`tests/` pytest **227 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：無新增孤兒。
 
+### 2026-08-27 — 八–十三 分階段開發（P0-A → P2-B，全量）
+
+改動檔案：`agent/runtime.py`、`agent/graph.py`、`agent/core.py`、`agent/middleware/{context_compaction,loop_guard,context_guard,message_processor,system_assembler}.py`、`workspace.py`、`workspace_controller.py`、`sessions.py`、`agent/prompts.py`、`main.py`、`tests/test_runtime_cache.py`、`tests/test_phase8_13.py`（新）。
+
+| 階段 | 內容 |
+|---|---|
+| **P0-A W1 編譯快取** | `WorkspaceRegistry`（path→穩定物件 + `begin_turn()` 重置）；middleware `reset_per_turn()`（Summarization 恢復砍半預算 / Steer 清注入 + 每 turn 注入 emit / SystemAssembler 清快取）；`steer_emit` 移出 build 參數；`AgentRuntimeRegistry` 每 session LRU 快取（含 referenced_sessions，`delete_session` evict）；`_compiled_graph` 按 (work_mode/language/autonomy/references/web/browser) 快取；`turn_index` 移入穩定 audit-context 於呼叫期讀取。D1/D2/N5 消除。 |
+| **P0-B W4** | 摘要 **memoize**（segment fingerprint+previous_summary → 摘要，stall 重試不再重跑摘要 LLM，D4）；**分類重試**（`_classify_retry_error`：overflow / rate_limit / transient / fatal + 指數退避，N3）。 |
+| **P1-A W3** | 死迴圈改 **autonomy-aware 權限門**：只封鎖「重複的那支工具」，其餘工具保留；guarded/supervised 引導 `ask_user`，autonomous 自我改策略；不再剝光全部工具。 |
+| **P1-B W5** | D3 `_merge_event_parts` id→index O(1)；D5 `_clean_final_content` 合併 plan-leak+echo 且比對全部 plan 片段；S2 確認 `get_goal` 已在 read-only；S3 guard S4 保留最近使用的 MCP 工具；V1 `CONTEXT_SAFETY_FACTOR 0.75→0.9`；L3 `MAX_COMMAND_TIMEOUT 60→300`、預設 60 + `run_command(background=true)` + `run_command_status` 工具；N4 標題改**純規則**（移除主模型 chat call）；L1 由既有 `tool_end.files` diff 回饋涵蓋。 |
+| **P2-A W2** | `loop_reason` state 欄位（repeated/degenerate/overflow/hitl/final）+ done 事件帶出；`MAX_STEPS_PROMPT=200` 顯式 recursion_limit。 |
+| **P2-B W6-P1** | `SessionStore.replace_assistant_parts` + main.py 於 `tool_end` 邊界以累積 merged parts 增量落盤（中斷可回放 partial reply）。 |
+
+**驗證**：`tests/test_runtime_cache.py`（6：快取 key/預算恢復/steer 重置/assembler 清快取/workspace 穩定/controller 穩定）、`tests/test_phase8_13.py`（4：merge O(1)/規則標題/後台命令/status）。`tests/` pytest **237 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：無新增孤兒（清理 `_strip_compaction_echo`/`_title_system_prompt`/`_default_title_from_message` 未用 import）。
+
 ---
 
 ## 追蹤約定
@@ -369,3 +384,4 @@
 | 2026-08-27 | 壓縮 C1–C4 已修復（摘要 session 持久化 + 跨輪重注入 / 預設模型 + 失敗提示 / token 精確截斷 / 輸入預算），含實作紀錄與孤兒清理 |
 | 2026-08-27 | Token 計數 T1–T4 已修復（單一常數 / CJK 擴充 / cache-aware 校準 / base64 門檻），含實作紀錄 |
 | 2026-08-27 | Prompt build 殘留收尾（A–D：MCP 段組裝位置 / 行為-only / 刪 tool_registry 孤兒 / list-content base），含實作紀錄 |
+| 2026-08-27 | 八–十三 全量分階段開發（P0-A 編譯快取 → P2-B 增量落盤），含實作紀錄 |
