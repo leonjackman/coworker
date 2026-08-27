@@ -39,6 +39,10 @@ try { npm run build | Out-Host } finally { Pop-Location }
 Write-Host "  OK"
 
 Write-Host "[4/6] Starting backend..."
+# Persistent LLM request logging (messages + tools + sampling params → data_dir/llm-requests.log).
+# On by default so every launch captures the exact bodies CW sends — useful for
+# diagnosing tool-call / degradation issues without having to set an env var.
+$env:COWORKER_LLM_LOG = if ($env:COWORKER_LLM_LOG) { $env:COWORKER_LLM_LOG } else { "1" }
 $Backend = Start-Process -FilePath $BackendPy -ArgumentList "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", $BackendPort, "--app-dir", "$RootDir\backend" -WorkingDirectory $RootDir -PassThru -WindowStyle Hidden
 
 $backendReady = $false

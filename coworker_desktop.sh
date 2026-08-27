@@ -59,6 +59,11 @@ else
   BACKEND_PY="$(command -v python3 || command -v python)"
 fi
 
+# Persistent LLM request logging (messages + tools + sampling params → data_dir/llm-requests.log).
+# On by default so every launch captures the exact bodies CW sends — useful for
+# diagnosing tool-call / degradation issues without having to set an env var.
+export COWORKER_LLM_LOG="${COWORKER_LLM_LOG:-1}"
+
 "$BACKEND_PY" -m uvicorn main:app --host 127.0.0.1 --port "$BACKEND_PORT" --app-dir "$ROOT_DIR/backend" &
 BACKEND_PID="$!"
 DESKTOP_PID=""
