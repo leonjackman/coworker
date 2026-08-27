@@ -910,6 +910,7 @@
   "files.expand_all": "すべて展開（あと {count} 件）",
   "files.collapse": "折りたたむ",
   "chat.interject_queued": "割り込み送信",
+  "chat.interject_queued_disabled": "割り込み送信 (only while a task is running)",
   "chat.interject_badge": "割り込み",
   "chat.steer_injected_label": "割り込みを受信",
   "chat.command_goal": "目標を設定（/goal <目標>）",

@@ -26,6 +26,10 @@ interface TodoBlockProps {
   /** Interject (插話) a queued message into the currently-running task to guide
    *  the LLM WITHOUT pausing/stopping the stream. */
   onInterjectQueued?: (id: string) => void;
+  /** Whether the session actually has a live stream right now. When false the
+   *  interject button is disabled — interjecting a finished turn would 409 and
+   *  leave the message stuck (the queue only auto-sends once the stream ends). */
+  streamActive?: boolean;
   onClose?: () => void;
 }
 
@@ -39,6 +43,7 @@ interface SortableQueueItemProps {
   onCancelEdit: () => void;
   onRemove: (id: string) => void;
   onInterject: (id: string) => void;
+  streamActive?: boolean;
 }
 
 /** One queued message row. Uses @dnd-kit sortable (same as the sidebar) so
@@ -54,6 +59,7 @@ function SortableQueueItem({
   onCancelEdit,
   onRemove,
   onInterject,
+  streamActive,
 }: SortableQueueItemProps) {
   const editingInputRef = useRef<HTMLInputElement>(null);
   const cancelledRef = useRef(false);
@@ -121,8 +127,9 @@ function SortableQueueItem({
         type="button"
         className="todo-block__queue-interject"
         onClick={() => onInterject(queued.id)}
+        disabled={!streamActive}
         aria-label={t('chat.interject_queued')}
-        title={t('chat.interject_queued')}
+        title={streamActive ? t('chat.interject_queued') : t('chat.interject_queued_disabled')}
       >
         <Send size={12} />
       </button>
@@ -153,7 +160,7 @@ function SortableQueueItem({
  * get checked off as the agent works; queued messages are listed one per row
  * with drag-to-reorder, inline edit and a remove action.
  */
-export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQueued, onEditQueued, onReorderQueued, onInterjectQueued, onClose }: TodoBlockProps) {
+export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQueued, onEditQueued, onReorderQueued, onInterjectQueued, onClose, streamActive = false }: TodoBlockProps) {
   const [expanded, setExpanded] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
@@ -243,6 +250,7 @@ export function TodoBlock({ todos, onToggleTodo, queuedMessages = [], onRemoveQu
                         onCancelEdit={cancelEdit}
                         onRemove={(id) => onRemoveQueued?.(id)}
                         onInterject={(id) => onInterjectQueued?.(id)}
+                        streamActive={streamActive}
                       />
                     ))}
                   </ul>

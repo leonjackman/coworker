@@ -910,6 +910,7 @@
   "files.expand_all": "Tout déplier ({count} de plus)",
   "files.collapse": "Réduire",
   "chat.interject_queued": "Intervenir maintenant",
+  "chat.interject_queued_disabled": "Intervenir maintenant (only while a task is running)",
   "chat.interject_badge": "Intervention",
   "chat.steer_injected_label": "Intervention reçue",
   "chat.command_goal": "Définir un objectif (/goal <objectif>)",

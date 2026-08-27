@@ -910,6 +910,7 @@
   "files.expand_all": "Expandir todo ({count} más)",
   "files.collapse": "Contraer",
   "chat.interject_queued": "Intervenir ahora",
+  "chat.interject_queued_disabled": "Intervenir ahora (only while a task is running)",
   "chat.interject_badge": "Intervenir",
   "chat.steer_injected_label": "Intervención recibida"
 }

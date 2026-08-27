@@ -910,6 +910,7 @@
   "files.expand_all": "Развернуть все (ещё {count})",
   "files.collapse": "Свернуть",
   "chat.interject_queued": "Вмешаться сейчас",
+  "chat.interject_queued_disabled": "Вмешаться сейчас (only while a task is running)",
   "chat.interject_badge": "Вмешательство",
   "chat.steer_injected_label": "Вмешательство получено",
   "chat.command_goal": "Установить цель (/goal <цель>)",

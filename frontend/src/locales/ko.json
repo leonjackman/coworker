@@ -910,6 +910,7 @@
   "files.expand_all": "전체 펼치기（{count}개 더）",
   "files.collapse": "接기",
   "chat.interject_queued": "지금 끼어들기",
+  "chat.interject_queued_disabled": "지금 끼어들기 (only while a task is running)",
   "chat.interject_badge": "끼어들기",
   "chat.steer_injected_label": "끼어들기 수신",
   "chat.command_goal": "목표 설정（/goal <목표>）",

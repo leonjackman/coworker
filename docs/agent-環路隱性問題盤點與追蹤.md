@@ -460,6 +460,25 @@
 - **修復**：`_message_chunk_events` 續段路由加 **name 回落**——index 未知時路由到「最近 running 且同 name」的工具（單工具常見情形），不再丟棄；多工具同 index 註冊路徑不變。
 - **驗證**：`tests/test_phase8_13.py` 新增 `test_tool_input_capture_without_index_continuation`（無 index 續段 args 累積）+ `test_tool_input_capture_with_index_routing_still_works`（並行 index 路由不退化）。`tests/` pytest **249 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。
 
+### 2026-08-27 — 插話（steer）功能 bug 修復（session 81d44c5c 真機復現）
+
+**症狀**：任務 2 後段插話失敗——訊息卡在佇列、5 次 `/chat/interject` 全部 409、僅 UI 閃一下，~1 分鐘後才以普通訊息送出。
+
+**根因（log + 前端追蹤確認）**：
+1. **插話按鈕未依 stream 活動狀態閘控**（直接原因）：`TodoBlock` 插話按鈕無 disabled、`interjectQueuedMessage` 呼叫 `/chat/interject` 前不檢查該 session 是否真有在飛的流 → 後端任務結束後每次點擊都 409 → 移除再重排（「閃一下」）。
+2. **stream 結束但訊息未 settle → `isThinking`/`busy` 卡 true**：`settleAssistantMessage` 只 settle `status==='running'`（`waiting` 永不 settle）；done 幀丟失 / id 不匹配 / SSE 早斷時訊息卡 running → 佇列自動送出被卡、插話按鈕仍可點 → 409 迴圈。
+3. **競態**：pendingSteers 在 interject 成功前就加入 → auto-continue effect 可能重複送出。
+
+**修復（全部前端）**：
+1. **插話按鈕閘控**：TodoBlock 加 `streamActive` prop，非串流時 disabled（`interject_queued_disabled` i18n 11 語系）。
+2. **`interjectQueuedMessage` 預檢**：無活動流（無 controller 且無 running/waiting 訊息）→ 直接普通送出，不呼叫 interject。
+3. **409 回退**：interject 失敗不再靜默重排迴圈 → 以普通訊息送出。
+4. **settle 覆蓋 waiting**：`settleAssistantMessage` 與 `resolvePendingRequest` 失敗 catch 都 settle 卡住的 waiting → done/error。
+5. **卡死 watchdog**：30s 週期檢查——running 訊息無活動流 controller → 強制 settle（reconcile 後端），防 isThinking/busy 永久卡住。
+6. **競態修復**：pendingSteers 僅在 interject 成功後加入。
+
+**驗證**：`frontend` `tsc --noEmit` App.tsx/TodoBlock **0 錯誤**（5 個 TS 錯誤皆既有）；i18n 11 語系 JSON 有效；後端 pytest **249 passed**（無後端改動）。
+
 ---
 
 ## 追蹤約定
@@ -489,3 +508,4 @@
 | 2026-08-27 | Recursion limit 200 撞限修復：MAX_STEPS_PROMPT→2000 後備值 + GraphRecursionError 優雅收尾（step_cap） |
 | 2026-08-27 | N1 改版：移除 step 上限（無上限），新增 IdleLoopMiddleware 進度感知卡死守門（warn→20 步限值硬停→滑出恢復無上限） |
 | 2026-08-27 | 真機會話審查（13 區成效全確認）+ 修復工具 input 捕獲為空（續段 chunk name 回落路由） |
+| 2026-08-27 | 插話（steer）bug 修復：按鈕閘控、stream-active 預檢、409 回退普通送出、settle waiting、卡死 watchdog |

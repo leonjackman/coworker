@@ -868,21 +868,26 @@ function App() {
     const queue = queuedMessagesRef.current[key] ?? [];
     const entry = queue.find((q) => q.id === queuedId);
     if (!entry) return;
+    // 插話前必須確認該 session 真的有在飛的流：interject 僅在後端任務進行中才
+    // 有效（否則 409）。沒有活動流時直接以普通訊息送出，避免「卡在佇列 + 409 迴圈」。
+    const streamActive =
+      Boolean(streamControllersRef.current[key]) &&
+      (goalStreamSessions.has(sessionId) ||
+        messages.some((m) => (m.status === 'running' || m.status === 'waiting') && m.sessionId === sessionId));
+    if (!streamActive) {
+      removeQueuedMessage(sessionId, queuedId);
+      void sendMessage({
+        message: entry.message,
+        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+        ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
+      });
+      return;
+    }
     removeQueuedMessage(sessionId, queuedId);
     const steerId = `steer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const userMessageId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    // 插话不渲染独立用户泡泡：内容由 assistant 气泡内的「收到插話」card 展示。
-    // pending 记录仅用于 late-steer 兜底判定（steer_injected 收到即移除）。
-    pendingSteersRef.current[key] = [
-      ...(pendingSteersRef.current[key] ?? []),
-      {
-        id: steerId,
-        message: entry.message,
-        userMessageId,
-        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
-        ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
-      },
-    ];
+    // pending 記錄在 interject「成功後」再加入：避免 auto-continue effect 在
+    // HTTP 尚未回應時就把 steer 當新訊息送出（與 409 回退競態 → 重複/延遲）。
     try {
       await chatService.interject({
         session_id: sessionId,
@@ -893,15 +898,25 @@ function App() {
         ...(entry.references && entry.references.length > 0 ? { referenced_sessions: entry.references.map((r) => r.id) } : {}),
         max_attachment_bytes: Math.max(1, maxAttachmentMb) * 1024 * 1024,
       });
+      pendingSteersRef.current[key] = [
+        ...(pendingSteersRef.current[key] ?? []),
+        {
+          id: steerId,
+          message: entry.message,
+          userMessageId,
+          ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
+          ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
+        },
+      ];
     } catch (error) {
-      // 409：当前无正在进行的任务，插话无法命中本次流。退回队列，
-      // 由用户决定重新插话或按队列顺序发送。
-      pendingSteersRef.current[key] = (pendingSteersRef.current[key] ?? []).filter((s) => s.id !== steerId);
-      enqueueMessage(sessionId, entry.message, {
+      // 409 / network failure：不靜默重排（否則點擊迴圈卡死），改以普通訊息送出，
+      // 讓使用者看到訊息確實發出。
+      console.warn('interject failed; sending as a normal message:', error);
+      void sendMessage({
+        message: entry.message,
         ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
         ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
       });
-      console.warn('interject failed (returned to queue):', error);
     }
   };
 
@@ -914,12 +929,14 @@ function App() {
   };
 
   // Terminal-state settle for an assistant message after a stream ends.
-  // Guards on `status === 'running'` so a done/error/stopped set by event
-  // handlers (or by stopMessage) is never overwritten. When the `done` frame
-  // was dropped, reconcile against the backend's committed message instead of
-  // blindly showing an orange "interrupted" bar — the backend persists the
-  // assistant message BEFORE writing `done`, so a present message id means the
-  // reply actually succeeded and must be adopted as `done`.
+  // Guards on `running`/`waiting` so a done/error/stopped set by event handlers
+  // (or by stopMessage) is never overwritten. `waiting` is included: a stale
+  // waiting (approval) message that never got a successful resume would
+  // otherwise stick forever and keep isThinking/busy true, blocking the queue.
+  // When the `done` frame was dropped, reconcile against the backend's committed
+  // message instead of blindly showing an orange "interrupted" bar — the backend
+  // persists the assistant message BEFORE writing `done`, so a present message
+  // id means the reply actually succeeded and must be adopted as `done`.
   const settleAssistantMessage = async (opts: {
     sessionId: string | undefined;
     assistantMessageId: string;
@@ -936,7 +953,7 @@ function App() {
     if (receivedDone) {
       setMessages((current) =>
         current.map((item) =>
-          item.id === mid && item.status === 'running'
+          item.id === mid && (item.status === 'running' || item.status === 'waiting')
             ? {
                 ...item,
                 content: fallback || item.content,
@@ -952,7 +969,7 @@ function App() {
     const committed = await findCommittedAssistantMessage(sid, mid);
     setMessages((current) =>
       current.map((item) =>
-        item.id === mid && item.status === 'running'
+        item.id === mid && (item.status === 'running' || item.status === 'waiting')
           ? committed
             ? {
                 ...item,
@@ -2026,6 +2043,31 @@ function App() {
     }
   }, [messages, queuedEntries, goalStreamSessions]);
 
+  // 卡死兜底：某条 assistant 消息仍卡在 running、但其流 controller 已不存在
+  // （流已结束但 settle 未生效——例如 done 帧丢失/消息 id 不匹配/SSE 早断），
+  // 則強制 settle，避免 isThinking/busy 永久為 true 把佇列與插話都卡死。
+  // 只處理 running（不含 waiting：waiting = 待審批，須保留給使用者 resolve，
+  // 其卡死由 resolvePendingRequest 失敗時的 settle 兜底）。
+  useEffect(() => {
+    if (sessionId == null) return;
+    const key = streamKey(sessionId);
+    const timer = setInterval(() => {
+      if (streamControllersRef.current[key]) return; // 仍有在飛的流，不碰
+      const stuck = messages.filter(
+        (m) => m.status === 'running' && m.sessionId === sessionId,
+      );
+      for (const m of stuck) {
+        void settleAssistantMessage({
+          sessionId,
+          assistantMessageId: m.id,
+          streamedContent: m.content,
+          receivedDone: false,
+        });
+      }
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [messages, sessionId]);
+
   // Queue the current composer content; it auto-sends after the stream ends.
   const handleSendQueued = () => {
     if (!isThinking) {
@@ -2772,6 +2814,22 @@ function App() {
       setPendingRequests((current) =>
         current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: false } : item)),
       );
+      // 解析失敗：把卡在 waiting 的訊息 settle 掉，否則 isThinking/busy 永久為
+      // true，佇列與插話都被卡死。
+      if (targetMessageId) {
+        setMessages((current) =>
+          current.map((item) =>
+            item.id !== targetMessageId
+              ? item
+              : {
+                  ...item,
+                  status: 'interrupted' as const,
+                  parts: settleRunningTools(item.parts ?? []),
+                  streamEndAt: Date.now(),
+                },
+          ),
+        );
+      }
       return;
     } finally {
       stopBrowserAgent();
@@ -4030,6 +4088,7 @@ function App() {
                           onInterjectQueued={(id) => {
                             if (sessionId) void interjectQueuedMessage(sessionId, id);
                           }}
+                          streamActive={isThinking}
                           onClose={dismissCurrentTodos}
                         />
                       )}

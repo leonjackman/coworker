@@ -910,6 +910,7 @@
   "files.expand_all": "Alle aufklappen ({count} weitere)",
   "files.collapse": "Einklappen",
   "chat.interject_queued": "Jetzt einwerfen",
+  "chat.interject_queued_disabled": "Jetzt einwerfen (only while a task is running)",
   "chat.interject_badge": "Einwurf",
   "chat.steer_injected_label": "Einwurf erhalten",
   "chat.command_goal": "Ein Ziel setzen (/goal <Ziel>)",

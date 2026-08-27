@@ -910,6 +910,7 @@
   "files.expand_all": "Expandir tudo ({count} a mais)",
   "files.collapse": "Recolher",
   "chat.interject_queued": "Intervir agora",
+  "chat.interject_queued_disabled": "Intervir agora (only while a task is running)",
   "chat.interject_badge": "Intervenção",
   "chat.steer_injected_label": "Intervenção recebida",
   "chat.command_goal": "Definir uma meta (/goal <objetivo>)",

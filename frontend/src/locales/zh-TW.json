@@ -910,6 +910,7 @@
   "files.expand_all": "展開全部（剩餘 {count} 個）",
   "files.collapse": "收起",
   "chat.interject_queued": "插話引導",
+  "chat.interject_queued_disabled": "插話引導（僅在任務進行中可用）",
   "chat.interject_badge": "插話",
   "chat.steer_injected_label": "收到插話",
   "chat.command_goal": "設定目標（/goal <目標>）",

@@ -912,6 +912,7 @@
   "files.expand_all": "Expand all ({count} more)",
   "files.collapse": "Collapse",
   "chat.interject_queued": "Interject now",
+  "chat.interject_queued_disabled": "Interject now (only while a task is running)",
   "chat.interject_badge": "Interject",
   "chat.steer_injected_label": "Steered",
   "chat.command_goal": "Set a persistent goal (/goal <objective>)",
