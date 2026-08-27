@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain_core.messages import SystemMessage
 
 from .mcp_session import McpSessionManager
 
@@ -154,25 +153,12 @@ class McpToolMiddleware(AgentMiddleware):
         if not additions:
             return {}
 
-        overrides: dict[str, Any] = {"tools": existing + additions}
-
-        # Build an explicit attribution section and PREPEND it to the system prompt.
-        # Placing it first ensures the model sees it before other content, making
-        # the MCP attribution authoritative rather than just another block.
-        summary = self._mcp_summary()
-        if summary:
-            current = getattr(request, "system_message", None)
-            base_text = getattr(current, "text", "") or ""
-            section = (
-                f"## MCP 服务与工具归属 / MCP Server Attribution\n\n"
-                "以下工具来自已连接的 MCP 服务（按服务器分组）。"
-                "When identifying tools, tools listed below belong to the named MCP server.\n\n"
-                f"{summary}\n\n"
-                "If asked which tools belong to MCP servers, use this section as your reference.\n"
-            )
-            overrides["system_message"] = SystemMessage(content=f"{section}{base_text}" if base_text else section)
-
-        return overrides
+        # The attribution section is composed by SystemAssembler as a proper
+        # fragment (after behaviour/phase/capabilities, hidden in discuss) — the
+        # behaviour core must stay FIRST (B2; codex developer-instructions-first,
+        # opencode instructions→mcp). Prepending it here pushed it above the
+        # behaviour core and diluted it.
+        return {"tools": existing + additions}
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         overrides = self._overrides(request)

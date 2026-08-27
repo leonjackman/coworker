@@ -8,14 +8,17 @@ where PhaseToolGate / SkillMiddleware / MemoryMiddleware each OVERRODE
 re-concatenated several times per request).
 
 Order (behaviour first, dynamic last — B2):
-    base behaviour -> phase block -> capabilities -> workspace -> memory index
-    -> skills catalog (+activated bodies)
+    base behaviour -> phase block -> capabilities -> MCP attribution
+    -> workspace -> memory index -> skills catalog (+activated bodies)
 
 Fragments:
-  * ``base``: the graph-level behaviour prompt. Must run AFTER McpToolMiddleware
-    so an MCP attribution section prepended there is preserved as the base.
+  * ``base``: the graph-level behaviour prompt.
   * ``phase_block``: phase/autonomy behavioural contract (discuss vs execute).
   * ``capabilities``: platform / web / browser capability notes.
+  * ``mcp``: MCP server attribution (which tools belong to which server) — the
+    MCP middleware no longer PREPENDS this above the behaviour core; it is a
+    regular fragment placed after capabilities (codex/openqueue put
+    instructions before MCP), hidden in the read-only ``discuss`` phase.
   * ``workspace``: project layout tree — TURN-CACHED (P3), never re-walked on
     every model call while the top-level tree is unchanged.
   * ``memory index``: token-budgeted resident index (already fingerprint-cached
@@ -31,13 +34,14 @@ contract are never dropped.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage
 
 from ...logger import get_logger
-from ..core import normalize_autonomy, normalize_phase, normalize_work_mode
+from ..core import normalize_autonomy, normalize_phase
 from ..prompts import phase_system_prompt
 from ..system_prompt import build_workspace_context
 from ...skills.skill_middleware import _phase_is_discuss, build_skill_section
@@ -51,6 +55,32 @@ logger = get_logger(__name__)
 SYSTEM_FIXED_BUDGET_TOKENS = 16_000
 
 
+def _system_text(msg: Any) -> str:
+    """Extract the text of a system message, tolerating list content.
+
+    LangChain ``SystemMessage.content`` is usually a string, but multimodal /
+    plugin paths can set a list of parts. Reading only ``.text`` would return ''
+    there and silently drop the behaviour core (B1 edge).
+    """
+    try:
+        content = msg.content
+    except Exception:  # noqa: BLE001
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text:
+                    out.append(text)
+            elif isinstance(item, str) and item:
+                out.append(item)
+        return "\n".join(out)
+    return str(content)
+
+
 class SystemAssembler(AgentMiddleware):
 
     def __init__(
@@ -60,11 +90,13 @@ class SystemAssembler(AgentMiddleware):
         workspace: Any | None = None,
         memory_manager: Any | None = None,
         skill_manager: Any | None = None,
+        mcp_summary_provider: Callable[[], str | None] | None = None,
     ):
         self.capabilities = capabilities
         self.workspace = workspace
         self.memory_manager = memory_manager
         self.skill_manager = skill_manager
+        self.mcp_summary_provider = mcp_summary_provider
         # P3: workspace layout is turn-cached per phase; invalidated when the
         # root dir mtime changes (top-level files/dirs added or removed).
         self._ws_cache: dict[tuple[Any, float], str] = {}
@@ -108,6 +140,23 @@ class SystemAssembler(AgentMiddleware):
             return ""
         return build_skill_section(self.skill_manager, messages, self._skill_body_cache)
 
+    def _mcp_section(self, is_discuss: bool) -> str:
+        if self.mcp_summary_provider is None or is_discuss:
+            return ""
+        try:
+            summary = self.mcp_summary_provider()
+        except Exception:  # noqa: BLE001 - an MCP summary hiccup must never break chat
+            return ""
+        if not summary:
+            return ""
+        return (
+            "## MCP 服务与工具归属 / MCP Server Attribution\n\n"
+            "以下工具来自已连接的 MCP 服务（按服务器分组）。"
+            "When identifying tools, tools listed below belong to the named MCP server.\n\n"
+            f"{summary}\n\n"
+            "If asked which tools belong to MCP servers, use this section as your reference."
+        )
+
     # -- assembly --------------------------------------------------------------
 
     def _overrides(self, request: Any) -> dict[str, Any]:
@@ -120,7 +169,7 @@ class SystemAssembler(AgentMiddleware):
         try:
             base_sys = getattr(request, "system_message", None)
             if base_sys is not None:
-                base = str(getattr(base_sys, "text", "") or "")
+                base = _system_text(base_sys)
         except Exception:  # noqa: BLE001 - never break on a missing base prompt
             base = ""
 
@@ -131,13 +180,16 @@ class SystemAssembler(AgentMiddleware):
         ]
         if self.capabilities:
             fragments.append((80, "capabilities", self.capabilities))
+        is_discuss = _phase_is_discuss(state)
+        mcp = self._mcp_section(is_discuss)
+        if mcp:
+            fragments.append((75, "mcp", mcp))
         ws = self._workspace_section(phase)
         if ws:
             fragments.append((70, "workspace", ws))
         memory = self._memory_section()
         if memory:
             fragments.append((60, "memory", memory))
-        is_discuss = _phase_is_discuss(state)
         messages = state.get("messages", []) or []
         skills = self._skills_section(messages, is_discuss)
         if skills:

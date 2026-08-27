@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from coworker.agent.system_prompt import (  # noqa: E402
     build_cw_system_prompt,
     build_project_context_md,
-    build_tool_context,
     build_workspace_context,
     build_workspace_tree,
 )
@@ -63,29 +62,14 @@ def test_build_workspace_context_includes_root_and_relative_hint(tmp_path: Path)
     assert "src/" in ctx
 
 
-def test_build_tool_context_groups_by_section():
-    tools = [
-        _FakeTool("read_file"),
-        _FakeTool("write_file"),
-        _FakeTool("run_command"),
-        _FakeTool("memory"),
-    ]
-    ctx = build_tool_context(tools)
-    assert "Filesystem" in ctx
-    assert "Runtime" in ctx
-    assert "Memory" in ctx
-    # Registered tool names appear; unknown ones render too.
-    assert "read_file" in ctx
-    assert "run_command" in ctx
-
-
-def test_build_cw_system_prompt_assembles_all_sections(tmp_path: Path):
-    (tmp_path / "backend").mkdir()
-    ws = Workspace(tmp_path)
-    tools = [_FakeTool("read_file"), _FakeTool("run_command")]
-    sp = build_cw_system_prompt(tools=tools, workspace=ws, language="zh")
-    assert "## Workspace" in sp
-    assert "## Available tools" in sp
+def test_build_cw_system_prompt_is_behaviour_only():
+    """The graph-level base prompt is behaviour-only (C): the workspace, tool
+    catalogue and MCP attribution are composed by SystemAssembler, so this
+    function must never repeat them."""
+    sp = build_cw_system_prompt()
+    assert "## Workspace" not in sp
+    assert "## Available tools" not in sp
+    assert "## MCP" not in sp
     assert "Working method" in sp
     assert "Tool discipline" in sp
     assert "do NOT re-run" in sp
@@ -106,14 +90,15 @@ def test_build_project_context_md_carries_identity(tmp_path: Path):
 
 
 def test_build_cw_system_prompt_behaviour_only_mode_omits_workspace_and_tools():
-    """Behaviour-only mode (used as the graph-level base prompt) must NOT carry
-    the workspace or the tool catalogue — those are injected exactly once by
-    PhaseToolGateMiddleware. Repeating them here caused duplicate, contradictory
-    `## Workspace` / `## Available tools` sections (~60KB+ per request) that
-    degraded tool calling (the 降智 regression)."""
-    sp = build_cw_system_prompt(tools=[_FakeTool("read_file")], workspace=None, include_workspace=False, include_tools=False)
+    """Behaviour-only base prompt must NOT carry the workspace, tool catalogue or
+    MCP attribution — those are composed exactly once by SystemAssembler
+    (behaviour first, dynamic last). Repeating them caused duplicate,
+    contradictory `## Workspace` / `## Available tools` sections (~60KB+ per
+    request) that degraded tool calling (the 降智 regression)."""
+    sp = build_cw_system_prompt()
     assert "## Workspace" not in sp
     assert "## Available tools" not in sp
+    assert "## MCP" not in sp
     assert "Working method" in sp
     assert "Tool discipline" in sp
 
@@ -126,7 +111,7 @@ def test_phase_gate_visibility_only_no_prompt_override(tmp_path: Path):
 
     from coworker.agent.middleware import PhaseToolGateMiddleware
 
-    base = build_cw_system_prompt(tools=[], workspace=None, include_workspace=False, include_tools=False)
+    base = build_cw_system_prompt()
     tools = [_FakeTool("read_file"), _FakeTool("write_file"), _FakeTool("run_command"), _FakeTool("write_todos"), _FakeTool("web_search")]
 
     class _Request:

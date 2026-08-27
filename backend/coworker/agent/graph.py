@@ -798,10 +798,12 @@ def build_coworker_agent_graph(
     phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names
 
     # SystemAssembler: the SINGLE point composing the full system prompt
-    # (behaviour + phase + capabilities + workspace + memory index + skills
-    # catalog). Runs AFTER McpToolMiddleware so the MCP attribution section is
-    # preserved as part of the base. Replaces the old per-call system-message
-    # overrides in PhaseToolGate + SkillMiddleware + MemoryMiddleware (B1/P5).
+    # (behaviour + phase + capabilities + MCP attribution + workspace + memory
+    # index + skills catalog). The MCP middleware exposes its attribution as a
+    # provider callable so the assembler places it AFTER capabilities (behaviour
+    # core first — B2) and hides it in discuss. Replaces the old per-call
+    # system-message overrides in PhaseToolGate + SkillMiddleware +
+    # MemoryMiddleware (B1/P5).
     from .. import platform as _platform
     from .middleware.system_assembler import SystemAssembler
 
@@ -814,6 +816,7 @@ def build_coworker_agent_graph(
             workspace=workspace,
             memory_manager=memory_manager,
             skill_manager=skill_manager,
+            mcp_summary_provider=mcp_middleware._mcp_summary,
         )
     )
 
@@ -848,19 +851,13 @@ def build_coworker_agent_graph(
 
     from .system_prompt import build_cw_system_prompt
 
-    # Behaviour-only base prompt. The workspace + tool catalogue are injected by
-    # PhaseToolGateMiddleware (phase-filtered, incl. MCP/plugin tools) on every
-    # model call — repeating them here made the system prompt contain duplicate
-    # `## Workspace` / `## Available tools` sections (~60KB+ per request), which
-    # diluted instructions and degraded tool calling (the 降智 regression).
-    system_prompt = build_cw_system_prompt(
-        tools=tools,
-        workspace=workspace,
-        work_mode=work_mode,
-        language=language,
-        include_workspace=False,
-        include_tools=False,
-    )
+    # Behaviour-only base prompt. The workspace layout, MCP attribution, memory
+    # index and skills catalog are composed by SystemAssembler (behaviour first,
+    # dynamic last) — repeating them here made the system prompt contain
+    # duplicate `## Workspace` / `## Available tools` sections (~60KB+ per
+    # request), which diluted instructions and degraded tool calling (the 降智
+    # regression).
+    system_prompt = build_cw_system_prompt()
 
     kwargs: dict[str, Any] = {
         "model": llm,

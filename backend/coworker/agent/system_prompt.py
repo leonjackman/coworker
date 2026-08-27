@@ -28,8 +28,6 @@ MAX_TREE_CHARS = 4_000
 # Cap the number of sibling entries shown per directory (else a 10k-file flat
 # repo floods the tree).
 MAX_DIR_ENTRIES = 60
-# Extra tool-list cap (name: one-line description).
-MAX_TOOL_CHARS = 4_000
 
 _IGNORED_TOP_LEVEL = {
     ".git",
@@ -182,105 +180,22 @@ def build_project_context_md(workspace_root: str | Path) -> str:
     )
 
 
-def build_tool_context(tools: list[Any]) -> str:
-    """Render the ``## Available tools`` section grouped by registry section.
-
-    DEPRECATED: the tool catalogue is no longer injected into the system prompt
-    (the model receives the phase-filtered tool schemas directly — mainstream
-    behaviour). Kept for debugging/tests only.
-    """
-    if not tools:
-        return ""
-    from .tool_registry import SECTION_LABELS, SECTION_ORDER, section_for, summary_for
-
-    # Build {tool_name: live_description} first.
-    live: dict[str, str] = {}
-    for tool in tools:
-        name = getattr(tool, "name", "")
-        if not name:
-            continue
-        desc = getattr(tool, "description", "") or ""
-        desc = " ".join(desc.split())[:160]
-        live[name] = desc
-
-    # Group by section.
-    sections: dict[str, list[str]] = {}
-    for name in live:
-        sec = section_for(name)
-        sections.setdefault(sec, []).append(name)
-
-    lines: list[str] = ["## Available tools"]
-    total = 0
-
-    def _emit(line: str) -> bool:
-        nonlocal total
-        if total + len(line) > MAX_TOOL_CHARS:
-            return False
-        lines.append(line)
-        total += len(line)
-        return True
-
-    for sec in SECTION_ORDER:
-        names = sections.get(sec)
-        if not names:
-            continue
-        label = SECTION_LABELS.get(sec, sec or "Other")
-        header = f"- **{label}**"
-        if not _emit(header):
-            break
-        for name in sorted(names):
-            summary = summary_for(name)
-            if not summary:
-                summary = live.get(name, "")
-            line = f"  - ``{name}`` — {summary}" if summary else f"  - ``{name}``"
-            if not _emit(line):
-                break
-        names.clear()  # mark emitted
-    # Any remaining (unknown-section / MCP) tools.
-    for sec, names in sections.items():
-        if not names:
-            continue
-        label = SECTION_LABELS.get(sec, sec or "Other")
-        header = f"- **{label}**"
-        if not _emit(header):
-            break
-        for name in sorted(names):
-            summary = live.get(name, "")
-            line = f"  - ``{name}`` — {summary}" if summary else f"  - ``{name}``"
-            if not _emit(line):
-                break
-
-    if total > 0:
-        return "\n".join(lines)
-    return ""
 
 
-def build_cw_system_prompt(
-    *,
-    tools: list[Any],
-    workspace: Any | None = None,
-    work_mode: str = "build",
-    language: str = "zh",
-    include_workspace: bool = True,
-    include_tools: bool = True,
-) -> str:
-    """Assemble the full system prompt for the Coworker agent.
+def build_cw_system_prompt() -> str:
+    """Assemble the behaviour-only base system prompt for the Coworker agent.
 
     Codex-style behaviour guidance, adapted and compressed for Coworker:
     * Always ground yourself in the real workspace (never guess paths).
     * Keep going until the task is resolved; do not fabricate results.
-    * Never hallucinate tools — use only the listed ones.
+    * Never hallucinate tools — use only the ones provided to you.
     * On tool failure, change strategy instead of retrying the same call.
     * Communicate like a concise teammate (Chinese by default).
 
-    ``include_workspace`` / ``include_tools`` let callers emit a behaviour-only
-    prompt: when the workspace + tool catalogue are injected by the phase gate
-    (``PhaseToolGateMiddleware``) instead, the graph-level prompt must NOT repeat
-    them or the model sees duplicated, contradictory sections.
+    The workspace layout, MCP attribution, memory index and skills catalog are
+    composed by ``SystemAssembler`` (behaviour first, dynamic last — B2); this
+    function only provides the behaviour core so it is never duplicated.
     """
-    parts: list[str] = []
-
-    # 1. Behaviour core (Codex-derived, CW-compressed).
     behaviour = (
         "You are Coworker, a local coding assistant.\n"
         "Work until the user's request is genuinely resolved; do NOT stop early "
@@ -310,18 +225,4 @@ def build_cw_system_prompt(
         "in PARALLEL: call ``use_workers`` with all tasks at once (or issue "
         "multiple ``use_worker`` calls in one response) instead of one at a time.\n"
     )
-
-    # 2. Workspace section.
-    if include_workspace and workspace is not None:
-        ws = build_workspace_context(workspace)
-        if ws:
-            parts.append(ws)
-
-    # 3. Tool catalogue.
-    if include_tools:
-        tool_ctx = build_tool_context(tools)
-        if tool_ctx:
-            parts.append(tool_ctx)
-
-    parts.append(behaviour)
-    return "\n\n".join(parts)
+    return behaviour

@@ -199,7 +199,7 @@
 | T3 | 計數 | 校準受 prompt-cache 干擾 | 低 | P2 | ☑ | 校準用 cache-inclusive actual |
 | T4 | 計數 | short base64 低估 | 低 | P2 | ☑ | 門檻 256→128 |
 | B1 | Prompt build | system 被多 middleware 整段覆寫 | 中 | P2 | ☑ | SystemAssembler 單一組裝點 |
-| B2 | Prompt build | 行為 prompt 排最尾 | 低 | P2 | ☑ | behaviour→phase→capabilities→workspace→memory→skills |
+| B2 | Prompt build | 行為 prompt 排最尾 | 低 | P2 | ☑ | behaviour→phase→capabilities→MCP→workspace→memory→skills |
 | B3 | Prompt build | 工具目錄 MCP 退回全 description | 中 | P2 | ☑ | 目錄整體移除（P1） |
 | D1 | 重複 | 每 turn 重建一切 | 高 | P1 | ☐ | |
 | D2 | 重複 | goal 多輪每輪重複 | 高 | P1 | ☐ | |
@@ -336,6 +336,19 @@
 
 **驗證**：`tests/test_token_counting.py` 7 組（無獨立 3.5 常數 / char 預算同比率導出 / CJK 全形·假名·韓文·ExtA 計入 / 全形拉丁排除 / 密集文字成本更高 / cache-inclusive 兩種 key / 128 門檻）。`tests/` pytest **221 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：無新增孤兒。
 
+### 2026-08-27 — Prompt build 殘留收尾（A–D，依確認決策）
+
+改動檔案：`agent/middleware/system_assembler.py`、`mcp/mcp_middleware.py`、`agent/system_prompt.py`、`agent/graph.py`、`tests/test_prompt_build.py`（新）。**刪除孤兒 `agent/tool_registry.py`**（`build_tool_context` 移除後全模組無引用）。
+
+| 項目 | 實作內容 |
+|---|---|
+| **A** | **MCP 段不再被 prepend 到 system 最前**（mcp_middleware 移除 `system_message` 覆寫）；改由 `SystemAssembler` 以 fragment（priority 75，capabilities 後/workspace 前）組裝，**discuss 隱藏**。組裝順序回歸 `[behaviour, phase, capabilities, MCP, workspace, memory, skills]`——行為核心第一（對齊 codex developer-instructions 在前 / opencode instructions→mcp）。 |
+| **B** | 行為 prompt 過時「use only the listed ones」（P1 移除目錄後的殘留）→ 改寫（docstring＋實際文案「the tools provided to you」）。 |
+| **C** | `build_cw_system_prompt` 收斂為**行為-only**（移除 `tools/workspace/include_workspace/include_tools` 參數）；刪 `build_tool_context`（孤兒，P1 deprecated）＋ `MAX_TOOL_CHARS`；**整檔刪除孤兒 `tool_registry.py`**；graph.py 呼叫同步。 |
+| **D** | base 提取支援 **list-content**（`_system_text`：`[{"type":"text",...}]` 併成文字；`.text` 為空串的行為核心遺失邊緣收尾）。 |
+
+**驗證**：`tests/test_prompt_build.py` 7 組（MCP 在行為/capabilities 後、discuss 隱藏、MCP middleware 不再覆寫 system_message、無 stale「listed ones」、行為-only、`build_tool_context` 已移除、list-content base）。`tests/` pytest **227 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：無新增孤兒。
+
 ---
 
 ## 追蹤約定
@@ -355,3 +368,4 @@
 | 2026-08-27 | 摘取 E1/E2 已修復（一步到位：dream 單一合併 call + 規則 guardrail 移除 verify LLM），含實作紀錄 |
 | 2026-08-27 | 壓縮 C1–C4 已修復（摘要 session 持久化 + 跨輪重注入 / 預設模型 + 失敗提示 / token 精確截斷 / 輸入預算），含實作紀錄與孤兒清理 |
 | 2026-08-27 | Token 計數 T1–T4 已修復（單一常數 / CJK 擴充 / cache-aware 校準 / base64 門檻），含實作紀錄 |
+| 2026-08-27 | Prompt build 殘留收尾（A–D：MCP 段組裝位置 / 行為-only / 刪 tool_registry 孤兒 / list-content base），含實作紀錄 |
