@@ -70,3 +70,38 @@ def test_run_command_bg_and_status(tmp_path: Path):
 def test_command_status_missing(tmp_path: Path):
     ws = Workspace(tmp_path)
     assert ws.command_status("nope")["status"] == "not_found"
+
+
+def test_delegation_build_workspace_tools_kwargs(tmp_path: Path):
+    """W1 上游鏈：delegation.py 以舊簽名呼叫 build_workspace_tools（含 turn_index）
+    已移除——此處鎖定委派工具集仍可建構（無 TypeError）。"""
+    from coworker.agent.graph import build_workspace_tools
+    from coworker.workspace import Workspace
+
+    ws = Workspace(tmp_path)
+    tools = build_workspace_tools(
+        ws,
+        {"session_id": "s::delegate::agent", "provider": "p", "model": "m", "workspace_path": str(tmp_path)},
+        change_store=None,
+        session_store=None,
+        referenced_sessions=set(),
+        skill_manager=None,
+        memory_store=None,
+        memory_rel="",
+        delegator=None,
+        caller_agent="agent",
+        web_tools=[],
+        browser_tool=None,
+        language="zh",
+        worker_llm=object(),
+        worker_session_id="s",
+        worker_work_mode="build",
+        worker_autonomy="guarded",
+        worker_provider_name="p",
+        worker_approval_store=None,
+        worker_data_dir=None,
+        worker_mcp_session_manager=None,
+        worker_bus=None,
+        session_id="s",
+    )
+    assert len(tools) > 0  # tools built without the removed turn_index kwarg

@@ -386,6 +386,19 @@
 
 **驗證**：`tests/test_parts_reconstruction.py::test_tool_result_replays_output_full_not_display_cap`（重放全文、非顯示截斷）。`tests/` pytest **239 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `App.tsx`/`types.ts` `tsc --noEmit` **0 錯誤**。
 
+### 2026-08-27 — 上游/主次關係連路審計與修復（13 區改動後）
+
+**審計**：逐鏈核對 13 區改動的上下游依賴（主 agent graph ↔ worker 子代理 ↔ delegation 委派 ↔ memory dream ↔ compaction 持久化 ↔ 重試 ↔ HITL/resume ↔ 增量落盤 ↔ 前端）——含共享 builder 的呼叫方簽名、跨輪 runtime 狀態、checkpointer 一致性、目標路徑一致性。
+
+**發現並修復的斷裂**：
+1. **`delegation.py` 傳已刪除的 `turn_index=1`（W1 上游主鏈斷裂）**：`build_workspace_tools` 的 `turn_index` 參數在 W1 已移除（移入穩定 audit-context），但 `Delegator._run_sub_turn`（delegation.py:374）仍傳 → **任何委派/團隊 spawn 都會 `TypeError`**。移除該參數（工具端已預設 `audit_context.get("turn_index", 1)`）。補回歸測試 `test_delegation_build_workspace_tools_kwargs`。
+2. **`_steer_buffer`/`_delegation_buffer` 跨輪殘留（W1 快取 runtime 的連路）**：W1 前 runtime 每 turn 新建（buffer 天然清空）；快取後每 turn 復用 → 上一輪未 drain 的通知幀洩入下一輪。於 `_stream` 起點（`begin_turn`/`reset_per_turn` 旁）清空兩 buffer（steer 已注入對話，通知幀可安全丟棄）。
+3. **P2-B 增量緩衝只累積 `tool_end`（crash 恢復不完整）**：`_partial_parts` 改為累積全部流事件（delta/reasoning/plan/tool_start/delta/end），於每次 `tool_end` 以累積 merged view 冪等寫入——中斷可回放的 partial reply 含完整工具 input/output_full。
+
+**核對無斷裂的鏈**：dream `_memory_target_rel` = memory 工具 `_resolve_memory_target` = `write_auto_facts` = 記憶索引路徑（一致）；W1 cached graph 的 checkpointer = 共享 JSON saver（一致）；中斷輪 checkpoint 保留（resume 不受快取影響）；`_force_compact` 預算砍半由 `reset_per_turn` 每輪還原；worker/委派工具集與新簽名相容；無被移除符號殘留（`build_tool_context`/`run_consolidation`/`_verify_preservation`/`TRUNCATE_CHARS_PER_TOKEN`/`CHARS_PER_TOKEN` 等 0 程式碼引用）。
+
+**驗證**：`tests/` pytest **240 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `tsc` **0 錯誤**。
+
 ---
 
 ## 追蹤約定
@@ -409,3 +422,4 @@
 | 2026-08-27 | 八–十三 全量分階段開發（P0-A 編譯快取 → P2-B 增量落盤），含實作紀錄 |
 | 2026-08-27 | 完整驗收：45 項逐項核對通過；根治 2 項既有 selftest 失敗（_cap_summary off-by-one、telemetry 錯誤預期）；append_message 冪等化 |
 | 2026-08-27 | 前端↔後端合約審計：tool_end 顯示/持久化拆分（output/output_full）、done 型別同步、context_usage budget_chars 修正 |
+| 2026-08-27 | 上游/主次關係連路審計：修復 delegation turn_index 斷裂、steer/delegation buffer 跨輪洩漏、P2-B 增量緩衝強化 |

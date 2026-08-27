@@ -607,6 +607,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             # fragment caches) and inject this turn's steer-emit callback.
             try:
                 self.workspace.begin_turn()
+                # W1 upstream chain: the runtime is cached per session, so the
+                # delegate/steer event buffers would leak a previous turn's
+                # undrained notification frames into the next turn. Any frame
+                # already applied to the conversation is a notification only —
+                # safe to drop at a fresh-turn boundary.
+                self._delegation_buffer.clear()
+                self._steer_buffer.clear()
                 reset = getattr(graph, "_cw_reset_per_turn", None)
                 if reset is not None:
                     reset(steer_emit=self._steer_emit_live(session_id))

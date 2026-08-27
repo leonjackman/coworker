@@ -371,7 +371,6 @@ class Delegator:
             self.workspace,
             audit_context,
             change_store=self.change_store,
-            turn_index=1,
             session_store=self.session_store,
             referenced_sessions=set(),
             skill_manager=self.skill_manager,

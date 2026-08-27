@@ -2058,8 +2058,9 @@ async def chat_stream(request: ChatStreamRequest):
                     logger.warning("update_todos(todos) failed for session %s", session_id, exc_info=True)
             if etype == "tool_end":
                 # W6/N2-P1: at tool boundaries persist the current merged parts so a
-                # mid-turn crash leaves a recoverable partial reply. Buffers the raw
-                # streaming events and writes the cumulative merged view.
+                # mid-turn crash leaves a recoverable partial reply. Accumulate ALL
+                # raw streaming events (text/reasoning/plan/tool) and write the
+                # cumulative merged view at each tool boundary (idempotent replace).
                 try:
                     _partial_parts.append(event)
                     if current_round_assistant_id:
@@ -2067,6 +2068,9 @@ async def chat_stream(request: ChatStreamRequest):
                         session_store.replace_assistant_parts(session_id, current_round_assistant_id, merged)
                 except Exception:  # noqa: BLE001 - incremental persist is best-effort
                     logger.debug("incremental tool persist failed for %s", session_id, exc_info=True)
+            elif etype in ("delta", "reasoning_delta", "plan_delta", "plan_start", "plan_end", "tool_start", "tool_delta"):
+                # Buffer for the incremental tool-boundary merge (P2-B).
+                _partial_parts.append(event)
             if etype == "done":
                 _persist_assistant(
                     event.get("content", ""),
