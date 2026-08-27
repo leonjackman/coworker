@@ -78,10 +78,10 @@
 
 | ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
 |---|---|---|---|---|---|
-| T1 | agent/core.py:1168 vs context.py:63 vs base.py:50 | **多套 chars/token 常數互相矛盾**：`CHARS_PER_TOKEN=3.5`（字元預算）vs `LATIN_CHARS_PER_TOKEN=3.8`（估算）vs `TRUNCATE_CHARS_PER_TOKEN=1.5`（截斷）。同一內容「字元預算」與「token 估算」差 ~8%，meter（tokens）與 trim（chars）可能對是否超預算判斷不一致。 | 單一估算器 | 全部收斂到 context.py 單一估算器；字元預算僅作 telemetry | 中 |
-| T2 | context.py:110-111 | **CJK 偵測範圍過窄**：`"一" <= ch <= "鿿"`（U+4E00–U+9FFF）不認**日文假名、全形標點（，。！？）、韓文** → 被當 Latin 以 3.8 chars/token 低估 token 數，可能超窗。 | — | 擴充 CJK 判定（含全形標點/假名/韓文區間） | 中 |
-| T3 | context.py:422-469 | **校準受 prompt-cache 干擾**：`usage_metadata.input_tokens` 在啟用 prefix cache 的 provider 上可能不含 cache hit，比值長期被拉向 1.0，進而低估非 cache 請求。 | — | 校準只在非 cache 呼叫採樣（或用含 cache 的總 input 數） | 低 |
-| T4 | context.py:79、165-204 | **short base64（<256 chars）以 prose 計**：`BASE64_MIN_RUN=256` 以下真實 base64 被當文字低估且不 scrub，仍送模型。 | — | 對 data URL header 一定以 base64 計（已做）；對長純 base64 降低門檻或加熵判定 | 低 |
+| T1 | agent/core.py:1212 vs context.py:63 | **多套 chars/token 常數互相矛盾**：`CHARS_PER_TOKEN=3.5`（字元預算）vs `LATIN_CHARS_PER_TOKEN=3.8`（估算）。C4 後決策已全走 token；char 僅顯示。 | codex `bytes/4`、opencode `chars/4`、LangChain `token_counter`（自訂）皆**單一來源** | 移除 `CHARS_PER_TOKEN`；`context_budget_chars` 改用 `LATIN_CHARS_PER_TOKEN`（單一常數，char 鏡像由估算器同比率導出） | 中 | ☑ |
+| T2 | context.py:110-111 | **CJK 偵測範圍過窄**：`"一" <= ch <= "鿿"`（U+4E00–U+9FFF）不認**日文假名、全形標點（，。！？）、韓文** → 被當 Latin 以 3.8 chars/token 低估 token 數，可能超窗。 | — | 擴充 CJK 判定（含全形標點/假名/韓文/ExtA/相容表意，排除全形拉丁字母） | 中 | ☑ |
+| T3 | context.py:401-459 | **校準受 prompt-cache 干擾**：`usage_metadata.input_tokens` 在啟用 prefix cache 的 provider 上可能不含 cache hit，比值長期被拉低，進而低估非 cache 請求。 | codex/opencode 以 provider 實際 usage（含 cache 佔窗）為權威 | 校準折入**含 cache 的總 input**（`_normalize_usage_total`：`input + cache_read`，Anthropic/OpenAI 兩種 key 形式） | 低 | ☑ |
+| T4 | context.py:79、165-204 | **short base64（<256 chars）以 prose 計**：`BASE64_MIN_RUN=256` 以下真實 base64 被當文字低估且不 scrub，仍送模型。 | — | `BASE64_MIN_RUN 256→128`（仍須過熵檢查） | 低 | ☑ |
 
 ### 七、請求 prompt build 不合理
 
@@ -194,10 +194,10 @@
 | C2 | 壓縮 | 摘要輸入雙重截斷 | 低 | P2 | ☑ | O1 已根治；輸入 32k→20k |
 | C3 | 壓縮 | 摘要模型首選主模型 | 中 | P2 | ☑ | 用預設模型 + 不可用提示（依決策）|
 | C4 | 壓縮 | trim 截斷倍率一刀切 | 低 | P2 | ☑ | token 精確截斷 + 孤兒清理 |
-| T1 | 計數 | chars/token 常數多套矛盾 | 中 | P2 | ☐ | |
-| T2 | 計數 | CJK 偵測範圍過窄 | 中 | P2 | ☐ | |
-| T3 | 計數 | 校準受 prompt-cache 干擾 | 低 | P2 | ☐ | |
-| T4 | 計數 | short base64 低估 | 低 | P2 | ☐ | |
+| T1 | 計數 | chars/token 常數多套矛盾 | 中 | P2 | ☑ | 單一常數（移除 CHARS_PER_TOKEN）|
+| T2 | 計數 | CJK 偵測範圍過窄 | 中 | P2 | ☑ | 擴充全形/假名/韓文/ExtA |
+| T3 | 計數 | 校準受 prompt-cache 干擾 | 低 | P2 | ☑ | 校準用 cache-inclusive actual |
+| T4 | 計數 | short base64 低估 | 低 | P2 | ☑ | 門檻 256→128 |
 | B1 | Prompt build | system 被多 middleware 整段覆寫 | 中 | P2 | ☑ | SystemAssembler 單一組裝點 |
 | B2 | Prompt build | 行為 prompt 排最尾 | 低 | P2 | ☑ | behaviour→phase→capabilities→workspace→memory→skills |
 | B3 | Prompt build | 工具目錄 MCP 退回全 description | 中 | P2 | ☑ | 目錄整體移除（P1） |
@@ -323,6 +323,19 @@
 
 **驗證**：`tests/test_compaction_persistence.py` 6 組（session 持久化 round-trip / runtime 重注入 / 摘要用預設模型 / 摘要失敗 flag + trim / token 截斷有界 / C2 常數對齊）。`tests/` pytest **214 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：改動檔案無新增孤兒。
 
+### 2026-08-27 — Token 計數不正確／不一致（T1–T4，依確認決策）
+
+改動檔案：`agent/core.py`、`context.py`、`agent/runtime.py`、`tests/test_token_counting.py`（新）、`memory/selftest.py`（預算斷言同步）。
+
+| 項目 | 實作內容 |
+|---|---|
+| **T1** | **移除 `CHARS_PER_TOKEN`（3.5）**；`context_budget_chars` 改用 `LATIN_CHARS_PER_TOKEN`（3.8，與估算器單一常數）。char 預算僅作顯示鏡像（決策已全走 `budget_tokens`）；`selftest` 預算斷言改為由 `LATIN_CHARS_PER_TOKEN` 動態推導。 |
+| **T2** | `_cjk_count` 擴充到 **8 個 CJK 區間**（Hangul Jamo、CJK 符號標點、假名、CJK Ext A、基本、韓文、相容表意、全形）＋**排除全形拉丁字母/數字**；密集文字不再被當 Latin 低估。 |
+| **T3** | 新增 `_normalize_usage_total`（`input + cache_read`，支援 Anthropic `input_token_details.cache_read` 與 OpenAI `prompt_tokens_details.cached_tokens`）；runtime `_fold_calibration` 改用 cache-inclusive actual——校準 EMA 不再被 prompt-cache 拉低（對齊 codex/opencode「provider usage 為權威」）。 |
+| **T4** | `BASE64_MIN_RUN 256→128`（仍須過熵檢查）；短 base64/小型 data blob 不再以 prose 計。 |
+
+**驗證**：`tests/test_token_counting.py` 7 組（無獨立 3.5 常數 / char 預算同比率導出 / CJK 全形·假名·韓文·ExtA 計入 / 全形拉丁排除 / 密集文字成本更高 / cache-inclusive 兩種 key / 128 門檻）。`tests/` pytest **221 passed**。`selftest.py` **245 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。`pyflakes`：無新增孤兒。
+
 ---
 
 ## 追蹤約定
@@ -341,3 +354,4 @@
 | 2026-08-27 | 檔案讀取 R1–R3 / O1 / L2 已修復（源頭優化：有界串流 + 附件 inline-once + rg/ignore），含實作紀錄與量化 |
 | 2026-08-27 | 摘取 E1/E2 已修復（一步到位：dream 單一合併 call + 規則 guardrail 移除 verify LLM），含實作紀錄 |
 | 2026-08-27 | 壓縮 C1–C4 已修復（摘要 session 持久化 + 跨輪重注入 / 預設模型 + 失敗提示 / token 精確截斷 / 輸入預算），含實作紀錄與孤兒清理 |
+| 2026-08-27 | Token 計數 T1–T4 已修復（單一常數 / CJK 擴充 / cache-aware 校準 / base64 門檻），含實作紀錄 |

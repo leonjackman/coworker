@@ -736,6 +736,7 @@ def main() -> int:
 
         # --- context budget: table resolution + conversion ----------------------
         from coworker.agent.core import _estimate_tokens, _message_text, _msg_chars, context_budget_chars, is_context_overflow_error
+        from coworker.context import LATIN_CHARS_PER_TOKEN
         from coworker.providers import DEFAULT_CONTEXT_WINDOW, MODEL_CONTEXT_TABLE, ProviderEntry, ProviderManager
 
         gpt = ProviderEntry(id="p1", name="gpt", provider_type="custom", base_url="http://localhost:9000", model="gpt-4o")
@@ -760,9 +761,11 @@ def main() -> int:
         win_o, src_o = ProviderManager.resolve_context_window(overridden)
         check("user override wins", win_o == 9999 and src_o == "user", f"{win_o}/{src_o}")
 
-        check("budget 128k -> 336000", context_budget_chars(128_000) == 336_000, str(context_budget_chars(128_000)))
+        # T1: the char budget derives from the SAME Latin ratio as the estimator.
+        expected_chars = int(128_000 * 0.75 * LATIN_CHARS_PER_TOKEN)
+        check("budget 128k derives from estimator ratio", context_budget_chars(128_000) == expected_chars, str(context_budget_chars(128_000)))
         check("budget floors at 20k", context_budget_chars(1) == 20_000, str(context_budget_chars(1)))
-        check("budget default when 0", context_budget_chars(0) == 336_000, str(context_budget_chars(0)))
+        check("budget default when 0", context_budget_chars(0) == expected_chars, str(context_budget_chars(0)))
 
         # B3: message size counts tool results & tool calls (not just text)
         from langchain_core.messages import AIMessage, HumanMessage, ToolMessage

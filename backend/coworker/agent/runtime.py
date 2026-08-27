@@ -50,6 +50,7 @@ from .core import (
     _merge_event_parts,
     _message_chunk_events,
     _normalize_usage,
+    _normalize_usage_total,
     _open_checkpointer,
     _resolve_project_memory_dir,
     _strip_plan_leak,
@@ -663,10 +664,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                                             run_usage["prompt_tokens"] += p
                                             run_usage["completion_tokens"] += c
                                             # Closed-loop calibration: pair the
-                                            # provider's ACTUAL prompt tokens with
-                                            # the guard's raw pre-send estimate of
-                                            # the very same request.
-                                            self._fold_calibration(graph, p)
+                                            # provider's ACTUAL prompt tokens (cache
+                                            # INCLUDED — cached tokens still occupy
+                                            # the window, T3) with the guard's raw
+                                            # pre-send estimate of the same request.
+                                            p_total, _ = _normalize_usage_total(usage)
+                                            self._fold_calibration(graph, p_total)
                                     cs = node_update.get("context_summary")
                                     if cs:
                                         compact_summary = str(cs)

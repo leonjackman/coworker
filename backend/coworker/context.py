@@ -76,7 +76,10 @@ PER_MESSAGE_OVERHEAD_TOKENS = 4
 TOKENS_PER_IMAGE_DEFAULT = 1_200
 
 # A run of base64 alphabet this long is treated as a binary blob, not prose.
-BASE64_MIN_RUN = 256
+# Minimum run length for a bare base64 candidate (T4: 256 → 128 so short
+# truncated base64 / small data blobs are not counted as prose). Short runs
+# still require the entropy check (_is_likely_base64) to pass.
+BASE64_MIN_RUN = 128
 _BASE64_RUN_RE = re.compile(r"[A-Za-z0-9+/]{" + str(BASE64_MIN_RUN) + r",}={0,2}")
 # A data URL header makes the following body base64 BY DEFINITION (the model
 # file format, not a heuristic) — always authoritative.
@@ -108,7 +111,35 @@ _OVERFLOW_PROMPT_TOKENS_RE = re.compile(r"prompt_tokens[:=]\s*(\d+)", re.I)
 # ---------------------------------------------------------------------------
 
 def _cjk_count(text: str) -> int:
-    return sum(1 for ch in text if "一" <= ch <= "鿿")
+    """Count CJK-dense characters (T2).
+
+    Expanded beyond the old U+4E00–U+9FFF window so full-width punctuation
+    (，。！？), Japanese kana, Korean hangul, CJK Extension A and CJK compatibility
+    ideographs are NOT counted as Latin (3.8 chars/token) — that under-counted
+    dense text and could overflow. Full-width Latin letters/digits are excluded
+    (≈1 token each, same as ASCII).
+    """
+    return sum(1 for ch in text if _is_cjk_dense(ord(ch)))
+
+
+_CJK_RANGES: tuple[tuple[int, int], ...] = (
+    (0x1100, 0x11FF),  # Hangul Jamo
+    (0x3000, 0x303F),  # CJK Symbols & Punctuation (、。「」)
+    (0x3040, 0x30FF),  # Hiragana + Katakana
+    (0x3400, 0x4DBF),  # CJK Extension A
+    (0x4E00, 0x9FFF),  # CJK Unified Ideographs
+    (0xAC00, 0xD7AF),  # Hangul Syllables
+    (0xF900, 0xFAFF),  # CJK Compatibility Ideographs
+    (0xFF00, 0xFFEF),  # Fullwidth Forms
+)
+
+
+def _is_cjk_dense(cp: int) -> bool:
+    # Full-width Latin digits/letters (０-９ Ａ-Ｚ ａ-ｚ) tokenize ≈1 each, like
+    # ASCII — not CJK-dense. The surrounding full-width punctuation stays dense.
+    if 0xFF10 <= cp <= 0xFF19 or 0xFF21 <= cp <= 0xFF3A or 0xFF41 <= cp <= 0xFF5A:
+        return False
+    return any(lo <= cp <= hi for lo, hi in _CJK_RANGES)
 
 
 def estimate_text_tokens(text: str) -> int:

@@ -1209,7 +1209,6 @@ def format_user_message(
 # checkpoint still holds full history; this only bounds what the model sees and
 # what gets replayed into the checkpoint.
 CONTEXT_SAFETY_FACTOR = 0.75
-CHARS_PER_TOKEN = 3.5
 # Compaction keeps a FIXED small recent-window of raw messages (opencode-aligned;
 # opencode uses DEFAULT_KEEP_TOKENS=8000). The compacted resident set is then
 # roughly ``recent + summary`` instead of the old ``budget × 0.6`` (≈118k for a
@@ -1224,13 +1223,18 @@ def context_budget_chars(context_window_tokens: int, max_output_tokens: int = 0)
     immediately). The output reservation matters: providers reserve
     ``max_output`` tokens from the window, so budgeting against the raw window
     leaves zero real margin (see :func:`coworker.context.effective_input_limit`).
+
+    T1: the char budget is a DISPLAY mirror — every decision (trim/compact/
+    guard/truncate) uses ``context_budget_tokens``. It derives from the SAME
+    Latin chars/token constant as the estimator so the legacy char meter
+    fallback never disagrees with the token meter.
     """
-    from ..context import effective_input_limit
+    from ..context import LATIN_CHARS_PER_TOKEN, effective_input_limit
 
     if not context_window_tokens or context_window_tokens <= 0:
         context_window_tokens = 128_000
     limit = effective_input_limit(context_window_tokens, max_output_tokens)
-    return max(20_000, int(limit * CONTEXT_SAFETY_FACTOR * CHARS_PER_TOKEN))
+    return max(20_000, int(limit * CONTEXT_SAFETY_FACTOR * LATIN_CHARS_PER_TOKEN))
 
 
 def context_budget_tokens(context_window_tokens: int, max_output_tokens: int = 0) -> int:
@@ -1401,6 +1405,25 @@ def _normalize_usage(usage: dict[str, Any]) -> tuple[int, int]:
         int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),
         int(usage.get("output_tokens") or usage.get("completion_tokens") or 0),
     )
+
+
+def _normalize_usage_total(usage: dict[str, Any]) -> tuple[int, int]:
+    """Cache-inclusive usage normalization (T3).
+
+    The calibration fold must measure the TRUE input size — cached tokens still
+    occupy the window. Providers report cache separately as
+    ``input_token_details.cache_read`` (Anthropic) or
+    ``prompt_tokens_details.cached_tokens`` (OpenAI); sum them in so cache-heavy
+    turns do not drag the calibration factor down (which would under-count
+    non-cached requests and risk an overflow).
+    """
+    p, c = _normalize_usage(usage)
+    details = usage.get("input_token_details") or usage.get("prompt_tokens_details") or {}
+    if isinstance(details, dict):
+        cache_read = int(details.get("cache_read") or details.get("cached_tokens") or 0)
+    else:
+        cache_read = 0
+    return p + max(0, cache_read), c
 
 
 
