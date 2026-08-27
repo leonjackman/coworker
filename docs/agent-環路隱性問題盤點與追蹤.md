@@ -509,3 +509,4 @@
 | 2026-08-27 | N1 改版：移除 step 上限（無上限），新增 IdleLoopMiddleware 進度感知卡死守門（warn→20 步限值硬停→滑出恢復無上限） |
 | 2026-08-27 | 真機會話審查（13 區成效全確認）+ 修復工具 input 捕獲為空（續段 chunk name 回落路由） |
 | 2026-08-27 | 插話（steer）bug 修復：按鈕閘控、stream-active 預檢、409 回退普通送出、settle waiting、卡死 watchdog |
+| 2026-08-28 | goal 能力修復（session 41d76f8b 復現樣本）：① idle-stop 首輪純文字不再直接 break → 注入 `_IDLE_NUDGE` 引導模型調 `update_goal(complete/blocked)` 續跑一輪；連續 2 純文字輪才停並置 `paused`（防前端自動續跑無限循環，GoalCard 顯示「繼續」供介入）② 每輪記帳後 `_emit_goal_updated`（前端 token/time 不再 0/0）③ 完成輪改調 `update_goal(status='complete')` 發出 done + 自動撤卡 ④ `update_goal_round(round_index+1)`（round 不再停 0，blocked 審計 ≥3 輪生效）⑤ `tokens_used` 改用該輪 done event 實際 `prompt+completion`（不再膨脹 135959）⑥ 前端 `goal_stream_end` 時 goal 仍 active → 自動 `kickGoalContinuation` 續跑。目標 `_IDLE_NUDGE`/`idle_rounds`/`idle_nudge` 作用域修正（原誤入 `_current_history` 內層）。新增 `tests/test_goal_round_flow.py`（4 項：round 計數 / 帳務累積 / 完成信號模板 / nudge 線路）。
