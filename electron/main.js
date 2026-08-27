@@ -1665,7 +1665,7 @@ ipcMain.handle('fetchSettings', async () => {
   try {
     return await requestBackend('/settings');
   } catch (e) {
-    return { max_attachment_mb: 25, revert_code: true };
+    return { max_attachment_mb: 25, revert_code: true, goal_enabled: true };
   }
 });
 
@@ -1673,7 +1673,7 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   try {
     return await requestBackend('/settings', 'POST', payload);
   } catch (e) {
-    return { status: 'error', max_attachment_mb: 25, revert_code: true, detail: e.message };
+    return { status: 'error', max_attachment_mb: 25, revert_code: true, goal_enabled: true, detail: e.message };
   }
 });
 

@@ -221,6 +221,8 @@
   "settings.autonomy_desc": "Jeden bestätigen fragt vor jeder Aktion; Geschützt arbeitet frei im Arbeitsbereich und fragt nur an der Grenze; Autonom fragt nie.",
   "settings.revert_code": "Dateiänderungen beim Bearbeiten rückgängig machen",
   "settings.revert_code_desc": "Klicken auf Bearbeiten setzt sofort zurück; Abbrechen stellt die Dateien wieder her.",
+  "settings.goal_enabled": "Zielmodus aktivieren",
+  "settings.goal_enabled_desc": "Erlaubt /goal ein dauerhaftes Ziel zu setzen, auf das der Agent über mehrere Runden hinarbeitet.",
   "settings.attachment_group": "Anhänge",
   "settings.attachment_group_desc": "Steuerung der Grenzgröße für Anhänge, die mit einer Nachricht gesendet werden.",
   "settings.max_attachment_mb": "Maximale Dateigröße",
@@ -934,6 +936,7 @@
   "goal.need_session": "Starten Sie zuerst eine Konversation (senden Sie eine Nachricht), dann setzen Sie ein Ziel.",
   "goal.need_workspace": "Wählen Sie zuerst einen Arbeitsbereich, dann setzen Sie ein Ziel.",
   "goal.command_failed": "Zieloperation fehlgeschlagen. Bitte erneut versuchen.",
+  "goal.disabled": "Die Zielfunktion ist deaktiviert. Aktivieren Sie sie in den Einstellungen, um /goal zu verwenden.",
   "goal.elapsed": "verstrichen",
   "chat.question_empty_fallback": "Der Agent benötigt Ihre Eingabe, um fortzufahren — bitte antworten Sie."
 }

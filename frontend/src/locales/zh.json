@@ -231,6 +231,8 @@
   "settings.autonomy_desc": "逐步确认逐动作询问；守护执行在工作区内自由推进、越界才问；全自动不询问。",
   "settings.revert_code": "编辑时回滚文件改动",
   "settings.revert_code_desc": "点击编辑即回滚，取消编辑自动恢复文件。",
+  "settings.goal_enabled": "启用目标模式",
+  "settings.goal_enabled_desc": "允许 /goal 设定持久目标，Agent 会持续多轮自主推进直至达成。",
   "settings.attachment_group": "附件",
   "settings.attachment_group_desc": "控制附件随消息发送的体积上限。",
   "settings.max_attachment_mb": "文件体积上限",
@@ -936,6 +938,7 @@
   "goal.need_session": "请先开始一个会话（发送一条消息），再设置目标。",
   "goal.need_workspace": "请先选择工作空间，再设置目标。",
   "goal.command_failed": "目标操作失败，请重试。",
+  "goal.disabled": "目标能力已关闭，请先在设置页开启后再使用 /goal。",
   "goal.elapsed": "已用",
   "chat.question_empty_fallback": "Agent 需要你的输入才能继续——请回复你的指示或选择。"
 }

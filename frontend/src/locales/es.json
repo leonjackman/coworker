@@ -221,6 +221,8 @@
   "settings.autonomy_desc": "Confirmar cada pregunta antes de cada acción; Protegido funciona libremente dentro del espacio de trabajo y pregunta solo en el límite; Autónomo nunca pregunta.",
   "settings.revert_code": "Revertir cambios de archivo al editar",
   "settings.revert_code_desc": "Al hacer clic en editar se revierte de inmediato; al cancelar se restauran los archivos.",
+  "settings.goal_enabled": "Habilitar modo objetivo",
+  "settings.goal_enabled_desc": "Permite que /goal cree un objetivo persistente hacia el que el agente trabaje en varias rondas.",
   "settings.attachment_group": "Archivos adjuntos",
   "settings.attachment_group_desc": "Controla el límite de tamaño para los archivos adjuntos enviados con un mensaje.",
   "settings.max_attachment_mb": "Tamaño máximo del archivo",

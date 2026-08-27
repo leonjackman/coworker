@@ -572,6 +572,8 @@ function App() {
   const [maxAttachmentMb, setMaxAttachmentMb] = useState<number>(loadMaxAttachmentMb);
   // 编辑用户消息时是否回滚该轮被改动的文件（默认开，对齐 opencode/Codex）。
   const [revertCode, setRevertCode] = useState<boolean>(true);
+  // goal 能力（多轮续跑）总开关：关闭后不能设定/续跑目标，续跑提示不再注入。
+  const [goalEnabled, setGoalEnabled] = useState<boolean>(true);
   const [workMode, setWorkMode] = useState<WorkMode>(() => {
     const stored = localStorage.getItem('cw.workMode') as WorkMode | null;
     return stored === 'plan' || stored === 'build' ? stored : 'build';
@@ -1246,6 +1248,9 @@ function App() {
           }
           if (typeof settings.revert_code === 'boolean') {
             setRevertCode(settings.revert_code);
+          }
+          if (typeof settings.goal_enabled === 'boolean') {
+            setGoalEnabled(settings.goal_enabled);
           }
         } catch { /* ignore */ }
         try {
@@ -1950,6 +1955,7 @@ function App() {
   // 启动/恢复 goal 续跑流（三个入口共用：/goal set|resume、会话加载恢复、HITL
   // resume 后重查）。防重入：该会话已有进行中 stream 或 goal 流则不重复启动。
   const kickGoalContinuation = async (sessionIdValue: string) => {
+    if (!goalEnabled) return;
     const busy = messages.some(
       (m) => (m.status === 'running' || m.status === 'waiting') && m.sessionId === sessionIdValue,
     );
@@ -3303,6 +3309,13 @@ function App() {
 
   /** /goal 目标命令（严格会话隔离：只作用于当前会话）。 */
   const handleGoalSlash = async (sid: string, rest: string, meta?: GoalSetMeta | undefined) => {
+    if (!goalEnabled) {
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', tOrDefault('goal.disabled', '目標能力已關閉，請在設置頁開啟後再使用。'), { status: 'done' }),
+      ]);
+      return;
+    }
     const sub = rest.split(/\s+/)[0] ?? '';
     const usage = () =>
       setMessages((current) => [
@@ -3856,6 +3869,11 @@ function App() {
     chatService.saveSettings({ revert_code: value }).catch(() => { /* ignore */ });
   };
 
+  const changeGoalEnabled = (value: boolean) => {
+    setGoalEnabled(value);
+    chatService.saveSettings({ goal_enabled: value }).catch(() => { /* ignore */ });
+  };
+
   const changeMemorySettings = (patch: MemorySettingsPatch) => {
     setMemorySettings((cur) => {
       const base: MemorySettings = cur ?? {
@@ -4059,6 +4077,7 @@ function App() {
                         selectedModel={selectedModel}
                         attachments={attachments}
                         maxAttachmentMb={maxAttachmentMb}
+                        goalEnabled={goalEnabled}
                         references={references}
                         modelOptions={modelOptions}
                         editing={Boolean(editingMessage)}
@@ -4124,6 +4143,8 @@ function App() {
                   onMaxAttachmentMbChange={changeMaxAttachmentMb}
                   revertCode={revertCode}
                   onRevertCodeChange={changeRevertCode}
+                  goalEnabled={goalEnabled}
+                  onGoalEnabledChange={changeGoalEnabled}
                   onThemeSettingsChange={changeThemeSettings}
                   onAutonomyChange={setAutonomy}
                   memorySettings={memorySettings}

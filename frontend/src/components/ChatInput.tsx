@@ -72,6 +72,8 @@ interface ChatInputProps {
   attachments: ComposerAttachment[];
   /** 文件体积上限（MB），来自设置页，控制二进制附件内联字节的阈值 */
   maxAttachmentMb: number;
+  /** goal 能力开关：关闭时 "/" 命令菜单不再显示 /goal 標籤 */
+  goalEnabled: boolean;
   references: SessionReference[];
   modelOptions: ModelOption[];
   onChange: (value: string) => void;
@@ -211,6 +213,7 @@ export function ChatInput({
   selectedModel,
   attachments,
   maxAttachmentMb,
+  goalEnabled = true,
   references,
   modelOptions,
   onChange,
@@ -358,7 +361,7 @@ export function ChatInput({
         ),
     [skills],
   );
-  const staticCommandItems = SLASH_COMMANDS.map((command) => ({
+  const staticCommandItems = SLASH_COMMANDS.filter((command) => command !== '/goal' || goalEnabled).map((command) => ({
     command,
     description: t(`chat.command_${command.slice(1)}`),
     type: "sys" as const,

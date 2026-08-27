@@ -221,6 +221,8 @@
   "settings.autonomy_desc": "確認ごとはすべてのアクション前を確認；ガード付きはワークスペース内で自由に作業し、境界でのみ質問；自律的は一切に質問しない。",
   "settings.revert_code": "編集時にファイル変更を元に戻す",
   "settings.revert_code_desc": "編集をクリックすると即座に元に戻し、キャンセルするとファイルを復元します。",
+  "settings.goal_enabled": "目標モードを有効化",
+  "settings.goal_enabled_desc": "/goal で持続的な目標を設定し、エージェントが複数ラウンドにわたり自主的に取り組み続けられるようにします。",
   "settings.attachment_group": "添付ファイル",
   "settings.attachment_group_desc": "メッセージで送信する添付ファイルのサイズ制限を制御。",
   "settings.max_attachment_mb": "最大ファイルサイズ",
@@ -934,6 +936,7 @@
   "goal.need_session": "先に会話を開始（メッセージを送信）してから、ゴールを設定してください。",
   "goal.need_workspace": "先にワークスペースを選択してから、ゴールを設定してください。",
   "goal.command_failed": "ゴール操作に失敗しました。もう一度お試しください。",
+  "goal.disabled": "目標機能は無効です。/goal を使うには設定で有効にしてください。",
   "goal.elapsed": "経過",
   "chat.question_empty_fallback": "エージェントが続行するには入力が必要です。指示または選択を返してください。"
 }

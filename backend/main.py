@@ -62,6 +62,7 @@ from coworker.goal_prompts import (
     render_goal_continuation,
     render_objective_updated,
 )
+from coworker.goal_feature import goal_feature
 from coworker.steer import SteerEntry, steer_inbox
 from coworker.skills.skill_manager import SkillManager
 from coworker.skills.skills import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, MAX_SKILL_FILE_BYTES
@@ -777,6 +778,24 @@ def _emit_goal_cleared(session_id: str) -> None:
         )
     except Exception:  # noqa: BLE001 - never break on a publish hiccup
         pass
+
+
+def _session_goal(session_id: str):
+    """Return the session's goal, or ``None`` when the goal capability is off.
+
+    This is the single read the *streaming pipeline* uses. When the feature is
+    disabled it returns ``None`` so the whole request path treats the session
+    exactly as if no goal ever existed — no continuation injection, no
+    multi-round loop, no goal accounting, no degenerate/idle-stop guards and no
+    ``goal_stream_end`` event. A clean A/B bypass for checking whether the goal
+    prompts cause model degradation (降智).
+    """
+    if not goal_feature.is_enabled():
+        return None
+    try:
+        return session_store.get_goal(session_id)
+    except Exception:  # noqa: BLE001 - never break the stream on a goal probe
+        return None
 
 
 class ChatRequest(BaseModel):
@@ -2110,7 +2129,7 @@ async def chat_stream(request: ChatStreamRequest):
             每轮起点重置终态旗标，每轮独立 snapshot，每轮结束记账并决定是否续跑。
             """
             nonlocal terminal_sent, error_emitted, interrupt_emitted, accumulated_content, last_context_usage, current_round_assistant_id, round_index, budget_wrapup_done, last_seen_objective
-            goal_stream_active = session_store.get_goal(session_id) is not None
+            goal_stream_active = _session_goal(session_id) is not None
             inflight_anchor: str | None = None
             inflight_pre: str | None = None
             # 退化回复计数（同一回复内大量重复，qwen3 模式）：累计 ≥2 轮即 blocked。
@@ -2133,11 +2152,11 @@ async def chat_stream(request: ChatStreamRequest):
                     last_context_usage = None
 
                     if round_index == 0:
-                        if request.skip_user_append and session_store.get_goal(session_id) is not None:
+                        if request.skip_user_append and _session_goal(session_id) is not None:
                             # 会话恢复 / 空闲启动：round 0 本身就是续跑轮，注入 goal 上下文。
                             # 该轮的 assistant 消息仍复用客户端传入的 id（前端已预建气泡），
                             # 只有真正的续跑轮（round >= 1）才用后端生成的新 id。
-                            goal = session_store.get_goal(session_id)
+                            goal = _session_goal(session_id)
                             injection = _goal_injection(goal)
                             # 以 user 角色注入（而非 system）：create_agent 总会把自带的
                             # system prompt 前置，system 角色注入会落在第 1 位，被严格
@@ -2154,7 +2173,7 @@ async def chat_stream(request: ChatStreamRequest):
                             current_round_assistant_id = request.assistant_message_id or None
                             round_anchor = snapshot_user_message_id
                     else:
-                        goal = session_store.get_goal(session_id)
+                        goal = _session_goal(session_id)
                         if goal is None:
                             break
                         if goal.status != "active" and not (goal.status == "budget_limited" and not budget_wrapup_done):
@@ -2211,7 +2230,7 @@ async def chat_stream(request: ChatStreamRequest):
                         inflight_anchor = None
 
                     # ---- accounting（仅 session 有 goal 时）----
-                    if session_store.get_goal(session_id) is not None:
+                    if _session_goal(session_id) is not None:
                         token_delta = int((last_context_usage or {}).get("used_tokens", 0) or 0)
                         try:
                             session_store.account_goal_usage(session_id, token_delta, round_elapsed)
@@ -2230,14 +2249,14 @@ async def chat_stream(request: ChatStreamRequest):
                     # ---- 退化回复检测（「一直重複說話」）----
                     # 同一回复内大量重复（qwen3 模式）。硬停只拦一轮，循环继续会再退化；
                     # 累计 ≥2 轮退化 → 目标 blocked，避免跨轮持续重复。
-                    if session_store.get_goal(session_id) is not None:
+                    if _session_goal(session_id) is not None:
                         try:
                             session = session_store.require(session_id)
                             if session.messages and session.messages[-1].role == "assistant":
                                 if is_degenerate_text(session.messages[-1].content):
                                     degenerate_rounds += 1
                                 if degenerate_rounds >= 2:
-                                    goal = session_store.get_goal(session_id)
+                                    goal = _session_goal(session_id)
                                     if goal is not None and goal.status == "active":
                                         blocked = session_store.update_goal_status(session_id, "blocked")
                                         if blocked is not None:
@@ -2253,7 +2272,7 @@ async def chat_stream(request: ChatStreamRequest):
                     # 继续续跑只会无限重复、撑爆上下文，最终 recursion error。
                     # 保护合法的「每轮修 1 个 bug」多轮任务：那些轮都有 replace/write
                     # 等实质工具执行（parts 含 tool），不受影响。
-                    if session_store.get_goal(session_id) is not None:
+                    if _session_goal(session_id) is not None:
                         try:
                             _sess = session_store.require(session_id)
                             if not _goal_round_has_tool_execution(_sess):
@@ -2263,7 +2282,7 @@ async def chat_stream(request: ChatStreamRequest):
                             logger.debug("idle-stop check failed for %s", session_id, exc_info=True)
 
                     # ---- continue decision ----
-                    goal = session_store.get_goal(session_id)
+                    goal = _session_goal(session_id)
                     if goal is None:
                         break
                     if goal.status == "active":
@@ -2364,7 +2383,7 @@ async def chat_stream(request: ChatStreamRequest):
             # GoalCard 停在错误态（即使重试成功也不切回 active）。
             if not isinstance(exc, (asyncio.CancelledError, GeneratorExit)) and not is_provider_bad_request(exc):
                 try:
-                    goal = session_store.get_goal(session_id)
+                    goal = _session_goal(session_id)
                     if goal is not None and goal.status == "active":
                         blocked = session_store.update_goal_status(session_id, "blocked")
                         if blocked is not None:
@@ -2532,6 +2551,7 @@ async def interject(request: InterjectRequest):
 class SettingsUpdate(BaseModel):
     max_attachment_mb: int = 25
     revert_code: Optional[bool] = None
+    goal_enabled: Optional[bool] = None
 
 
 class LogSettingsUpdate(BaseModel):
@@ -2730,16 +2750,17 @@ apply_stored_retention_settings()
 
 @app.get("/settings")
 async def get_settings():
-    """Get user-level settings (attachment size cap + edit revert)."""
+    """Get user-level settings (attachment size cap + edit revert + goal flag)."""
     return {
         "max_attachment_mb": read_user_max_attachment_mb(),
         "revert_code": read_user_revert_code(),
+        "goal_enabled": goal_feature.is_enabled(),
     }
 
 
 @app.post("/settings")
 async def set_settings(request: SettingsUpdate):
-    """Update user-level settings (attachment size cap + edit revert)."""
+    """Update user-level settings (attachment size cap + edit revert + goal flag)."""
     max_attachment_mb = max(MIN_MAX_ATTACHMENT_MB, min(MAX_MAX_ATTACHMENT_MB, request.max_attachment_mb))
     try:
         # Merge so the two keys don't clobber each other across saves.
@@ -2747,18 +2768,22 @@ async def set_settings(request: SettingsUpdate):
         existing.update({"max_attachment_mb": max_attachment_mb})
         if request.revert_code is not None:
             existing["revert_code"] = bool(request.revert_code)
+        if request.goal_enabled is not None:
+            existing["goal_enabled"] = bool(request.goal_enabled)
         _save_user_settings_file(existing)
     except Exception as exc:
         return {
             "status": "error",
             "max_attachment_mb": max_attachment_mb,
             "revert_code": read_user_revert_code(),
+            "goal_enabled": goal_feature.is_enabled(),
             "detail": str(exc),
         }
     return {
         "status": "ok",
         "max_attachment_mb": max_attachment_mb,
         "revert_code": read_user_revert_code(),
+        "goal_enabled": goal_feature.is_enabled(),
     }
 
 
@@ -3058,6 +3083,8 @@ async def goal_set(request: GoalSetRequest):
     ``skip_user_append=True`` 的 /chat/stream 触发续跑（见设计文档 §3.3.2）。
     """
     _require_goal(request.session_id)
+    if not goal_feature.is_enabled():
+        raise HTTPException(status_code=403, detail="goal capability is disabled (enable it in Settings)")
     objective = request.objective.strip()
     if not objective:
         raise HTTPException(status_code=400, detail="objective is required")
@@ -3099,6 +3126,8 @@ async def goal_pause(request: GoalControlRequest):
 async def goal_resume(request: GoalControlRequest):
     """恢复目标作用：仅 paused 可恢复。"""
     _require_goal(request.session_id)
+    if not goal_feature.is_enabled():
+        raise HTTPException(status_code=403, detail="goal capability is disabled (enable it in Settings)")
     current = session_store.get_goal(request.session_id)
     if current is None:
         raise HTTPException(status_code=404, detail="no active goal")
@@ -3137,7 +3166,8 @@ async def goal_clear(request: GoalControlRequest):
 @app.get("/goal")
 async def goal_get(session_id: str):
     _require_goal(session_id)
-    goal = session_store.get_goal(session_id)
+    # 能力关闭时按无目标处理：前端拿到 null 不会渲染 GoalCard / 不会触发续跑流。
+    goal = _session_goal(session_id)
     return {"status": "ok", "goal": goal.to_dict() if goal is not None else None}
 
 

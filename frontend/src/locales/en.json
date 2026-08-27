@@ -231,6 +231,8 @@
   "settings.autonomy_desc": "Confirm-each asks before every action; Guarded works freely inside the workspace and asks only at the boundary; Autonomous never asks.",
   "settings.revert_code": "Revert file changes when editing",
   "settings.revert_code_desc": "Clicking edit reverts immediately; cancelling restores the files.",
+  "settings.goal_enabled": "Enable goal mode",
+  "settings.goal_enabled_desc": "Let /goal create a persistent multi-round goal the agent keeps working toward.",
   "settings.attachment_group": "Attachments",
   "settings.attachment_group_desc": "Control the size limit for attachments sent with a message.",
   "settings.max_attachment_mb": "Max file size",
@@ -936,6 +938,7 @@
   "goal.need_session": "Start a conversation first (send a message), then set a goal.",
   "goal.need_workspace": "Select a workspace first, then set a goal.",
   "goal.command_failed": "Goal operation failed. Please retry.",
+  "goal.disabled": "Goal capability is disabled. Enable it in Settings to use /goal.",
   "goal.elapsed": "elapsed",
   "chat.question_empty_fallback": "The agent needs your input to continue — please reply with guidance."
 }

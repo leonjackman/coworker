@@ -18,6 +18,7 @@ from typing import Any
 from langchain.agents.middleware import ClearToolUsesEdit, ContextEditingMiddleware
 
 from ..changes import ChangeStore
+from ..goal_feature import goal_feature
 from ..logger import get_logger
 from ..mcp.mcp import McpManager
 from ..sessions import SessionStore
@@ -645,7 +646,9 @@ def build_workspace_tools(
     # Goal tools（对齐 codex spec.rs）：仅当 session 有 active/budget_limited 目标时
     # 可见。update_goal 只能声明 complete/blocked（pause/resume/budget 归用户/系统）；
     # get_goal 只读查询。用 factory 延迟闭包，避免在定义处绑定外部可变 state。
-    if session_store is not None and session_id:
+    # 整个 goal 能力被关闭（Settings toggle / COWORKER_GOAL_ENABLED=0 bypass）时
+    # 一律不挂载，模型看不到这两个工具。
+    if session_store is not None and session_id and goal_feature.is_enabled():
         _active_goal = None
         try:
             _active_goal = session_store.get_goal(session_id)

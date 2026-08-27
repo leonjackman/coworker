@@ -245,6 +245,8 @@
   "settings.autonomy_desc": "Confirmer chaque demande avant chaque action ; Surveillé travaille librement dans l'espace de travail et ne demande qu'à la limite ; Autonome ne demande jamais.",
   "settings.revert_code": "Annuler les modifications lors de l'édition",
   "settings.revert_code_desc": "Cliquer sur modifier annule immédiatement ; annuler restaure les fichiers.",
+  "settings.goal_enabled": "Activer le mode objectif",
+  "settings.goal_enabled_desc": "Permet à /goal de créer un objectif persistant vers lequel l'agent travaille sur plusieurs tours.",
   "settings.attachment_group": "Pièces jointes",
   "settings.attachment_group_desc": "Contrôlez la limite de taille des pièces jointes envoyées avec un message.",
   "settings.max_attachment_mb": "Taille maximale du fichier",
@@ -934,6 +936,7 @@
   "goal.need_session": "Commencez une conversation (envoyez un message), puis définissez un objectif.",
   "goal.need_workspace": "Sélectionnez d'abord un espace de travail, puis définissez un objectif.",
   "goal.command_failed": "Échec de l'opération sur l'objectif. Veuillez réessayer.",
+  "goal.disabled": "La fonctionnalité objectif est désactivée. Activez-la dans les paramètres pour utiliser /goal.",
   "goal.elapsed": "écoulé",
   "chat.question_empty_fallback": "L'agent a besoin de votre réponse pour continuer — merci de répondre."
 }

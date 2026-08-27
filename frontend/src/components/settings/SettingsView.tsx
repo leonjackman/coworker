@@ -22,6 +22,8 @@ interface SettingsViewProps {
   onMaxAttachmentMbChange: (value: number) => void;
   revertCode: boolean;
   onRevertCodeChange: (value: boolean) => void;
+  goalEnabled: boolean;
+  onGoalEnabledChange: (value: boolean) => void;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAutonomyChange: (mode: Autonomy) => void;
   memorySettings: MemorySettings | null;
@@ -43,6 +45,8 @@ export function SettingsView({
   onMaxAttachmentMbChange,
   revertCode,
   onRevertCodeChange,
+  goalEnabled,
+  onGoalEnabledChange,
   onThemeSettingsChange,
   onAutonomyChange,
   memorySettings,
@@ -197,6 +201,18 @@ export function SettingsView({
                   { value: 'false', label: t('memory.disabled') },
                 ],
                 onChange: (value) => onRevertCodeChange(value === 'true'),
+              },
+              {
+                id: 'goal_enabled',
+                type: 'toggle',
+                label: t('settings.goal_enabled'),
+                description: t('settings.goal_enabled_desc'),
+                value: goalEnabled ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onGoalEnabledChange(value === 'true'),
               },
               {
                 id: 'audit',

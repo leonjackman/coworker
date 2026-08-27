@@ -228,6 +228,8 @@
   "settings.autonomy_desc": "「每次確認」會在每一次動作前詢問；「受控」在工作區內自由工作，僅在邊界處詢問；「自主」永不詢問。",
   "settings.revert_code": "編輯時回滾檔案更動",
   "settings.revert_code_desc": "點擊編輯即回滾，取消編輯自動恢復檔案。",
+  "settings.goal_enabled": "啟用目標模式",
+  "settings.goal_enabled_desc": "允許 /goal 設定持久目標，Agent 會持續多輪自主推進直至達成。",
   "settings.attachment_group": "附件",
   "settings.attachment_group_desc": "控制隨訊息送出的附件大小限制。",
   "settings.max_attachment_mb": "最大檔案大小",
@@ -934,6 +936,7 @@
   "goal.need_session": "請先開始一個會話（發送一條訊息），再設定目標。",
   "goal.need_workspace": "請先選擇工作空間，再設定目標。",
   "goal.command_failed": "目標操作失敗，請重試。",
+  "goal.disabled": "目標能力已關閉，請先在設定頁開啟後再使用 /goal。",
   "goal.elapsed": "已用",
   "chat.question_empty_fallback": "Agent 需要你的輸入才能繼續——請回覆你的指示或選擇。"
 }
