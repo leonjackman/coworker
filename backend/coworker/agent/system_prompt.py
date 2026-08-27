@@ -260,6 +260,7 @@ def build_cw_system_prompt(
     work_mode: str = "build",
     language: str = "zh",
     include_workspace: bool = True,
+    include_tools: bool = True,
 ) -> str:
     """Assemble the full system prompt for the Coworker agent.
 
@@ -269,6 +270,11 @@ def build_cw_system_prompt(
     * Never hallucinate tools — use only the listed ones.
     * On tool failure, change strategy instead of retrying the same call.
     * Communicate like a concise teammate (Chinese by default).
+
+    ``include_workspace`` / ``include_tools`` let callers emit a behaviour-only
+    prompt: when the workspace + tool catalogue are injected by the phase gate
+    (``PhaseToolGateMiddleware``) instead, the graph-level prompt must NOT repeat
+    them or the model sees duplicated, contradictory sections.
     """
     parts: list[str] = []
 
@@ -310,9 +316,10 @@ def build_cw_system_prompt(
             parts.append(ws)
 
     # 3. Tool catalogue.
-    tool_ctx = build_tool_context(tools)
-    if tool_ctx:
-        parts.append(tool_ctx)
+    if include_tools:
+        tool_ctx = build_tool_context(tools)
+        if tool_ctx:
+            parts.append(tool_ctx)
 
     parts.append(behaviour)
     return "\n\n".join(parts)

@@ -103,3 +103,47 @@ def test_build_project_context_md_carries_identity(tmp_path: Path):
     assert "backend/" not in md
     assert "项目结构" not in md
     assert "以当前实时结构为准" in md
+
+
+def test_build_cw_system_prompt_behaviour_only_mode_omits_workspace_and_tools():
+    """Behaviour-only mode (used as the graph-level base prompt) must NOT carry
+    the workspace or the tool catalogue — those are injected exactly once by
+    PhaseToolGateMiddleware. Repeating them here caused duplicate, contradictory
+    `## Workspace` / `## Available tools` sections (~60KB+ per request) that
+    degraded tool calling (the 降智 regression)."""
+    sp = build_cw_system_prompt(tools=[_FakeTool("read_file")], workspace=None, include_workspace=False, include_tools=False)
+    assert "## Workspace" not in sp
+    assert "## Available tools" not in sp
+    assert "Working method" in sp
+    assert "Tool discipline" in sp
+
+
+def test_phase_gate_produces_single_workspace_and_tool_sections(tmp_path: Path):
+    """The final system message after PhaseToolGateMiddleware._overrides (built
+    on a behaviour-only base) must contain `## Workspace` and `## Available
+    tools` each exactly once — the single-injection contract."""
+    from langchain_core.messages import SystemMessage
+
+    from coworker.agent.middleware import PhaseToolGateMiddleware
+
+    base = build_cw_system_prompt(tools=[], workspace=None, include_workspace=False, include_tools=False)
+    tools = [_FakeTool("read_file"), _FakeTool("write_file"), _FakeTool("run_command"), _FakeTool("write_todos"), _FakeTool("web_search")]
+
+    class _Request:
+        def __init__(self):
+            self.state = {"language": "zh", "work_mode": "build", "phase": "execute", "autonomy": "guarded"}
+            self.tools = tools
+            self.system_message = SystemMessage(base)
+
+        def override(self, **kwargs):
+            return kwargs
+
+    gate = PhaseToolGateMiddleware(workspace=Workspace(tmp_path))
+    overrides = gate._overrides(_Request())
+    final = str(overrides["system_message"].text or "")
+    assert final.count("## Workspace") == 1
+    assert final.count("## Available tools") == 1
+    assert final.count("Working method") == 1
+    assert "## Workspace" in final
+    assert "## Available tools" in final
+    assert "read_file" in final  # the phase-filtered tool catalogue survived

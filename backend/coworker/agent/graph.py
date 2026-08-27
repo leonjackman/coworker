@@ -899,12 +899,18 @@ def build_coworker_agent_graph(
 
     from .system_prompt import build_cw_system_prompt
 
+    # Behaviour-only base prompt. The workspace + tool catalogue are injected by
+    # PhaseToolGateMiddleware (phase-filtered, incl. MCP/plugin tools) on every
+    # model call — repeating them here made the system prompt contain duplicate
+    # `## Workspace` / `## Available tools` sections (~60KB+ per request), which
+    # diluted instructions and degraded tool calling (the 降智 regression).
     system_prompt = build_cw_system_prompt(
         tools=tools,
         workspace=workspace,
         work_mode=work_mode,
         language=language,
-        include_workspace=True,
+        include_workspace=False,
+        include_tools=False,
     )
 
     kwargs: dict[str, Any] = {
