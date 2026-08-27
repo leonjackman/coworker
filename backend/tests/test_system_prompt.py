@@ -118,10 +118,10 @@ def test_build_cw_system_prompt_behaviour_only_mode_omits_workspace_and_tools():
     assert "Tool discipline" in sp
 
 
-def test_phase_gate_produces_single_workspace_and_tool_sections(tmp_path: Path):
-    """The final system message after PhaseToolGateMiddleware._overrides (built
-    on a behaviour-only base) must contain `## Workspace` and `## Available
-    tools` each exactly once — the single-injection contract."""
+def test_phase_gate_visibility_only_no_prompt_override(tmp_path: Path):
+    """After the P1/P5 split, PhaseToolGateMiddleware only filters the tool set;
+    the system prompt is composed by SystemAssembler (no tool catalogue, no
+    workspace section here — mainstream: tool list IS the schema)."""
     from langchain_core.messages import SystemMessage
 
     from coworker.agent.middleware import PhaseToolGateMiddleware
@@ -140,10 +140,149 @@ def test_phase_gate_produces_single_workspace_and_tool_sections(tmp_path: Path):
 
     gate = PhaseToolGateMiddleware(workspace=Workspace(tmp_path))
     overrides = gate._overrides(_Request())
-    final = str(overrides["system_message"].text or "")
-    assert final.count("## Workspace") == 1
-    assert final.count("## Available tools") == 1
-    assert final.count("Working method") == 1
-    assert "## Workspace" in final
-    assert "## Available tools" in final
-    assert "read_file" in final  # the phase-filtered tool catalogue survived
+    # Visibility only: the phase-filtered schemas are what the model sees.
+    assert {t.name for t in overrides["tools"]} == {"read_file", "write_file", "run_command", "write_todos", "web_search"}
+    # The system message is left untouched here (SystemAssembler owns it).
+    assert "system_message" not in overrides
+
+
+def test_tool_descriptions_bounded():
+    """P2 guard: built tool descriptions must stay bounded (no context bombs in
+    the schemas the model sees on every request)."""
+    from coworker.agent.core import MAX_TOOL_DESCRIPTION_CHARS
+
+    names = ("memory", "memory_read", "update_goal", "install_skill", "run_command", "delegate_task")
+    src = (Path(__file__).resolve().parents[1] / "coworker" / "agent" / "graph.py").read_text(encoding="utf-8")
+    import re
+
+    for name in names:
+        m = re.search(rf"def {name}\([^)]*\)[^\"]*\"\"\"(.+?)\"\"\"", src, re.S)
+        assert m, f"tool {name} not found"
+        desc = " ".join(m.group(1).split())
+        assert len(desc) <= MAX_TOOL_DESCRIPTION_CHARS, f"{name} desc {len(desc)} chars > {MAX_TOOL_DESCRIPTION_CHARS}"
+
+
+# --- SystemAssembler (P5/V5/B2) -----------------------------------------------
+
+class _FakeMemoryManager:
+    bound_project = None
+    bound_agent = None
+
+    def render_prompt(self):
+        return "MEMORY_SECTION_TOKEN"
+
+
+class _FakeSkillEntry:
+    def __init__(self, name, desc, path):
+        self.name = name
+        self.description = desc
+        self.file_path = path
+        self.version = "1.0.0"
+        self.commands = []
+
+
+class _FakeSkillManager:
+    def __init__(self, entries=None):
+        self._entries = entries or [_FakeSkillEntry("demo", "does demo things", "/tmp/demo/SKILL.md")]
+
+    def injection_list(self):
+        return self._entries
+
+    def read_body(self, name):
+        return None  # no activated bodies in these tests
+
+    def read_command_body(self, name, command):
+        return None
+
+
+def _assembler_request(base="BASE_BEHAVIOUR", **state_overrides):
+    from langchain_core.messages import SystemMessage
+
+    state = {"language": "zh", "work_mode": "build", "phase": "execute", "autonomy": "guarded", "messages": []}
+    state.update(state_overrides)
+
+    class _Request:
+        tools = []
+
+        def __init__(self):
+            self.state = dict(state)
+            self.system_message = SystemMessage(base)
+
+        def override(self, **kwargs):
+            return kwargs
+
+    return _Request()
+
+
+def test_system_assembler_composes_fragments_in_order(tmp_path: Path):
+    from coworker.agent.middleware.system_assembler import SystemAssembler
+
+    asm = SystemAssembler(
+        capabilities="CAP_LINE",
+        workspace=Workspace(tmp_path),
+        memory_manager=_FakeMemoryManager(),
+        skill_manager=_FakeSkillManager(),
+    )
+    req = _assembler_request()
+    out = str(asm._overrides(req)["system_message"].content or "")
+    # Behaviour core first, then phase, capabilities, workspace, memory, skills.
+    assert "You are executing" in out  # phase block present
+    assert out.index("BASE_BEHAVIOUR") < out.index("You are executing")
+    assert out.index("CAP_LINE") > out.index("BASE_BEHAVIOUR")
+    assert "## Workspace" in out
+    assert "MEMORY_SECTION_TOKEN" in out
+    assert "demo" in out  # skill catalog
+    assert "Available tools" not in out  # P1: no tool catalogue
+
+
+def test_system_assembler_hides_skills_in_discuss(tmp_path: Path):
+    from coworker.agent.middleware.system_assembler import SystemAssembler
+
+    asm = SystemAssembler(
+        capabilities="",
+        workspace=Workspace(tmp_path),
+        memory_manager=_FakeMemoryManager(),
+        skill_manager=_FakeSkillManager(),
+    )
+    req = _assembler_request(phase="discuss")
+    out = str(asm._overrides(req)["system_message"].content or "")
+    assert "demo" not in out  # skills hidden in discuss
+    assert "MEMORY_SECTION_TOKEN" in out  # memory still injected
+
+
+def test_system_assembler_budget_guard_drops_skills_then_workspace(tmp_path: Path, monkeypatch):
+    import coworker.agent.middleware.system_assembler as sa_module
+
+    monkeypatch.setattr(sa_module, "SYSTEM_FIXED_BUDGET_TOKENS", 20)
+    asm = sa_module.SystemAssembler(
+        capabilities="CAP_LINE",
+        workspace=Workspace(tmp_path),
+        memory_manager=_FakeMemoryManager(),
+        skill_manager=_FakeSkillManager(),
+    )
+    req = _assembler_request()
+    out = str(asm._overrides(req)["system_message"].content or "")
+    # Lowest-priority fragments dropped first: skills gone, then workspace gone,
+    # but behaviour + phase never dropped.
+    assert "demo" not in out
+    assert "MEMORY_SECTION_TOKEN" not in out
+    assert "BASE_BEHAVIOUR" in out
+
+
+def test_system_assembler_workspace_turn_cache(tmp_path: Path):
+    from coworker.agent.middleware.system_assembler import SystemAssembler
+
+    asm = SystemAssembler(
+        capabilities="",
+        workspace=Workspace(tmp_path),
+        memory_manager=_FakeMemoryManager(),
+        skill_manager=None,
+    )
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "f.txt").write_text("x")
+    req = _assembler_request()
+    o1 = str(asm._overrides(req)["system_message"].content or "")
+    # Second call with no FS change reuses the cached workspace tree (P3).
+    o2 = str(asm._overrides(req)["system_message"].content or "")
+    assert o1 == o2
+    assert len(asm._ws_cache) >= 1

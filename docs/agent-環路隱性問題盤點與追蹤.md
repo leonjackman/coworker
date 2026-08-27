@@ -42,13 +42,13 @@
 
 ### 二、Prompt 注入（過大／重複）
 
-| ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
-|---|---|---|---|---|---|
-| P1 | agent/phase_gate.py:117-119、agent/system_prompt.py:182-253 | **工具 schema 與 system prompt 工具目錄重複付費**：工具 schema 本就隨每請求送給 provider；PhaseGate 又把一份「Available tools」目錄（上限 4000 chars）塞進 system prompt。同一份信息每請求付兩次 token。 | codex/opencode 工具清單就是 schema，不在 prompt 重複 | 移除或大幅縮小工具目錄；只保留「不可由 schema 表達」的指引 | 中 |
-| P2 | agent/graph.py:337、557、240 | **工具 description 過長**：`memory`（~1400 chars）、`update_goal`（~1000）、`install_skill`（~900）、`run_command`（含 platform hint）。description 每字進 schema token 成本，且每回合重付。 | 主流 description ~200–400 chars，長指引移入 skill/memory 檔 | 瘦身 description；長指引改放文件，工具描述只留「什麼時候用 + 關鍵參數」 | 中 |
-| P3 | agent/phase_gate.py:113-116、agent/system_prompt.py:50-120 | **workspace 目錄樹每 model call 重新 walk FS**：`build_workspace_context→build_workspace_tree` 遞迴 `iterdir`。同 turn 內目錄不變卻每 step 重建重發。 | opencode 每 turn 組裝；codex world-state diff | turn 級快取目錄樹；工具執行導致變更後才刷新 | 中(效能) |
-| P4 | skills/skill_middleware.py:61、64-85 | **Activated skill 正文上限 80k chars**（≈25k–60k tokens）：`[skill:…]` 啟用後每個 model call 都注入 system prompt，單一技能可佔大半窗口。 | opencode Agent Skills 正文注入要小得多 | 上限降到主流量級（如 ~8–15k chars）；超過則只注入摘要+提示 load_skill | 中 |
-| P5 | agent/graph.py:851-898 | **每 step 重複注入記憶+技能+workspace+工具**：四者皆由 wrap_model_call 在每個 model call 重算重發。 | opencode 每 turn；codex 每 step 但 diff | 同 turn 內結果快取；system 組裝改為一次 | 中 |
+| ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 | 狀態 |
+|---|---|---|---|---|---|---|
+| P1 | agent/phase_gate.py:117-119、agent/system_prompt.py:182-253 | **工具 schema 與 system prompt 工具目錄重複付費**：工具 schema 本就隨每請求送給 provider；PhaseGate 又把一份「Available tools」目錄（上限 4000 chars）塞進 system prompt。同一份信息每請求付兩次 token。 | codex/opencode 工具清單就是 schema，不在 prompt 重複 | 移除或大幅縮小工具目錄；只保留「不可由 schema 表達」的指引 | 中 | ☑ |
+| P2 | agent/graph.py:337、557、240 | **工具 description 過長**：`memory`（2099 chars）、`update_goal`（951）、`install_skill`（827）、`run_command`（640）、`memory_read`（607）。description 每字進 schema token 成本，且每回合重付。 | 主流 description ~100–400 chars，長指引移入 skill/memory 檔 | 瘦身 description；長指引改放文件，工具描述只留「什麼時候用 + 關鍵參數」 | 中 | ☑ |
+| P3 | agent/phase_gate.py:113-116、agent/system_prompt.py:50-120 | **workspace 目錄樹每 model call 重新 walk FS**：`build_workspace_context→build_workspace_tree` 遞迴 `iterdir`。同 turn 內目錄不變卻每 step 重建重發。 | opencode 每 turn 組裝；codex world-state diff | turn 級快取目錄樹；工具執行導致變更後才刷新 | 中(效能) | ☑ |
+| P4 | skills/skill_middleware.py:61、64-85 | **Activated skill 正文上限 80k chars**（≈25k–60k tokens）：`[skill:…]` 啟用後每個 model call 都注入 system prompt，單一技能可佔大半窗口；skills catalog 亦無 token cap。 | opencode Agent Skills 正文注入要小得多 | 上限降到主流量級（如 ~8–15k chars）；超過則只注入摘要+提示 load_skill | 中 | ☑ |
+| P5 | agent/graph.py:851-898 | **每 step 重複注入記憶+技能+workspace+工具**：四者皆由 wrap_model_call 在每個 model call 重算重發。 | opencode 每 turn；codex 每 step 但 diff | 同 turn 內結果快取；system 組裝改為一次 | 中 | ☑ |
 
 ### 三、檔案讀取過大
 
@@ -85,11 +85,11 @@
 
 ### 七、請求 prompt build 不合理
 
-| ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
-|---|---|---|---|---|---|
-| B1 | phase_gate.py:120-123、skill_middleware.py:155-164、memory_middleware.py:61-69 | **系統訊息被 3+ middleware 各自整個覆寫**：PhaseGate→Skill→Memory 每個都 `SystemMessage(f"{section}\n\n{base_text}")`，把不斷增長的 system 反覆整段複製拼接。`base.py` 只讀 `.text`（content 若為 list 拿到空串）。 | opencode 一次組裝；codex base instructions 單源 | 改成「一次組裝 + middleware 只提供片段」；統一 content 讀取 | 中 |
-| B2 | agent/graph.py:851-898、system_prompt.py:279-325 | **行為 prompt 被排最尾**：最終 system 順序 = memory→skills→phase+workspace+tools→behavior。最該被模型遵守的工具紀律/不空轉指引被長目錄稀釋。 | codex/opencode 行為放前、動態內容放後 | 調整組合順序：行為核心 → memory → skills → workspace → tools | 低 |
-| B3 | agent/system_prompt.py:229-249 | **工具目錄對 MCP/未知工具退回完整 description**（可能上千字），與 P1 的雙份成本疊加。 | — | MCP 工具用短摘要；未註冊工具可不列 | 中 |
+| ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 | 狀態 |
+|---|---|---|---|---|---|---|
+| B1 | phase_gate.py:120-123、skill_middleware.py:155-164、memory_middleware.py:61-69 | **系統訊息被 3+ middleware 各自整個覆寫**：PhaseGate→Skill→Memory 每個都 `SystemMessage(f"{section}\n\n{base_text}")`，把不斷增長的 system 反覆整段複製拼接。`base.py` 只讀 `.text`（content 若為 list 拿到空串）。 | opencode 一次組裝；codex base instructions 單源 | 改成「一次組裝 + middleware 只提供片段」；統一 content 讀取 | 中 | ☑ |
+| B2 | agent/graph.py:851-898、system_prompt.py:279-325 | **行為 prompt 被排最尾**：最終 system 順序 = memory→skills→phase+workspace+tools→behavior。最該被模型遵守的工具紀律/不空轉指引被長目錄稀釋。 | codex/opencode 行為放前、動態內容放後 | 調整組合順序：行為核心 → memory → skills → workspace → tools | 低 | ☑ |
+| B3 | agent/system_prompt.py:229-249 | **工具目錄對 MCP/未知工具退回完整 description**（可能上千字），與 P1 的雙份成本疊加。 | — | MCP 工具用短摘要；未註冊工具可不列 | 中 | ☑ |
 
 ### 八、重複／多餘步驟
 
@@ -125,14 +125,14 @@
 | V2 | base.py:36 | `SUMMARY_OUTPUT_TOKENS=4096`：與 opencode 一致，合理。 | 一致 | 保留 | - |
 | V3 | context.py:69 | `PER_MESSAGE_OVERHEAD_TOKENS=4`：qwen 模板測過 ~4，合理。 | 一致 | 保留 | - |
 | V4 | base.py:33 | `KEEP_RECENT_TOKENS=8000`：壓縮後 resident≈8k+摘要，與 opencode DEFAULT_KEEP_TOKENS=8000 對齊，合理。 | 一致 | 保留 | - |
-| V5 | system_prompt.py:24-29、memory、skill_middleware | **固定注入總量無預算**：記憶 4000 + skills 目錄 + workspace 樹 6000 + 工具目錄 4000 ≈ 15k chars（~5k tokens）每次請求；疊加後可能爆窗。 | opencode 對 system 有隱含預算 | 為「固定注入」設總預算與優先級，防止疊加 | 中 |
+| V5 | system_prompt.py:24-29、memory、skill_middleware | **固定注入總量無預算**：記憶 4000 + skills 目錄 + workspace 樹 6000 + 工具目錄 4000 ≈ 15k chars（~5k tokens）每次請求；疊加後可能爆窗。 | opencode 對 system 有隱含預算 | 為「固定注入」設總預算與優先級，防止疊加 | 中 | ☑ |
 
 ### 十二、不合理順序
 
 | ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
 |---|---|---|---|---|---|
 | O1 | core.py:769-815 | **工具輸出持久化即截斷 2000 chars**：`_message_chunk_events` 在 `tool_end` 就 `output[:2000]` 存進 parts → 原始工具輸出在 session 就丟失，後續摘要/重放/回滾都只有 2000 chars。 | opencode **全文落盤**、只在轉模型時截斷 | 全文存 session（或落盤檔案），截斷只在模型轉換時 | 中 |
-| O2 | graph.py:851-867 | **記憶 middleware 掛在 Skills 之後**，注入在 phase 之後，導致行為 prompt 墊底（B2）；記憶與技能的組合順序靠隱式鏈，不易維護。 | — | 顯式定義 system 組合順序（見 B2） | 低 |
+| O2 | graph.py:851-867 | **記憶 middleware 掛在 Skills 之後**，注入在 phase 之後，導致行為 prompt 墊底（B2）；記憶與技能的組合順序靠隱式鏈，不易維護。 | — | 顯式定義 system 組合順序（見 B2） | 低 | ☑ |
 
 ### 十三、不符合主流做法
 
@@ -180,11 +180,11 @@
 | M3 | 記憶 | 記憶固定 4000 chars 每請求注入 | 中 | P2 | ☑ | token 預算索引（預設 2500）|
 | M4 | 記憶 | 記憶雙重上限矛盾（死代碼 30k） | 低 | P2 | ☑ | 移除死碼 |
 | M5 | 記憶 | 記憶區塊 boilerplate 計入預算 | 低 | P2 | ☑ | 結構標記不計內容預算 |
-| P1 | Prompt | 工具 schema 與工具目錄重複 | 中 | P1 | ☐ | |
-| P2 | Prompt | 工具 description 過長 | 中 | P1 | ☐ | |
-| P3 | Prompt | workspace 目錄樹每 call 重 walk | 中(效能) | P1 | ☐ | |
-| P4 | Prompt | activated skill 上限 80k 過大 | 中 | P1 | ☐ | |
-| P5 | Prompt | 每 step 重複注入記憶+技能+工具 | 中 | P2 | ☐ | |
+| P1 | Prompt | 工具 schema 與工具目錄重複 | 中 | P1 | ☑ | 移除目錄，schema 即工具清單 |
+| P2 | Prompt | 工具 description 過長 | 中 | P1 | ☑ | 六工具瘦身 5518→2520 chars + 上限 650 |
+| P3 | Prompt | workspace 目錄樹每 call 重 walk | 中(效能) | P1 | ☑ | turn 快取 + 60 entries/4000 chars |
+| P4 | Prompt | activated skill 上限 80k 過大 | 中 | P1 | ☑ | 12k + catalog 1500 token cap |
+| P5 | Prompt | 每 step 重複注入記憶+技能+工具 | 中 | P2 | ☑ | SystemAssembler 單點組裝 |
 | R1 | 讀取 | read_file 單次 50k chars 過大 | 中 | P2 | ☐ | |
 | R2 | 讀取 | 附件 120k chars 永久重放 | 高 | P0 | ☐ | |
 | R3 | 讀取 | 搜尋讀檔上限 1MB | 低 | P2 | ☐ | |
@@ -198,9 +198,9 @@
 | T2 | 計數 | CJK 偵測範圍過窄 | 中 | P2 | ☐ | |
 | T3 | 計數 | 校準受 prompt-cache 干擾 | 低 | P2 | ☐ | |
 | T4 | 計數 | short base64 低估 | 低 | P2 | ☐ | |
-| B1 | Prompt build | system 被多 middleware 整段覆寫 | 中 | P2 | ☐ | |
-| B2 | Prompt build | 行為 prompt 排最尾 | 低 | P2 | ☐ | |
-| B3 | Prompt build | 工具目錄 MCP 退回全 description | 中 | P2 | ☐ | |
+| B1 | Prompt build | system 被多 middleware 整段覆寫 | 中 | P2 | ☑ | SystemAssembler 單一組裝點 |
+| B2 | Prompt build | 行為 prompt 排最尾 | 低 | P2 | ☑ | behaviour→phase→capabilities→workspace→memory→skills |
+| B3 | Prompt build | 工具目錄 MCP 退回全 description | 中 | P2 | ☑ | 目錄整體移除（P1） |
 | D1 | 重複 | 每 turn 重建一切 | 高 | P1 | ☐ | |
 | D2 | 重複 | goal 多輪每輪重複 | 高 | P1 | ☐ | |
 | D3 | 重複 | `_merge_event_parts` O(n²) | 中(效能) | P2 | ☐ | |
@@ -213,9 +213,9 @@
 | L2 | 過度寬鬆 | 圖片 data URL 永久內聯 | 中 | P2 | ☐ | |
 | L3 | 過度寬鬆 | run_command timeout 上限偏小 | 低 | P2 | ☐ | |
 | V1 | 數值 | safety factor 0.75 偏保守 | 低 | P2 | ☐ | |
-| V5 | 數值 | 固定注入總量無預算 | 中 | P2 | ☐ | |
+| V5 | 數值 | 固定注入總量無預算 | 中 | P2 | ☑ | SystemAssembler 16k token 總預算 |
 | O1 | 順序 | 工具輸出持久化即截斷 2000 | 中 | P1 | ☐ | |
-| O2 | 順序 | 記憶/技能組合順序隱式 | 低 | P2 | ☐ | |
+| O2 | 順序 | 記憶/技能組合順序隱式 | 低 | P2 | ☑ | SystemAssembler 顯式順序 |
 | N1 | 主流 | 迴圈決策顯式化缺失 | 中 | P2 | ☐ | |
 | N2 | 主流 | 訊息級儲存 vs part 級 | 中 | P2 | ☐ | |
 | N3 | 主流 | 重試策略單薄 | 中 | P2 | ☐ | |
@@ -243,6 +243,43 @@
 
 ---
 
+## 已修復紀錄
+
+### 2026-08-27 — 記憶注入全套對齊 codex（M1–M5，方案 A+B）
+
+改動檔案：`memory_prompt.py`、`memory_discovery.py`、`memory_manager.py`、`memory_middleware.py`、`agent/graph.py`（memory_read 說明）。
+
+| 項目 | 實作內容 |
+|---|---|
+| **B + M3** | 常駐區塊改為**緊湊索引**：每個記憶檔只保留 `kind/name/rel/source` 標頭 + **每 block 首行預覽**（`PREVIEW_LINE_CHARS=160`）；全文一律 `memory_read` on-demand。預算改為 **token 制**（`MemoryConfig.inject_token_limit`，預設 2500，對齊 codex `MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT=2500`）。 |
+| **M1** | 注入依**相關性排序**：agent 核心檔（SOUL/AGENT/MEMORY）→ agent base → project（BASE/PROJECT）→ system → team。agent 自身記憶不再被 system 檔擠掉；即使預算耗盡仍保留全部檔案的檔頭清單。 |
+| **M2** | 新增 `MemoryScanner.scan_scoped()` / `scoped_paths()`：只讀本 scope 檔案，不再 rglob 全庫。`MemoryManager` 增加 **render 快取**（mtime/size fingerprint，變化才重渲染），長 turn 內多個 model call 不重複掃描/渲染。 |
+| **M4** | 移除 `MEMORY_SECTION_MAX_CHARS=30_000` 死代碼，上限來源單一化（token 預算）。 |
+| **M5** | 結構標記（`<file>`/`<memory>`/warning）**不計入內容預算**；`format_memory_prompt(char_limit)` 保留為向後相容包裝（`char_limit//4 → token`）。 |
+| **B/citation** | 索引區塊標頭指示模型「用 `memory_read` 讀全文，於最終回答引用 rel path」；`memory_read` docstring 同步更新。 |
+
+**驗證**：`stress_test.py` 新增 5 組測試（優先級+預算 / 結構不計 / scope 隔離（含 DREAMS.md 排除）/ render 快取失效）；`120 passed`。`selftest.py` 僅餘 2 項既有失敗（context_usage telemetry、summary cap，均與本改動無關）。`tests/` pytest `183 passed`。
+
+### 2026-08-27 — Prompt 注入 + PhaseToolGate 拆分（P1–P5 / B1–B3 / V5 / O2，檔次 1+2）
+
+改動檔案：`agent/middleware/phase_gate.py`、`agent/middleware/system_assembler.py`（新）、`agent/graph.py`、`agent/core.py`、`agent/system_prompt.py`、`skills/skill_middleware.py`、`skills/skills.py`。
+
+| 項目 | 實作內容 |
+|---|---|
+| **P1** | 移除 `## Available tools` 工具目錄注入（`phase_gate.py`）；工具清單即 phase 過濾後的 schema（主流：codex `model_visible_specs` / opencode `SessionTools.resolve`）。`build_tool_context` 標 deprecated；行為 prompt 的「Use ONLY the tools provided to you」同步更新。`_blocked_tool_message` 保留作 hallucination 安全網。 |
+| **P2** | 六工具 description 瘦身：`memory 2099→617`、`update_goal 951→427`、`install_skill 827→393`、`run_command 640→370`、`memory_read 607→319`、`delegate_task 394`（合計 **5518→2520 chars，-54%**）。新增 `MAX_TOOL_DESCRIPTION_CHARS=650` + 靜態 guard 測試。 |
+| **P3** | workspace 樹 **turn 級快取**（SystemAssembler 依 `(phase, root mtime)` 快取）；`MAX_TREE_ENTRIES 120→60`、`MAX_TREE_CHARS 6000→4000`。 |
+| **P4** | `SKILL_BODY_MAX_CHARS 80k→12k`；skills catalog 新增 `format_skills_prompt_bounded`（`SKILLS_CATALOG_MAX_TOKENS=1500`，先縮 desc 再逐檔捨棄，並附「還有更多技能可 load_skill」提示）。 |
+| **P5/B1/B2/O2** | 新增 **`SystemAssembler`**（codex fragment 模型）：behaviour→phase→capabilities→workspace→memory→skills **單一組裝點**，替換 PhaseToolGate prompt 組裝 + SkillMiddleware + MemoryMiddleware 各自的 system_message 覆寫；順序顯式化。Skills 於 discuss 隱藏、memory 每 phase 注入語義保留。 |
+| **V5** | `SYSTEM_FIXED_BUDGET_TOKENS=16_000` 總預算：超限依優先級自低而高捨棄（skills→memory→workspace→capabilities），behaviour/phase 永不捨棄。 |
+| **PhaseToolGate 拆分** | 三分職責 → 二分：可見性（`tools=` override）+ 守門（`wrap_tool_call`）留在 gate；prompt 組裝移入 SystemAssembler。 |
+
+**量化**：實測（真實 scoped memory + workspace + behavior + phase + capabilities）組裝後 system ≈ **842 tokens**；改前同場景含工具目錄（≤4000 chars ≈ 1000+ tokens）＋全文記憶，固定注入成本估 >50% 下降。
+
+**驗證**：`tests/` pytest **188 passed**（+5：phase-gate 可見性測試、desc guard、SystemAssembler 4 組）。`stress_test.py` **120 passed**。`selftest.py` 僅餘 2 項既有失敗（與本改動無關）。
+
+---
+
 ## 追蹤約定
 
 - 每修復一項：在總表把狀態改為 `☑`，備註欄填 commit / PR 連結與驗證方式。
@@ -255,3 +292,4 @@
 |---|---|
 | 2026-08-27 | 初版：全環路隱性問題盤點（45 項），基於與 codex / opencode-dev 對照 |
 | 2026-08-27 | 記憶注入 M1–M5 已修復（方案 A+B 對齊 codex），含實作紀錄與驗證 |
+| 2026-08-27 | Prompt 注入 P1–P5 / B1–B3 / V5 / O2 已修復（檔次 1+2：純減法 + SystemAssembler），含實作紀錄與量化對比 |

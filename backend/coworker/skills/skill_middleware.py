@@ -25,7 +25,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import SystemMessage
 
 from .skill_manager import SkillManager
-from .skills import format_skills_prompt
+from .skills import format_skills_prompt_bounded
 
 from coworker.logger import get_logger
 logger = get_logger(__name__)
@@ -57,8 +57,9 @@ def _message_text(message: Any) -> str:
 # Hard cap per activated skill body. Skill bodies are injected into the system
 # prompt on EVERY model call of the turn; an unbounded one is a context bomb
 # (the same class of failure as uncapped tool results, just through a
-# different door).
-SKILL_BODY_MAX_CHARS = 80_000
+# different door). 12k chars ≈ ~3-4k tokens — a full workflow body without
+# letting a single skill blow the window.
+SKILL_BODY_MAX_CHARS = 12_000
 
 
 def _format_active_skills(active: list[dict[str, str]]) -> str:
@@ -85,6 +86,68 @@ def _format_active_skills(active: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def resolve_active_skills(
+    manager: SkillManager,
+    messages: list[Any],
+    body_cache: dict[tuple[str, str], tuple[str, str] | None] | None = None,
+) -> list[dict[str, str]]:
+    """Scan the conversation for ``[skill:...]`` tags and load their bodies.
+
+    Shared by SkillMiddleware and the SystemAssembler. ``body_cache`` memoizes
+    SKILL.md reads across a turn.
+    """
+    cache = body_cache if body_cache is not None else {}
+    allowed = {s.name for s in manager.injection_list()}
+    seen: set[tuple[str, str]] = set()
+    active: list[dict[str, str]] = []
+    for msg in messages:
+        if getattr(msg, "type", None) != "human":
+            continue
+        content = _message_text(msg)
+        if not content:
+            continue
+        for match in SKILL_MARKER_RE.finditer(content):
+            name = match.group(1)
+            command = match.group(2) or ""
+            key = (name, command)
+            if key in seen or name not in allowed:
+                continue
+            seen.add(key)
+            if key not in cache:
+                if command:
+                    cache[key] = manager.read_command_body(name, command)
+                else:
+                    cache[key] = manager.read_body(name)
+            body = cache[key]
+            if body is None:
+                continue
+            active.append(
+                {"name": name, "command": command, "body": body[0], "location": body[1]}
+            )
+    return active
+
+
+def build_skill_section(
+    manager: SkillManager,
+    messages: list[Any],
+    body_cache: dict[tuple[str, str], tuple[str, str] | None] | None = None,
+) -> str:
+    """Render the full skills section: bounded catalog + activated-skill bodies.
+
+    Returns ``""`` when there is nothing to inject (no skills / hidden phase).
+    """
+    try:
+        skills = manager.injection_list()
+        active = resolve_active_skills(manager, messages, body_cache)
+    except Exception as exc:  # noqa: BLE001 - a scan failure must not break chat
+        logger.warning("Skill catalog refresh failed: %s", exc)
+        return ""
+    section = format_skills_prompt_bounded(skills) if skills else ""
+    if active:
+        section = f"{section}\n\n{_format_active_skills(active)}".strip()
+    return section
+
+
 class SkillMiddleware(AgentMiddleware):
 
     def __init__(self, manager: SkillManager):
@@ -93,62 +156,12 @@ class SkillMiddleware(AgentMiddleware):
         # long agent turn doesn't re-read the same SKILL.md on every model call.
         self._body_cache: dict[tuple[str, str], tuple[str, str] | None] = {}
 
-    def _resolve_body(self, name: str, command: str) -> tuple[str, str] | None:
-        key = (name, command)
-        if key not in self._body_cache:
-            if command:
-                self._body_cache[key] = self.manager.read_command_body(name, command)
-            else:
-                self._body_cache[key] = self.manager.read_body(name)
-        return self._body_cache[key]
-
-    def _extract_active_skills(self, request: Any) -> list[dict[str, str]]:
-        """Scan the conversation for ``[skill:...]`` tags and load their bodies.
-
-        Scans every user message so a skill activated earlier in the session
-        stays active across later turns (mirrors the old inline-body behaviour
-        where the body remained visible in history).
-        """
-        state = getattr(request, "state", None) or {}
-        messages = state.get("messages", []) or []
-        allowed = {s.name for s in self.manager.injection_list()}
-        seen: set[tuple[str, str]] = set()
-        active: list[dict[str, str]] = []
-        for msg in messages:
-            if getattr(msg, "type", None) != "human":
-                continue
-            content = _message_text(msg)
-            if not content:
-                continue
-            for match in SKILL_MARKER_RE.finditer(content):
-                name = match.group(1)
-                command = match.group(2) or ""
-                key = (name, command)
-                if key in seen or name not in allowed:
-                    continue
-                seen.add(key)
-                body = self._resolve_body(name, command)
-                if body is None:
-                    continue
-                active.append(
-                    {"name": name, "command": command, "body": body[0], "location": body[1]}
-                )
-        return active
-
     def _overrides(self, request: Any) -> dict[str, Any]:
         if _phase_is_discuss(getattr(request, "state", None)):
             logger.debug("skills hidden in discuss phase")
             return {}
-        try:
-            skills = self.manager.injection_list()
-            active = self._extract_active_skills(request)
-        except Exception as exc:  # noqa: BLE001 - a scan failure must not break chat
-            logger.warning("Skill catalog refresh failed: %s", exc)
-            return {}
-
-        section = format_skills_prompt(skills) if skills else ""
-        if active:
-            section = f"{section}\n\n{_format_active_skills(active)}".strip()
+        messages = (getattr(request, "state", None) or {}).get("messages", []) or []
+        section = build_skill_section(self.manager, messages, self._body_cache)
         if not section:
             return {}
 

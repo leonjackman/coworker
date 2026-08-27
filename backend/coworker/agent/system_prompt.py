@@ -20,8 +20,11 @@ from typing import Any
 # repos. opencode caps the skill list at ~18k chars; we cap the workspace tree
 # harder because it is a fixed preamble, not a per-skill on-demand read.
 MAX_TREE_DEPTH = 3
-MAX_TREE_ENTRIES = 120
-MAX_TREE_CHARS = 6_000
+# Bounded workspace tree (P3): the layout is a hint, not a snapshot — the model
+# is told to list directories before reading. Keep it small so a huge repo
+# cannot make the resident tree a context bomb.
+MAX_TREE_ENTRIES = 60
+MAX_TREE_CHARS = 4_000
 # Cap the number of sibling entries shown per directory (else a 10k-file flat
 # repo floods the tree).
 MAX_DIR_ENTRIES = 60
@@ -182,10 +185,9 @@ def build_project_context_md(workspace_root: str | Path) -> str:
 def build_tool_context(tools: list[Any]) -> str:
     """Render the ``## Available tools`` section grouped by registry section.
 
-    Uses the authoritative ``tool_registry`` for each tool's section + one-line
-    summary so the model sees a compact, grouped catalogue and never has to
-    guess what a tool does. Tools unknown to the registry (MCP / plugin) are
-    rendered generically from their own description.
+    DEPRECATED: the tool catalogue is no longer injected into the system prompt
+    (the model receives the phase-filtered tool schemas directly — mainstream
+    behaviour). Kept for debugging/tests only.
     """
     if not tools:
         return ""
@@ -293,8 +295,8 @@ def build_cw_system_prompt(
         "- Keep the user informed with short progress notes before big actions.\n"
         "\n"
         "## Tool discipline\n"
-        "- Use ONLY the tools listed under 'Available tools'. Never invent a tool "
-        "name (e.g. there is no ``list_directory`` — use ``run_command ls``).\n"
+        "- Use ONLY the tools provided to you. Never invent a tool name (e.g. "
+        "there is no ``list_directory`` — use ``run_command ls``).\n"
         "- If a tool call fails, do NOT re-run the exact same call. Analyze the "
         "error and change approach (narrow the scope, pick a different tool, or "
         "summarize and answer directly).\n"

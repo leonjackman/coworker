@@ -313,6 +313,64 @@ def format_skills_prompt(skills: list[SkillEntry]) -> str:
     return "\n".join(lines)
 
 
+# Token budget for the resident skills CATALOG (P4/V5). Bodies load on demand
+# via load_skill; a huge catalog (many skills × long descriptions) is a fixed
+# per-request cost on every model call. Mainstream coding agents keep the
+# catalog small (opencode Skill.fmt injects name/description/location only).
+SKILLS_CATALOG_MAX_TOKENS = 1500
+# When the catalog is over budget, each description is clipped to this width
+# before whole skills are dropped (dropping lowest-order ones last).
+SKILL_DESCRIPTION_CLIP_CHARS = 160
+
+
+def _clip_description(desc: str, limit: int) -> str:
+    return " ".join(desc.split())[:limit]
+
+
+def format_skills_prompt_bounded(skills: list["SkillEntry"]) -> str:
+    """``format_skills_prompt`` + a hard token budget (mainstream, P4).
+
+    Renders the catalog normally; if it exceeds ``SKILLS_CATALOG_MAX_TOKENS``
+    it is re-rendered with clipped descriptions, then with whole skills dropped
+    (from the end) until it fits. Never returns over-budget.
+    """
+    from coworker.context import estimate_text_tokens
+
+    def _render(list_: list) -> str:
+        return format_skills_prompt(list_)
+
+    rendered = _render(skills)
+    if estimate_text_tokens(rendered) <= SKILLS_CATALOG_MAX_TOKENS:
+        return rendered
+
+    clipped: list = []
+    for s in skills:
+        import copy
+
+        c = copy.copy(s)
+        if hasattr(c, "description"):
+            c.description = _clip_description(c.description or "", SKILL_DESCRIPTION_CLIP_CHARS)
+        clipped.append(c)
+    rendered = _render(clipped)
+    if estimate_text_tokens(rendered) <= SKILLS_CATALOG_MAX_TOKENS:
+        return rendered
+
+    kept: list = []
+    for s in clipped:
+        kept.append(s)
+        if estimate_text_tokens(_render(kept)) > SKILLS_CATALOG_MAX_TOKENS:
+            kept.pop()
+            break
+    if kept:
+        out = _render(kept)
+        out += (
+            "\n\n[skill catalog truncated to fit context — more skills exist; "
+            "load any skill by name via the load_skill tool]"
+        )
+        return out
+    return ""
+
+
 def _escape_xml(value: str) -> str:
     return (
         value.replace("&", "&amp;")

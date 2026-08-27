@@ -166,7 +166,7 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
     Only trailing runs count, so ordinary long tasks are unaffected. Mounted
     last (innermost) so its overrides are applied after PhaseToolGateMiddleware
-    / SkillMiddleware / MemoryMiddleware.
+    / SystemAssembler.
     """
 
     def __init__(self, warn_after: int = 2, stop_after: int = 4, text_warn_after: int = 3, text_stop_after: int = 5) -> None:

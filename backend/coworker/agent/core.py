@@ -473,6 +473,12 @@ def _open_checkpointer(checkpoints_dir: Any):
 
 _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 
+# Upper bound for built tool descriptions (P2). Tool schemas ride on EVERY
+# request, so a long description is paid token-by-token on every model call of
+# every turn. Mainstream coding agents keep descriptions short (~100-400 chars)
+# and move long guidance into memory/skill files instead.
+MAX_TOOL_DESCRIPTION_CHARS = 650
+
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser", "get_goal"}
 _PLAN_TOOLS = {"ask_user"}

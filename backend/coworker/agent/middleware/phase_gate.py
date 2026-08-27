@@ -1,11 +1,20 @@
-"""Phase-gated tool selection middleware."""
+"""Phase-gated tool visibility + tool-call gate middleware.
+
+Splits the old three-role middleware: tool VISIBILITY and the defense-in-depth
+tool-call GATE live here; the system-prompt composition moved to
+``SystemAssembler`` (single fragment assembler with a total budget). This
+matches mainstream architecture — codex (``ToolRouter.model_visible_specs``
+visibility + ``ToolOrchestrator`` gating; prompt via context contributors) and
+opencode (``SessionTools.resolve`` visibility + ``permission.ask`` gating;
+prompt via ``SystemPrompt`` service).
+"""
 
 from collections.abc import Callable
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import Runtime
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import ToolMessage
 
 from ...logger import get_logger
 from ..core import (
@@ -19,8 +28,6 @@ from ..core import (
     normalize_phase,
     normalize_work_mode,
 )
-from ..prompts import phase_system_prompt
-from ..system_prompt import build_tool_context, build_workspace_context
 
 logger = get_logger(__name__)
 
@@ -38,8 +45,7 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
       unless autonomy is ``autonomous`` (physical removal — the model cannot
       interrupt the user at all in full-autonomy mode).
 
-    The phase/autonomy-aware system prompt is also injected here so there is a
-    single prompt source (fixing the previous double-injection).
+    The phase/autonomy-aware system prompt is composed by ``SystemAssembler``.
 
     MCP tools are treated as execute-phase tools: they are allowed (and only
     visible) while ``phase == "execute"``. A provider callable supplies the
@@ -47,8 +53,7 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     unknown tool calls without coupling this module to the MCP layer.
     """
 
-    def __init__(self, capabilities: str = "", mcp_tool_names_provider: Callable[[], set[str]] | None = None, workspace: Any | None = None):
-        self.capabilities = capabilities
+    def __init__(self, mcp_tool_names_provider: Callable[[], set[str]] | None = None, workspace: Any | None = None):
         self.mcp_tool_names_provider = mcp_tool_names_provider
         self.workspace = workspace
 
@@ -81,46 +86,17 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         state = request.state
         allowed = self._allowed_tools(state)
         tools = [tool for tool in request.tools if getattr(tool, "name", "") in allowed]
-        language = state.get("language", "zh")
         phase = normalize_phase(state.get("phase"), state.get("work_mode"))
-        autonomy = normalize_autonomy(state.get("autonomy"))
         # 记录当前 phase，供 use_worker 工具在执行时判断 worker 是否只读。
         if self.workspace is not None:
             try:
                 setattr(self.workspace, "_current_phase", phase)
             except Exception:  # noqa: BLE001 - phase tracking must never gate tools
                 pass
-        # Base behaviour prompt (graph-level, set via create_agent's system_prompt)
-        # is preserved and prepended; the phase prompt refines it for this phase.
-        base = ""
-        try:
-            base_sys = getattr(request, "system_message", None)
-            if base_sys is not None:
-                base = str(getattr(base_sys, "text", "") or "")
-        except Exception:  # noqa: BLE001 - never break on a missing base prompt
-            base = ""
-        prompt = base
-        phase_block = phase_system_prompt(language, phase, autonomy)
-        if prompt:
-            prompt = f"{prompt}\n\n{phase_block}"
-        else:
-            prompt = phase_block
-        if self.capabilities:
-            prompt = f"{prompt}\n\n{self.capabilities}"
-        # Workspace layout + the phase-filtered tool catalogue ride along so the
-        # model always knows the real project layout and exactly which tools it
-        # can call (never guesses paths or hallucinates tools).
-        if self.workspace is not None:
-            ws_ctx = build_workspace_context(self.workspace)
-            if ws_ctx:
-                prompt = f"{prompt}\n\n{ws_ctx}"
-        tool_ctx = build_tool_context(tools)
-        if tool_ctx:
-            prompt = f"{prompt}\n\n{tool_ctx}"
-        return {
-            "tools": tools,
-            "system_message": SystemMessage(prompt),
-        }
+        # Visibility only: the phase-filtered schemas are what the model sees.
+        # The system prompt (workspace/phase/memory/skills) is composed by
+        # SystemAssembler — no duplicate tool catalogue here (mainstream).
+        return {"tools": tools}
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         return handler(request.override(**self._overrides(request)))
@@ -135,7 +111,6 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         return str(getattr(tool_call, "name", "") or "")
 
     def _blocked_tool_message(self, request: Any) -> Any:
-        from langchain_core.messages import ToolMessage
         tool_name = self._tool_name(request)
         registered: set[str] = set()
         if self.workspace is not None:

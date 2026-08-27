@@ -35,6 +35,9 @@ from .loop_guard import RepeatedToolCallMiddleware, StallRetryMiddleware, ToolCa
 # Phase-gated tool selection
 from .phase_gate import PhaseToolGateMiddleware
 
+# Single system-prompt assembler (fragment model, codex-style)
+from .system_assembler import SystemAssembler, SYSTEM_FIXED_BUDGET_TOKENS
+
 # Shared constants & utilities (re-exported for backward compatibility)
 from .base import (
     COMPACTION_PROMPTS,
@@ -81,6 +84,9 @@ __all__ = [
     "ToolCallCleanerMiddleware",
     # Phase
     "PhaseToolGateMiddleware",
+    # Assembler
+    "SystemAssembler",
+    "SYSTEM_FIXED_BUDGET_TOKENS",
     # Constants / utilities
     "COMPACTION_PROMPTS",
     "_COMPACTION_FLUSH",

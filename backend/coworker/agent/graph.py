@@ -197,16 +197,10 @@ def build_workspace_tools(
     def run_command(command: str | list[str], cwd: str = "", timeout_seconds: int = 20) -> str:
         """Run an allowlisted command in the workspace after runtime policy approval.
 
-        The result is JSON with ``return_code`` (0 = success), ``stdout``,
-        ``stderr`` and ``timed_out``. A non-zero ``return_code`` means the
-        command FAILED — never blindly re-run the exact same command; adjust
-        the path/scope first or use a different tool. Note that searches can
-        report "Permission denied" for unreadable directories even when the
-        search itself worked: narrow the search path instead of retrying the
-        whole tree with the same command.
-
-        ``command`` may be an argv array or a plain shell string — the backend
-        normalizes strings into argv (shlex) automatically.
+        Returns JSON with ``return_code`` (0 = success), ``stdout``, ``stderr``,
+        ``timed_out``. A non-zero ``return_code`` means FAILURE — never blindly
+        re-run the exact same command; adjust the path/scope or use another tool.
+        ``command`` may be an argv array or a plain shell string (shlex-normalized).
         """
         import shlex as _shlex
 
@@ -238,18 +232,13 @@ def build_workspace_tools(
 
     @tool(args_schema=InstallSkillArgs)
     def install_skill(name: str, content: str, commands: list[dict[str, str]] | None = None) -> str:
-        """Install a NEW skill by writing its SKILL.md directly into the user skills
-        directory (~/.agents/skills/<name>/SKILL.md) and refreshing the catalog.
+        """Install a NEW skill by writing its SKILL.md into the user skills directory.
 
-        Use this (and ONLY this) to add a brand-new skill from chat — do NOT use
-        write_file or run_command for that, because the install path lives outside
-        the workspace sandbox and those tools will be denied. The provided ``content``
-        must be the complete SKILL.md text including a YAML frontmatter with ``name``
-        and ``description``. When ``commands`` is provided, each sub-command is written
-        to commands/<name>.md and listed in the root frontmatter, so the skill exposes
-        direct /<command> entries. On success the skill becomes available immediately:
-        it shows up in the settings "Installed Skills" list and as a ``/skill <name>``
-        command (or ``/<command>`` when it declares sub-commands).
+        Use ONLY this tool to add a brand-new skill from chat (the file tools
+        cannot write outside the workspace sandbox). ``content`` must be the
+        complete SKILL.md text with YAML frontmatter (``name`` + ``description``).
+        Optional ``commands`` write ``/<command>`` entries. On success the skill
+        becomes available immediately.
         """
         try:
             if skill_market_manager is None:
@@ -336,46 +325,20 @@ def build_workspace_tools(
 
     @tool(args_schema=MemoryArgs)
     def memory(action: str, content: str = "", target: str = "", scope: str = "agent", name: str = "") -> str:
-        """Write a long-term memory entry.
+        """Write a durable long-term memory entry (persists across sessions).
 
-        Long-term memory persists across sessions and is injected into every
-        conversation. Use it for stable facts: user preferences, project
-        conventions, ports / commands that are always true, decisions with
-        lasting consequences. Do NOT store anything transient (a one-off error,
-        an exploratory guess) — that belongs in the conversation instead.
+        Store ONLY stable facts (preferences, conventions, ports/commands,
+        decisions), concise and self-contained; merge related facts; never paste
+        raw text.
 
-        Write each entry as a CONDENSED, self-contained fact in your own words:
-        distill the durable takeaway rather than quoting messages or pasting raw
-        text. Keep entries concise (a sentence or two, ideally under ~200 chars)
-        and merge related facts into what it makes sense to remember.
+        - ``add``: append an entry.
+        - ``replace``: replace entries containing ``target`` (substring) with ``content``.
+        - ``remove``: delete entries containing ``target``.
 
-        - ``add``: appends a new entry.
-        - ``replace``: replaces every entry containing ``target`` (substring)
-          with ``content``. Use it to update stale or outgrown entries.
-        - ``remove``: deletes every entry containing ``target``.
-
-        Your ``MEMORY.md`` is a CURATED INDEX of durable facts, kept concise by
-        automatic consolidation. When you have a lot of detail to preserve,
-        write it to a separate topic file via ``name`` (e.g. ``name="RULES.md"``)
-        instead of dumping it into ``MEMORY.md``. Before writing, check whether
-        the fact already exists or overlaps an existing entry — prefer
-        ``replace``/merge over blind appends. Never paste long raw text: only
-        refined takeaways belong in memory.
-
-        Scope rules:
-        - ``scope="agent"`` (default) writes to your own agent ``BASE/`` — either
-          your ``MEMORY.md`` or, via ``name``, another ``.md`` file there. Use
-          ``name="SESSIONS/2026-08-19.md"`` to write a dated session note (the
-          system also appends automatic session notes there each day).
-        - ``scope="system"`` writes to one of the system-default files only:
-          ``MEMORY.md``, ``USER.md`` or ``AGENT.md`` (pass it via ``name``).
-          Use this for durable global facts about the user.
-
-        You cannot write to project ``BASE`` user files, ``BASE/PROJECT``,
-        another agent's memory, or user-created root files — those are
-        read-only for you. In supervised mode a write pauses for the user's
-        confirmation. Failed writes (duplicate / target not found) return an
-        error message and change nothing.
+        ``scope="agent"`` (default) writes to your agent ``BASE/`` (MEMORY.md or
+        a topic file via ``name``); ``scope="system"`` writes only to system
+        files (MEMORY.md / USER.md / AGENT.md via ``name``). Writes pause for
+        approval when supervised.
         """
         try:
             if memory_store is None or not memory_rel:
@@ -405,14 +368,10 @@ def build_workspace_tools(
     def memory_read(file: str) -> str:
         """Read a long-term memory file on demand (agent scope).
 
-        Your ``SESSIONS/*`` records and extra topic files are NOT injected into
-        every conversation to keep the prompt compact — the resident memory
-        block is only an index. When you need the FULL content of a memory file,
-        read it here with its memory-root-relative ``rel`` path (e.g.
-        ``<project>/<agent>/SESSIONS/2026-08-17.md``) from the injected index.
-        Returns the file content, or an error if the path is missing or outside
-        the memory root. When you rely on a memory in your final answer, cite
-        its rel path so the user can verify and you can re-find it later.
+        The resident memory block is only an index; read the FULL content of a
+        memory file here using its memory-root-relative ``rel`` path from the
+        index (e.g. ``<project>/<agent>/SESSIONS/2026-08-17.md``). Cite the rel
+        path in your final answer when you rely on a memory.
         """
         try:
             if memory_store is None or not memory_rel:
@@ -559,23 +518,12 @@ def build_workspace_tools(
     def update_goal(status: str) -> str:
         """Declare the active session goal complete or blocked.
 
-        You may ONLY set "complete" or "blocked". Pausing/resuming the goal and
-        its token budget are user- or system-controlled — never call this tool
-        to change them.
-
-        "complete" is a strict claim: the FULL objective is finished and
-        verified requirement-by-requirement against authoritative current-state
-        evidence (files, command output, tests, rendered artifacts, runtime
-        behavior). Never mark complete merely because work is hard, slow, the
-        budget is nearly exhausted, or you are stopping work.
-
-        "blocked" is only for a true impasse: the SAME blocking condition has
-        repeated for at least three consecutive goal turns. Never use it because
-        the work is hard, uncertain, or would benefit from clarification.
-
-        The system enforces this: calling "blocked" before the goal has run
-        three turns is REJECTED and the goal stays active — you must keep
-        working. Only after the third goal turn will "blocked" be accepted.
+        Only set "complete" when the FULL objective is finished and verified
+        against current evidence (files, tests, output) — never because work is
+        hard or slow. Only set "blocked" on a true impasse persisting across
+        goal turns; the engine rejects premature "blocked" and you must keep
+        working. Pausing/resuming and the token budget are user/system-controlled
+        — never changed here.
         """
         if session_store is None or not session_id:
             return json.dumps({"error": "goal store unavailable"}, ensure_ascii=False)
@@ -792,10 +740,7 @@ def build_coworker_agent_graph(
         audit_path=(Path(data_dir) / TOOL_AUDIT_FILENAME) if data_dir is not None else None,
     )
 
-    from .. import platform as _platform
-
     phase_gate = PhaseToolGateMiddleware(
-        "\n\n".join(part for part in (_platform.platform_hint(), web_capability, browser_capability) if part),
         workspace=workspace,
     )
     # Output reservation: 0 means "unset" upstream, but the LLM call itself
@@ -850,25 +795,27 @@ def build_coworker_agent_graph(
     middleware.extend(command_approval_middleware(approval_store, mcp_middleware.tool_policy, workspace=workspace))
 
     middleware.append(mcp_middleware)
-    phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names    # Skills: inject the catalog (name+description+location) into the system
-    # prompt; the full SKILL.md body loads on demand via read_file.
-    if skill_manager is not None:
-        from ..skills.skill_middleware import SkillMiddleware
+    phase_gate.mcp_tool_names_provider = mcp_middleware.tool_names
 
-        middleware.append(SkillMiddleware(skill_manager))
+    # SystemAssembler: the SINGLE point composing the full system prompt
+    # (behaviour + phase + capabilities + workspace + memory index + skills
+    # catalog). Runs AFTER McpToolMiddleware so the MCP attribution section is
+    # preserved as part of the base. Replaces the old per-call system-message
+    # overrides in PhaseToolGate + SkillMiddleware + MemoryMiddleware (B1/P5).
+    from .. import platform as _platform
+    from .middleware.system_assembler import SystemAssembler
 
-    # Memory: inject long-term memory into every phase (planning needs the
-    # user's background facts most of all). Mounted after skills so the memory
-    # section lands before the skills catalog in the system prompt. Writes are
-    # gated separately by the phase gate + HITL middleware via the `memory`
-    # tool.
-    if memory_manager is not None:
-        from ..memory.memory_middleware import MemoryMiddleware
-
-        try:
-            middleware.append(MemoryMiddleware(memory_manager))
-        except Exception as exc:  # noqa: BLE001 - a broken memory middleware must not break chat
-            logger.warning("Memory middleware unavailable: %s", exc)
+    capabilities = "\n\n".join(
+        part for part in (_platform.platform_hint(), web_capability, browser_capability) if part
+    )
+    middleware.append(
+        SystemAssembler(
+            capabilities=capabilities,
+            workspace=workspace,
+            memory_manager=memory_manager,
+            skill_manager=skill_manager,
+        )
+    )
 
     # Loop guard: the model must never re-run the same failing tool call
     # forever. create_agent's default recursion_limit (9_999) makes an
