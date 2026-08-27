@@ -47,7 +47,7 @@ from coworker.memory.layout import (
 from coworker.memory.registry import MemoryRegistry
 from coworker.memory.memory_store import MemoryStore, MemoryError
 from coworker.memory.memory_discovery import MemoryScanner
-from coworker.memory.memory_prompt import format_memory_prompt
+from coworker.memory.memory_prompt import format_memory_index, format_memory_prompt
 from coworker.memory.memory_manager import MemoryManager, DEFAULT_AGENT
 
 # Config
@@ -526,6 +526,100 @@ def test_single_mode_render(tmp: Path):
     check("single render identity", "default_agent" in rendered, str(rendered[:200]))
 
 
+def test_memory_index_priority_and_budget(tmp: Path):
+    print("\n[S] Memory index: relevance priority + token budget (M1/M5)")
+    md = _next_md()
+
+    class MockCfg:
+        enabled = True
+        char_limit = 4000
+        inject_token_limit = 2500
+        auto_extract = False
+        nudge_interval = 10
+        extract_model = ""
+
+    mgr = MemoryManager(data_dir=tmp, memory_dir=tmp / MEMORY_ROOT_NAME, config=MockCfg())
+    mgr.registry.ensure_root()
+    mgr.registry.ensure_agent(mgr.registry.ensure_project(md), DEFAULT_AGENT)
+    # A huge system file that used to starve agent memory (M1).
+    mgr.store.write_file("MEMORY.md", "SYS " + "x" * 20_000)
+    mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/SOUL.md", "AGENT_SOUL_FACT")
+    mgr.store.write_file(f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md", "AGENT_MEMORY_FACT")
+    rendered = mgr.render_for(md, DEFAULT_AGENT)
+    check("agent core rendered before system", rendered.index("AGENT_SOUL_FACT") < rendered.index("SYS "), "priority")
+    check("agent MEMORY present", "AGENT_MEMORY_FACT" in rendered, str(rendered[:120]))
+    check("index lists rel path", f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md" in rendered)
+    # M5: a 20k-char system file is compacted to a one-line preview, not a bomb.
+    check("huge system compacted to preview", len(rendered) < 3000, f"len={len(rendered)}")
+    check("no warning when everything fits", "<budget_warning>" not in rendered)
+
+
+def test_memory_index_structural_free(tmp: Path):
+    print("\n[T] Memory index: structural markup not counted (M5)")
+
+    class N:
+        kind = "agent_file"
+        name = "MEMORY.md"
+        rel = "p/a/BASE/MEMORY.md"
+        mtime = 0.0
+        content = "fact-one\n\nfact-two"
+        blocks = ("fact-one", "fact-two")
+
+    # token budget smaller than the XML header cost: headers still render.
+    out = format_memory_index([N()], token_budget=1)
+    check("header free under tiny budget", '<file kind="agent_file"' in out, str(out[:80]))
+    check("preview clipped under tiny budget", "<budget_warning>" in out)
+
+
+def test_scoped_scan_isolation(tmp: Path):
+    print("\n[U] Scoped scan: reads only the scope (M2)")
+    md1, md2 = _next_md(), _next_md()
+    registry = MemoryRegistry(tmp / MEMORY_ROOT_NAME)
+    registry.ensure_root()
+    store = MemoryStore(tmp / MEMORY_ROOT_NAME)
+    store.write_file("MEMORY.md", "global")
+    store.write_file(f"{md1}/{DEFAULT_AGENT}/BASE/MEMORY.md", "alpha")
+    store.write_file(f"{md1}/{DEFAULT_AGENT}/BASE/DREAMS.md", "- dream noise")
+    store.write_file(f"{md2}/{DEFAULT_AGENT}/BASE/MEMORY.md", "beta")
+    store.write_file(f"{md2}/BASE/notes.md", "beta notes")
+    for i in range(50):
+        store.write_file(f"{_next_md()}/{DEFAULT_AGENT}/BASE/MEMORY.md", f"unrelated{i}")
+    scanner = MemoryScanner(tmp / MEMORY_ROOT_NAME)
+    nodes = scanner.scan_scoped(project_dir=md1, agent=DEFAULT_AGENT)
+    rels = [n.rel for n in nodes]
+    check("scoped includes alpha", any("alpha" in (n.content or "") for n in nodes), str(rels))
+    check("scoped excludes beta", all("beta" not in (n.content or "") for n in nodes), str(rels))
+    check("scoped excludes unrelated projects", all(n.rel.startswith(md1) or n.kind == "system" for n in nodes), str(rels))
+    check("scoped includes system", any(n.kind == "system" for n in nodes), str(rels))
+    check("scoped excludes DREAMS.md", all(n.name != "DREAMS.md" for n in nodes), str(rels))
+
+
+def test_render_cache(tmp: Path):
+    print("\n[V] Manager render cache invalidated by change")
+
+    class MockCfg:
+        enabled = True
+        char_limit = 4000
+        inject_token_limit = 2500
+        auto_extract = False
+        nudge_interval = 10
+        extract_model = ""
+
+    mgr = MemoryManager(data_dir=tmp, memory_dir=tmp / MEMORY_ROOT_NAME, config=MockCfg())
+    mgr.registry.ensure_root()
+    md = _next_md()
+    mgr.registry.ensure_agent(mgr.registry.ensure_project(md), DEFAULT_AGENT)
+    rel = f"{md}/{DEFAULT_AGENT}/BASE/MEMORY.md"
+    mgr.store.write_file(rel, "first fact")
+    r1 = mgr.render_for(md, DEFAULT_AGENT)
+    check("render cache populated", bool(mgr._render_cache), str(mgr._render_cache))
+    r2 = mgr.render_for(md, DEFAULT_AGENT)
+    check("render cache reused", r1 == r2)
+    mgr.store.write_file(rel, "second fact")
+    r3 = mgr.render_for(md, DEFAULT_AGENT)
+    check("render invalidated on change", "second fact" in r3 and r3 != r1, str(r3[:80]))
+
+
 # --- HTTP tests ---
 
 def test_http_api(url: str, project_id: str):
@@ -730,6 +824,10 @@ def main():
         test_memory_manager_scoping(tmp)
         test_full_inject_order_mm(tmp)
         test_single_mode_render(tmp)
+        test_memory_index_priority_and_budget(tmp)
+        test_memory_index_structural_free(tmp)
+        test_scoped_scan_isolation(tmp)
+        test_render_cache(tmp)
 
     if URL and PROJECT_ID:
         try:

@@ -20,7 +20,6 @@ from typing import Any
 
 from .layout import MEMORY_ROOT_NAME
 from .memory_discovery import MemoryScanner
-from .memory_prompt import format_memory_prompt
 from .memory_store import MemoryStore
 from .registry import MemoryRegistry
 
@@ -56,6 +55,11 @@ class MemoryConfig:
     # Internal read-side hard cap for the resident injection block. Not user
     # facing: the settings page only exposes ``enabled`` / ``auto_extract``.
     inject_char_limit: int = 4000
+    # Resident memory is a token-budgeted INDEX (codex-aligned; codex caps its
+    # resident summary at 2500 tokens). This caps the CONTENT tokens of the
+    # injected block; structural markup is excluded. ``inject_char_limit`` stays
+    # as the write-side file-size cap (and a legacy alias).
+    inject_token_limit: int = 2500
     auto_extract: bool = False
     # Internal consolidation knobs (not exposed in the settings UI).
     nudge_interval: int = 3
@@ -105,6 +109,11 @@ class MemoryManager:
         # One session note per (session, date): tracks which day a session's
         # SESSIONS/<date>.md has already been summarized to avoid duplicates.
         self._session_summarized: dict[str, str] = {}
+        # Read-side render cache: (project, agent, team_ids) -> (fingerprint,
+        # rendered). Recomputed when any scoped file's mtime/size changes, so a
+        # long turn's many model calls do not re-scan / re-render the same
+        # unchanged memory (M2: no whole-library scan, no per-call re-render).
+        self._render_cache: dict[tuple[Any, ...], tuple[str, str]] = {}
         # Injected extractor dependencies (set via configure_extractor).
         self._llm_factory: Any | None = None
         self._transcript_provider: Any | None = None
@@ -136,22 +145,60 @@ class MemoryManager:
     # -- read path ----------------------------------------------------------
 
     def render_prompt(self) -> str:
-        """Render the injected memory block for the default (system-only) scope."""
+        """Render the injected memory block for the default (system-only) scope.
+
+        Uses the scoped scan (system files only) + token budget + render cache.
+        """
         if not self.config.enabled:
             return ""
-        library = self.scanner.scan()
-        return format_memory_prompt(library.injected(), self.config.char_limit)
+        key: tuple[Any, ...] = ("", "", tuple())
+        fp = self._scope_fingerprint(None, None, [])
+        cached = self._render_cache.get(key)
+        if cached is not None and cached[0] == fp:
+            return cached[1]
+        nodes = self.scanner.scan_scoped(project_dir=None)
+        rendered = self._render_index(nodes)
+        self._render_cache[key] = (fp, rendered)
+        return rendered
 
     def render_for(self, project_dir: str | None = None, agent: str | None = None) -> str:
         """Render the injected memory block for one project/agent scope.
 
         Includes team-level memory (GOALS/CONTEXT/MEMORY of the agent's team and
         its ancestor teams) and a lightweight team roster when the org registry
-        is available and the agent belongs to a team.
+        is available and the agent belongs to a team. Reads only the scoped
+        files (M2) and reuses the cached render while they are unchanged.
         """
         if not self.config.enabled:
             return ""
-        library = self.scanner.scan()
+        team_ids, roster_lines, identity_lines = self._org_context(project_dir, agent)
+        key: tuple[Any, ...] = (project_dir, agent or DEFAULT_AGENT, tuple(team_ids))
+        fp = self._scope_fingerprint(project_dir, agent, team_ids)
+        cached = self._render_cache.get(key)
+        if cached is not None and cached[0] == fp:
+            return cached[1]
+        nodes = self.scanner.scan_scoped(
+            project_dir=project_dir,
+            agent=agent or DEFAULT_AGENT,
+            team_ids=team_ids,
+        )
+        rendered = self._render_index(nodes)
+        if identity_lines:
+            block = "\n".join(identity_lines)
+            rendered = f"{rendered}\n\n{block}" if rendered else block
+        if roster_lines:
+            block = "\n".join(roster_lines)
+            section = f"## 团队成员\n{block}"
+            rendered = f"{rendered}\n\n{section}" if rendered else section
+        self._render_cache[key] = (fp, rendered)
+        return rendered
+
+    def _org_context(
+        self,
+        project_dir: str | None,
+        agent: str | None,
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Resolve the org-driven identity / roster / team_ids for a scope."""
         team_ids: list[str] = []
         roster_lines: list[str] = []
         identity_lines: list[str] = []
@@ -190,16 +237,38 @@ class MemoryManager:
                 team_ids = []
                 roster_lines = []
                 identity_lines = []
-        nodes = library.injected(project_dir=project_dir, agent=agent or DEFAULT_AGENT, team_ids=team_ids)
-        rendered = format_memory_prompt(nodes, self.config.char_limit)
-        if identity_lines:
-            block = "\n".join(identity_lines)
-            rendered = f"{rendered}\n\n{block}" if rendered else block
-        if roster_lines:
-            block = "\n".join(roster_lines)
-            section = f"## 团队成员\n{block}"
-            rendered = f"{rendered}\n\n{section}" if rendered else section
-        return rendered
+        return team_ids, roster_lines, identity_lines
+
+    def _scope_fingerprint(
+        self,
+        project_dir: str | None,
+        agent: str | None,
+        team_ids: list[str],
+    ) -> str:
+        """Cheap mtime/size fingerprint of the scoped files (no content reads)."""
+        try:
+            paths = self.scanner.scoped_paths(
+                project_dir=project_dir,
+                agent=agent or DEFAULT_AGENT,
+                team_ids=team_ids,
+            )
+        except Exception:  # noqa: BLE001 - a fingerprint failure must never break chat
+            return ""
+        parts: list[str] = []
+        for p in paths:
+            try:
+                st = p.stat()
+                parts.append(f"{p.name}:{st.st_mtime_ns}:{st.st_size}")
+            except OSError:
+                parts.append(f"{p.name}:missing")
+        return "|".join(parts)
+
+    def _render_index(self, nodes: list[Any]) -> str:
+        """Render the scoped nodes as a compact token-budgeted index (codex-aligned)."""
+        from .memory_prompt import format_memory_index
+
+        budget = int(getattr(self.config, "inject_token_limit", 0) or 0) or 2500
+        return format_memory_index(nodes, token_budget=budget)
 
     # -- middleware factory -------------------------------------------------
 
@@ -221,6 +290,7 @@ class MemoryManager:
         view._pending_dreams = self._pending_dreams
         view._pending_candidates = self._pending_candidates
         view._session_summarized = self._session_summarized
+        view._render_cache = self._render_cache
         view._llm_factory = self._llm_factory
         view._transcript_provider = self._transcript_provider
         view._dream_semaphore = self._dream_semaphore

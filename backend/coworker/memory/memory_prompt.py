@@ -1,85 +1,160 @@
 """System-prompt formatting for the injected memory block.
 
-Each memory file becomes a ``<file>`` section carrying its kind, name and a
-freshness label; the whole set is injected in precedence order (system →
-project BASE → project context → agent core → sessions).
+The resident block is a COMPACT INDEX, not full file bodies — codex-aligned:
+only a condensed summary is resident, full files load on demand via the
+``memory_read`` tool. Each memory file is listed with its kind/name/rel path
+and a one-line-per-block preview of its facts; the whole set is rendered in
+relevance order so an agent's own core files (SOUL/AGENT/MEMORY) are never
+starved by system or team files.
+
+Budgeting is token-based (``coworker.context.estimate_text_tokens``) so dense
+CJK memory does not silently inflate the per-call overhead; structural markup
+(``<file>`` headers, wrapper tags) is NOT counted against the content budget,
+so boilerplate never eats the facts.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+# Agent core files are the most relevant memory and always render first.
+AGENT_CORE_NAMES = ("SOUL.md", "AGENT.md", "MEMORY.md")
+# First line of each Markdown block is kept, clipped to this width.
+PREVIEW_LINE_CHARS = 160
 
-def format_memory_prompt(
+
+def _priority(node: Any) -> int:
+    """Relevance order (lower = rendered first).
+
+    agent core (SOUL/AGENT/MEMORY) -> agent base files -> project (BASE/PROJECT)
+    -> system -> team/other. This is the M1 fix: an agent's own MEMORY.md
+    (last in the old system-first precedence) can no longer be starved.
+    """
+    kind = getattr(node, "kind", "") or ""
+    name = getattr(node, "name", "") or ""
+    if kind == "agent_file" and name in AGENT_CORE_NAMES:
+        return 0
+    if kind == "agent_file":
+        return 1
+    if kind in ("base_file", "project_file"):
+        return 2
+    if kind == "system":
+        return 3
+    return 4  # team / other (team files scan as folder_file)
+
+
+def _estimate(text: str) -> int:
+    from coworker.context import estimate_text_tokens
+
+    return estimate_text_tokens(text)
+
+
+def format_memory_index(
     nodes: list[Any],
-    char_limit: int,
+    token_budget: int = 2500,
+    estimate_fn: Any = None,
 ) -> str:
-    """Render memory files into a system-prompt block.
+    """Render the resident memory INDEX for a set of ``MemoryNode`` objects.
 
-    ``nodes`` is a list of ``MemoryNode`` objects in injection precedence order
-    (see ``memory_discovery.scan``). ``char_limit`` is a HARD read-side cap: the
-    resident block is truncated at ``char_limit`` characters with a pointer to
-    ``memory_read`` for on-demand retrieval. Truncation never destroys data — the
-    files stay on disk.
+    ``nodes`` may arrive in any order — they are re-sorted by relevance inside.
+    ``token_budget`` caps the CONTENT previews (structural markup is free, M5).
+    ``estimate_fn`` defaults to ``coworker.context.estimate_text_tokens``.
     """
     if not nodes:
         return ""
-    lines: list[str] = [
-        "\n\nThe following are long-term facts about the user, this project, "
-        "or the current agent that you should remember across sessions. Treat "
-        "them as background context and prefer them over assumptions. These "
-        "files are only updated through the memory tool or by the user.",
+    est = estimate_fn or _estimate
+    ordered = sorted(nodes, key=_priority)
+
+    header_lines = [
+        "\n\nThe following are long-term facts about the user, this project, or the "
+        "current agent. This is a compact INDEX of your memory files — full content "
+        "is loaded on demand: read any file with the `memory_read` tool using its "
+        "`rel` path below, and cite that rel path when you rely on a memory in your "
+        "final answer. Treat these as background context and prefer them over "
+        "assumptions.",
         "<memory>",
     ]
-    total = 0
+    lines: list[str] = list(header_lines)
+    budget = max(1, int(token_budget or 0))
+    used = 0
     truncated = False
-    for node in nodes:
-        content = node.content or ""
-        remaining = char_limit - total
-        if remaining <= 0:
-            truncated = True
-            break
-        source = _node_source(node)
-        rendered, clipped = _render_file(node, content, remaining)
-        lines.append(rendered)
-        total += len(rendered)
-        if clipped:
-            truncated = True
-        if remaining <= len(rendered):
+    for node in ordered:
+        header = _file_header(node)
+        lines.append(header)
+        content = (node.content or "").strip()
+        if not content:
+            lines.append("    (empty)")
+            continue
+        preview_lines, cost, clipped = _render_preview(node, budget - used, est)
+        if cost > 0:
+            lines.extend(preview_lines)
+            used += cost
+        if clipped or (cost == 0 and budget - used <= 0):
             truncated = True
     if truncated:
         lines.append(
-            "  <budget_warning>Memory is compacted to keep this prompt small. "
-            "Additional session records and topic files are available on demand "
-            "via the memory_read tool.</budget_warning>"
+            "  <budget_warning>Memory is compacted to an index to keep this prompt "
+            "small. Full files, older facts and additional session records are "
+            "available on demand via the memory_read tool.</budget_warning>"
         )
     lines.append("</memory>")
     return "\n".join(lines)
 
 
-def _render_file(node: Any, content: str, remaining: int) -> tuple[str, bool]:
-    """Render one memory file, clipping its body so the total stays in budget.
+def _render_preview(
+    node: Any,
+    remaining_tokens: int,
+    est: Any,
+) -> tuple[list[str], int, bool]:
+    """Render the one-line-per-block preview for one node.
 
-    Returns ``(rendered, clipped)`` where ``clipped`` is True when the file body
-    had to be cut to fit ``remaining``.
+    Returns ``(lines, tokens_used, clipped)``. ``clipped`` is True when the
+    preview had to be cut to fit ``remaining_tokens``.
     """
-    source = _node_source(node)
-    header = f'  <file kind="{_escape(node.kind)}" name="{_escape(node.name)}" source="{source}">'
-    if not content.strip():
-        return f"{header}\n    (empty)\n  </file>", False
-    parts = [header]
-    total = len(header)
+    content = (node.content or "").strip()
+    blocks = tuple(getattr(node, "blocks", None) or ())
+    if not blocks:
+        from .memory_file import split_blocks
+
+        blocks = tuple(split_blocks(content))
+    lines: list[str] = []
+    used = 0
     clipped = False
-    for line in content.splitlines():
-        rendered_line = f"    {_escape(line)}"
-        if total + len(rendered_line) + 1 > remaining:
-            parts.append("    … (clipped — use memory_read to view)")
+    for block in blocks:
+        if not block or not block.strip():
+            continue
+        first = block.strip().splitlines()[0]
+        line = first[:PREVIEW_LINE_CHARS]
+        cost = est(line)
+        if used + cost > remaining_tokens:
             clipped = True
             break
-        parts.append(rendered_line)
-        total += len(rendered_line) + 1
-    parts.append("  </file>")
-    return "\n".join(parts), clipped
+        lines.append(f"    {_escape(line)}")
+        used += cost
+    if not lines:
+        # Nothing fit, but we still want the model to know this file has facts.
+        clipped = True
+    return lines, used, clipped
+
+
+def format_memory_prompt(nodes: list[Any], char_limit: int) -> str:
+    """Backward-compatible char-budget entry point.
+
+    Converted to a token budget using the same estimator the token path uses
+    (~4 chars/token) so existing callers keep working. The manager uses the
+    token-budget path directly (``format_memory_index``).
+    """
+    budget = max(8, int(char_limit or 0) // 4)
+    return format_memory_index(nodes, token_budget=budget)
+
+
+def _file_header(node: Any) -> str:
+    source = _node_source(node)
+    rel = getattr(node, "rel", "") or ""
+    return (
+        f'  <file kind="{_escape(node.kind)}" name="{_escape(node.name)}" '
+        f'rel="{_escape(rel)}" source="{_escape(source)}">'
+    )
 
 
 def _node_source(node: Any) -> str:
@@ -89,7 +164,7 @@ def _node_source(node: Any) -> str:
         "project_file": "project memory (system-generated)",
         "agent_file": "agent memory",
         "session_file": "agent session memory",
-    }.get(node.kind, node.kind)
+    }.get(getattr(node, "kind", ""), getattr(node, "kind", ""))
     return f"{label} (updated {_format_mtime(getattr(node, 'mtime', 0))})"
 
 

@@ -282,6 +282,87 @@ class MemoryScanner:
 
         return MemoryLibrary(root=self.root, system=system, projects=projects)
 
+    def scoped_paths(
+        self,
+        *,
+        project_dir: str | None = None,
+        agent: str | None = None,
+        team_ids: list[str] | None = None,
+    ) -> list[Path]:
+        """Return the files that belong to ONE injection scope, without IO.
+
+        Unlike ``scan()`` (which recursively reads the ENTIRE memory library —
+        every project, agent, folder and team — just to filter), this enumerates
+        only the paths that ``scan_scoped`` would read: system files, one
+        project's BASE + PROJECT, one agent's core + BASE files, and the given
+        team containers. Cheap enough to call on every model call for a
+        freshness fingerprint.
+        """
+        paths: list[Path] = []
+        for name in SYSTEM_FILES:
+            paths.append(self.root / name)
+        if self.root.is_dir():
+            for entry in sorted(self.root.iterdir()):
+                if not _is_memory_file(entry) or entry.name in SYSTEM_FILES:
+                    continue
+                paths.append(entry)
+        if not project_dir:
+            return paths
+        proj = self.root / project_dir
+        base_dir = proj / BASE_DIR
+        if base_dir.is_dir():
+            for entry in sorted(base_dir.iterdir()):
+                if _is_memory_file(entry):
+                    paths.append(entry)
+            proj_sub = base_dir / PROJECT_SUBDIR
+            if proj_sub.is_dir():
+                for entry in sorted(proj_sub.iterdir()):
+                    if _is_memory_file(entry):
+                        paths.append(entry)
+        if agent:
+            agent_dir = proj / agent
+            if agent_dir.is_dir():
+                try:
+                    normalize_agent_layout(agent_dir)
+                except Exception:  # noqa: BLE001 - a layout issue must not break scope enumeration
+                    pass
+                core_dir = agent_dir / AGENT_BASE_DIR
+                if core_dir.is_dir():
+                    for entry in sorted(core_dir.iterdir()):
+                        # DREAMS.md is internal noise (kept visible in the tree
+                        # but never injected) — mirrors injected()'s filter.
+                        if _is_memory_file(entry) and entry.name != "DREAMS.md":
+                            paths.append(entry)
+        for tid in team_ids or []:
+            team_dir = proj / TEAMS_DIR / tid
+            if team_dir.is_dir():
+                for f in sorted(team_dir.rglob("*")):
+                    if _is_memory_file(f):
+                        paths.append(f)
+        return paths
+
+    def scan_scoped(
+        self,
+        *,
+        project_dir: str | None = None,
+        agent: str | None = None,
+        team_ids: list[str] | None = None,
+    ) -> list[MemoryNode]:
+        """Read injection nodes for ONE scope (M2: no whole-library scan).
+
+        Returns the same node kinds as ``injected()`` but without scanning
+        unrelated projects / agents / folders / sessions. Non-project scope
+        returns system files only.
+        """
+        nodes: list[MemoryNode] = []
+        for path in self.scoped_paths(project_dir=project_dir, agent=agent, team_ids=team_ids):
+            rel = _rel(self.root, path)
+            if path.is_file():
+                nodes.append(self._read_node(_kind_for(rel), rel))
+            else:
+                nodes.append(None)
+        return [n for n in nodes if n is not None]
+
     def search(self, query: str, limit: int = 50) -> list[dict]:
         """Case-insensitive substring search across every discoverable file.
 
@@ -493,6 +574,24 @@ class MemoryScanner:
     def _empty_node(self, kind: str, rel: str) -> MemoryNode:
         path = self.root / rel
         return MemoryNode(kind=kind, name=path.name, rel=rel, path=path, content="", mtime=0.0)
+
+
+def _kind_for(rel: str) -> str:
+    """Classify a memory-root-relative path into a node kind (scoped scan)."""
+    parts = rel.split("/")
+    if len(parts) == 1:
+        return "system"
+    if len(parts) >= 4 and parts[-3] == "teams":
+        return "folder_file"  # team container file
+    if len(parts) >= 3 and parts[-3] == BASE_DIR and parts[-2] == PROJECT_SUBDIR:
+        return "project_file"
+    if len(parts) >= 3 and parts[-3] == BASE_DIR:
+        return "base_file"
+    if len(parts) >= 3 and parts[-2] == BASE_DIR:
+        return "agent_file"
+    if len(parts) >= 2 and parts[-2] == SESSIONS_DIR:
+        return "session_file"
+    return "folder_file"
 
 
 def _rel(root: Path, path: Path) -> str:

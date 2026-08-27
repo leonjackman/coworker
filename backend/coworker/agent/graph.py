@@ -406,11 +406,13 @@ def build_workspace_tools(
         """Read a long-term memory file on demand (agent scope).
 
         Your ``SESSIONS/*`` records and extra topic files are NOT injected into
-        every conversation to keep the prompt compact. When you need to recall
-        what happened in an earlier session or review a topic file, read it here
-        with its memory-root-relative ``file`` path (e.g.
-        ``<project>/<agent>/SESSIONS/2026-08-17.md``). Returns the file content,
-        or an error if the path is missing or outside the memory root.
+        every conversation to keep the prompt compact — the resident memory
+        block is only an index. When you need the FULL content of a memory file,
+        read it here with its memory-root-relative ``rel`` path (e.g.
+        ``<project>/<agent>/SESSIONS/2026-08-17.md``) from the injected index.
+        Returns the file content, or an error if the path is missing or outside
+        the memory root. When you rely on a memory in your final answer, cite
+        its rel path so the user can verify and you can re-find it later.
         """
         try:
             if memory_store is None or not memory_rel:

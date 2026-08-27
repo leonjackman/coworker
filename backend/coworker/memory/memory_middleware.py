@@ -11,9 +11,10 @@ user's approval via the HITL middleware (supervised/guarded) or pass directly
 Files are read directly from the backend through the MemoryManager — never via
 the workspace ``resolve_path`` guard — so the workspace boundary invariant is
 not weakened (an agent holding the memory files still cannot touch them with
-the regular file tools). The injected section carries each file's path and
-mtime so the model can reason about freshness (Claude's lesson: timestamps,
-not importance scoring).
+the regular file tools). The injected section is a compact, token-budgeted
+INDEX (codex-aligned): each file's path and freshness are resident so the model
+can reason about what is available and load full content on demand via
+``memory_read``.
 """
 
 from __future__ import annotations
@@ -25,12 +26,6 @@ from langchain_core.messages import SystemMessage
 from coworker.logger import get_logger
 
 logger = get_logger(__name__)
-
-# Hard cap on the injected memory section. Memory rides in the system prompt on
-# EVERY model call of a turn; an unbounded memory file would silently tax the
-# whole window. 30k chars (~8–10k tokens) leaves room for real memory while
-# keeping a firm ceiling on the fixed per-call overhead.
-MEMORY_SECTION_MAX_CHARS = 30_000
 
 
 class MemoryMiddleware(AgentMiddleware):
@@ -48,13 +43,6 @@ class MemoryMiddleware(AgentMiddleware):
         except Exception as exc:  # noqa: BLE001 - a scan failure must never break chat
             logger.warning("Memory load failed: %s", exc)
             return {}
-        if not section:
-            return {}
-        if len(section) > MEMORY_SECTION_MAX_CHARS:
-            section = (
-                section[:MEMORY_SECTION_MAX_CHARS]
-                + "\n[memory section truncated by Coworker to fit context]"
-            )
         if not section:
             return {}
 
