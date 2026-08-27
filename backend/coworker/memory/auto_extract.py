@@ -19,8 +19,7 @@ Design decisions (per the architecture audit):
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from coworker.logger import get_logger
 logger = get_logger(__name__)
@@ -42,39 +41,6 @@ def build_extract_llm(provider_entry: Any | None, extract_model: str = "") -> An
         base_url=base_url,
         timeout=120,
     )
-
-
-EXTRACT_PROMPT = """You are a memory curator for a coding assistant called Coworker.
-
-Review the conversation transcript below and decide whether any stable, durable
-facts are worth remembering across sessions. Only extract facts that the user
-would want Coworker to remember LONG-TERM:
-
-- User identity / preferences (language, communication style, tooling tastes)
-- Project conventions and constraints (build commands, ports, architecture rules)
-- Decisions with lasting consequences that will matter in future sessions
-
-Do NOT extract:
-- One-off errors, temporary state, or exploratory guesses
-- Anything secret (API keys, passwords, credentials)
-- Facts already answered entirely within this session
-
-CONDENSATION RULES (important):
-- Write each memory as a CONCISE, SELF-CONTAINED fact in your OWN words — distill
-  the durable takeaway, never paste or quote raw transcript text.
-- Do NOT copy error messages, step-by-step procedures, or long explanations.
-  Reduce them to their lasting essence (e.g. "backend binds port 9527" instead of
-  a debugging dialogue).
-- Each entry must be at most ~200 characters.
-- One key fact per entry.
-
-Respond with ONLY a JSON array of strings, e.g. ["user prefers Chinese replies",
-"frontend builds with npm run build only"]. If nothing is worth saving, respond
-with the literal JSON [].
-
-Transcript:
-{transcript}
-"""
 
 
 def _recent_transcript(messages: list[dict[str, Any]], max_chars: int = 12_000) -> str:
@@ -130,296 +96,183 @@ def _recent_transcript(messages: list[dict[str, Any]], max_chars: int = 12_000) 
     return "\n".join(lines)
 
 
-def _parse_candidates(text: str) -> list[str]:
-    """Best-effort parse of the model's JSON-array response.
+def _parse_blocks_and_new(text: str) -> tuple[list[str], list[str]] | None:
+    """Parse the merged response into ``(blocks, new)``; ``None`` when unparseable.
 
-    Real local models (e.g. qwen3.x on vLLM) sometimes answer with a
-    Python-style single-quoted list ``['a', 'b']``, which strict ``json.loads``
-    rejects. We try strict JSON first, then a single-quote-tolerant pass.
+    Tolerates a ``{"blocks": [...], "new": [...]}`` object OR a bare JSON /
+    Python-repr array (both quote styles) — local models occasionally answer
+    with a bare list, in which case ``new`` stays empty.
     """
     text = text.strip()
-    candidates: list[str] = []
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, list):
-            candidates = [str(x) for x in parsed if isinstance(x, str)]
-    except json.JSONDecodeError:
-        # Fall back: scan for a JSON array in the response.
-        start, end = text.find("["), text.rfind("]")
-        if start != -1 and end > start:
-            candidates = _parse_array_slice(text[start : end + 1])
-    if not candidates:
-        # Final fallback: tolerate single-quoted arrays (Python repr style).
-        candidates = _parse_array_slice(text)
-    return candidates
 
+    def _as_strings(v: Any) -> list[str]:
+        return [str(x) for x in v if isinstance(x, str) and str(x).strip()] if isinstance(v, list) else []
 
-def _parse_array_slice(text: str) -> list[str]:
-    """Parse a JSON/Python array slice, accepting both quote styles."""
-    from ast import literal_eval
-
-    parsed: Any = None
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+    obj: dict[str, Any] | None = None
+    bare: list[str] | None = None
+    for candidate in (text, _bounded_json_slice(text)):
+        if not candidate:
+            continue
         try:
-            parsed = literal_eval(text)
-        except (ValueError, SyntaxError):
-            return []
-    if isinstance(parsed, list):
-        return [str(x) for x in parsed if isinstance(x, str)]
-    return []
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            try:
+                from ast import literal_eval
+
+                parsed = literal_eval(candidate)
+            except (ValueError, SyntaxError):
+                continue
+        if isinstance(parsed, dict):
+            obj = parsed
+            break
+        if isinstance(parsed, list):
+            bare = _as_strings(parsed)
+            break
+    if obj is not None:
+        blocks = _as_strings(obj.get("blocks"))
+        new = _as_strings(obj.get("new"))
+        if blocks:
+            return blocks, new
+        return None
+    if bare:
+        return bare, []
+    return None
 
 
-async def run_auto_extract(
-    *,
-    llm: Any,
-    messages: list[dict[str, Any]],
-    session_id: str,
-    provider_name: str,
-    model_name: str,
-    write_facts: Callable[[list[str]], int],
-    project_dir: str = "",
-    agent: str = "",
-) -> dict[str, Any]:
-    """Extract candidate memories from recent messages and write them directly.
-
-    ``write_facts`` receives the parsed candidate list and persists them into
-    long-term memory (deduplicated); it returns the number actually added.
-    Never raises: all failures degrade to a logged no-op so the caller can fire
-    this as a fire-and-forget task.
-    """
-    transcript = _recent_transcript(messages)
-    if not transcript:
-        logger.debug("auto-extract: no transcript to review for %s", session_id)
-        return {"added": 0, "error": None, "_transcript": "", "_candidates": []}
-    try:
-        from langchain_core.messages import SystemMessage, HumanMessage
-
-        response = await llm.ainvoke(
-            [
-                SystemMessage(content=EXTRACT_PROMPT.format(transcript=transcript)),
-                HumanMessage(
-                    content="Review the transcript and return the JSON array of "
-                    "long-term facts worth remembering."
-                ),
-            ]
-        )
-        text = ""
-        if isinstance(response, str):
-            text = response
-        else:
-            text = getattr(response, "content", "") or ""
-        candidates = _parse_candidates(str(text))
-    except Exception as exc:  # noqa: BLE001 - auto-extract must never break chat
-        logger.warning("auto-extract failed for %s: %s", session_id, exc)
-        return {"added": 0, "error": str(exc)[:200], "_transcript": transcript, "_candidates": []}
-
-    added = write_facts(candidates)
-    if added:
-        logger.info("auto-extract wrote %d memories for %s", added, session_id)
-    return {"added": added, "error": None, "_transcript": transcript, "_candidates": candidates}
+def _bounded_json_slice(text: str) -> str:
+    """Return the outermost ``{...}`` (or ``[...]``) slice of ``text``, or ''."""
+    open_ch, close_ch = ("{", "}") if "{" in text else ("[", "]")
+    start = text.find(open_ch)
+    end = text.rfind(close_ch)
+    if start == -1 or end <= start:
+        return ""
+    return text[start : end + 1]
 
 
-# ---------------------------------------------------------------------------
-# Dream / consolidation
-# ---------------------------------------------------------------------------
+EXTRACT_MERGE_PROMPT = """You are the long-term memory keeper for a coding
+assistant called Coworker. Below are the agent's CURRENT memory blocks and a
+recent conversation transcript.
 
-CONSOLIDATE_PROMPT = """You are a memory consolidator for Coworker. You merge new
-durable facts into an existing memory index, deduplicating, superseding stale
-entries and compressing while preserving meaning.
+Do TWO things in one pass:
 
-Existing MEMORY.md blocks (each block is one durable fact, separated by blank lines):
+1. Extract NEW durable facts from the transcript (user preferences, project
+   conventions/constraints, lasting decisions). Only facts the user would want
+   remembered long-term.
+2. Produce the FINAL memory block list:
+   - Keep every existing block that is still relevant. You may rewrite, translate
+     or MERGE overlapping entries to keep the total within the size budget — but
+     never silently drop a distinct fact.
+   - Add the genuinely new durable facts as concise, self-contained sentences
+     (~200 chars, one key fact each). Never paste raw transcript text, error
+     logs or secrets.
 
+Return ONLY a JSON object:
+{{"blocks": ["<concise fact>", ...], "new": ["<genuinely new fact added this time>", ...]}}
+
+The "new" array is the subset of "blocks" that did not exist before (used for
+logging and a safe append-only fallback).
+
+Current memory blocks:
 {existing}
 
-New candidate facts to integrate:
-
-{candidates}
-
-RULES:
-- Merge overlapping facts: when a new candidate is a duplicate or a refinement of
-  an existing block, UPDATE that block in place (do not keep both).
-- Remove or rewrite stale / superseded entries.
-- Keep each block as a CONCISE, SELF-CONTAINED fact (~200 chars). Never paste raw
-  transcript text.
-- Preserve every existing block UNLESS it is merged or clearly stale. You may
-  restructure but must not drop meaning.
-- If a new candidate is already covered, do not add it again.
-- Do not invent facts that are not in the existing blocks or the candidates.
-
-Return ONLY a JSON object with one key "blocks": an array of the final memory
-blocks (strings). Every entry must be a plain string; no extra commentary.
+Recent transcript:
+{transcript}
 """
 
 
-def _parse_consolidation(text: str) -> list[str] | None:
-    """Best-effort parse of the consolidation response.
-
-    Returns ``None`` when the output is not a usable JSON object (caller falls
-    back to append-only). Expects ``{"blocks": [ ... ]}``, with single-quoted
-    lists tolerated for local models.
-    """
-    text = (text or "").strip()
-    candidates: list[str] | None = None
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, dict):
-            blocks = parsed.get("blocks")
-            if isinstance(blocks, list):
-                candidates = [str(b).strip() for b in blocks if str(b).strip()]
-    except json.JSONDecodeError:
-        start, end = text.find("["), text.rfind("]")
-        if start != -1 and end > start:
-            parsed = _parse_array_slice(text[start : end + 1])
-            if parsed:
-                candidates = [str(b).strip() for b in parsed if str(b).strip()]
-    return candidates
-
-
-async def run_consolidation(
+async def run_extract_and_merge(
     *,
     llm: Any,
-    existing: str,
-    candidates: list[str],
+    messages: list[dict[str, Any]],
+    existing_blocks: list[str],
     session_id: str,
-    max_prior_loss: float = 0.25,
+    provider_name: str = "memory-extract",
+    model_name: str = "",
     max_total_chars: int = 4000,
-) -> tuple[list[str] | None, str]:
-    """Consolidate ``existing`` memory with ``candidates`` via the model.
+    max_prior_loss: float = 0.25,
+    max_transcript_chars: int = 12_000,
+) -> dict[str, Any]:
+    """E1/E2 一步到位：SINGLE merged LLM call.
 
-    Returns ``(new_blocks, note)``. ``new_blocks`` is ``None`` when the rewrite
-    is rejected by a guardrail (falls back to append-only). ``note`` explains the
-    outcome for the dream diary. Never raises: model errors degrade to
-    ``(None, note)``.
+    One prompt extracts new durable facts AND merges them into the current
+    memory blocks (consolidating overlapping entries in-band). Guardrails are
+    RULE-based (textual coverage + size budget) — the separate
+    ``_verify_preservation`` LLM call is gone. Returns:
+
+    ``{"blocks": <final blocks or None>, "new": [...], "note": str, "added": int,
+    "transcript": str}``
+
+    ``blocks=None`` means the merge was rejected by a guardrail — the caller
+    falls back to appending ``new`` (nothing is lost).
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from .memory_file import split_blocks
+    from .memory_file import render_blocks
 
-    prior = split_blocks(existing)
-    if not candidates:
-        return None, "no new candidates to consolidate"
+    transcript = _recent_transcript(messages, max_chars=max_transcript_chars)
+    if not transcript.strip():
+        return {"blocks": None, "new": [], "note": "no transcript", "added": 0, "transcript": ""}
+
+    prior = [b for b in existing_blocks if b.strip()]
+    existing = render_blocks(prior) if prior else "(empty)"
     try:
         response = await llm.ainvoke(
             [
                 SystemMessage(
-                    content=CONSOLIDATE_PROMPT.format(
-                        existing=existing or "(empty)",
-                        candidates="\n".join(f"- {c}" for c in candidates),
+                    content=EXTRACT_MERGE_PROMPT.format(
+                        existing=existing,
+                        transcript=transcript,
                     )
                 ),
-                HumanMessage(content="Return the consolidated JSON {\"blocks\": [...]}."),
+                HumanMessage(content='Return the consolidated JSON {"blocks": [...], "new": [...]}.'),
             ]
         )
         text = str(getattr(response, "content", "") or response or "")
-    except Exception as exc:  # noqa: BLE001 - consolidation must never break chat
-        return None, f"model error: {str(exc)[:120]}"
+    except Exception as exc:  # noqa: BLE001 - extraction must never break chat
+        return {"blocks": None, "new": [], "note": f"model error: {str(exc)[:120]}", "added": 0, "transcript": transcript}
 
-    new_blocks = _parse_consolidation(text)
-    if new_blocks is None:
-        return None, "unparseable consolidation output"
-    if not new_blocks:
-        return None, "consolidation produced no blocks"
+    parsed = _parse_blocks_and_new(text)
+    if parsed is None:
+        return {"blocks": None, "new": [], "note": "unparseable merge output", "added": 0, "transcript": transcript}
+    blocks, new = parsed
 
-    # Guardrail 1: must not drop more than max_prior_loss of prior entries.
-    # Pure Markdown headings are structure, not facts — the model may drop or
-    # restructure them freely, so they are excluded from the reference set.
-    # Text matching is a fast path; when a rewrite paraphrases / translates /
-    # merges facts (so no block textually resembles the original) we ask the
-    # model itself to confirm semantic preservation before accepting.
+    # Rule guardrail 1: must not lose more than max_prior_loss of prior facts.
     prior_facts = [b for b in prior if not _is_heading_block(b)]
     if prior_facts:
-        missing = [i for i, p in enumerate(prior_facts) if not _is_covered_by(p, new_blocks)]
-        if missing:
-            missing = await _verify_preservation(llm, prior_facts, new_blocks)
+        missing = [i for i, p in enumerate(prior_facts) if not _is_covered_by(p, blocks)]
         loss = len(missing) / len(prior_facts)
         if loss > max_prior_loss:
-            return None, (
-                f"guardrail: rewrite loses {loss:.0%} of prior entries "
-                f"(need >= {1 - max_prior_loss:.0%})"
-            )
+            return {
+                "blocks": None,
+                "new": new,
+                "note": f"guardrail: merge loses {loss:.0%} of prior facts (append-only fallback)",
+                "added": len(new),
+                "transcript": transcript,
+            }
 
-    # Guardrail 2: new version must fit the read-side injection budget.
-    total = sum(len(b) for b in new_blocks)
+    # Rule guardrail 2: merged version must fit the injection budget.
+    total = sum(len(b) for b in blocks)
     if total > max_total_chars:
-        return None, f"guardrail: consolidated memory too large ({total} chars)"
+        return {
+            "blocks": None,
+            "new": new,
+            "note": f"guardrail: merged memory too large ({total} chars, cap {max_total_chars})",
+            "added": len(new),
+            "transcript": transcript,
+        }
 
-    return new_blocks, f"consolidated {len(prior)} -> {len(new_blocks)} blocks"
-
-
-async def _verify_preservation(
-    llm: Any, prior_facts: list[str], new_blocks: list[str]
-) -> list[int]:
-    """Ask the model which prior entries lose their meaning in the rewrite.
-
-    Returns the 0-based indices of ``prior_facts`` whose meaning is COMPLETELY
-    absent from ``new_blocks``. Paraphrase, translation and merging all count
-    as preserved — naive text similarity cannot detect those. Never raises:
-    an unusable answer degrades conservatively to "all prior entries at risk"
-    so the caller rejects the rewrite and falls back to append-only (safe).
-    """
-    from langchain_core.messages import HumanMessage, SystemMessage
-
-    numbered = "\n".join(f"{i}. {f}" for i, f in enumerate(prior_facts))
-    blocks_text = "\n".join(f"- {b}" for b in new_blocks)
-    system = (
-        "You are a memory consistency checker. Below are the OLD long-term "
-        "memory entries (numbered) and the NEW consolidated blocks produced by "
-        "another model.\n\n"
-        "For each OLD entry, decide whether its MEANING is preserved somewhere "
-        "in the NEW blocks. Paraphrasing, translating into another language, or "
-        "merging into a combined entry all count as preserved.\n\n"
-        "Respond with ONLY a JSON array of the 0-based indices of OLD entries "
-        "whose meaning is COMPLETELY absent from the NEW blocks. If every OLD "
-        "entry is preserved, respond with the literal JSON []."
-    )
-    human = f"OLD entries:\n{numbered}\n\nNEW blocks:\n{blocks_text}"
-    try:
-        response = await llm.ainvoke(
-            [SystemMessage(content=system), HumanMessage(content=human)]
-        )
-        text = str(getattr(response, "content", "") or response or "")
-    except Exception:  # noqa: BLE001 - a check failure must not break the dream
-        return list(range(len(prior_facts)))
-    parsed = _parse_index_array(text)
-    if parsed is None:
-        return list(range(len(prior_facts)))
-    return [i for i in parsed if isinstance(i, int) and 0 <= i < len(prior_facts)]
+    return {
+        "blocks": blocks,
+        "new": new,
+        "note": f"merged {len(prior)} -> {len(blocks)} blocks (+{len(new)} new)",
+        "added": len(new),
+        "transcript": transcript,
+    }
 
 
-def _parse_index_array(text: str) -> list[int] | None:
-    """Parse a JSON/Python array of integers; ``None`` when not an array.
-
-    ``None`` (not ``[]``) signals "cannot confirm" so callers can degrade to a
-    conservative action. A genuine empty ``[]`` is preserved.
-    """
-    from ast import literal_eval
-
-    text = text.strip()
-    if not text:
-        return None
-    parsed: Any = None
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        try:
-            parsed = literal_eval(text)
-        except (ValueError, SyntaxError):
-            start, end = text.find("["), text.rfind("]")
-            if start != -1 and end > start:
-                try:
-                    parsed = json.loads(text[start : end + 1])
-                except (json.JSONDecodeError, ValueError):
-                    try:
-                        parsed = literal_eval(text[start : end + 1])
-                    except (ValueError, SyntaxError):
-                        return None
-            else:
-                return None
-    if isinstance(parsed, list):
-        return [x for x in parsed if isinstance(x, int)]
-    return None
+# ---------------------------------------------------------------------------
+# Session notes
+# ---------------------------------------------------------------------------
 
 
 def _is_heading_block(block: str) -> bool:
@@ -473,7 +326,12 @@ Transcript:
 
 def _parse_summary(text: str) -> list[str]:
     """Best-effort parse of the session-summary JSON-array response."""
-    return _parse_candidates(text)
+    parsed = _parse_blocks_and_new(text)
+    if parsed is None:
+        return []
+    blocks, new = parsed
+    # A session-summary response is a bare array (blocks); "new" is empty.
+    return blocks or new
 
 
 async def run_session_summary(

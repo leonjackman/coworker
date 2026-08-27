@@ -103,9 +103,8 @@ class MemoryManager:
         self.store = MemoryStore(self._root)
         # Org registry (injected by main.py) powers roster + team memory injection.
         self.org_store: Any | None = None
-        # Phase 2: per-session dream state (idle timers + staged candidates).
+        # Phase 2: per-session dream state (idle timers).
         self._pending_dreams: dict[str, Any] = {}
-        self._pending_candidates: dict[str, list[str]] = {}
         # One session note per (session, date): tracks which day a session's
         # SESSIONS/<date>.md has already been summarized to avoid duplicates.
         self._session_summarized: dict[str, str] = {}
@@ -288,7 +287,6 @@ class MemoryManager:
         view.store = self.store
         view.org_store = self.org_store
         view._pending_dreams = self._pending_dreams
-        view._pending_candidates = self._pending_candidates
         view._session_summarized = self._session_summarized
         view._render_cache = self._render_cache
         view._llm_factory = self._llm_factory
@@ -425,7 +423,11 @@ class MemoryManager:
             cancelled.set()
 
     async def _dream_async(self, session_id: str) -> None:
-        """Run the full background memory pass: extract, then consolidate.
+        """Run the background memory pass: ONE merged extract+merge LLM call.
+
+        ``run_extract_and_merge`` extracts new durable facts and merges them
+        into the current MEMORY.md in a single prompt (rule-based guardrails, no
+        LLM verify). A separate once-per-day session note is appended after.
 
         Throttled three ways so background extraction never starves the user's
         turns: a global concurrency cap, a per-session cooldown, and skipping
@@ -440,8 +442,6 @@ class MemoryManager:
         ran = False
         fingerprint = ""
         try:
-            from .auto_extract import run_auto_extract, run_session_summary
-
             messages = list(self._transcript_provider(session_id) or [])
             fingerprint = _transcript_fingerprint(messages)
             with self._lock:
@@ -460,27 +460,49 @@ class MemoryManager:
                 logger.info("dream skipped for %s: no provider configured", session_id)
                 return
             model_label = getattr(llm, "model_name", "") or self.config.extract_model
-            result = await run_auto_extract(
+
+            # E1/E2: ONE merged LLM call — extract new facts AND merge them into
+            # the current MEMORY.md in-band. Guardrails are rule-based (coverage
+            # + size budget); the old extract → stage → consolidate → verify
+            # chain (up to 4 main-model calls) is gone.
+            from .auto_extract import run_extract_and_merge
+            from .memory_file import render_blocks, split_blocks
+
+            target = self._memory_target_rel()
+            try:
+                existing_blocks = split_blocks(self.store.read_file(target).content or "")
+            except Exception:  # noqa: BLE001 - a missing/invalid MEMORY.md starts empty
+                existing_blocks = []
+            result = await run_extract_and_merge(
                 llm=llm,
                 messages=messages,
+                existing_blocks=existing_blocks,
                 session_id=session_id,
                 provider_name=model_label or "memory-extract",
                 model_name=model_label,
-                write_facts=lambda candidates: self._stage_candidates(session_id, candidates),
-                project_dir=self.bound_project or "",
-                agent=self.bound_agent,
+                max_total_chars=self.config.inject_char_limit,
+                max_prior_loss=self.config.max_prior_loss,
             )
-            added = int(result.get("added") or 0)
-            candidates = list(result.get("_candidates") or [])
-            consolidated, note = await self._consolidate_now(llm, session_id)
-            transcript = result.get("_transcript") or ""
+            blocks = result.get("blocks")
+            new = list(result.get("new") or [])
+            note = str(result.get("note") or "")
+            transcript = str(result.get("transcript") or "")
+            if blocks:
+                self.store.write_file(target, render_blocks(blocks))
+                consolidated = True
+                added = len(new)
+            else:
+                # Guardrail rejected the merge: append the new facts (bounded,
+                # deduped). Nothing is lost.
+                consolidated = False
+                added = self.write_auto_facts(new)
             summary_note = await self._write_session_summary(llm, session_id, transcript)
             self._write_dream_diary(
                 session_id,
                 added=added,
                 consolidated=consolidated,
                 note=note,
-                candidates=candidates,
+                candidates=new or None,
                 summary_note=summary_note,
             )
             logger.info(
@@ -498,62 +520,11 @@ class MemoryManager:
                     self._last_dream_fingerprint[session_id] = fingerprint
             self._dream_semaphore.release()
 
-    def _stage_candidates(self, session_id: str, candidates: list[str]) -> int:
-        """Extract step: stage candidates for the consolidation pass (and fall
-        back to direct writes when no consolidation will run)."""
-        stored = self._pending_candidates.setdefault(session_id, [])
-        for text in candidates:
-            text = (text or "").strip()
-            if text and text not in stored:
-                stored.append(text)
-        # Keep a bounded in-memory staging list per session.
-        self._pending_candidates[session_id] = stored[-50:]
-        return len(stored)
-
-    async def _consolidate_now(self, llm: Any, session_id: str) -> tuple[bool, str]:
-        """Consolidate staged candidates into the agent's MEMORY.md.
-
-        Returns ``(applied, note)``. Guarded: on any rejection the candidates
-        fall back to direct appends so nothing is lost.
-        """
-        from .auto_extract import run_consolidation
-
-        staged = self._pending_candidates.pop(session_id, [])
-        if not staged:
-            return False, "no staged candidates to consolidate"
+    def _memory_target_rel(self) -> str:
+        """The MEMORY.md rel path for the current scope (or system USER.md)."""
         if self.bound_project:
-            target = f"{self.bound_project}/{self.bound_agent}/BASE/MEMORY.md"
-            try:
-                existing = self.store.read_file(target).content or ""
-            except Exception:  # noqa: BLE001
-                existing = ""
-        else:
-            target = "USER.md"
-            try:
-                existing = self.store.read_file(target).content or ""
-            except Exception:  # noqa: BLE001
-                existing = ""
-        new_blocks, note = await run_consolidation(
-            llm=llm,
-            existing=existing,
-            candidates=staged,
-            session_id=session_id,
-            max_prior_loss=self.config.max_prior_loss,
-            max_total_chars=self.config.inject_char_limit,
-        )
-        if new_blocks is None:
-            # Guardrail rejected the rewrite: append candidates directly (no loss).
-            added = self.write_auto_facts(staged)
-            return False, f"append-only fallback ({added} added); {note}"
-        try:
-            from .memory_file import render_blocks
-
-            self.store.write_file(target, render_blocks(new_blocks))
-            return True, note
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("dream consolidate write failed for %s: %s", session_id, exc)
-            added = self.write_auto_facts(staged)
-            return False, f"write failed; append-only fallback ({added} added)"
+            return f"{self.bound_project}/{self.bound_agent}/BASE/MEMORY.md"
+        return "USER.md"
 
     async def _write_session_summary(
         self, llm: Any, session_id: str, transcript: str

@@ -11,7 +11,6 @@ failure.
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 import time
 from pathlib import Path
@@ -465,10 +464,10 @@ def main() -> int:
         check("paste guard rejects very long block", _looks_like_raw_paste("x" * 1300))
         check("paste guard allows concise fact", not _looks_like_raw_paste("用户偏好中文回复，前端用 npm run build 构建。"))
 
-        # --- dream consolidation guardrails ------------------------------------
+        # --- dream merge guardrails (rule-based, no LLM verify) ---------------
         import asyncio
 
-        from coworker.memory.auto_extract import run_consolidation
+        from coworker.memory.auto_extract import run_extract_and_merge
 
         class _FakeLLM:
             def __init__(self, payload: str):
@@ -477,55 +476,57 @@ def main() -> int:
             async def ainvoke(self, messages):
                 return type("R", (), {"content": self._payload})()
 
-        async def _run(llm, existing, candidates):
-            return await run_consolidation(
-                llm=llm, existing=existing, candidates=candidates,
-                session_id="s", max_prior_loss=0.25, max_total_chars=4000,
+        async def _run(llm, existing, new_fact):
+            return await run_extract_and_merge(
+                llm=llm,
+                messages=[{"role": "user", "content": f"新信息：{new_fact}"}],
+                existing_blocks=split_blocks(existing),
+                session_id="s",
+                max_prior_loss=0.25,
+                max_total_chars=4000,
             )
 
-        # Guardrail: too many prior entries dropped -> rejected (None).
+        # Guardrail: too many prior entries dropped -> rejected (blocks None).
         keep_most = '{"blocks": ["用户偏好中文"]}'
-        blocks_keep, note_keep = asyncio.run(_run(_FakeLLM(keep_most), "用户偏好中文\n\n端口 9527\n\n用 pnpm", ["偏好中文"]))
-        check("consolidation rejects heavy loss", blocks_keep is None, note_keep)
+        r_keep = asyncio.run(_run(_FakeLLM(keep_most), "用户偏好中文\n\n端口 9527\n\n用 pnpm", "偏好中文"))
+        check("consolidation rejects heavy loss", r_keep["blocks"] is None, r_keep["note"])
 
         # Guardrail: unparseable -> rejected.
-        blocks_bad, note_bad = asyncio.run(_run(_FakeLLM("not json at all"), "a\n\nb", ["c"]))
-        check("consolidation rejects unparseable", blocks_bad is None, note_bad)
+        r_bad = asyncio.run(_run(_FakeLLM("not json at all"), "a\n\nb", "c"))
+        check("consolidation rejects unparseable", r_bad["blocks"] is None, r_bad["note"])
 
         # Success path: preserves prior entries, integrates candidate.
-        ok_payload = '{"blocks": ["用户偏好中文", "端口 9527", "用户使用 pnpm"]}'
-        blocks_ok, note_ok = asyncio.run(_run(_FakeLLM(ok_payload), "用户偏好中文\n\n端口 9527", ["用户使用 pnpm"]))
-        check("consolidation succeeds", blocks_ok is not None, note_ok)
-        check("consolidation integrates candidate", any("pnpm" in b for b in blocks_ok or []), str(blocks_ok))
+        ok_payload = '{"blocks": ["用户偏好中文", "端口 9527", "用户使用 pnpm"], "new": ["用户使用 pnpm"]}'
+        r_ok = asyncio.run(_run(_FakeLLM(ok_payload), "用户偏好中文\n\n端口 9527", "用户使用 pnpm"))
+        check("consolidation succeeds", r_ok["blocks"] is not None, r_ok["note"])
+        check("consolidation integrates candidate", any("pnpm" in b for b in r_ok["blocks"] or []), str(r_ok["blocks"]))
 
         # Guardrail leniency: pure headings are not facts — dropping them must
         # not count as losing memory.
         heading_payload = '{"blocks": ["用户偏好中文", "端口 9527", "用 pnpm"]}'
-        blocks_h, note_h = asyncio.run(_run(_FakeLLM(heading_payload), "# MEMORY\n\n用户偏好中文\n\n端口 9527\n\n用 pnpm", ["偏好中文"]))
-        check("consolidation ignores headings", blocks_h is not None, note_h)
+        r_h = asyncio.run(_run(_FakeLLM(heading_payload), "# MEMORY\n\n用户偏好中文\n\n端口 9527\n\n用 pnpm", "偏好中文"))
+        check("consolidation tolerates dropped headings", r_h["blocks"] is not None, r_h["note"])
 
-        # Guardrail leniency: merging a duplicate entry into a combined block
-        # (substring containment) counts as kept, not as loss.
+        # Guardrail leniency: merged duplicates (substring containment) count as kept.
         dup_prior = "项目背景：Hub 平台\n\n项目：Hub 平台，目录 /Users/x/\n\n用户偏好：中文"
         merged_payload = '{"blocks": ["项目背景：Hub 平台，目录 /Users/x/", "用户偏好：中文"]}'
-        blocks_d, note_d = asyncio.run(_run(_FakeLLM(merged_payload), dup_prior, ["用户偏好：中文"]))
-        check("consolidation tolerates merge", blocks_d is not None, note_d)
+        r_d = asyncio.run(_run(_FakeLLM(merged_payload), dup_prior, "用户偏好：中文"))
+        check("consolidation tolerates merge", r_d["blocks"] is not None, r_d["note"])
 
         # Guardrail leniency: a reworded entry (fuzzy match) still counts as kept.
         reword_payload = '{"blocks": ["用户偏好中文回复，前端用 npm 构建", "端口 9527"]}'
-        blocks_r, note_r = asyncio.run(_run(_FakeLLM(reword_payload), "用户偏好中文回复，前端用 npm run build 构建。\n\n端口 9527", ["用户偏好中文回复"]))
-        check("consolidation tolerates rewording", blocks_r is not None, note_r)
+        r_r = asyncio.run(_run(_FakeLLM(reword_payload), "用户偏好中文回复，前端用 npm run build 构建。\n\n端口 9527", "用户偏好中文回复"))
+        check("consolidation tolerates rewording", r_r["blocks"] is not None, r_r["note"])
 
         # --- _recent_transcript: budget-aware tail building --------------------
-        from coworker.memory.auto_extract import _parse_candidates, _parse_consolidation, _recent_transcript
+        from coworker.memory.auto_extract import _parse_blocks_and_new, _recent_transcript
 
-        # Local models often return single-quoted (Python-style) arrays; strict
-        # json.loads would silently drop them, so parsing must tolerate both.
-        check("parser double-quoted", _parse_candidates('["a", "b"]') == ["a", "b"], str(_parse_candidates('["a", "b"]')))
-        check("parser single-quoted", _parse_candidates("['a', 'b']") == ["a", "b"], str(_parse_candidates("['a', 'b']")))
-        check("parser mixed quotes", _parse_candidates("[\"a\", 'b']") == ["a", "b"], str(_parse_candidates("[\"a\", 'b']")))
-        check("parser empty", _parse_candidates("[]") == [], str(_parse_candidates("[]")))
-        check("consolidation single-quoted", _parse_consolidation("{'blocks': ['a', 'b']}") == ["a", "b"], str(_parse_consolidation("{'blocks': ['a', 'b']}")))
+        # Local models often return single-quoted (Python-style) JSON; parsing
+        # must tolerate both quote styles and both shapes (dict / bare array).
+        check("parser dict double-quoted", _parse_blocks_and_new('{"blocks": ["a", "b"], "new": ["a"]}') == (["a", "b"], ["a"]), str(_parse_blocks_and_new('{"blocks": ["a", "b"], "new": ["a"]}')))
+        check("parser dict single-quoted", _parse_blocks_and_new("{'blocks': ['a', 'b']}") == (["a", "b"], []), str(_parse_blocks_and_new("{'blocks': ['a', 'b']}")))
+        check("parser bare array", _parse_blocks_and_new('["a", "b"]') == (["a", "b"], []), str(_parse_blocks_and_new('["a", "b"]')))
+        check("parser garbage", _parse_blocks_and_new("garbage") is None, str(_parse_blocks_and_new("garbage")))
 
         small = [
             {"role": "user", "content": "第一条"},
@@ -566,12 +567,12 @@ def main() -> int:
         check("realistic transcript uses budget", len(t_real) >= 11_000, str(len(t_real)))
         check("realistic keeps latest user", "现在的需求" in t_real, t_real[-60:])
 
-        # --- end-to-end dream: stage -> consolidate -> MEMORY.md write ---------
+        # --- end-to-end dream: ONE merged LLM call -> MEMORY.md write ---------
         from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
 
         class _DispatchLLM:
-            """Returns a JSON array for extract/summary and a blocks object for
-            consolidation, selected by the system prompt it sees."""
+            """Returns the merged-blocks object for the dream merge prompt and a
+            JSON array for the session notetaker, selected by the prompt text."""
 
             def __init__(self):
                 self.model_name = "fake"
@@ -580,11 +581,11 @@ def main() -> int:
             async def ainvoke(self, messages):
                 text = str(messages[0].content)
                 self.calls.append(text[:60])
-                if "memory consolidator" in text:
-                    return type("R", (), {"content": '{"blocks": ["自动提取的事实一", "自动提取的事实二"]}'})()
+                if "long-term memory keeper" in text:
+                    return type("R", (), {"content": '{"blocks": ["自动提取的事实一", "自动提取的事实二"], "new": ["自动提取的事实一", "自动提取的事实二"]}'})()
                 if "session notetaker" in text:
                     return type("R", (), {"content": '["本周完成了记忆功能排查", "修复了转写截断问题"]'})()
-                return type("R", (), {"content": '["自动提取的事实一", "自动提取的事实二"]'})()
+                return type("R", (), {"content": "[]"})()
 
         with tempfile.TemporaryDirectory() as dream_tmp:
             d_root = Path(dream_tmp) / "memory"
@@ -595,25 +596,14 @@ def main() -> int:
             )
             d_view = d_mgr.for_project("20260812100000", DEFAULT_AGENT)
             d_llm = _DispatchLLM()
+            d_view.configure_extractor(
+                llm_factory=lambda: d_llm,
+                transcript_provider=lambda sid: [{"role": "user", "content": "第一条"}, {"role": "assistant", "content": "第二条"}],
+            )
 
-            async def _run_extract():
-                from coworker.memory.auto_extract import run_auto_extract
-
-                return await run_auto_extract(
-                    llm=d_llm,
-                    messages=[{"role": "user", "content": "第一条"}, {"role": "assistant", "content": "第二条"}],
-                    session_id="dream-s1",
-                    provider_name="fake",
-                    model_name="fake",
-                    write_facts=lambda cands: d_view._stage_candidates("dream-s1", cands),
-                    project_dir=d_view.bound_project or "",
-                    agent=d_view.bound_agent,
-                )
-
-            res = asyncio.run(_run_extract())
-            check("dream extract staged candidates", int(res.get("added") or 0) == 2, str(res))
-            consolidated, note = asyncio.run(d_view._consolidate_now(d_llm, "dream-s1"))
-            check("dream consolidated", consolidated is True, note)
+            asyncio.run(d_view._dream_async("dream-s1"))
+            # ONE merged extract+merge call (no extract→stage→consolidate→verify chain).
+            check("dream ran a single merge call", sum("long-term memory keeper" in c for c in d_llm.calls) == 1, str(d_llm.calls))
             mem_raw = d_view.store.read_raw(f"20260812100000/{DEFAULT_AGENT}/BASE/MEMORY.md")
             check("dream wrote MEMORY.md", "自动提取的事实一" in mem_raw and "自动提取的事实二" in mem_raw, mem_raw)
 

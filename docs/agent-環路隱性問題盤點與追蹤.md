@@ -62,8 +62,8 @@
 
 | ID | 位置 | 現況／隱性問題 | 對比主流 | 建議方向 | 嚴重度 |
 |---|---|---|---|---|---|
-| E1 | memory/memory_manager.py:388-407、auto_extract.py:29-44 | **自動記憶抽取用主模型跑**：`_llm_factory()` 預設建**主 provider 大模型**（`extract_model=""` fallback），每 dream 可觸發 extract + consolidate + session-summary 三次完整 LLM call。 | codex 記憶用輕量模型 | 預設用小型/便宜模型（`extract_model` 改為預設啟用）；限制 consolidate 既有檔大小 | 中 |
-| E2 | memory/auto_extract.py:304-389 | **consolidation 輸入過大且多 call**：`{existing}` 整個 MEMORY.md（~4000 chars）+ 全部候選內嵌，每 dream 還可能跑 `_verify_preservation`（再一次 LLM call）——最壞 1 dream = 4 次 LLM call。 | — | 限制既有檔輸入長度；合併/簡化 preservation 檢查（僅在相似度全 miss 時才問模型） | 中 |
+| E1 | memory/memory_manager.py:388-407、auto_extract.py:29-44 | **dream 每輪最多 4 次主模型 LLM call**：extract → stage → consolidate → `_verify_preservation`(可能第 3 次) → session-summary(第 4 次)。`extract_model` 設定已存在但未節省 call 數。 | hermes：背景 review 每 10 turn **一次** call（background_review.py）；opencode：唯一 LLM 摘要在 compaction（背景 fork） | Dream 改 **單一合併 call**（`run_extract_and_merge`：抽取+就地合併一次完成）；`extract_model` 經 `_memory_extract_llm()`(main.py:1104) 已生效 | 中 | ☑ |
+| E2 | memory/auto_extract.py:304-389 | **consolidation 輸入過大且多 call**：`{existing}` 整個 MEMORY.md（~4000 chars）+ 全部候選內嵌，`_verify_preservation` 相似度 miss 時又來一次 LLM call（最壞 1 dream = 4 次）。 | hermes：consolidation 是 char-budget 強制 + 模型就地 merge，**無 verify LLM**（memory_tool.py:428-441） | 合併 prompt 一次回傳 blocks；guardrail 全改**規則**（覆蓋率相似度 + 大小預算），移除 `_verify_preservation` LLM call | 中 | ☑ |
 
 ### 五、壓縮精簡不正確
 
@@ -188,8 +188,8 @@
 | R1 | 讀取 | read_file 整檔載入 + 輸出過大 | 中 | P2 | ☑ | 有界串流 + binary 4KB 偵測 + 插入前 token 截斷 |
 | R2 | 讀取 | 附件 120k chars 永久重放 | 高 | P0 | ☑ | inline-once + 歷史 stub（重放 -99.7%）|
 | R3 | 讀取 | 搜尋 1MB/檔掃描、無 ignore | 低 | P2 | ☑ | rg 快路徑 + ignore-aware fallback + 256KB |
-| E1 | 摘取 | 自動記憶抽取用主模型 | 中 | P2 | ☐ | |
-| E2 | 摘取 | consolidation 輸入過大且多 call | 中 | P2 | ☐ | |
+| E1 | 摘取 | dream 每輪最多 4 次主模型 LLM call | 中 | P2 | ☑ | 單一合併 call（4→1）|
+| E2 | 摘取 | consolidation 輸入過大且多 call | 中 | P2 | ☑ | 移除 verify LLM；規則 guardrail |
 | C1 | 壓縮 | 壓縮摘要跨輪失效（架構 bug） | 高 | P0 | ☐ | |
 | C2 | 壓縮 | 摘要輸入雙重截斷 | 低 | P2 | ☐ | |
 | C3 | 壓縮 | 摘要模型首選主模型 | 中 | P2 | ☐ | |
@@ -295,6 +295,21 @@
 
 **驗證**：`tests/` pytest **203 passed**（+15 新測試：read 串流/binary/分頁、附件 stub、rg+fallback/ignore、token 截斷）。`stress_test.py` **120 passed**。`selftest.py` 僅餘 2 項既有失敗（與本改動無關）。
 
+### 2026-08-27 — 摘取／抽取過大（E1 / E2，一步到位）
+
+改動檔案：`memory/auto_extract.py`、`memory/memory_manager.py`、`tests/test_memory_extract.py`（新）。
+
+| 項目 | 實作內容 |
+|---|---|
+| **E1/E2** | Dream 改 **單一合併 LLM call**：新增 `run_extract_and_merge`（`EXTRACT_MERGE_PROMPT` 一個 prompt 同時「抽取新事實 + 就地合併既有 blocks」），回傳最終 blocks。**4 次主模型 call → 1 次**（外加每日一次的 session note）。 |
+| **E2** | **移除 `_verify_preservation` 的 LLM verify**：guardrail 全改**規則**——覆蓋率文字相似度（`_is_covered_by`，`max_prior_loss`）+ 大小預算（`inject_char_limit`）；被拒則 append-only fallback（`write_auto_facts` 新事實保底，無遺失）。 |
+| **E1** | `extract_model` 沿用既有 `_memory_extract_llm()`（main.py:1104，provider id → `build_extract_llm` 建小模型）；transcript 維持 12k chars 有界。 |
+| **清理** | 刪除孤兒/廢棄代碼：`run_auto_extract`、`run_consolidation`、`_verify_preservation`、`_parse_index_array`、`_parse_candidates`、`_parse_array_slice`、`EXTRACT_PROMPT`、`CONSOLIDATE_PROMPT`、`_parse_consolidation`、`_stage_candidates`、`_consolidate_now`、`_pending_candidates`。`_parse_blocks_and_new` 強化為唯一 parser（dict/裸陣列/單引號皆容）。`selftest` 改測新路徑（`run_extract_and_merge` + 真實 `_dream_async`）。記憶模組淨刪 **~408 行**。 |
+
+**量化**：dream LLM call 數 **4 → 1**；guardrail 不再有第二個 LLM verify call（測試以 counting-LLM 斷言 `calls == 1`）。
+
+**驗證**：`tests/test_memory_extract.py` 新增 5 組測試（單 call 合併 / 覆蓋率拒回 + 無第二 call / 預算拒回 / unparseable 降級 / 無 transcript 跳過）；`tests/` pytest **208 passed**。`selftest.py` **247 PASS**（僅餘 2 項既有失敗）。`stress_test.py` **120 passed**。
+
 ---
 
 ## 追蹤約定
@@ -311,3 +326,4 @@
 | 2026-08-27 | 記憶注入 M1–M5 已修復（方案 A+B 對齊 codex），含實作紀錄與驗證 |
 | 2026-08-27 | Prompt 注入 P1–P5 / B1–B3 / V5 / O2 已修復（檔次 1+2：純減法 + SystemAssembler），含實作紀錄與量化對比 |
 | 2026-08-27 | 檔案讀取 R1–R3 / O1 / L2 已修復（源頭優化：有界串流 + 附件 inline-once + rg/ignore），含實作紀錄與量化 |
+| 2026-08-27 | 摘取 E1/E2 已修復（一步到位：dream 單一合併 call + 規則 guardrail 移除 verify LLM），含實作紀錄 |
