@@ -930,6 +930,10 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 existing_tool["status"] = "success" if part.get("status") == "success" else "error"
                 if part.get("output") is not None:
                     existing_tool["output"] = part["output"]
+                # O1: carry the full output through to the persisted/merged part
+                # (display stays at the preview cap on ``output``).
+                if part.get("output_full") is not None:
+                    existing_tool["output_full"] = part["output_full"]
                 if part.get("duration_ms") is not None:
                     existing_tool["duration_ms"] = part["duration_ms"]
                 if part.get("files") is not None:
@@ -943,6 +947,7 @@ def _merge_event_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         "status": "success" if part.get("status") == "success" else "error",
                         "input": "",
                         "output": part.get("output"),
+                        **({"output_full": part["output_full"]} if part.get("output_full") is not None else {}),
                         **({"duration_ms": part["duration_ms"]} if part.get("duration_ms") is not None else {}),
                         **({"files": part["files"]} if part.get("files") is not None else {}),
                     }

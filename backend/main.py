@@ -3458,7 +3458,7 @@ def _parts_to_conversation(message) -> list[dict[str, Any]]:
                     "id": part.get("id") or f"tool-{len(out)}",
                     "type": "function",
                     "function": {"name": part.get("name") or "", "arguments": args_str},
-                    "result": _truncate_tool_result(part.get("output") or part.get("result") or ""),
+                    "result": _truncate_tool_result(part.get("output_full") or part.get("output") or part.get("result") or ""),
                 }
             )
     flush()

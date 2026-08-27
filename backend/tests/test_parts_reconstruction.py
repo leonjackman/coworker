@@ -113,3 +113,22 @@ def test_user_messages_preserved_by_history_builder():
     assert history[0]["role"] == "user"
     # format_user_message wraps plain text as a multimodal part list.
     assert "hi" in str(history[0]["content"])
+
+
+def test_tool_result_replays_output_full_not_display_cap():
+    """O1 display/persist split: the model replay must use `output_full` (the
+    full persisted copy), never the display-capped `output` the frontend sees."""
+    full = "FULL_RESULT_" + "x" * 5000
+    display = full[:2000]
+    m = _msg(
+        content="assistant",
+        parts=[{"type": "tool", "id": "t1", "name": "read_file", "status": "success", "input": "a.txt", "output": display, "output_full": full}],
+    )
+    out = _main_module._parts_to_conversation(m)
+    assistant = next(c for c in out if c.get("role") == "assistant" and c.get("tool_calls"))
+    result = assistant["tool_calls"][0]["result"]
+    # The replayed result carries the full content (far beyond the 2000-char
+    # display cap the frontend sees).
+    assert "FULL_RESULT_" in result
+    assert len(result) > 4000
+    assert result != display

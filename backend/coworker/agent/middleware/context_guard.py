@@ -482,11 +482,16 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 return
             messages = list(getattr(request, "messages", []) or [])
             used_chars = sum(_msg_chars(m) for m in messages)
+            # budget_chars mirrors the token budget through the SAME Latin ratio
+            # as the estimator (T1) so the frontend's legacy chars fallback is a
+            # consistent value, never 0.
+            from ...context import LATIN_CHARS_PER_TOKEN
+
             writer(
                 {
                     "type": "context_usage",
                     "used_chars": used_chars,
-                    "budget_chars": 0,
+                    "budget_chars": int(self.limit_tokens * LATIN_CHARS_PER_TOKEN),
                     "used_tokens": raw,
                     "used_tokens_calibrated": measured,
                     "calibration_factor": round(float(factor), 3),

@@ -375,6 +375,17 @@
 
 **驗收結果**：`tests/` pytest **238 passed**。`selftest.py` **247 PASS、0 FAIL**（2 項既有失敗根治）。`stress_test.py` **120 passed**。前端 `App.tsx`/`types.ts`（C3 `compaction_notice`）`tsc --noEmit` **0 錯誤**。`pyflakes`：無新增孤兒（餘項皆既有）。
 
+### 2026-08-27 — 前端↔後端合約審計與源頭改造（13 區開發後斷裂檢查）
+
+**審計**：比對後端 SSE 事件詞彙（runtime.py/main.py）與前端處理清單（App.tsx/chatService.ts）——全數對齊；SSE 解析無 schema 驗證（新欄位安全）；session-detail/API 回應僅新增欄位（向前相容）。
+
+**發現並源頭改造的斷裂**：
+1. **`tool_end` 事件輸出從 2000 → 全量（O1 引入）**：O1 把持久化輸出改為全文（128k fuse），但同一個 `part["output"]` 同時用於 live `tool_end` SSE 事件與 `done.parts` → 前端工具泡泡被 40k+ 輸出淹沒。**源頭改造**：拆分顯示/持久化——`output` 維持 2000 chars 顯示上限（前端合約還原），新增 `output_full`（全文，128k fuse）供 `_parts_to_conversation` 重放（token 截斷至 4000）與 session 持久化。`_merge_event_parts` 同步轉載 `output_full`。O1「全文持久化、重放時截斷」目標不變，僅線上/顯示體積還原。
+2. **`done` 事件新欄位未同步前端型別**：`loop_reason` / `compaction` 加入 `frontend/src/types.ts` 的 `done` 事件（`compaction_notice` 先前已加）。
+3. **`context_usage.budget_chars: 0`**：guard telemetry 硬編 0 → 改為 `limit_tokens × LATIN_CHARS_PER_TOKEN` 衍生值（前端 chars fallback 不再為 0）。
+
+**驗證**：`tests/test_parts_reconstruction.py::test_tool_result_replays_output_full_not_display_cap`（重放全文、非顯示截斷）。`tests/` pytest **239 passed**。`selftest.py` **247 PASS、0 FAIL**。`stress_test.py` **120 passed**。前端 `App.tsx`/`types.ts` `tsc --noEmit` **0 錯誤**。
+
 ---
 
 ## 追蹤約定
@@ -397,3 +408,4 @@
 | 2026-08-27 | Prompt build 殘留收尾（A–D：MCP 段組裝位置 / 行為-only / 刪 tool_registry 孤兒 / list-content base），含實作紀錄 |
 | 2026-08-27 | 八–十三 全量分階段開發（P0-A 編譯快取 → P2-B 增量落盤），含實作紀錄 |
 | 2026-08-27 | 完整驗收：45 項逐項核對通過；根治 2 項既有 selftest 失敗（_cap_summary off-by-one、telemetry 錯誤預期）；append_message 冪等化 |
+| 2026-08-27 | 前端↔後端合約審計：tool_end 顯示/持久化拆分（output/output_full）、done 型別同步、context_usage budget_chars 修正 |
