@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { t } from "../lib/i18n";
+import { SHORTCUTS } from "../keys";
 import type { Autonomy, ComposerAttachment, OrgRosterEntry, SessionReference, WorkMode } from "../types";
 import { Button } from "./ui/button";
 import { CardSlot } from "./ui/card-slot";
@@ -1012,7 +1013,7 @@ export function ChatInput({
                     </Select>
                   </div>
 
-                  <Tooltip content={t(workMode === "plan" ? "chat.work_plan_tip" : "chat.work_build_tip")}>
+                  <Tooltip content={SHORTCUTS.TOGGLE_WORK_MODE.label}>
                     <button type="button" className="composer-toggle-button" onClick={() => onWorkModeChange(workMode === "plan" ? "build" : "plan")} aria-label={t("chat.toggle_work_mode")}>
                       <ListChecks size={14} />
                       <span>{t(workMode === "plan" ? "chat.work_plan" : "chat.work_build")}</span>

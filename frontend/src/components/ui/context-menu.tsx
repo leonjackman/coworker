@@ -1,6 +1,7 @@
 import { ClipboardPaste, Copy, Eraser, Scissors, Square, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import { isMac, modKeyLabel } from "../../lib/platform";
 import { t } from "../../lib/i18n";
 
 /** 预置操作槽位：组件内部实现复制/粘贴/剪切等，免去使用者重复造轮子 */
@@ -37,10 +38,10 @@ interface ContextMenuProps {
 }
 
 const SLOT_META: Record<ContextMenuSlotId, { icon: ReactNode; getShortcut: () => string }> = {
-  copy: { icon: <Copy size={13} />, getShortcut: () => modKey() + "C" },
-  cut: { icon: <Scissors size={13} />, getShortcut: () => modKey() + "X" },
-  paste: { icon: <ClipboardPaste size={13} />, getShortcut: () => modKey() + "V" },
-  selectAll: { icon: <Square size={13} />, getShortcut: () => modKey() + "A" },
+  copy: { icon: <Copy size={13} />, getShortcut: () => modKeyLabel() + "C" },
+  cut: { icon: <Scissors size={13} />, getShortcut: () => modKeyLabel() + "X" },
+  paste: { icon: <ClipboardPaste size={13} />, getShortcut: () => modKeyLabel() + "V" },
+  selectAll: { icon: <Square size={13} />, getShortcut: () => modKeyLabel() + "A" },
   delete: { icon: <Trash2 size={13} />, getShortcut: () => (isMac() ? "⌫" : "Del") },
   clear: { icon: <Eraser size={13} />, getShortcut: () => "" },
 };
@@ -53,15 +54,6 @@ const SLOT_LABEL: Record<ContextMenuSlotId, string> = {
   delete: "context_menu.delete",
   clear: "context_menu.clear",
 };
-
-function isMac(): boolean {
-  if (typeof navigator === "undefined") return false;
-  return navigator.platform.toLowerCase().includes("mac");
-}
-
-function modKey(): string {
-  return isMac() ? "⌘" : "Ctrl+";
-}
 
 /** 通过受控组件原生 setter + input 事件，让 React 受控 textarea/input 感知外部改动 */
 function setElementValue(el: HTMLTextAreaElement | HTMLInputElement, value: string) {

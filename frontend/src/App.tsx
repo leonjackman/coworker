@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ChatInput, extractSessionIds, type CommandChip } from './components/ChatInput';
+import { useGlobalShortcuts } from './keys';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { WebSetupHintBar } from './components/WebSetupHintBar';
@@ -603,6 +604,13 @@ function App() {
   const [mcpTemplates, setMcpTemplates] = useState<McpTemplateEntry[]>([]);
   const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
   const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnostic[]>([]);
+
+  // Global keyboard shortcuts (e.g. Cmd+. / Ctrl+. to toggle plan/build).
+  useGlobalShortcuts({
+    onToggleWorkMode: () => {
+      setWorkMode((prev) => (prev === 'plan' ? 'build' : 'plan'));
+    },
+  });
 
   // Keep the installed-skill catalog fresh at the app level (not just when the
   // Settings → Skills panel mounts) so the chat-input "/" command card can list
