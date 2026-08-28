@@ -35,10 +35,11 @@
 | --- | --- |
 | 🗨️ **流式对话** | 基于 SSE 的实时 Agent 响应，支持心跳保活与多会话并行流式输出 |
 | 📥 **消息排队 & 插話** | Agent 回覆期間仍可繼續輸入，消息按会话入队，當前流結束後逐條自動發送；亦可對佇列中任一消息「插話」(↳)，在不中斷當前流的前提下引導回覆 |
-| 🔌 **多模型支持** | OpenAI、Ollama 及任意 OpenAI 兼容 API，支持上下文窗口在线探测 |
+| 🔌 **多模型支持** | 内置 32 个模型厂商预设 —— OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen / DashScope、Moonshot (Kimi)、Zhipu (GLM)、Doubao、Minimax、Cohere、Groq、xAI、Mistral、Ollama、vLLM、OpenRouter、SiliconFlow 等 —— 以及任意 OpenAI 兼容自定义端点，支持上下文窗口在线探测 |
 | 🧠 **长程记忆** | 按 Agent / 项目隔离的 Markdown 记忆库，LLM 自动提取，支持 zip 导入导出、回收站与跨目录迁移 |
 | 👥 **多 Agent 团队** ⚠️ | 创建团队与部门，Agent 之间可互相委派任务。**实验性能力** — 见下方说明 |
 | 👤 **子代理 (Sub-Agent)** | 单 Agent 模式下可派出独立子代理并行或串行执行任务，每个子代理拥有独立的 LLM 运行环境和受限工具集 |
+| 🎯 **目标模式 (Goal Mode)** | 用 `/goal` 设定持久目标，Agent 自动连续多轮推进直至完成或受阻，并配有常驻进度卡片与暂停 / 恢复 / 清除控制 |
 | 🔄 **MCP 集成** | Model Context Protocol 支持 — stdio / HTTP / SSE / WebSocket / Streamable HTTP 传输，OAuth 2.1 + PKCE、模板发现、持久会话 |
 | 📦 **技能系统** | SKILL.md 标准技能，支持市场浏览与一键安装（SkillHub · ClawHub），Agent 可在对话中直接安装新技能 |
 | 🌐 **网页搜索 & 抓取** | 基于 [Tavily](https://tavily.com) 的网页搜索（`web_search`）与网页抓取（`web_fetch`），支持深度搜索、结果数配置、Cloudflare 自动重试；API Key 安全存储于系统钥匙串 |
@@ -127,7 +128,8 @@ COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
 
 在应用的 **设置 → 提供商** 中添加 AI 语言模型：
 
-- 设置基础 URL、模型名称、API 密钥
+- 从 32 个内置厂商预设中选择（OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen、Moonshot、Zhipu 等），或填写自定义 OpenAI 兼容端点
+- 为所选厂商设置基础 URL、模型名称、API 密钥
 - 密钥会存入系统 Keychain（macOS）或 0600 权限文件（备用）
 - 使用内置 "测试" 按钮检查连接
 
@@ -299,6 +301,17 @@ Agent 流式回覆期間，從佇列中任選一條消息點「插話」(↳)，
 - **运行时 API**：`POST /settings/log-level`（切换级别并持久化）、`POST /settings/log-config`（级别/轮转/JSON/请求日志，立即生效并持久化）、`POST /settings/truncate-log`（清空或保留末尾 N 字节）、`GET /settings/log-file`（分页读取）。
 - **请求日志**：每条 HTTP 请求以 `coworker.http` 记录 method/path/status/耗时与 `request_id`；健康检查与日志读取端点自动跳过；查询串中的 token/key 等敏感参数会被打码。
 - **会话关联**：`app.log` 的 JSON 记录会自动带上 `session_id`（会话相关请求及 `/chat/stream` / `/chat/interject` 全程），可直接 `grep '"session_id":"<会话ID>"'` 拉出单个会话的运行时日志。
+
+---
+
+## 目标模式（Goal Mode）
+
+用 `/goal <目标>` 设定一个持久目标，Agent 会在**无需额外输入**的情况下连续多轮推进，直到将目标标记为 `complete`（完成）或 `blocked`（受阻）。任务面板中会常驻一张进度卡片（目标、状态、已用时间、token 预算进度条）。
+
+- **输入框 Stop** 停止当前任务；目标保持 `active`，需一次触发（新消息 / 恢复 / 重开会话）才能继续。
+- **TodoBlock 暂停 / 恢复 / 清除** 控制目标本身 —— 暂停会让当前轮跑完后停止后续轮次，但不中止正在进行的运行。
+- 目标**严格按会话隔离**，绝不影响其他会话。
+- 若运行中触发人机协作审批或提问，循环会暂停，在你批准后续跑。
 
 ---
 

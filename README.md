@@ -36,10 +36,11 @@
 | --- | --- |
 | 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
 | 📥 **Message Queue & Interject** | Keep typing while the agent works — sends queue up per session and auto-send one-by-one when the stream finishes; interject (↳) any queued message to steer the running reply without interrupting it |
-| 🔌 **Multi-Provider** | OpenAI, Ollama, and any OpenAI-compatible API, with live context-window discovery |
+| 🔌 **Multi-Provider** | 32 built-in provider presets — OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen / DashScope, Moonshot (Kimi), Zhipu (GLM), Doubao, Minimax, Cohere, Groq, xAI, Mistral, Ollama, vLLM, OpenRouter, SiliconFlow and more — plus any OpenAI-compatible custom endpoint, with live context-window discovery |
 | 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract, zip export / import, trash recovery, and cross-directory migration |
 | 👥 **Multi-Agent Teams** ⚠️ | Create teams & departments and let agents delegate tasks to each other. **Experimental** — see note below |
 | 👤 **Sub-Agent Workers** | Spawn independent sub-agents in single-agent mode for parallel or sequential tasks, each with its own LLM graph, memory, and restricted toolset |
+| 🎯 **Goal Mode** | Set a persistent `/goal` and let the agent drive multi-round autonomous execution until complete or blocked, with a pinned progress card and pause / resume / clear controls |
 | 🔄 **MCP Integration** | Model Context Protocol — stdio / HTTP / SSE / WebSocket / Streamable HTTP transports, OAuth 2.1 + PKCE, template discovery, persistent sessions |
 | 📦 **Skills** | SKILL.md-based skills with marketplace browsing, one-click install (SkillHub · ClawHub), and in-chat install via the agent |
 | 🌐 **Web Search & Fetch** | Web search powered by [Tavily](https://tavily.com) (`web_search`) and web page fetching (`web_fetch`), with configurable search depth, result count, Cloudflare retry, and secure keychain storage for your API key |
@@ -128,7 +129,8 @@ For all platforms, download the pre-built installer from [GitHub Releases](https
 
 Open **Settings → Providers** in the app UI:
 
-- Set the base URL, model name, and API key
+- Pick from 32 built-in provider presets (OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen, Moonshot, Zhipu, and more), or add a custom OpenAI-compatible endpoint
+- Set the base URL, model name, and API key for the chosen provider
 - Keys are stored in the macOS Keychain (or a 0600-protected file)
 - Use the built-in "Test" button to verify connectivity
 
@@ -305,6 +307,56 @@ While the agent is streaming, pick any queued message and hit **Interject now**
 > Queued messages auto-send one-by-one once the stream settles; use **Interject
 > now** when you want guidance to take effect *within* the current run instead
 > of waiting for it to finish.
+
+---
+
+## Goal Mode
+
+Set a persistent objective with `/goal <objective>` and the agent keeps working
+across multiple rounds **without further input** until it marks the goal
+`complete` or `blocked`. A progress card (objective, status, elapsed time,
+token-budget bar) is pinned in the task panel.
+
+- **Input-box Stop** stops the current task; the goal stays `active` and needs a
+  kick (new message / resume / reopen) to continue.
+- **TodoBlock pause / resume / clear** control the goal itself — pausing lets the
+  current round finish, then stops further rounds without aborting the run.
+- Goals are **strictly per-session** and never affect other sessions.
+- If a human-in-the-loop approval or question is raised mid-run, the loop pauses
+  and resumes after you approve.
+
+---
+
+## Logging & Observability
+
+All logs are written to the app data directory by default (macOS:
+`~/Library/Application Support/Coworker`; override with `COWORKER_DATA_DIR`).
+
+| File | Contents | Governance |
+| --- | --- | --- |
+| `app.log` + `app.log.N` | Main runtime log (JSON, one record per line) | Rotated by size (default 10 MB × 5) |
+| `agent_trace.jsonl` | Agent activity trace (events / state / context) | Rolling retention, default last 100 (adjustable in settings) |
+| `tool_audit.jsonl` | Tool-call audit | Rolling retention, default last 100 (adjustable in settings) |
+| `command_approvals.json` | Command approval records | Keeps last 100 + guaranteed 25 |
+| `worker_events/<run>.jsonl` | Sub-agent run stream events (replayable) | Last 200 runs / total ≤ 100 MB |
+
+Controls:
+
+- **Env vars**: `COWORKER_LOG_LEVEL`, `COWORKER_LOG_MAX_BYTES`,
+  `COWORKER_LOG_BACKUP_COUNT`, `COWORKER_JSON_LOG`, `COWORKER_HTTP_LOG`
+  (request log toggle), `COWORKER_WORKER_EVENTS_MAX_RUNS` /
+  `COWORKER_WORKER_EVENTS_MAX_BYTES`.
+- **Runtime API**: `POST /settings/log-level` (switch level, persists),
+  `POST /settings/log-config` (level / rotation / JSON / request log, applies
+  immediately and persists), `POST /settings/truncate-log` (clear or keep last N
+  bytes), `GET /settings/log-file` (paginated read).
+- **Request log**: every HTTP request is recorded via `coworker.http`
+  (method / path / status / latency / `request_id`); health-check and log-read
+  endpoints are skipped; token / key query params are redacted.
+- **Session correlation**: JSON records in `app.log` automatically carry
+  `session_id` (session-related requests and the whole `/chat/stream` /
+  `/chat/interject` flow), so you can `grep '"session_id":"<id>"'` to pull a
+  single session's runtime log.
 
 ---
 
