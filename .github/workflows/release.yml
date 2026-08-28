@@ -297,4 +297,29 @@ jobs:
           if [[ "${{ github.ref_name }}" =~ -([a-zA-Z]+)(\.[0-9]+)?$ ]]; then
             PRERELEASE_FLAG="--prerelease"
           fi
-          gh release create "${{ github.ref_name }}" "${FILES[@]}" --generate-notes --title "CoWorker ${{ github.ref_name }}" $PRERELEASE_FLAG
+
+          # 從 CHANGELOG.md 擷取本版本說明：先精確版本，再退回 Unreleased，都無則自動生成
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"
+          NOTES_FILE="--generate-notes"
+          extract_section() {
+            awk -v name="$1" '
+              BEGIN { found=0 }
+              /^## / {
+                if (found) exit
+                if ($0 ~ "^##[ \t]+" name "([ \t]|$)") { found=1; next }
+              }
+              found { print }
+            ' CHANGELOG.md
+          }
+          if [ -f CHANGELOG.md ]; then
+            extract_section "$VER" > /tmp/release_notes.md
+            if [ ! -s /tmp/release_notes.md ]; then
+              extract_section "Unreleased" > /tmp/release_notes.md
+            fi
+            if [ -s /tmp/release_notes.md ]; then
+              NOTES_FILE="--notes-file /tmp/release_notes.md"
+            fi
+          fi
+
+          gh release create "${{ github.ref_name }}" "${FILES[@]}" $NOTES_FILE --title "CoWorker ${{ github.ref_name }}" $PRERELEASE_FLAG
