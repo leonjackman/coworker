@@ -1,4 +1,4 @@
-import { AlertTriangle, BrainCircuit, Check, ChevronDown, Loader2, Network, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { AlertTriangle, BrainCircuit, Check, Loader2, Network, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { getProviderTemplateOrder, providerTemplate, ProviderIcon } from '../lib/provider-registry';
 import { t, translateError } from '../lib/i18n';
@@ -134,12 +134,13 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
     setFetchingModels(true);
     setMessage(null);
     try {
-      const response = await chatService.fetchProviderModels({
+      const fetchParams: { base_url: string; api_key: string; provider_type: string; provider_id?: string } = {
         base_url: form.base_url,
         api_key: form.api_key,
         provider_type: form.provider_type,
-        provider_id: hasValidProviderId(form.id) ? form.id : '',
-      });
+      };
+      if (form.id) fetchParams.provider_id = form.id;
+      const response = await chatService.fetchProviderModels(fetchParams);
       setForm((current) => ({
         ...current,
         availableModels: response.models,
@@ -182,7 +183,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
           vision: Boolean(form.vision),
         });
-        newProviderId = created.id;
+        newProviderId = created.provider.id;
       }
       await load();
       onProviderChange();
@@ -255,12 +256,13 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
     setTesting(true);
     setTestResult(null);
     try {
-      const result = await chatService.testProvider({
+      const testParams: { base_url: string; api_key: string; model: string; provider_id?: string } = {
         base_url: form.base_url,
         api_key: form.api_key,
         model: form.model,
-        provider_id: hasValidProviderId(form.id) ? form.id : '',
-      });
+      };
+      if (form.id) testParams.provider_id = form.id;
+      const result = await chatService.testProvider(testParams);
       setTestResult(result);
     } catch (error) {
       setTestResult({ ok: false, latency_ms: null, error: translateError(error) });
@@ -544,61 +546,55 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
               <article
                 className={`provider-card provider-card--mir provider-card--mir-hover ${!provider.enabled ? 'provider-card--disabled' : ''} ${isDefault ? 'provider-card--is-default' : ''}`}
                 key={provider.id}
+                onClick={() => { startEdit(provider); setViewMode('form'); }}
               >
-                {/* Row 1: icon + name + badges / switcher / menu */}
+                {/* Row 1: icon + name + badges / switcher */}
                 <div className="provider-card__top">
                   <div className="provider-card__identity">
                     <ProviderIcon type={provider.provider_type} size={18} />
                     <strong>{provider.name}</strong>
                     {!provider.enabled && <Badge>{t('providers.disabled')}</Badge>}
                   </div>
-                  <div className="provider-card__controls">
+                  <div className="provider-card__controls" onClick={(e) => e.stopPropagation()}>
                     <Switch id={`provider-switch-${provider.id}`} checked={provider.enabled} onChange={() => handleToggle(provider)} />
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="icon" className="h-7 w-7" aria-label={t('common.more')}>
-                          <ChevronDown size={14} />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="provider-menu__content">
-                        <DropdownMenuItem onSelect={() => startEdit(provider)}>{t('providers.edit')}</DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => handleSetDefault(provider)} disabled={isDefault}>
-                          {isDefault && <Check size={12} />}
-                          {t('providers.set_default')}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => { void handleToggle(provider); }}>
-                          {provider.enabled ? t('providers.disable') : t('providers.enable')}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onSelect={() => setDeleteConfirm(provider.id)}>
-                          <Trash2 size={12} />
-                          {t('common.delete')}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
                   </div>
                 </div>
 
-                {/* Row 2: URL badges + default */}
+                {/* Row 2: model + url · default / error · edit menu */}
                 <div className="provider-card__meta">
-                  {provider.base_url && <Badge className="provider-url-badge">{provider.base_url}</Badge>}
-                  {isDefault && <Badge className="provider-default-badge">{t('providers.default_badge')}</Badge>}
+                  <span className="provider-card__subtitle">
+                    {provider.model && <span>{t('providers.model')}: <Badge className="provider-card-model-badge">{provider.model}</Badge></span>}
+                    {provider.model && provider.base_url && <span> · </span>}
+                    {provider.base_url && <span className="provider-card-url">{provider.base_url}</span>}
+                    {isDefault && <span> · {t('providers.default_badge')}</span>}
+                    {provider.context_error && <span className="provider-card__warning">{provider.context_error}</span>}
+                  </span>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="provider-card-edit-btn"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {t('providers.edit')}
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="provider-menu__content">
+                      <DropdownMenuItem onSelect={() => startEdit(provider)}>{t('providers.edit')}</DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => handleSetDefault(provider)} disabled={isDefault}>
+                        {isDefault && <Check size={12} />}
+                        {t('providers.set_default')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => { void handleToggle(provider); }}>
+                        {provider.enabled ? t('providers.disable') : t('providers.enable')}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem variant="destructive" onSelect={() => setDeleteConfirm(provider.id)}>
+                        <Trash2 size={12} />
+                        {t('common.delete')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
-
-                {/* Row 3: model */}
-                {provider.model && (
-                  <div className="provider-card__model">
-                    <span>{t('providers.model')}: </span>
-                    <Badge>{provider.model}</Badge>
-                  </div>
-                )}
-
-                {provider.context_error && (
-                  <div className="provider-card__warning" role="alert">
-                    <AlertTriangle size={13} />
-                    <span>{provider.context_error}</span>
-                  </div>
-                )}
 
                 {/* Delete inline confirm */}
                 {deleteConfirm === provider.id && (
