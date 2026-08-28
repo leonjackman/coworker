@@ -8,7 +8,10 @@ a = Analysis(
     ['main.py'],
     pathex=[os.getcwd()],
     binaries=[],
-    datas=[],
+    datas=[
+        # Provider catalog (JSON data) loaded at runtime by coworker/providers/catalog.py.
+        ('coworker/providers/catalog.json', 'coworker/providers'),
+    ],
     hiddenimports=[
         'langchain',
         'langchain_openai',
