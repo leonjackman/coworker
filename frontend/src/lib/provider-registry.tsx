@@ -2,16 +2,26 @@ import type { ReactNode } from 'react';
 import { Network } from 'lucide-react';
 
 import anthropicIcon from '@lobehub/icons-static-svg/icons/anthropic.svg?url';
+import cerebrasIcon from '@lobehub/icons-static-svg/icons/cerebras-color.svg?url';
+import cohereIcon from '@lobehub/icons-static-svg/icons/cohere-color.svg?url';
 import deepseekIcon from '@lobehub/icons-static-svg/icons/deepseek-color.svg?url';
+import fireworksIcon from '@lobehub/icons-static-svg/icons/fireworks-color.svg?url';
 import geminiIcon from '@lobehub/icons-static-svg/icons/gemini-color.svg?url';
+import groqIcon from '@lobehub/icons-static-svg/icons/groq.svg?url';
+import huggingfaceIcon from '@lobehub/icons-static-svg/icons/huggingface-color.svg?url';
 import lmstudioIcon from '@lobehub/icons-static-svg/icons/lmstudio.svg?url';
 import minimaxIcon from '@lobehub/icons-static-svg/icons/minimax-color.svg?url';
+import mistralIcon from '@lobehub/icons-static-svg/icons/mistral-color.svg?url';
+import nvidiaIcon from '@lobehub/icons-static-svg/icons/nvidia-color.svg?url';
 import ollamaIcon from '@lobehub/icons-static-svg/icons/ollama.svg?url';
 import openaiIcon from '@lobehub/icons-static-svg/icons/openai.svg?url';
 import openrouterIcon from '@lobehub/icons-static-svg/icons/openrouter-color.svg?url';
+import perplexityIcon from '@lobehub/icons-static-svg/icons/perplexity-color.svg?url';
 import qwenIcon from '@lobehub/icons-static-svg/icons/qwen-color.svg?url';
 import siliconflowIcon from '@lobehub/icons-static-svg/icons/siliconcloud-color.svg?url';
+import togetherIcon from '@lobehub/icons-static-svg/icons/together-color.svg?url';
 import vllmIcon from '@lobehub/icons-static-svg/icons/vllm-color.svg?url';
+import xaiIcon from '@lobehub/icons-static-svg/icons/xai-text.svg?url';
 import { chatService } from '../services/chatService';
 
 export interface ProviderTemplate {
@@ -30,6 +40,12 @@ const LEGACY_TEMPLATES: Record<string, ProviderTemplate> = {
     base_url: 'https://api.openai.com/v1',
     icon: openaiIcon,
   },
+  anthropic: {
+    key: 'anthropic',
+    name: 'Anthropic',
+    base_url: 'https://api.anthropic.com',
+    icon: anthropicIcon,
+  },
   google: {
     key: 'google',
     name: 'Google Gemini',
@@ -41,6 +57,54 @@ const LEGACY_TEMPLATES: Record<string, ProviderTemplate> = {
     name: 'DeepSeek',
     base_url: 'https://api.deepseek.com/v1',
     icon: deepseekIcon,
+  },
+  groq: {
+    key: 'groq',
+    name: 'Groq',
+    base_url: 'https://api.groq.com/openai/v1',
+    icon: groqIcon,
+  },
+  xai: {
+    key: 'xai',
+    name: 'xAI (Grok)',
+    base_url: 'https://api.x.ai/v1',
+    icon: xaiIcon,
+  },
+  together: {
+    key: 'together',
+    name: 'Together AI',
+    base_url: 'https://api.together.xyz/v1',
+    icon: togetherIcon,
+  },
+  fireworks: {
+    key: 'fireworks',
+    name: 'Fireworks AI',
+    base_url: 'https://api.fireworks.ai/inference/v1',
+    icon: fireworksIcon,
+  },
+  cerebras: {
+    key: 'cerebras',
+    name: 'Cerebras',
+    base_url: 'https://api.cerebras.ai/v1',
+    icon: cerebrasIcon,
+  },
+  nvidia: {
+    key: 'nvidia',
+    name: 'NVIDIA NIM',
+    base_url: 'https://integrate.api.nvidia.com/v1',
+    icon: nvidiaIcon,
+  },
+  perplexity: {
+    key: 'perplexity',
+    name: 'Perplexity',
+    base_url: 'https://api.perplexity.ai',
+    icon: perplexityIcon,
+  },
+  mistral: {
+    key: 'mistral',
+    name: 'Mistral AI',
+    base_url: 'https://api.mistral.ai/v1',
+    icon: mistralIcon,
   },
   ollama: {
     key: 'ollama',
@@ -57,7 +121,7 @@ const LEGACY_TEMPLATES: Record<string, ProviderTemplate> = {
   vllm: {
     key: 'vllm',
     name: 'vLLM (Local)',
-    base_url: 'http://127.0.0.1:9527/v1',
+    base_url: 'http://127.0.0.1:8000/v1',
     icon: vllmIcon,
   },
   openrouter: {
@@ -90,6 +154,18 @@ const LEGACY_TEMPLATES: Record<string, ProviderTemplate> = {
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     icon: qwenIcon,
   },
+  cohere: {
+    key: 'cohere',
+    name: 'Cohere',
+    base_url: 'https://api.cohere.com/v2',
+    icon: cohereIcon,
+  },
+  huggingface: {
+    key: 'huggingface',
+    name: 'HuggingFace Inference API',
+    base_url: 'https://router.huggingface.co/hf-inference/v1',
+    icon: huggingfaceIcon,
+  },
   custom: {
     key: 'custom',
     name: 'Custom',
@@ -104,6 +180,14 @@ const KEY_TO_ICON: Record<string, string | null> = {
   anthropic: anthropicIcon,
   gemini: geminiIcon,
   deepseek: deepseekIcon,
+  groq: groqIcon,
+  xai: xaiIcon,
+  together: togetherIcon,
+  fireworks: fireworksIcon,
+  cerebras: cerebrasIcon,
+  nvidia: nvidiaIcon,
+  perplexity: perplexityIcon,
+  mistral: mistralIcon,
   ollama: ollamaIcon,
   lmstudio: lmstudioIcon,
   vllm: vllmIcon,
@@ -111,6 +195,8 @@ const KEY_TO_ICON: Record<string, string | null> = {
   siliconflow: siliconflowIcon,
   minimax: minimaxIcon,
   qwen: qwenIcon,
+  cohere: cohereIcon,
+  huggingface: huggingfaceIcon,
 };
 
 // Cached catalog data loaded from backend API.
@@ -159,17 +245,27 @@ export async function getIconAliases(): Promise<Record<string, string | null>> {
 const PROVIDER_ICON_ALIASES: Record<string, string | null> = {
   anthropic: anthropicIcon,
   claude: anthropicIcon,
+  cerebras: cerebrasIcon,
+  cohere: cohereIcon,
   custom: null,
   dashscope: qwenIcon,
-  minimax: minimaxIcon,
-  minimax_cn: minimaxIcon,
+  fireworks: fireworksIcon,
   gemini: geminiIcon,
   google: geminiIcon,
+  groq: groqIcon,
+  huggingface: huggingfaceIcon,
   lm_studio: lmstudioIcon,
   lmstudio: lmstudioIcon,
-  openai_compatible: null,
+  mistral: mistralIcon,
+  nvidia: nvidiaIcon,
+  perplexity: perplexityIcon,
   siliconcloud: siliconflowIcon,
   siliconflow: siliconflowIcon,
+  together: togetherIcon,
+  xai: xaiIcon,
+  minimax: minimaxIcon,
+  minimax_cn: minimaxIcon,
+  openai_compatible: null,
 };
 
 export function ProviderIcon({ type, size = 16 }: { type: string; size?: number }): ReactNode {

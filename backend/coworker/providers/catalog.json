@@ -47,6 +47,14 @@
     "anthropic",
     "google",
     "deepseek",
+    "groq",
+    "xai",
+    "together",
+    "fireworks",
+    "cerebras",
+    "nvidia",
+    "perplexity",
+    "mistral",
     "ollama",
     "lmstudio",
     "vllm",
@@ -54,7 +62,9 @@
     "siliconflow",
     "minimax",
     "minimax_cn",
-    "qwen"
+    "qwen",
+    "cohere",
+    "huggingface"
   ],
   "providers": {
     "openai": {
@@ -144,6 +154,165 @@
         "deepseek-r1": 131072,
         "deepseek-coder-v2": 131072,
         "deepseek": 1000000
+      }
+    },
+    "groq": {
+      "name": "Groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_mode": "openai",
+      "icon": "groq",
+      "supports_vision": false,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "llama3-70b": 8192,
+        "llama3-8b": 8192,
+        "llama3": 8192,
+        "llama2-70b": 4096,
+        "llama2": 4096,
+        "mixtral-8x7b": 32768,
+        "gemma2-9b": 8192,
+        "gemma-7b": 8192
+      }
+    },
+    "xai": {
+      "name": "xAI (Grok)",
+      "base_url": "https://api.x.ai/v1",
+      "api_mode": "openai",
+      "icon": "xai",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "grok-4.5": 262144,
+        "grok-4": 131072,
+        "grok-3": 131072,
+        "grok": 131072,
+        "grok-4-vision": 131072
+      }
+    },
+    "together": {
+      "name": "Together AI",
+      "base_url": "https://api.together.xyz/v1",
+      "api_mode": "openai",
+      "icon": "together",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "meta-llama": 131072,
+        "meta-llama3": 8192,
+        "meta-llama3.1": 131072,
+        "meta-llama3.3": 131072,
+        "mistral": 32000,
+        "google": 131072,
+        "qwen": 131072,
+        "deepseek": 131072,
+        "codestral": 32000
+      }
+    },
+    "fireworks": {
+      "name": "Fireworks AI",
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "api_mode": "openai",
+      "icon": "fireworks",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "fireworks-llama": 131072,
+        "fireworks-mixtral": 32768,
+        "fireworks-qwen": 131072,
+        "fireworks": 8192
+      }
+    },
+    "cerebras": {
+      "name": "Cerebras",
+      "base_url": "https://api.cerebras.ai/v1",
+      "api_mode": "openai",
+      "icon": "cerebras",
+      "supports_vision": false,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "llama3.1-70b": 8192,
+        "llama3.1-8b": 8192,
+        "llama3.3-70b": 8192,
+        "llama3": 8192
+      }
+    },
+    "nvidia": {
+      "name": "NVIDIA NIM",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_mode": "openai",
+      "icon": "nvidia",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "nvidia": 131072,
+        "mistral": 131072,
+        "meta": 131072,
+        "google": 131072,
+        "qwen": 131072,
+        "deepseek": 131072,
+        "databricks": 131072,
+        "snowflake": 131072,
+        "samba": 131072,
+        "yi": 131072
+      }
+    },
+    "perplexity": {
+      "name": "Perplexity",
+      "base_url": "https://api.perplexity.ai",
+      "api_mode": "openai",
+      "icon": "perplexity",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "sonar": 128000,
+        "sonar-pro": 200000,
+        "sonar-reasoning": 128000,
+        "sonar-deep-research": 200000,
+        "sonar-reasoning-pro": 128000,
+        "sonar-pro-deep-research": 200000
+      }
+    },
+    "mistral": {
+      "name": "Mistral AI",
+      "base_url": "https://api.mistral.ai/v1",
+      "api_mode": "openai",
+      "icon": "mistral",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "mistral-large": 128000,
+        "mistral-small": 128000,
+        "mistral-medium": 32000,
+        "mistral-embed": 8192,
+        "codestral": 32000,
+        "codestral-mamba": 256000,
+        "open-mistral-nemo": 128000,
+        "open-codestral-mamba": 256000,
+        "ministral-8b": 128000,
+        "ministral-3b": 128000,
+        "mistral-saba": 128000,
+        "mistral-embed": 8192,
+        "pixtral": 128000,
+        "mistral-ocr": 128000,
+        "open-mistral-7b": 128000,
+        "open-mixtral-8x7b": 32768,
+        "open-mixtral-8x22b": 64000
       }
     },
     "ollama": {
@@ -274,18 +443,61 @@
         "qwen2": 131072,
         "qwq": 131072
       }
+    },
+    "cohere": {
+      "name": "Cohere",
+      "base_url": "https://api.cohere.com/v2",
+      "api_mode": "cohere",
+      "icon": "cohere",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "command-r7b-12-2024": 131072,
+        "command-r-plus-08-2024": 128000,
+        "command-r": 128000,
+        "command": 4096,
+        "embed": 512,
+        "embed-english": 512,
+        "embed-multilingual": 512
+      }
+    },
+    "huggingface": {
+      "name": "HuggingFace Inference API",
+      "base_url": "https://router.huggingface.co/hf-inference/v1",
+      "api_mode": "openai",
+      "icon": "huggingface",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "hf": 131072,
+        "huggingface": 131072
+      }
     }
   },
   "icon_aliases": {
     "anthropic": "anthropic",
     "claude": "anthropic",
+    "cerebras": "cerebras",
+    "cohere": "cohere",
     "dashscope": "qwen",
+    "fireworks": "fireworks",
     "gemini": "gemini",
     "google": "gemini",
+    "groq": "groq",
+    "huggingface": "huggingface",
     "lm_studio": "lmstudio",
     "lmstudio": "lmstudio",
+    "mistral": "mistral",
+    "nvidia": "nvidia",
+    "perplexity": "perplexity",
     "siliconcloud": "siliconflow",
     "siliconflow": "siliconflow",
+    "together": "together",
+    "xai": "xai",
     "minimax": "minimax",
     "minimax_cn": "minimax",
     "custom": null
