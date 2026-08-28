@@ -2202,11 +2202,15 @@ ipcMain.handle('update-provider', async (event, payload) => {
 });
 
 ipcMain.handle('discover-provider-context', async (event, providerId) => {
-  try {
-    return await requestBackend(`/providers/${encodeURIComponent(providerId)}/discover-context`, 'POST', {});
-  } catch (error) {
-    throw new Error(error.message || 'Failed to discover context window');
-  }
+    try {
+      return await requestBackend(`/providers/${encodeURIComponent(providerId)}/discover-context`, 'POST', {});
+    } catch (error) {
+      throw new Error(error.message || 'Failed to discover context');
+    }
+  });
+
+ipcMain.handle('get-provider-templates', async () => {
+  return requestBackend('/providers/templates');
 });
 
 ipcMain.handle('delete-provider', async (event, providerId) => {

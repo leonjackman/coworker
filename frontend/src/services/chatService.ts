@@ -118,6 +118,7 @@ export interface ChatService {
   testProvider: (request: { base_url: string; api_key: string; model: string; provider_id?: string }) => Promise<ProviderTestResult>;
   fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string; provider_id?: string }) => Promise<{ models: string[]; error?: string }>;
   discoverProviderContext: (providerId: string) => Promise<{ status: string; provider: ProviderEntry }>;
+  getProviderTemplates: () => Promise<{ status: string; templates: Array<{ key: string; name: string; base_url: string; icon: string | null }>; order: string[]; icon_aliases: Record<string, string | null> }>;
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;
   listActiveSessions: () => Promise<string[]>;
@@ -932,6 +933,11 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.discoverProviderContext(providerId);
   }
 
+  async getProviderTemplates(): Promise<{ status: string; templates: Array<{ key: string; name: string; base_url: string; icon: string | null }>; order: string[]; icon_aliases: Record<string, string | null> }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getProviderTemplates();
+  }
+
   async generateTitle(sessionId: string, firstUserMessage: string, assistantResponse?: string): Promise<string> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.generateTitle(sessionId, firstUserMessage, assistantResponse, getLanguage());
@@ -1543,6 +1549,10 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
+  }
+
+  async getProviderTemplates(): Promise<{ status: string; templates: Array<{ key: string; name: string; base_url: string; icon: string | null }>; order: string[]; icon_aliases: Record<string, string | null> }> {
+    return this.request('/providers/templates');
   }
 
   async generateTitle(sessionId: string, firstUserMessage: string, assistantResponse?: string): Promise<string> {

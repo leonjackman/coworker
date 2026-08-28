@@ -5058,6 +5058,20 @@ def fetch_provider_models(request: ProviderFetchModelsPayload):
     return {"status": "ok", "models": models}
 
 
+@app.get("/providers/templates")
+def get_provider_templates():
+    """Return provider templates for the frontend picker."""
+    from coworker.providers.catalog import get_catalog, to_template_list, get_ordered_keys
+
+    catalog = get_catalog()
+    return {
+        "status": "ok",
+        "templates": to_template_list(),
+        "order": get_ordered_keys(),
+        "icon_aliases": catalog.get("icon_aliases", {}),
+    }
+
+
 def _resolve_provider_secret(request: BaseModel) -> str:
     """Fill an empty test/fetch api_key from the Keychain-stored secret of the
     provider being edited (key_in_secrets providers keep the JSON blank)."""

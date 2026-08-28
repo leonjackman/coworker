@@ -30,10 +30,12 @@ def build_extract_llm(provider_entry: Any | None, extract_model: str = "") -> An
     if provider_entry is None:
         return None
     from langchain_openai import ChatOpenAI
+    from ..providers.catalog import get_provider_meta
 
     model = extract_model or provider_entry.model or ""
     base_url = (provider_entry.base_url or "").rstrip("/")
-    if provider_entry.provider_type == "ollama" and not base_url.endswith("/v1"):
+    meta = get_provider_meta(provider_entry.provider_type)
+    if meta and meta.get("url_trailing_v1") and not base_url.endswith("/v1"):
         base_url = f"{base_url}/v1"
     return ChatOpenAI(
         model=model,

@@ -19,6 +19,7 @@ import re
 from typing import Any
 
 from ..providers import DEFAULT_MAX_OUTPUT_TOKENS, ProviderEntry, ProviderManager
+from ..providers.catalog import get_provider_meta
 
 # ---------------------------------------------------------------------------
 # LLM stream chunk timeout
@@ -63,9 +64,22 @@ def repetition_penalty_for(model_name: str) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _use_repetition_penalty(provider: ProviderEntry) -> bool:
+    """Whether to apply repetition_penalty for this provider.
+
+    True when the catalog marks the provider explicitly, or when the
+    provider's base_url points to a local/private address (self-hosted).
+    """
+    meta = get_provider_meta(provider.provider_type)
+    if meta and meta.get("use_repetition_penalty"):
+        return True
+    return ProviderManager._is_local(provider)
+
+
 def openai_compatible_base_url(provider: ProviderEntry) -> str:
     base_url = provider.base_url.rstrip("/")
-    if provider.provider_type == "ollama" and not base_url.endswith("/v1"):
+    meta = get_provider_meta(provider.provider_type)
+    if meta and meta.get("url_trailing_v1") and not base_url.endswith("/v1"):
         return f"{base_url}/v1"
     return base_url
 
@@ -162,7 +176,7 @@ def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str 
     diffing what CW actually sent vs what the provider received.
     """
     max_tokens = provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS
-    use_penalty = ProviderManager._is_local(provider) or provider.provider_type in ("ollama", "llamacpp", "llmstudio", "lmstudio")
+    use_penalty = _use_repetition_penalty(provider)
     kwargs = dict(
         model=model_name,
         api_key=provider.api_key or os.getenv("OPENAI_API_KEY") or "not-needed",

@@ -12,6 +12,7 @@ import openrouterIcon from '@lobehub/icons-static-svg/icons/openrouter-color.svg
 import qwenIcon from '@lobehub/icons-static-svg/icons/qwen-color.svg?url';
 import siliconflowIcon from '@lobehub/icons-static-svg/icons/siliconcloud-color.svg?url';
 import vllmIcon from '@lobehub/icons-static-svg/icons/vllm-color.svg?url';
+import { chatService } from '../services/chatService';
 
 export interface ProviderTemplate {
   key: string;
@@ -20,7 +21,9 @@ export interface ProviderTemplate {
   icon: string | null;
 }
 
-export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
+// Legacy static templates for backward compatibility (existing provider records
+// that were created before the catalog API existed still carry these keys).
+const LEGACY_TEMPLATES: Record<string, ProviderTemplate> = {
   openai: {
     key: 'openai',
     name: 'OpenAI',
@@ -95,20 +98,63 @@ export const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
   },
 };
 
-export const PROVIDER_TEMPLATE_ORDER = [
-  'openai',
-  'google',
-  'deepseek',
-  'ollama',
-  'lmstudio',
-  'vllm',
-  'openrouter',
-  'siliconflow',
-  'minimax',
-  'minimax_cn',
-  'qwen',
-  'custom',
-];
+// Icon key → SVG mapping (used by ProviderIcon to resolve catalog icon keys).
+const KEY_TO_ICON: Record<string, string | null> = {
+  openai: openaiIcon,
+  anthropic: anthropicIcon,
+  gemini: geminiIcon,
+  deepseek: deepseekIcon,
+  ollama: ollamaIcon,
+  lmstudio: lmstudioIcon,
+  vllm: vllmIcon,
+  openrouter: openrouterIcon,
+  siliconflow: siliconflowIcon,
+  minimax: minimaxIcon,
+  qwen: qwenIcon,
+};
+
+// Cached catalog data loaded from backend API.
+let _cached: {
+  templates: Record<string, ProviderTemplate>;
+  order: string[];
+  aliases: Record<string, string | null>;
+} | null = null;
+
+/** Load provider templates from the backend catalog API. */
+export async function loadProviderTemplates(): Promise<typeof _cached> {
+  if (_cached) return _cached;
+  try {
+    const res = await chatService.getProviderTemplates();
+    const templates: Record<string, ProviderTemplate> = {};
+    for (const t of res.templates) {
+      templates[t.key] = t;
+    }
+    _cached = { templates, order: res.order, aliases: res.icon_aliases };
+  } catch {
+    // Fallback to legacy static data if the API is unavailable.
+    _cached = { templates: {}, order: [], aliases: {} };
+  }
+  return _cached;
+}
+
+/** Get a template by key. Checks catalog first, then legacy fallback. */
+export function providerTemplate(key: string): ProviderTemplate | undefined {
+  if (_cached?.templates[key]) return _cached.templates[key];
+  return LEGACY_TEMPLATES[key];
+}
+
+/** Get the ordered list of provider template keys. */
+export async function getProviderTemplateOrder(): Promise<string[]> {
+  await loadProviderTemplates();
+  if (_cached && _cached.order.length > 0) return _cached.order;
+  return Object.keys(LEGACY_TEMPLATES);
+}
+
+/** Get the icon aliases map from the catalog. */
+export async function getIconAliases(): Promise<Record<string, string | null>> {
+  await loadProviderTemplates();
+  return _cached?.aliases ?? {};
+}
 
 const PROVIDER_ICON_ALIASES: Record<string, string | null> = {
   anthropic: anthropicIcon,
@@ -126,30 +172,56 @@ const PROVIDER_ICON_ALIASES: Record<string, string | null> = {
   siliconflow: siliconflowIcon,
 };
 
-export function providerTemplate(type: string): ProviderTemplate | undefined {
-  return PROVIDER_TEMPLATES[type];
-}
-
 export function ProviderIcon({ type, size = 16 }: { type: string; size?: number }): ReactNode {
-  const icon = PROVIDER_TEMPLATES[type]?.icon ?? PROVIDER_ICON_ALIASES[type] ?? null;
-  if (!icon) {
+  // 1. Check catalog icon key → SVG
+  if (_cached) {
+    const iconKey = _cached.templates[type]?.icon ?? _cached.aliases[type];
+    if (iconKey && KEY_TO_ICON[iconKey]) {
+      return (
+        <img
+          alt=""
+          aria-hidden="true"
+          src={KEY_TO_ICON[iconKey]}
+          className="provider-icon-img"
+          style={{ width: size, height: size }}
+        />
+      );
+    }
+  }
+  // 2. Check legacy templates directly
+  const legacyIcon = LEGACY_TEMPLATES[type]?.icon;
+  if (legacyIcon) {
     return (
-      <span
+      <img
+        alt=""
         aria-hidden="true"
-        className="provider-icon-fallback"
+        src={legacyIcon}
+        className="provider-icon-img"
         style={{ width: size, height: size }}
-      >
-        <Network size={Math.max(12, size - 4)} />
-      </span>
+      />
     );
   }
+  // 3. Check icon aliases
+  const aliasIcon = PROVIDER_ICON_ALIASES[type];
+  if (aliasIcon) {
+    return (
+      <img
+        alt=""
+        aria-hidden="true"
+        src={aliasIcon}
+        className="provider-icon-img"
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+  // 4. Fallback
   return (
-    <img
-      alt=""
+    <span
       aria-hidden="true"
-      src={icon}
-      className="provider-icon-img"
+      className="provider-icon-fallback"
       style={{ width: size, height: size }}
-    />
+    >
+      <Network size={Math.max(12, size - 4)} />
+    </span>
   );
 }

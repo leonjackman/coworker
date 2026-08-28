@@ -1,233 +1,47 @@
-import json
+"""ProviderManager — CRUD, secret management, context-window discovery.
+
+Migrated from the former monolithic ``providers.py``.
+Only the parts that reference provider behaviour (ollama /v1 suffix,
+repetition_penalty) now go through ``catalog.py``.
+"""
+
+from __future__ import annotations
+
 import ipaddress
+import json
 import time
 import urllib.parse
 import urllib.request
 import uuid
-from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .atomicio import atomic_write_text
-
-CONFIG_VERSION = 1
+from ..atomicio import atomic_write_text
+from .catalog import get_provider_meta
+from .models import (
+    CONFIG_VERSION,
+    DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    MAX_OUTPUT_TOKENS_MAX,
+    MAX_OUTPUT_TOKENS_MIN,
+    ProviderEntry,
+    ProviderConfig,
+)
 
 # TTL for context-window discovery results. Unreachable local servers (e.g. a
 # switched-off LAN vLLM box) are expensive to probe, so we never re-probe more
 # often than this even while the UI polls /config every few seconds.
 _CTX_DISCOVERY_TTL_SECONDS = 60.0
-# Timeout (seconds) for a single discovery probe. Short enough that a cold
-# /config still answers promptly when local servers are down.
+# Timeout (seconds) for a single discovery probe.
 _CTX_DISCOVERY_TIMEOUT_SECONDS = 3.0
 
 # Last discovery outcome per provider key: ``(monotonic_ts, window, error)``.
 _CTX_DISCOVERY_CACHE: dict[str, tuple[float, int, str | None]] = {}
 
 # A user-configured context window above this many tokens is only trusted when
-# the server reports at least that much via live discovery. Untrusted oversized
-# windows can push prompts past a server's real max_model_len (vLLM hangs
-# silently instead of erroring), so they surface a warning in the provider card.
+# the server reports at least that much via live discovery.
 _UNVERIFIED_CONTEXT_WINDOW_WARN = 131_072  # 128k
-
-
-@dataclass
-class ProviderEntry:
-    id: str
-    name: str
-    provider_type: str
-    base_url: str
-    api_key: str = ""
-    model: str = ""
-    enabled: bool = True
-    created_at: str = ""
-    updated_at: str = ""
-    # When True the real api_key lives in the OS secret store (Keychain) and the
-    # JSON only carries an empty placeholder; load() resolves it in memory.
-    key_in_secrets: bool = False
-    # Context window in tokens. 0 = unknown: resolved at runtime via
-    # resolve_context_window() (user override > MODEL_CONTEXT_TABLE > discover > 128k).
-    context_window: int = 0
-    # Per-request max output tokens. 0 = unset → DEFAULT_MAX_OUTPUT_TOKENS (8192).
-    # Users pick a preset or type a custom value (custom providers where the model
-    # is not in the catalog).
-    max_output_tokens: int = 0
-    # Multimodal (vision) capability. When True, screenshots / fetched images /
-    # image attachments are sent as native ``image_url`` content blocks (the
-    # model SEES them, billed as vision tokens); when False they are externalized
-    # to disk and referenced by path instead of being smuggled into the context
-    # as truncated base64 text (which is both a corrupted image and ~36k tokens
-    # of waste per shot). Default False keeps text-only providers safe.
-    vision: bool = False
-
-
-# ---------------------------------------------------------------------------
-# Known cloud model context windows (id-prefix matched, tokens).
-# Order matters: more specific prefixes must come before broader ones.
-# ---------------------------------------------------------------------------
-MODEL_CONTEXT_TABLE: list[tuple[str, int]] = [
-    # ---- OpenAI ----------------------------------------------------------
-    ("gpt-5.6", 1_050_000),
-    ("gpt-5.5", 1_050_000),
-    ("gpt-5.4", 1_050_000),
-    ("gpt-5.3", 1_050_000),
-    ("gpt-5.2", 1_050_000),
-    ("gpt-5.1", 1_050_000),
-    ("gpt-5", 400_000),
-    ("gpt-4.1", 1_000_000),
-    ("gpt-4o-mini", 128_000),
-    ("gpt-4o", 128_000),
-    ("gpt-4", 128_000),
-    ("o4-mini", 200_000),
-    ("o3-mini", 200_000),
-    ("o3", 200_000),
-    ("o1", 200_000),
-    ("gpt-oss-120b", 131_072),
-    ("gpt-oss-20b", 131_072),
-    ("gpt-oss", 131_072),
-    # ---- Anthropic (haiku before claude so the narrower prefix wins) ------
-    ("claude-haiku", 200_000),
-    ("claude-sonnet", 1_000_000),
-    ("claude-opus", 1_000_000),
-    ("claude-fable", 1_000_000),
-    ("claude-mythos", 1_000_000),
-    ("claude", 1_000_000),
-    # ---- Google Gemini / Gemma -------------------------------------------
-    ("gemini-3", 1_000_000),
-    ("gemini-2.5", 1_000_000),
-    ("gemini-2.0", 1_000_000),
-    ("gemini", 1_000_000),
-    ("gemma4:12b", 262_144),
-    ("gemma4:26b", 262_144),
-    ("gemma4:31b", 262_144),
-    ("gemma4", 131_072),
-    ("gemma3", 131_072),
-    ("gemma2", 8_192),
-    ("gemma", 8_192),
-    # ---- DeepSeek ---------------------------------------------------------
-    ("deepseek-v4", 1_000_000),
-    ("deepseek-v3.1", 131_072),
-    ("deepseek-v3", 131_072),
-    ("deepseek-r1", 131_072),
-    ("deepseek-coder-v2", 131_072),
-    ("deepseek", 1_000_000),
-    # ---- Meta Llama -------------------------------------------------------
-    ("llama4:scout", 10_000_000),
-    ("llama4:maverick", 1_000_000),
-    ("llama4", 10_000_000),
-    ("llama3.3", 128_000),
-    ("llama3.2", 128_000),
-    ("llama3.1", 128_000),
-    ("llama3", 8_192),
-    # ---- Qwen (specific variants before broad prefixes) --------------------
-    ("qwen3", 262_144),
-    ("qwen2.5-coder", 131_072),
-    ("qwen2.5", 131_072),
-    ("qwen2", 131_072),
-    ("qwq", 131_072),
-    # ---- Z.AI GLM ---------------------------------------------------------
-    ("glm-5.2", 1_000_000),
-    ("glm-5.1", 198_000),
-    ("glm-5", 198_000),
-    ("glm-4.7", 198_000),
-    ("glm-4.6", 198_000),
-    ("glm-4.5", 128_000),
-    ("glm-4", 128_000),
-    ("glm", 128_000),
-    # ---- Moonshot / Kimi --------------------------------------------------
-    ("kimi-k3", 1_000_000),
-    ("kimi-k2.7", 262_144),
-    ("kimi-k2.6", 262_144),
-    ("kimi-k2.5", 131_072),
-    ("kimi", 131_072),
-    # ---- MiniMax ----------------------------------------------------------
-    ("minimax-m3", 1_000_000),
-    ("minimax-m2.7", 131_072),
-    ("minimax-m2.5", 131_072),
-    ("minimax", 131_072),
-    # ---- Mistral ----------------------------------------------------------
-    ("mistral-medium-3.5", 262_144),
-    ("mistral-medium", 262_144),
-    ("mistral-large-3", 131_072),
-    ("mistral-large", 128_000),
-    ("mistral-small", 128_000),
-    ("codestral", 32_000),
-    ("mixtral", 32_000),
-    ("mistral", 32_000),
-    # ---- xAI Grok ---------------------------------------------------------
-    ("grok-4.5", 262_144),
-    ("grok-4", 131_072),
-    ("grok-3", 131_072),
-    ("grok", 131_072),
-    # ---- Microsoft Phi ----------------------------------------------------
-    ("phi-4", 128_000),
-    ("phi4", 128_000),
-    ("phi-3", 128_000),
-    ("phi3", 128_000),
-    # ---- IBM Granite ------------------------------------------------------
-    ("granite4.1", 131_072),
-    ("granite4", 131_072),
-    ("granite3.3", 128_000),
-    ("granite3", 128_000),
-    ("granite", 128_000),
-    # ---- ByteDance Doubao / Baidu Ernie / others (cloud) -------------------
-    ("doubao", 262_144),
-    ("ernie", 128_000),
-    ("wenxin", 128_000),
-    ("internlm", 1_000_000),
-    ("yi-", 200_000),
-    ("yi", 32_000),
-]
-
-DEFAULT_CONTEXT_WINDOW = 128_000
-
-# Effective per-request output cap when a provider does not configure
-# ``max_output_tokens``. Bounds a single model call so a degenerate / repeating
-# generation cannot burn the whole GPU budget (the 3b5bffff runaway: an unbounded
-# greedy generation ran to 17k+ tokens). Users can raise/lower it per provider.
-DEFAULT_MAX_OUTPUT_TOKENS = 8192
-# Clamp bounds for user-set values (0 = unset → default).
-MAX_OUTPUT_TOKENS_MIN = 0
-MAX_OUTPUT_TOKENS_MAX = 1_000_000
-
-
-@dataclass
-class ProviderConfig:
-    version: int = CONFIG_VERSION
-    providers: list[ProviderEntry] = field(default_factory=list)
-    default_provider_id: str = ""
-    default_model: str = ""
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "ProviderConfig":
-        # Filter to known dataclass fields so configs written by newer/older
-        # builds with extra keys (e.g. a removed `stream_chunk_timeout`) still
-        # load instead of raising TypeError on **item.
-        _known = ProviderEntry.__dataclass_fields__
-        providers = [ProviderEntry(**{k: v for k, v in item.items() if k in _known}) for item in payload.get("providers", [])]
-        config = cls(
-            version=int(payload.get("version", CONFIG_VERSION)),
-            providers=providers,
-            default_provider_id=str(payload.get("default_provider_id", "")),
-            default_model=str(payload.get("default_model", "")),
-            created_at=str(payload.get("created_at", datetime.now(timezone.utc).isoformat())),
-            updated_at=str(payload.get("updated_at", datetime.now(timezone.utc).isoformat())),
-        )
-        if config.default_provider_id and not config.find_enabled(config.default_provider_id):
-            config.default_provider_id = ""
-            config.default_model = ""
-        return config
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    def find_enabled(self, provider_id: str) -> ProviderEntry | None:
-        for provider in self.providers:
-            if provider.id == provider_id and provider.enabled:
-                return provider
-        return None
 
 
 class ProviderManager:
@@ -241,6 +55,10 @@ class ProviderManager:
         # `security` subprocess per provider on every request.
         self._key_cache: dict[str, str] = {}
 
+    # ------------------------------------------------------------------
+    # Secret store helpers
+    # ------------------------------------------------------------------
+
     def _resolve_secret(self, provider: ProviderEntry) -> None:
         """Fill provider.api_key from the secret store (cached)."""
         if not provider.key_in_secrets:
@@ -251,7 +69,7 @@ class ProviderManager:
             return
         if self.data_dir is None:
             return
-        from .secrets import get_secret
+        from ..secrets import get_secret
 
         value = get_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
         if value:
@@ -264,12 +82,28 @@ class ProviderManager:
             return
         if self.data_dir is None:
             return
-        from .secrets import set_secret
+        from ..secrets import set_secret
 
         set_secret(self.data_dir, self.SECRET_SERVICE, provider.id, provider.api_key)
         self._key_cache[provider.id] = provider.api_key
         provider.api_key = ""
         provider.key_in_secrets = True
+
+    def _clear_secret(self, provider: ProviderEntry) -> None:
+        """Remove the stored secret and the key_in_secrets marker."""
+        if self.data_dir is None:
+            return
+        from ..secrets import delete_secret, get_secret
+
+        if get_secret(self.data_dir, self.SECRET_SERVICE, provider.id) is None:
+            return
+        delete_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
+        self._key_cache.pop(provider.id, None)
+        provider.key_in_secrets = False
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
 
     def load(self) -> ProviderConfig:
         if not self.config_path.exists():
@@ -295,20 +129,13 @@ class ProviderManager:
                     migrated = True
                     break
         if migrated:
-            # Write directly (NOT via save()): save() would see the just-emptied
-            # api_key + key_in_secrets and _clear_secret() the brand-new Keychain
-            # entry, silently losing the legacy plaintext key.
             self._write_config(config)
-            # Repopulate the in-memory key for the callers of this load() so the
-            # very first request after the upgrade still sees the provider's key.
             for provider in config.providers:
                 self._resolve_secret(provider)
         return config
 
     def save(self, config: ProviderConfig) -> None:
         config.updated_at = datetime.now(timezone.utc).isoformat()
-        # Move any plaintext keys into the secret store; an explicit empty key
-        # clears the stored secret instead of leaving a stale Keychain entry.
         for provider in config.providers:
             if provider.api_key:
                 self._store_secret(provider)
@@ -323,23 +150,9 @@ class ProviderManager:
             json.dumps(config.to_dict(), ensure_ascii=False, indent=2) + "\n",
         )
 
-    def _clear_secret(self, provider: ProviderEntry) -> None:
-        """Remove the stored secret and the key_in_secrets marker.
-
-        Only when a secret actually exists — if the Keychain entry was deleted
-        out-of-band (e.g. the user emptied the keychain), keep ``key_in_secrets``
-        True so a restored entry is still resolved instead of silently flipping
-        the provider to "no key".
-        """
-        if self.data_dir is None:
-            return
-        from .secrets import delete_secret, get_secret
-
-        if get_secret(self.data_dir, self.SECRET_SERVICE, provider.id) is None:
-            return
-        delete_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
-        self._key_cache.pop(provider.id, None)
-        provider.key_in_secrets = False
+    # ------------------------------------------------------------------
+    # Public views
+    # ------------------------------------------------------------------
 
     def public_config(self) -> dict[str, Any]:
         config = self.load()
@@ -358,6 +171,39 @@ class ProviderManager:
         if provider and config.default_model and provider.model != config.default_model:
             provider.model = config.default_model
         return provider
+
+    @staticmethod
+    def public_provider(provider: ProviderEntry) -> dict[str, Any]:
+        window, source, error = ProviderManager._resolve_context_window_full(provider)
+        return {
+            "id": provider.id,
+            "name": provider.name,
+            "provider_type": provider.provider_type,
+            "base_url": provider.base_url,
+            "api_key_present": bool(provider.api_key),
+            "api_key_preview": ProviderManager.secret_preview(provider.api_key),
+            "model": provider.model,
+            "enabled": provider.enabled,
+            "context_window": window,
+            "context_source": source,
+            "context_error": error,
+            "max_output_tokens": provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS,
+            "vision": bool(provider.vision),
+            "created_at": provider.created_at,
+            "updated_at": provider.updated_at,
+        }
+
+    @staticmethod
+    def secret_preview(secret: str) -> str:
+        if not secret:
+            return ""
+        if len(secret) <= 8:
+            return "****"
+        return f"{secret[:4]}...{secret[-4:]}"
+
+    # ------------------------------------------------------------------
+    # CRUD
+    # ------------------------------------------------------------------
 
     def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0, vision: bool = False) -> dict[str, Any]:
         base_url = self.validate_base_url(base_url, provider_type)
@@ -434,7 +280,7 @@ class ProviderManager:
             self.save(config)
             self._key_cache.pop(provider_id, None)
             if self.data_dir is not None and provider.key_in_secrets:
-                from .secrets import delete_secret
+                from ..secrets import delete_secret
 
                 delete_secret(self.data_dir, self.SECRET_SERVICE, provider.id)
             return
@@ -452,12 +298,13 @@ class ProviderManager:
         self.save(config)
         return self.public_provider(provider)
 
+    # ------------------------------------------------------------------
+    # Connection testing & model fetching
+    # ------------------------------------------------------------------
+
     def test_provider_connection(self, base_url: str, api_key: str, model: str) -> dict[str, Any]:
-        # Apply the same URL guard as create/update so the test endpoint cannot
-        # be used as an arbitrary-network scanner. Custom type keeps plain-http
-        # LAN/Ollama endpoints working (see validate_base_url).
         self.validate_base_url(base_url, "custom")
-        endpoint = self.chat_completions_url(base_url)
+        endpoint = self.chat_completions_url(base_url, "custom")
         body = {
             "model": model,
             "max_tokens": 1,
@@ -480,26 +327,32 @@ class ProviderManager:
     def fetch_models(self, base_url: str, api_key: str = "", provider_type: str = "custom") -> list[str]:
         self.validate_base_url(base_url, provider_type)
         base = base_url.rstrip("/")
-        if provider_type == "ollama":
+        meta = get_provider_meta(provider_type)
+        is_ollama = provider_type == "ollama" or (meta and meta.get("api_mode") == "ollama")
+        if is_ollama:
             url = f"{base}/api/tags"
             headers = {}
         else:
-            url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+            import re
+            has_versioned_path = bool(re.search(r'/v\d+', base))
+            url = f"{base}/models" if has_versioned_path else f"{base}/v1/models"
             headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         request = urllib.request.Request(url, headers=headers, method="GET")
         response = urllib.request.urlopen(request, timeout=15)
         payload = json.loads(response.read().decode())
-        if provider_type == "ollama":
+        if is_ollama:
             return [str(model["name"]) for model in payload.get("models", []) if model.get("name")]
         return [str(model["id"]) for model in payload.get("data", []) if model.get("id")]
 
+    # ------------------------------------------------------------------
+    # Context window resolution
+    # ------------------------------------------------------------------
+
     @staticmethod
     def table_context_window(model: str) -> int:
-        """Look up a model's context window from the known-model table.
+        """Look up a model's context window from the known-model table."""
+        from .context_table import MODEL_CONTEXT_TABLE
 
-        Prefix-matched from most specific to most generic; returns 0 when the
-        model is unknown.
-        """
         name = (model or "").strip().lower()
         if not name:
             return 0
@@ -510,34 +363,20 @@ class ProviderManager:
 
     @staticmethod
     def resolve_context_window(provider: ProviderEntry, model: str | None = None) -> tuple[int, str]:
-        """Resolve the effective context window (tokens) for a provider.
-
-        Priority: user override > known-model table > server discovery > default.
-        ``model`` (when given) overrides ``provider.model`` so a per-turn model
-        switch recomputes the window from the chosen model — see B7. Returns
-        ``(window, source)`` where source is one of ``"user"``, ``"table"``,
-        ``"discovered"``, ``"unreachable"``, ``"default"``.
-        """
         window, source, _ = ProviderManager._resolve_context_window_full(provider, model=model)
         return window, source
 
     @staticmethod
     def _resolve_context_window_full(provider: ProviderEntry, model: str | None = None) -> tuple[int, str, str | None]:
-        """Like :meth:`resolve_context_window` but also reports why discovery
-        failed (``error``) so the UI can tell the user their local server is
-        unreachable instead of silently falling back."""
         model = (model or provider.model or "").strip()
-        # Probe the server (cached, 60s TTL) so a stale or over-sized
-        # stored window can never exceed the server's real max_model_len —
-        # oversized prompts make some servers (e.g. vLLM) hang silently instead
-        # of returning a context-length error.
         discovered = 0
         discovered_error: str | None = None
         try:
             discovered, discovered_error = ProviderManager._discover_context_window_cached(provider, model)
         except Exception:  # noqa: BLE001 - discovery is best-effort
             discovered, discovered_error = 0, None
-        # User-provided context window always takes priority over table values.
+        from .context_table import MODEL_CONTEXT_TABLE
+
         from_table = ProviderManager.table_context_window(model)
         if provider.context_window and provider.context_window > 0:
             effective = provider.context_window
@@ -578,8 +417,6 @@ class ProviderManager:
 
     @staticmethod
     def _discover_context_window_cached(provider: ProviderEntry, model: str | None = None) -> tuple[int, str | None]:
-        """Discovery with a short TTL cache so polling /config cannot hammer a
-        downed server (each probe can take seconds)."""
         model = (model or provider.model or "").strip()
         key = f"{provider.provider_type}|{(provider.base_url or '').rstrip('/')}|{model}"
         entry = _CTX_DISCOVERY_CACHE.get(key)
@@ -594,13 +431,6 @@ class ProviderManager:
 
     @staticmethod
     def cached_context_error(provider: ProviderEntry) -> str | None:
-        """Return the cached discovery error for a provider WITHOUT probing.
-
-        This is a pure dict read — it never touches the network, so async
-        handlers can call it without blocking the event loop. Returns the
-        human-readable unreachable message only when a fresh failed probe is
-        cached (within TTL), else ``None``.
-        """
         key = f"{provider.provider_type}|{(provider.base_url or '').rstrip('/')}|{provider.model}"
         entry = _CTX_DISCOVERY_CACHE.get(key)
         if entry is None:
@@ -612,27 +442,18 @@ class ProviderManager:
 
     @staticmethod
     def fetch_context_window(provider: ProviderEntry) -> int:
-        """Best-effort discovery of the context window from a local server.
-
-        - ollama: ``POST {base}/api/show`` → ``model_info.*.context_length`` or
-          ``parameters`` containing ``num_ctx``.
-        - llamacpp: ``GET {base}/props`` → ``default_generation_settings.n_ctx``.
-        - OpenAI-compatible local servers: ``GET /v1/models`` extended fields.
-
-        Returns 0 when the value cannot be determined (caller falls back).
-        """
         window, _ = ProviderManager._fetch_context_window_full(provider)
         return window
 
     @staticmethod
     def _fetch_context_window_full(provider: ProviderEntry, model: str | None = None) -> tuple[int, str | None]:
-        """Returns ``(window, error)``; ``error`` is human-readable when the
-        probe failed (server unreachable/refused/timeout), else ``None``."""
         base = (provider.base_url or "").rstrip("/")
         if not base:
             return 0, None
         try:
-            if provider.provider_type == "ollama":
+            meta = get_provider_meta(provider.provider_type)
+            is_ollama = provider.provider_type == "ollama" or (meta and meta.get("api_mode") == "ollama")
+            if is_ollama:
                 window, error = ProviderManager._fetch_ollama_ctx(base, model)
                 if window and window > 0:
                     return window, None
@@ -648,7 +469,9 @@ class ProviderManager:
                     if isinstance(n_ctx, int) and n_ctx > 0:
                         return n_ctx, None
                 return 0, None
-            url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+            import re
+            has_versioned_path = bool(re.search(r'/v\d+', base))
+            url = f"{base}/models" if has_versioned_path else f"{base}/v1/models"
             payload = ProviderManager._http_get(url, provider)
             if isinstance(payload, dict):
                 for item in payload.get("data", []):
@@ -705,6 +528,10 @@ class ProviderManager:
         with urllib.request.urlopen(request, timeout=_CTX_DISCOVERY_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode())
 
+    # ------------------------------------------------------------------
+    # URL helpers
+    # ------------------------------------------------------------------
+
     @staticmethod
     def validate_base_url(base_url: str, provider_type: str = "") -> str:
         normalized = base_url.strip().rstrip("/")
@@ -721,51 +548,22 @@ class ProviderManager:
             private_or_loopback = address.is_private or address.is_loopback
         except ValueError:
             private_or_loopback = False
-        # Custom providers are explicitly configured by the user and may legitimately
-        # run over plain http (e.g. internal/LAN OpenAI-compatible servers). The
-        # "public providers must use https" rule therefore only applies to non-custom
-        # provider types (localhost/private addresses are still always allowed).
         if parsed.scheme == "http" and provider_type != "custom" and not (local_hostname or private_or_loopback):
             raise ValueError("public providers must use https")
         return normalized
 
     @staticmethod
-    def chat_completions_url(base_url: str) -> str:
+    def chat_completions_url(base_url: str, provider_type: str = "") -> str:
         base = base_url.rstrip("/")
         if base.endswith("/chat/completions"):
             return base
-        if base.endswith("/v1"):
+        # Detect if base_url already contains a versioned path segment (e.g. /v1, /v1beta/openai)
+        # to avoid double-appending /v1.
+        import re
+        has_versioned_path = bool(re.search(r'/v\d+', base))
+        if has_versioned_path:
             return f"{base}/chat/completions"
         return f"{base}/v1/chat/completions"
-
-    @staticmethod
-    def public_provider(provider: ProviderEntry) -> dict[str, Any]:
-        window, source, error = ProviderManager._resolve_context_window_full(provider)
-        return {
-            "id": provider.id,
-            "name": provider.name,
-            "provider_type": provider.provider_type,
-            "base_url": provider.base_url,
-            "api_key_present": bool(provider.api_key),
-            "api_key_preview": ProviderManager.secret_preview(provider.api_key),
-            "model": provider.model,
-            "enabled": provider.enabled,
-            "context_window": window,
-            "context_source": source,
-            "context_error": error,
-            "max_output_tokens": provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS,
-            "vision": bool(provider.vision),
-            "created_at": provider.created_at,
-            "updated_at": provider.updated_at,
-        }
-
-    @staticmethod
-    def secret_preview(secret: str) -> str:
-        if not secret:
-            return ""
-        if len(secret) <= 8:
-            return "****"
-        return f"{secret[:4]}...{secret[-4:]}"
 
     @staticmethod
     def require_provider(config: ProviderConfig, provider_id: str) -> ProviderEntry:

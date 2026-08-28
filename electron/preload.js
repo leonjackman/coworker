@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createProvider: (payload) => ipcRenderer.invoke('create-provider', payload),
   updateProvider: (providerId, params) => ipcRenderer.invoke('update-provider', { provider_id: providerId, params }),
   discoverProviderContext: (providerId) => ipcRenderer.invoke('discover-provider-context', providerId || ''),
+  getProviderTemplates: () => ipcRenderer.invoke('get-provider-templates'),
   deleteProvider: (providerId) => ipcRenderer.invoke('delete-provider', providerId),
   setDefaultProvider: (payload) => ipcRenderer.invoke('set-default-provider', payload),
   testProvider: (payload) => ipcRenderer.invoke('test-provider', payload),

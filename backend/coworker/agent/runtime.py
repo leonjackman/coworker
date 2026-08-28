@@ -1242,7 +1242,18 @@ class AgentRuntimeRegistry:
         selected_workspace = self._workspace_or_default(workspace)
         provider = self._provider_for_request(provider_id, model)
         if not provider and self.settings.agent_provider == "openai":
-            provider = ProviderEntry(id="env-openai", name="Environment OpenAI", provider_type="openai", base_url=os.getenv("COWORKER_OPENAI_BASE_URL", "https://api.openai.com/v1"), api_key=os.getenv("OPENAI_API_KEY", ""), model=self.settings.openai_model, enabled=True)
+            from ..providers.catalog import get_provider_meta
+
+            meta = get_provider_meta("openai")
+            provider = ProviderEntry(
+                id="env-openai",
+                name=meta["name"] if meta else "OpenAI",
+                provider_type="openai",
+                base_url=os.getenv("COWORKER_OPENAI_BASE_URL", meta["base_url"] if meta else "https://api.openai.com/v1"),
+                api_key=os.getenv("OPENAI_API_KEY", ""),
+                model=self.settings.openai_model,
+                enabled=True,
+            )
         if not provider:
             if self.settings.agent_provider == "simulated":
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)

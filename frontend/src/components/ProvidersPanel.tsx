@@ -1,6 +1,6 @@
 import { AlertTriangle, BrainCircuit, Check, ChevronDown, Loader2, Network, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { providerTemplate, PROVIDER_TEMPLATE_ORDER, ProviderIcon } from '../lib/provider-registry';
+import { getProviderTemplateOrder, providerTemplate, ProviderIcon } from '../lib/provider-registry';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type { ProviderEntry, ProviderPayload, ProviderTestResult } from '../types';
@@ -43,7 +43,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
-  const [form, setForm] = useState<FormState>(emptyForm);
+  const [form, setForm] = useState<FormState>(emptyForm());
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -51,6 +51,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   const [ctxSource, setCtxSource] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [maxOutputMode, setMaxOutputMode] = useState<'preset' | 'custom'>('preset');
+  const [templateOrder, setTemplateOrder] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -70,6 +71,10 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void getProviderTemplateOrder().then(order => setTemplateOrder(order));
+  }, []);
 
   function selectTemplate(key: string) {
     const template = providerTemplate(key);
@@ -289,7 +294,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
             <div className="field">
               <span>{t('providers.template')}</span>
               <div className="provider-template-row">
-                {PROVIDER_TEMPLATE_ORDER.map((key) => {
+                {templateOrder.map((key) => {
                   const template = providerTemplate(key);
                   if (!template) return null;
                   const active = form.provider_type === key;
@@ -488,7 +493,7 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           <strong>{t('providers.quick_add')}</strong>
           <p>{t('providers.quick_add_desc')}</p>
           <div className="provider-template-row">
-            {PROVIDER_TEMPLATE_ORDER.filter((key) => key !== 'custom').map((key) => {
+            {templateOrder.filter((key) => key !== 'custom').map((key) => {
               const template = providerTemplate(key);
               if (!template) return null;
               return (
