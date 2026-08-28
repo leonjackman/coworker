@@ -9852,7 +9852,7 @@ body.bottom-panel-resizing {
 .goal-card__round {
   font-size: 11px;
   font-weight: 500;
-  color: var(--muted-foreground);
+  color: var(--accent-foreground);
   padding: 1px 6px;
   background: var(--accent);
   border-radius: var(--radius-sm);
