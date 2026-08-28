@@ -1851,13 +1851,6 @@ function App() {
           }
           pendingTerminalGoal = null;
         }
-        // 目标仍 active（未 done/blocked/paused——后端空转停会置 paused，此处仅兜底
-        // 剩余边界）→ 自动续跑下一轮，避免「需手动点继续」。
-        const gsid = event.session_id ?? requestSessionId;
-        const curGoal = gsid ? goalsBySessionRef.current[goalsSessionKey(gsid)] : undefined;
-        if (gsid && curGoal && curGoal.status === 'active') {
-          void kickGoalContinuation(gsid);
-        }
       } else if (event.type === 'steer_injected') {
         // 插話已被运行中 graph 消费：从 pending 列表移除（不再自动续跑），
         // 并在当前 assistant 气泡内追加一条「收到插話」notice。

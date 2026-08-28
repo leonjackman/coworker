@@ -1,12 +1,13 @@
 """Goal round-flow regression tests (post goal-chain 修復).
 
-Covers the accounting / round-count / idle-nudge / continuation-template fixes:
+Covers the accounting / round-count / idle-stop / continuation-template fixes:
 - update_goal_round records the COMPLETED round count (round_index+1) so the
   blocked audit (goal.round < 2 → 需 ≥3 輪) works and round doesn't stick at 0.
 - account_goal_usage accumulates the round's ACTUAL consumption (prompt+completion).
 - the continuation template instructs the model to call update_goal(complete)
   when done (完成信號).
-- the idle-stop nudge text is wired into the round loop.
+- idle-stop (连续 2 轮纯文字、无工具、未 done) 推断为 complete 并停止续跑，
+  前端收到 complete 后自动关闭 GoalCard（恢复 11cd0313 行为），不再 nudge 续命。
 """
 
 import sys
@@ -54,11 +55,13 @@ def test_continuation_template_instructs_completion_signal():
     assert 'update_goal(status="complete")' in txt
 
 
-def test_idle_nudge_wired_into_round_loop():
+def test_idle_stop_infers_complete():
     src = Path(__file__).resolve().parents[1] / "main.py"
     text = src.read_text(encoding="utf-8")
-    assert "_IDLE_NUDGE" in text
+    # nudge 续命机制已移除（不再劝模型继续跑工具）。
+    assert "_IDLE_NUDGE" not in text
+    # 空闲计数仍保留。
     assert "idle_rounds += 1" in text
     assert "update_goal(status='complete')" in text
-    # 连续 2 轮纯文字 → 置 paused（防前端自动续跑无限循环）
-    assert 'update_goal_status(session_id, "paused")' in text
+    # 连续 2 轮纯文字 → 推断 complete（前端自动关卡片，不再卡 active / paused）。
+    assert 'update_goal_status(session_id, "complete")' in text

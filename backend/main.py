@@ -2177,31 +2177,17 @@ async def chat_stream(request: ChatStreamRequest):
                     history.extend(_parts_to_conversation(m))
             return history
 
-        # 引导纯文字轮明确收尾：模型认为完成就调 update_goal(complete)，否则继续实际工作。
-        _IDLE_NUDGE = (
-            "你上一輪未執行任何工具。請明確收尾：若目標已完成，立即調用 "
-            "update_goal(status='complete')；若遇到無法逾越的阻礙，調用 "
-            "update_goal(status='blocked')；否則請繼續執行實際工具 "
-            "（read/write/replace/run_command/search）推進目標，不要只輸出文字總結。"
-        )
-
-        # 空转 nudge 状态：声明在 handler 作用域（_goal_injection 与
-        # _goal_rounds_iter 为 sibling，双方都要读写 idle_nudge/idle_rounds）。
+        # 空转计数：连续纯文字轮（无工具执行、未调 update_goal）的轮数。
         idle_rounds = 0
-        idle_nudge = False
 
         def _goal_injection(goal) -> str | None:
             """该续跑轮要注入的 system 首位内容（内部指令，不落库），或 None。"""
-            nonlocal last_seen_objective, idle_nudge
+            nonlocal last_seen_objective
             if goal.status == "budget_limited":
                 return render_budget_limit(goal)
             if last_seen_objective is not None and goal.objective != last_seen_objective:
                 return render_objective_updated(goal)
-            base = render_goal_continuation(goal)
-            if idle_nudge:
-                idle_nudge = False
-                return f"{base}\n\n{_IDLE_NUDGE}"
-            return base
+            return render_goal_continuation(goal)
 
         async def _goal_rounds_iter():
             """单一生成器内层多轮循环（已拍板落地方式）。
@@ -2217,11 +2203,10 @@ async def chat_stream(request: ChatStreamRequest):
             # 退化回复计数（同一回复内大量重复，qwen3 模式）：累计 ≥2 轮即 blocked。
             degenerate_rounds = 0
             # 连续纯文字（无工具执行）轮数：≥2 轮才停。首轮纯文字不直接 break，
-            # 而是注入 nudge 引导模型在下一轮明确调用 update_goal(complete/blocked)
-            # —— 否则「模型认为完成但只输出总结」的轮会被误判为空转，goal 卡 active
-            # 永远无法 done（必须手动继续）。idle_rounds/idle_nudge 声明于 handler
-            # 作用域（sibling _goal_injection 也读写 idle_nudge），这里以 nonlocal 取用。
-            nonlocal idle_rounds, idle_nudge
+            # 而是直接续跑，等待模型调用 update_goal(complete/blocked) 或撞预算硬停
+            # （默认 token 预算为硬天花板）。idle_rounds 声明于 handler 作用域，此处
+            # 以 nonlocal 取用。
+            nonlocal idle_rounds
 
             def _begin_round(anchor: str) -> str | None:
                 return agent_registry.snapshot_manager.begin_turn(session_id, anchor, resolved_workspace)
@@ -2369,29 +2354,28 @@ async def chat_stream(request: ChatStreamRequest):
                         except Exception:  # noqa: BLE001 - never break the stream
                             logger.debug("degenerate check failed for %s", session_id, exc_info=True)
 
-                    # ---- 空转停止（防空转退化）----
-                    # goal 模式每轮都会无条件续跑，但若模型本轮**没有执行任何实质
-                    # 工具**（只输出纯文字回答），说明它要么认为任务已完成（但没调
-                    # update_goal）、要么在空转。第一轮纯文字不直接停：注入 nudge 引导
-                    # 模型下一轮明确调 update_goal(complete/blocked) 或继续实际工具；
-                    # 连续 2 轮纯文字（nudge 后仍无工具且未 done）才停止，防无限续跑。
+                    # ---- 空转停止（推断完成，防空转退化 + 自动关卡片）----
+                    # goal 模式每轮无条件续跑，但若模型本轮**没有执行任何实质工具**
+                    # （只输出纯文字回答），说明它要么认为任务已完成（但忘了调
+                    # update_goal）、要么在空转。连续 2 轮纯文字（无工具且未 done）：
+                    # 视为模型已完成但漏发信号，引擎推断为 complete —— 前端收到
+                    # complete 后约 2.5s 自动关闭 GoalCard（恢复 11cd0313 行为），
+                    # 既不再无限续跑，也不卡在 active 无法关闭。
                     if _session_goal(session_id) is not None:
                         try:
                             _sess = session_store.require(session_id)
                             if not _goal_round_has_tool_execution(_sess):
                                 idle_rounds += 1
                                 if idle_rounds >= 2:
-                                    # 连续 2 轮纯文字（nudge 后仍未调 update_goal / 无工具）：
-                                    # 停止续跑并置 paused——前端不自动续跑（防无限循环），
-                                    # GoalCard 显示「继续」按钮供用户介入。
-                                    logger.debug("goal idle-stop: %d consecutive text-only rounds for %s", idle_rounds, session_id)
+                                    # 连续 2 轮纯文字（未调 update_goal / 无工具）：
+                                    # 推断为完成并置 complete，停止续跑。
+                                    logger.debug("goal idle-stop: %d consecutive text-only rounds for %s -> inferred complete", idle_rounds, session_id)
                                     _ig = _session_goal(session_id)
                                     if _ig is not None and _ig.status == "active":
-                                        paused = session_store.update_goal_status(session_id, "paused")
-                                        if paused is not None:
-                                            _emit_goal_updated(session_id, paused)
+                                        completed = session_store.update_goal_status(session_id, "complete")
+                                        if completed is not None:
+                                            _emit_goal_updated(session_id, completed)
                                     break
-                                idle_nudge = True
                             else:
                                 idle_rounds = 0
                         except Exception:  # noqa: BLE001 - never break the stream

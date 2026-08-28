@@ -375,7 +375,14 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             msg = "STOP. " + "；".join(hard_reasons) + ". " + guidance
             overrides: dict[str, Any] = {"messages": [*messages, HumanMessage(content=msg)]}
             # W2/N1: surface the loop-stop reason on the state (→ done event).
-            overrides["loop_reason"] = LOOP_REASON_DEGENERATE if degenerate else LOOP_REASON_REPEATED
+            # `loop_reason` is a declared agent-state channel, NOT a ModelRequest
+            # field, so we inject it via the `state` override (a valid field) to
+            # stay compatible with langchain versions that don't expose `loop_reason`
+            # on ModelRequest. The runtime falls back to LOOP_REASON_FINAL when the
+            # model node does not echo it back into the node update.
+            state = getattr(request, "state", None)
+            if isinstance(state, dict):
+                overrides["state"] = {**state, "loop_reason": LOOP_REASON_DEGENERATE if degenerate else LOOP_REASON_REPEATED}
             if tool_count >= self.stop_after and tool_name:
                 # Block only the repeated tool; keep every other tool (incl. ask_user).
                 overrides["tools"] = [t for t in request.tools if getattr(t, "name", "") != tool_name]
@@ -481,11 +488,14 @@ class IdleLoopMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                     "已達卡住硬停門檻：20 步限值內仍有任意連續 10 步中 ≥7 步未產生新進展或規律重複。"
                     "請停止工具呼叫，總結已完成與剩餘事項。"
                 )
-                return {
+                state_for_reason = getattr(request, "state", None)
+                idle_overrides: dict[str, Any] = {
                     "messages": [*messages, HumanMessage(content=msg)],
                     "tools": [],
-                    "loop_reason": LOOP_REASON_IDLE_HARD,
                 }
+                if isinstance(state_for_reason, dict):
+                    idle_overrides["state"] = {**state_for_reason, "loop_reason": LOOP_REASON_IDLE_HARD}
+                return idle_overrides
             return {}
         else:
             if stuck10:

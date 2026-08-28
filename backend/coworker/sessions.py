@@ -49,6 +49,12 @@ class SessionMessage:
     interject: bool = False
 
 
+# 默认 goal token 预算（对齐 codex 的 max_goal_token_budget）：未显式指定时作为
+# 硬终止天花板——模型不自觉调 update_goal(complete) 时，撞预算即 budget_limited 硬停，
+# 防止无限续跑。用户仍可在 /goal 时显式传 token_budget 覆盖。
+DEFAULT_GOAL_TOKEN_BUDGET = 5_000_000
+
+
 @dataclass
 class GoalState:
     """Persistent goal bound to a session (对齐 codex `ThreadGoal`).
@@ -311,13 +317,19 @@ class SessionStore:
         return self.require(session_id).goal
 
     def set_goal(self, session_id: str, objective: str, token_budget: int | None = None) -> GoalState:
-        """新建或覆盖重建目标（状态置 active，计数清零，刷新时间戳）。"""
+        """新建或覆盖重建目标（状态置 active，计数清零，刷新时间戳）。
+
+        未显式传 ``token_budget`` 时套用 ``DEFAULT_GOAL_TOKEN_BUDGET`` 作为硬终止
+        天花板（对齐 codex 的 max_goal_token_budget），避免模型不自觉调
+        update_goal(complete) 时无限续跑。
+        """
         session = self.require(session_id)
         now = _now_epoch_ms()
+        effective_budget = int(token_budget) if token_budget is not None else DEFAULT_GOAL_TOKEN_BUDGET
         goal = GoalState(
             objective=objective,
             status="active",
-            token_budget=int(token_budget) if token_budget is not None else None,
+            token_budget=effective_budget,
             tokens_used=0,
             time_used_seconds=0,
             created_at=now,
