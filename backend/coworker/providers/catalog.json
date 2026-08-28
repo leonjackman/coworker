@@ -487,7 +487,7 @@
       }
     },
     "zhipu": {
-      "name": "智谱 (Zhipu AI)",
+      "name": "Zhipu AI (GLM)",
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
       "api_mode": "openai",
       "icon": "zhipu",
@@ -515,7 +515,7 @@
       }
     },
     "moonshot": {
-      "name": "月之暗面 (Moonshot AI)",
+      "name": "Moonshot AI (Kimi)",
       "base_url": "https://api.moonshot.cn/v1",
       "api_mode": "openai",
       "icon": "moonshot",
@@ -532,7 +532,7 @@
       }
     },
     "doubao": {
-      "name": "字节跳动 (ByteDance Doubao)",
+      "name": "ByteDance (Doubao)",
       "base_url": "https://ark-api.console.volcengine.com/v3",
       "api_mode": "openai",
       "icon": "doubao",
@@ -551,7 +551,7 @@
       }
     },
     "wenxin": {
-      "name": "百度 (Baidu Wenxin)",
+      "name": "Baidu (Wenxin)",
       "base_url": "https://qianfan.baidubce.com/v2",
       "api_mode": "openai",
       "icon": "wenxin",
@@ -572,7 +572,7 @@
       }
     },
     "yi": {
-      "name": "零一万物 (01.AI)",
+      "name": "01.AI (Yi)",
       "base_url": "https://api.lingyiwanwu.com/v1",
       "api_mode": "openai",
       "icon": "yi",
@@ -597,7 +597,7 @@
       }
     },
     "stepfun": {
-      "name": "阶跃星辰 (StepFun)",
+      "name": "StepFun (Step)",
       "base_url": "https://api.stepfun.com/v1",
       "api_mode": "openai",
       "icon": "stepfun",
@@ -614,7 +614,7 @@
       }
     },
     "tencent": {
-      "name": "腾讯 (Tencent Hunyuan)",
+      "name": "Tencent (Hunyuan)",
       "base_url": "https://hunyuan.tencentcloudapi.com",
       "api_mode": "openai",
       "icon": "tencent",
@@ -632,7 +632,7 @@
       }
     },
     "baichuan": {
-      "name": "百川 (Baichuan)",
+      "name": "Baichuan Intelligence",
       "base_url": "https://api.baichuan-ai.com/v1",
       "api_mode": "openai",
       "icon": "baichuan",
@@ -648,7 +648,7 @@
       }
     },
     "alibaba": {
-      "name": "阿里 (Alibaba Cloud)",
+      "name": "Alibaba Cloud (Qwen)",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "api_mode": "openai",
       "icon": "alibaba",
@@ -666,7 +666,7 @@
       }
     },
     "internlm": {
-      "name": "书生 (InternLM / 上海 AI Lab)",
+      "name": "InternLM (Shanghai AI Lab)",
       "base_url": "https://internlm-chat.intern-ai.org.cn/puyu-api/v1",
       "api_mode": "openai",
       "icon": "internlm",
