@@ -64,7 +64,17 @@
     "minimax_cn",
     "qwen",
     "cohere",
-    "huggingface"
+    "huggingface",
+    "zhipu",
+    "moonshot",
+    "doubao",
+    "wenxin",
+    "yi",
+    "stepfun",
+    "tencent",
+    "baichuan",
+    "alibaba",
+    "internlm"
   ],
   "providers": {
     "openai": {
@@ -307,7 +317,6 @@
         "ministral-8b": 128000,
         "ministral-3b": 128000,
         "mistral-saba": 128000,
-        "mistral-embed": 8192,
         "pixtral": 128000,
         "mistral-ocr": 128000,
         "open-mistral-7b": 128000,
@@ -476,6 +485,204 @@
         "hf": 131072,
         "huggingface": 131072
       }
+    },
+    "zhipu": {
+      "name": "智谱 (Zhipu AI)",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_mode": "openai",
+      "icon": "zhipu",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "glm-5.2": 1000000,
+        "glm-5.1": 198000,
+        "glm-5": 198000,
+        "glm-4.7": 198000,
+        "glm-4.6": 198000,
+        "glm-4.5": 128000,
+        "glm-4": 128000,
+        "glm-4-air": 128000,
+        "glm-4-airx": 128000,
+        "glm-4-flash": 128000,
+        "glm-4v": 128000,
+        "glm-4v-plus": 128000,
+        "glm-4-plus": 128000,
+        "glm-zero": 128000,
+        "glm-3-turbo": 128000,
+        "glm-3": 128000
+      }
+    },
+    "moonshot": {
+      "name": "月之暗面 (Moonshot AI)",
+      "base_url": "https://api.moonshot.cn/v1",
+      "api_mode": "openai",
+      "icon": "moonshot",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "moonshot-v1-128k": 128000,
+        "moonshot-v1-32k": 32768,
+        "moonshot-v1-8k": 8192,
+        "moonshot-v1": 128000,
+        "moonshot": 128000
+      }
+    },
+    "doubao": {
+      "name": "字节跳动 (ByteDance Doubao)",
+      "base_url": "https://ark-api.console.volcengine.com/v3",
+      "api_mode": "openai",
+      "icon": "doubao",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "doubao-pro-256k": 262144,
+        "doubao-pro-32k": 32768,
+        "doubao-lite-256k": 262144,
+        "doubao-lite-32k": 32768,
+        "doubao-pro": 8192,
+        "doubao-lite": 8192,
+        "doubao": 262144
+      }
+    },
+    "wenxin": {
+      "name": "百度 (Baidu Wenxin)",
+      "base_url": "https://qianfan.baidubce.com/v2",
+      "api_mode": "openai",
+      "icon": "wenxin",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "ernie-4.5": 128000,
+        "ernie-4.5-turbo": 128000,
+        "ernie-4.5-vision-preview": 128000,
+        "ernie-3.5": 128000,
+        "ernie-4.0": 128000,
+        "ernie-bot-turbo": 128000,
+        "ernie-bot": 128000,
+        "ernie": 128000,
+        "wenxin": 128000
+      }
+    },
+    "yi": {
+      "name": "零一万物 (01.AI)",
+      "base_url": "https://api.lingyiwanwu.com/v1",
+      "api_mode": "openai",
+      "icon": "yi",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "yi-large": 32768,
+        "yi-large-turbo": 16384,
+        "yi-large-rmv": 16384,
+        "yi-spark": 16384,
+        "yi-medium": 16384,
+        "yi-medium-200k": 200000,
+        "yi-vision": 16384,
+        "yi-large-fc": 16384,
+        "yi-large-rag": 32768,
+        "yi-large-v2": 32768,
+        "yi-vl-plus": 4096,
+        "yi-vl": 4096,
+        "yi": 32768
+      }
+    },
+    "stepfun": {
+      "name": "阶跃星辰 (StepFun)",
+      "base_url": "https://api.stepfun.com/v1",
+      "api_mode": "openai",
+      "icon": "stepfun",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "step-2-16k": 16384,
+        "step-1-256k": 262144,
+        "step-1v-8k": 8192,
+        "step-1": 16384,
+        "step": 16384
+      }
+    },
+    "tencent": {
+      "name": "腾讯 (Tencent Hunyuan)",
+      "base_url": "https://hunyuan.tencentcloudapi.com",
+      "api_mode": "openai",
+      "icon": "tencent",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "hunyuan-turbo": 28000,
+        "hunyuan-lite": 28000,
+        "hunyuan-standard": 8192,
+        "hunyuan-standard-256k": 262144,
+        "hunyuan-pro": 28000,
+        "hunyuan": 28000
+      }
+    },
+    "baichuan": {
+      "name": "百川 (Baichuan)",
+      "base_url": "https://api.baichuan-ai.com/v1",
+      "api_mode": "openai",
+      "icon": "baichuan",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "baichuan4": 131072,
+        "baichuan3-turbo": 131072,
+        "baichuan2-turbo": 131072,
+        "baichuan": 131072
+      }
+    },
+    "alibaba": {
+      "name": "阿里 (Alibaba Cloud)",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_mode": "openai",
+      "icon": "alibaba",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "qwen-long": 1000000,
+        "qwen-turbo": 8191,
+        "qwen-plus": 8191,
+        "qwen-max": 8191,
+        "qwen-max-longcontext": 8191,
+        "qwen": 8191
+      }
+    },
+    "internlm": {
+      "name": "书生 (InternLM / 上海 AI Lab)",
+      "base_url": "https://internlm-chat.intern-ai.org.cn/puyu-api/v1",
+      "api_mode": "openai",
+      "icon": "internlm",
+      "supports_vision": true,
+      "requires_api_key": true,
+      "url_trailing_v1": false,
+      "use_repetition_penalty": false,
+      "model_context_prefixes": {
+        "internlm3-8b-instruct": 262144,
+        "internlm2.5-1.8b-chat": 32768,
+        "internlm2.5-7b-chat": 32768,
+        "internlm2.5-20b-chat": 32768,
+        "internlm2-7b-chat": 32768,
+        "internlm2-20b-chat": 32768,
+        "internlm": 32768
+      }
     }
   },
   "icon_aliases": {
@@ -500,6 +707,16 @@
     "xai": "xai",
     "minimax": "minimax",
     "minimax_cn": "minimax",
-    "custom": null
+    "custom": null,
+    "alibaba": "alibaba",
+    "baichuan": "baichuan",
+    "doubao": "doubao",
+    "internlm": "internlm",
+    "moonshot": "moonshot",
+    "stepfun": "stepfun",
+    "tencent": "tencent",
+    "wenxin": "wenxin",
+    "yi": "yi",
+    "zhipu": "zhipu"
   }
 }
