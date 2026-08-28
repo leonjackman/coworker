@@ -1078,19 +1078,43 @@ def prepare_agent_messages(
     多模态 ``list[dict]`` 内容原样透传（交给 LangChain 转成 ``image_url`` 块）。
     为避免冲破服务端的每 prompt 图数上限，当图片总数超过 ``max_images`` 时只保留
     最近的图片（当前这轮的附件一定在内），被丢弃的旧图以一段文字注记取代。
+
+    ``_parts_to_conversation`` 会把持久化的 parts 重建为标准的
+    ``assistant(tool_calls) → tool(result)`` 序列；这里必须原样放行 ``role="tool"``
+    与 assistant 的 ``tool_calls`` 键，否则跨轮历史只剩纯文字叙述——模型会模仿
+    「只叙述不执行工具」的空转/降智模式（曾观测到连续多轮输出
+    「先查看當前狀態，再一次性 commit：」等承诺句后停止）。LangChain 的
+    ``convert_to_messages`` 会把放行的消息转成 ``ToolMessage`` / 带 tool_calls 的
+    ``AIMessage``。
     """
     limit = int(max_images) if max_images and max_images > 0 else MAX_IMAGES_PER_PROMPT
     prepared: list[dict[str, Any]] = []
     for message in messages:
         role = str(message.get("role", ""))
         content = message.get("content")
-        if role not in {"user", "assistant", "system"} or content is None:
+        if role == "tool":
+            if content is None:
+                continue
+            prepared.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": str(message.get("tool_call_id") or ""),
+                    "content": str(content),
+                }
+            )
             continue
-        # 多模态内容（list[dict]）原样透传，交给 LangChain 的 message_from_dict
-        # 转成带 image_url 块的 HumanMessage；其余统一转字符串。
-        prepared.append(
-            {"role": role, "content": content if isinstance(content, list) else str(content)}
-        )
+        if role not in {"user", "assistant", "system"}:
+            continue
+        # 纯 tool_calls 的 assistant 消息 content 可为 None（无叙述时），必须保留。
+        if content is None and not (role == "assistant" and message.get("tool_calls")):
+            continue
+        entry: dict[str, Any] = {
+            "role": role,
+            "content": content if isinstance(content, list) else str(content),
+        }
+        if role == "assistant" and message.get("tool_calls"):
+            entry["tool_calls"] = message["tool_calls"]
+        prepared.append(entry)
     if not prepared:
         prepared.append({"role": "user", "content": ""})
         return prepared

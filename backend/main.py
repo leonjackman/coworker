@@ -3486,10 +3486,22 @@ def _parts_to_conversation(message) -> list[dict[str, Any]]:
             text_buf.append(str(content))
         elif ptype == "tool":
             args = part.get("input")
+            args_str = "{}"
             try:
-                args_str = args if isinstance(args, str) else _json.dumps(args, ensure_ascii=False)
+                if isinstance(args, str):
+                    args_str = args
+                else:
+                    args_str = _json.dumps(args, ensure_ascii=False)
+                parsed = _json.loads(args_str)
+                if not isinstance(parsed, dict):
+                    # 只接受 JSON 物件。空/非法/非物件 arguments（早期「工具 input
+                    # 捕獲為空」bug 残留等）统一落为 {} —— 否则 LangChain
+                    # convert_to_messages 会对 arguments 做 json.loads + args 字段
+                    # 校验，空串抛 `Expecting value: line 1 column 1 (char 0)`，
+                    # 字符串/数组又会被 args: dict 校验拒绝，直接打崩整轮。
+                    args_str = "{}"
             except Exception:  # noqa: BLE001 - best-effort serialization
-                args_str = str(args)
+                args_str = "{}"
             tool_calls.append(
                 {
                     "id": part.get("id") or f"tool-{len(out)}",

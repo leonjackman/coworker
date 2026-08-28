@@ -214,7 +214,8 @@ def test_idle_loop_varying_stuck_hard_stops():
     # hard stop: last override strips tools + idle_hard
     final = out[-1]
     assert final.get("tools") == []
-    assert final.get("loop_reason") == "idle_hard"
+    # loop_reason 写在覆盖的 state 里（不是顶层）。
+    assert final.get("state", {}).get("loop_reason") == "idle_hard"
     assert "硬停" in _last_content(final)
 
 

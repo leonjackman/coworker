@@ -62,6 +62,8 @@ def test_idle_stop_infers_complete():
     assert "_IDLE_NUDGE" not in text
     # 空闲计数仍保留。
     assert "idle_rounds += 1" in text
-    assert "update_goal(status='complete')" in text
+    # 模型侧完成信号仍在续跑模板里（goal_prompts.py）。
+    prompts = Path(__file__).resolve().parents[1] / "coworker" / "goal_prompts.py"
+    assert 'update_goal(status="complete")' in prompts.read_text(encoding="utf-8")
     # 连续 2 轮纯文字 → 推断 complete（前端自动关卡片，不再卡 active / paused）。
     assert 'update_goal_status(session_id, "complete")' in text
