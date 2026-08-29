@@ -83,11 +83,7 @@ export function ShortcutsPage({ onBack }: ShortcutsPageProps) {
       )}
     >
       <div className="settings-list">
-        <section className="settings-group" aria-labelledby="settings-group-shortcuts">
-          <div className="settings-group__heading">
-            <h2 id="settings-group-shortcuts">{t('shortcuts.group')}</h2>
-            <p>{t('shortcuts.group_desc')}</p>
-          </div>
+        <section className="settings-group">
           <div className="settings-card">
             {SHORTCUT_REGISTRY.map((definition) => {
               const effective = getEffectiveShortcut(definition.id);
