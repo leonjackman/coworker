@@ -648,8 +648,27 @@ function App() {
     'send-message': () => {
       const draft = editingMessage ? editDraft : input;
       if (!draft.trim() && attachments.length === 0) return false;
-      if (editingMessage) void commitEditMessage(editingMessage.id, editDraft);
-      else sendMessage();
+      if (editingMessage) {
+        void commitEditMessage(editingMessage.id, editDraft);
+        return true;
+      }
+      // Cmd+Enter = 插话：任务运行中立即入队并引导（steer）运行中的图；空闲时退回普通发送。
+      const sid = sessionIdRef.current;
+      if (isThinking && sid) {
+        const text = draft.trim();
+        if (!text) return false;
+        const queuedAttachments = attachments;
+        const queuedReferences = references;
+        const entry = enqueueMessage(sid, text, { attachments: queuedAttachments, references: queuedReferences });
+        setInput('');
+        setCommandChip(null);
+        commandChipRef.current = null;
+        setAttachments([]);
+        setReferences([]);
+        if (entry) void interjectQueuedMessage(sid, entry.id);
+        return true;
+      }
+      sendMessage();
       return true;
     },
     'stop-agent': () => {
@@ -963,7 +982,7 @@ function App() {
   }
   const queuedMessagesRef = useRef<Record<string, QueuedEntry[]>>({});
   const [queuedEntries, setQueuedEntries] = useState<Record<string, QueuedEntry[]>>({});
-  const enqueueMessage = (sessionId: string | undefined, message: string, extra?: { attachments?: ComposerAttachment[]; references?: SessionReference[] }) => {
+  const enqueueMessage = (sessionId: string | undefined, message: string, extra?: { attachments?: ComposerAttachment[]; references?: SessionReference[] }): QueuedEntry | undefined => {
     const key = streamKey(sessionId);
     const entry: QueuedEntry = {
       id: `queued-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -975,6 +994,7 @@ function App() {
     const queue = [...(queuedMessagesRef.current[key] ?? []), entry];
     queuedMessagesRef.current[key] = queue;
     setQueuedEntries((current) => ({ ...current, [key]: queue }));
+    return entry;
   };
   const dequeueMessage = (sessionId: string | undefined): QueuedEntry | null => {
     const key = streamKey(sessionId);
