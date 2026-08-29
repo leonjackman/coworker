@@ -265,8 +265,6 @@
   "shortcuts.view_memory_desc": "Switch to the memory view.",
   "shortcuts.view_mcp": "MCP Servers",
   "shortcuts.view_mcp_desc": "Switch to the MCP servers view.",
-  "shortcuts.view_org": "Organization",
-  "shortcuts.view_org_desc": "Switch to the organization view.",
   "shortcuts.view_chat": "Back to Chat",
   "shortcuts.view_chat_desc": "Press Esc to return to the chat view.",
   "shortcuts.copy_last_response": "Copy Last Response",

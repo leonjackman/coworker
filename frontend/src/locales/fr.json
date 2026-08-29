@@ -279,8 +279,6 @@
   "shortcuts.view_memory_desc": "Passe à la vue de la mémoire.",
   "shortcuts.view_mcp": "Serveurs MCP",
   "shortcuts.view_mcp_desc": "Passe à la vue des serveurs MCP.",
-  "shortcuts.view_org": "Organisation",
-  "shortcuts.view_org_desc": "Passe à la vue de l'organisation.",
   "shortcuts.view_chat": "Retour à la conversation",
   "shortcuts.view_chat_desc": "Échap revient à la vue de conversation.",
   "shortcuts.copy_last_response": "Copier la dernière réponse",

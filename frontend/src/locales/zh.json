@@ -265,8 +265,6 @@
   "shortcuts.view_memory_desc": "切换到记忆页面。",
   "shortcuts.view_mcp": "MCP 服务器",
   "shortcuts.view_mcp_desc": "切换到 MCP 服务器页面。",
-  "shortcuts.view_org": "组织",
-  "shortcuts.view_org_desc": "切换到组织页面。",
   "shortcuts.view_chat": "返回对话",
   "shortcuts.view_chat_desc": "按 Esc 返回对话视图。",
   "shortcuts.copy_last_response": "复制最后回复",

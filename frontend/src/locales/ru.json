@@ -255,8 +255,6 @@
   "shortcuts.view_memory_desc": "Переключает на представление памяти.",
   "shortcuts.view_mcp": "Серверы MCP",
   "shortcuts.view_mcp_desc": "Переключает на представление серверов MCP.",
-  "shortcuts.view_org": "Организация",
-  "shortcuts.view_org_desc": "Переключает на представление организации.",
   "shortcuts.view_chat": "Вернуться в чат",
   "shortcuts.view_chat_desc": "Esc возвращает к представлению чата.",
   "shortcuts.copy_last_response": "Копировать последний ответ",

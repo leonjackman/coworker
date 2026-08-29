@@ -141,12 +141,6 @@ export const SHORTCUT_REGISTRY: readonly ShortcutDefinition[] = [
     defaultBinding: { key: '4', mod: modKey() },
   },
   {
-    id: 'view-org',
-    labelKey: 'shortcuts.view_org',
-    descriptionKey: 'shortcuts.view_org_desc',
-    defaultBinding: { key: '5', mod: modKey() },
-  },
-  {
     id: 'toggle-sidebar',
     labelKey: 'shortcuts.toggle_sidebar',
     descriptionKey: 'shortcuts.toggle_sidebar_desc',

@@ -754,10 +754,6 @@ function App() {
       setActiveView('memory');
       return true;
     },
-    'view-org': () => {
-      setActiveView('org');
-      return true;
-    },
     'view-chat': () => {
       // Esc 语义：先关弹窗/菜单/抽屉，其次「返回上级」逐层退回，最后才到对话视图。
       if (hasOpenOverlay() || mobileSidebarOpen) return false;

@@ -593,8 +593,6 @@
   "shortcuts.view_memory_desc": "메모리 화면으로 전환합니다.",
   "shortcuts.view_mcp": "MCP 서버",
   "shortcuts.view_mcp_desc": "MCP 서버 화면으로 전환합니다.",
-  "shortcuts.view_org": "조직",
-  "shortcuts.view_org_desc": "조직 화면으로 전환합니다.",
   "shortcuts.view_chat": "채팅으로 돌아가기",
   "shortcuts.view_chat_desc": "Esc를 한 번 누르면 채팅 화면으로 돌아갑니다.",
   "shortcuts.copy_last_response": "마지막 응답 복사",

@@ -137,6 +137,7 @@ export function ShortcutsPage({ onBack }: ShortcutsPageProps) {
                             </Button>
                           )}
                           <Switch
+                            id={`shortcut-${definition.id}`}
                             checked={effective.enabled}
                             onChange={() => setShortcutEnabled(definition.id, !effective.enabled)}
                             aria-label={t('shortcuts.enabled')}

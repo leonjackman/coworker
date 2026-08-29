@@ -255,8 +255,6 @@
   "shortcuts.view_memory_desc": "Alterna para a visão de memória.",
   "shortcuts.view_mcp": "Servidores MCP",
   "shortcuts.view_mcp_desc": "Alterna para a visão de servidores MCP.",
-  "shortcuts.view_org": "Organização",
-  "shortcuts.view_org_desc": "Alterna para a visão de organização.",
   "shortcuts.view_chat": "Voltar ao chat",
   "shortcuts.view_chat_desc": "Esc volta para a visão de chat.",
   "shortcuts.copy_last_response": "Copiar última resposta",

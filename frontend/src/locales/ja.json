@@ -255,8 +255,6 @@
   "shortcuts.view_memory_desc": "メモリ画面に切り替えます。",
   "shortcuts.view_mcp": "MCP サーバー",
   "shortcuts.view_mcp_desc": "MCP サーバー画面に切り替えます。",
-  "shortcuts.view_org": "組織",
-  "shortcuts.view_org_desc": "組織画面に切り替えます。",
   "shortcuts.view_chat": "チャットへ戻る",
   "shortcuts.view_chat_desc": "Esc を一度押すとチャット画面に戻ります。",
   "shortcuts.copy_last_response": "最後の応答をコピー",
