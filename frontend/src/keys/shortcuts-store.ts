@@ -48,6 +48,17 @@ export function subscribeShortcutsChange(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+let recordingShortcutId: string | null = null;
+
+/** Mark a shortcut as being re-bound right now (pauses all global shortcuts). */
+export function setShortcutRecording(id: string | null): void {
+  recordingShortcutId = id;
+}
+
+export function isShortcutRecording(): boolean {
+  return recordingShortcutId !== null;
+}
+
 /** Stable reference that only changes when an override is saved. */
 export function getShortcutsSnapshot(): Readonly<OverrideMap> {
   return overrides;
@@ -97,36 +108,61 @@ export function setShortcutBinding(id: string, binding: ShortcutBinding | null):
   save({ ...overrides, [id]: override });
 }
 
-/** True when a user override (binding or enabled state) exists for the shortcut. */
-export function hasShortcutOverride(id: string): boolean {
-  return overrides[id] != null;
+/** True when a custom binding that actually differs from the default exists. */
+export function hasCustomBinding(id: string): boolean {
+  const override = overrides[id];
+  if (!override?.binding) return false;
+  const definition = SHORTCUT_REGISTRY.find((entry) => entry.id === id);
+  if (!definition) return false;
+  return !bindingsEqual(override.binding, definition.defaultBinding);
 }
 
 export function bindingsEqual(a: ShortcutBinding, b: ShortcutBinding): boolean {
-  return a.key === b.key && a.mod === b.mod;
+  return keysMatch(a.key, b.key) && a.mod === b.mod && (a.shift ?? false) === (b.shift ?? false);
 }
 
-/** Enforce strict matching: the expected modifier present and no other modifier pressed. */
+/** Enforce strict matching: expected modifiers present and no extra modifier pressed. */
 export function eventMatchesBinding(event: KeyboardEvent, binding: ShortcutBinding): boolean {
-  if (event.key !== binding.key) return false;
-  if (binding.mod === 'Meta') {
-    return event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+  // With Shift held, event.key is the shifted character (e.g. 'N' for n), so
+  // compare single characters case-insensitively; the shift flag still enforces
+  // whether Shift must actually be held.
+  if (!keysMatch(event.key, binding.key)) return false;
+  const shift = binding.shift ?? false;
+  if (shift !== event.shiftKey) return false;
+  if (binding.mod === 'None') {
+    return !event.metaKey && !event.ctrlKey && !event.altKey;
   }
-  return event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+  if (binding.mod === 'Meta') {
+    return event.metaKey && !event.ctrlKey && !event.altKey;
+  }
+  return event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+function keysMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a.length === 1 && b.length === 1) return a.toLowerCase() === b.toLowerCase();
+  return false;
 }
 
 const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Shift', 'Alt']);
+const SAFE_PLAIN_KEYS = new Set([
+  'Escape',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+  'F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'F20', 'F21', 'F22', 'F23', 'F24',
+]);
 
 /**
- * Parse a keydown into a bindable combination. Requires at least one of
- * Meta/Ctrl plus a real (non-modifier) key; returns `null` otherwise so the
- * recorder keeps waiting for the final key.
+ * Parse a keydown into a bindable combination. Requires Meta/Ctrl (Shift is
+ * captured as part of the combo) plus a real (non-modifier) key; bare keys are
+ * only allowed for a small safe set (Escape / function keys). Returns `null`
+ * otherwise so the recorder keeps waiting for the final key.
  */
 export function bindingFromKeyEvent(event: KeyboardEvent): ShortcutBinding | null {
   if (MODIFIER_KEYS.has(event.key)) return null;
-  const mod = event.metaKey ? 'Meta' : event.ctrlKey ? 'Control' : null;
-  if (!mod) return null;
-  return { key: event.key, mod };
+  if (event.metaKey) return { key: event.key, mod: 'Meta', shift: event.shiftKey };
+  if (event.ctrlKey) return { key: event.key, mod: 'Control', shift: event.shiftKey };
+  if (SAFE_PLAIN_KEYS.has(event.key)) return { key: event.key, mod: 'None' };
+  return null;
 }
 
 /** Other enabled shortcuts that share the given binding (excluding `excludeId`). */
@@ -141,6 +177,10 @@ export function findConflicts(binding: ShortcutBinding, excludeId: string): Shor
 
 const KEY_LABELS: Record<string, string> = {
   ' ': 'Space',
+  ',': ',',
+  '.': '.',
+  '\\': '\\',
+  '`': '`',
   Escape: 'Esc',
   ArrowUp: '↑',
   ArrowDown: '↓',
@@ -156,11 +196,18 @@ const KEY_LABELS: Record<string, string> = {
   PageDown: 'PgDn',
 };
 
-/** Human-readable label, e.g. `⌘ + .` or `Ctrl + Space`. */
+/** Human-readable label, e.g. `⌘ + .`, `Ctrl + Shift + U` or `Esc`. */
 export function formatBinding(binding: ShortcutBinding): string {
+  const shift = binding.shift ? '⇧ ' : '';
+  if (binding.mod === 'None') {
+    return `${shift}${keyLabel(binding.key)}`.trim();
+  }
   const mod = binding.mod === 'Meta' ? '⌘' : 'Ctrl';
-  const key = KEY_LABELS[binding.key] ?? (binding.key.length === 1 ? binding.key.toUpperCase() : binding.key);
-  return `${mod} + ${key}`;
+  return `${mod} + ${shift}${keyLabel(binding.key)}`;
+}
+
+function keyLabel(key: string): string {
+  return KEY_LABELS[key] ?? (key.length === 1 ? key.toUpperCase() : key);
 }
 
 /** Reactive hook — re-renders whenever a shortcut override changes. */

@@ -113,6 +113,13 @@ interface ChatInputProps {
   commandChip?: CommandChip | null;
   /** Called when the user commits or removes the command chip. */
   onCommandCommit?: (chip: CommandChip | null) => void;
+  /** Imperative handle for global shortcut actions (focus / attach / commands). */
+  apiRef?: React.MutableRefObject<ComposerApi | null>;
+}
+
+export interface ComposerApi {
+  focus: () => void;
+  attachFiles: () => void;
 }
 
 const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/settings", "/memory"];
@@ -241,6 +248,7 @@ export function ChatInput({
   onOpenCommands,
   commandChip = null,
   onCommandCommit,
+  apiRef,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -252,6 +260,14 @@ export function ChatInput({
   const addErrorTimer = useRef<number | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const toggleShortcut = useShortcut("toggle-work-mode");
+
+  useEffect(() => {
+    if (!apiRef) return;
+    apiRef.current = {
+      focus: () => editorRef.current?.focus(),
+      attachFiles: () => fileInputRef.current?.click(),
+    };
+  }, [apiRef]);
 
   const showAddError = (message: string) => {
     setAddError(message);

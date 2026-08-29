@@ -34,8 +34,8 @@ interface SettingsViewProps {
   updateCenter: UpdateCenter;
   onLanguageChange?: () => void;
   onClose: () => void;
-  initialPage?: SettingsPage;
-  onInitialPageConsumed?: () => void;
+  settingsPage: SettingsPage;
+  onSettingsPageChange: (page: SettingsPage) => void;
 }
 
 export type SettingsPage = 'main' | 'theme' | 'audit' | 'web' | 'shortcuts';
@@ -57,19 +57,11 @@ export function SettingsView({
   updateCenter,
   onLanguageChange,
   onClose,
-  initialPage = 'main',
-  onInitialPageConsumed,
+  settingsPage,
+  onSettingsPageChange,
 }: SettingsViewProps) {
-  const [settingsPage, setSettingsPage] = useState<SettingsPage>(initialPage);
   const { enabled: soundEnabled, toggleEnabled: toggleSound } = useSound();
   const [webSettings, setWebSettings] = useState<WebSettings | null>(null);
-
-  useEffect(() => {
-    if (initialPage && initialPage !== 'main') {
-      onInitialPageConsumed?.();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -97,7 +89,7 @@ export function SettingsView({
   const currentPreset = THEME_PRESETS.find((preset) => preset.id === themeSettings.presetId);
 
   if (settingsPage === 'theme') {
-    return <ThemeCustomizer settings={themeSettings} onChange={onThemeSettingsChange} onBack={() => setSettingsPage('main')} />;
+    return <ThemeCustomizer settings={themeSettings} onChange={onThemeSettingsChange} onBack={() => onSettingsPageChange('main')} />;
   }
 
   if (settingsPage === 'audit') {
@@ -107,7 +99,7 @@ export function SettingsView({
         title={t('settings.audit_group')}
         description={t('settings.audit_group_desc')}
         action={(
-          <Button variant="ghost" onClick={() => setSettingsPage('main')}>
+          <Button variant="ghost" onClick={() => onSettingsPageChange('main')}>
             <ArrowLeft size={15} />
             {t('settings.back')}
           </Button>
@@ -127,11 +119,11 @@ export function SettingsView({
       fetch_enabled: true,
       api_key_configured: false,
     };
-    return <WebSettingsPage settings={current} onChange={setWebSettings} onBack={() => setSettingsPage('main')} />;
+    return <WebSettingsPage settings={current} onChange={setWebSettings} onBack={() => onSettingsPageChange('main')} />;
   }
 
   if (settingsPage === 'shortcuts') {
-    return <ShortcutsPage onBack={() => setSettingsPage('main')} />;
+    return <ShortcutsPage onBack={() => onSettingsPageChange('main')} />;
   }
 
   return (
@@ -178,7 +170,7 @@ export function SettingsView({
                 description: t('settings.palette_entry_desc'),
                 actionLabel: t('settings.configure'),
                 meta: <span className="settings-chip">{t(currentPreset?.labelKey ?? 'theme.preset_mineral')}</span>,
-                onAction: () => setSettingsPage('theme'),
+                onAction: () => onSettingsPageChange('theme'),
               },
               {
                 id: 'shortcuts',
@@ -187,7 +179,7 @@ export function SettingsView({
                 description: t('settings.shortcuts_entry_desc'),
                 actionLabel: t('settings.configure'),
                 meta: <span className="settings-chip">{t('settings.shortcuts_count', { count: SHORTCUT_REGISTRY.length })}</span>,
-                onAction: () => setSettingsPage('shortcuts'),
+                onAction: () => onSettingsPageChange('shortcuts'),
               },
             ],
           },
@@ -235,7 +227,7 @@ export function SettingsView({
                 label: t('settings.audit_entry'),
                 description: t('settings.audit_entry_desc'),
                 actionLabel: t('settings.audit_open'),
-                onAction: () => setSettingsPage('audit'),
+                onAction: () => onSettingsPageChange('audit'),
               },
             ],
           },
@@ -261,7 +253,7 @@ export function SettingsView({
                         : t('settings.web_disabled')}
                   </span>
                 ),
-                onAction: () => setSettingsPage('web'),
+                onAction: () => onSettingsPageChange('web'),
               },
             ],
           },

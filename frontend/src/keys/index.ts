@@ -8,9 +8,11 @@ export {
   formatBinding,
   getEffectiveShortcut,
   getShortcutsSnapshot,
-  hasShortcutOverride,
+  hasCustomBinding,
+  isShortcutRecording,
   setShortcutBinding,
   setShortcutEnabled,
+  setShortcutRecording,
   subscribeShortcutsChange,
   useShortcut,
 } from './shortcuts-store';

@@ -9,9 +9,10 @@ import {
   formatBinding,
   getEffectiveShortcut,
   getShortcutsSnapshot,
-  hasShortcutOverride,
+  hasCustomBinding,
   setShortcutBinding,
   setShortcutEnabled,
+  setShortcutRecording,
   subscribeShortcutsChange,
 } from '../../keys';
 import { Button } from '../ui/button';
@@ -28,7 +29,11 @@ export function ShortcutsPage({ onBack }: ShortcutsPageProps) {
   const [conflictError, setConflictError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!recordingId) return;
+    if (!recordingId) {
+      setShortcutRecording(null);
+      return;
+    }
+    setShortcutRecording(recordingId); // pause all global shortcuts while recording
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -58,7 +63,10 @@ export function ShortcutsPage({ onBack }: ShortcutsPageProps) {
       setConflictError(null);
     };
     window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      setShortcutRecording(null);
+    };
   }, [recordingId]);
 
   return (
@@ -84,7 +92,7 @@ export function ShortcutsPage({ onBack }: ShortcutsPageProps) {
             {SHORTCUT_REGISTRY.map((definition) => {
               const effective = getEffectiveShortcut(definition.id);
               const isRecording = recordingId === definition.id;
-              const hasOverride = hasShortcutOverride(definition.id);
+              const hasOverride = hasCustomBinding(definition.id);
               return (
                 <div className={`settings-row${isRecording ? ' settings-row--recording' : ''}`} key={definition.id}>
                   <div className="settings-row__copy">
@@ -110,7 +118,11 @@ export function ShortcutsPage({ onBack }: ShortcutsPageProps) {
                       ) : (
                         <>
                           <span className={`settings-chip${effective.enabled ? '' : ' settings-chip--dim'}`}>
-                            {effective.enabled ? formatBinding(effective.binding) : t('shortcuts.disabled')}
+                            {effective.enabled
+                              ? definition.doublePress
+                                ? t('shortcuts.press_twice', { binding: formatBinding(effective.binding) })
+                                : formatBinding(effective.binding)
+                              : t('shortcuts.disabled')}
                           </span>
                           <Button
                             variant="secondary"

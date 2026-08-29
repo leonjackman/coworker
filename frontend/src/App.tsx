@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ChatInput, extractSessionIds, type CommandChip } from './components/ChatInput';
+import { ChatInput, extractSessionIds, type CommandChip, type ComposerApi } from './components/ChatInput';
 import { useGlobalShortcuts } from './keys';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
@@ -461,6 +461,16 @@ function createMessage(
   };
 }
 
+/**
+ * True when any modal / menu / overlay that should consume Esc is currently
+ * open. All of the app's popups (DetailModal, SideDrawer, CreateProjectDialog,
+ * context menu, radix menus) are only mounted while open, so their DOM markers
+ * are a reliable "popup open" signal.
+ */
+function hasOpenOverlay(): boolean {
+  return Boolean(document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"], [role="listbox"]'));
+}
+
 // Map a raw `context_usage` event (snake_case) into the frontend ContextUsage
 // shape. Shared by the streaming event handler AND the session-open preview
 // fetch so both paths render an identical indicator.
@@ -597,7 +607,7 @@ function App() {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [webSetupHint, setWebSetupHint] = useState<'disabled' | 'no_key' | null>(null);
   const [webHintDismissed, setWebHintDismissed] = useState(false);
-  const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPage | null>(null);
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('main');
   const [references, setReferences] = useState<SessionReference[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
@@ -605,10 +615,160 @@ function App() {
   const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
   const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnostic[]>([]);
 
-  // Global keyboard shortcuts (registry-driven; Cmd+. / Ctrl+. to toggle plan/build).
+  // Global keyboard shortcuts — registry-driven (see keys/config.ts). Handlers
+  // return true when they consumed the key so conditional shortcuts (e.g.
+  // Esc-to-stop) can let the key fall through when not applicable.
+  const composerApiRef = useRef<ComposerApi | null>(null);
+  // 停止生成需要连按两次 Esc：第一次记录时间并放行（菜单/弹窗仍可正常关闭），
+  // 第二次在窗口期内的 Esc 才真正停止。
+  const lastEscPressRef = useRef(0);
   useGlobalShortcuts({
     'toggle-work-mode': () => {
       setWorkMode((prev) => (prev === 'plan' ? 'build' : 'plan'));
+      return true;
+    },
+    'new-chat': () => {
+      setActiveView('chat');
+      startNewChat();
+      return true;
+    },
+    'new-project': () => {
+      createProject();
+      return true;
+    },
+    'open-settings': () => {
+      openSettingsPage('main');
+      return true;
+    },
+    'focus-input': () => {
+      setActiveView('chat');
+      requestAnimationFrame(() => composerApiRef.current?.focus());
+      return true;
+    },
+    'send-message': () => {
+      const draft = editingMessage ? editDraft : input;
+      if (!draft.trim() && attachments.length === 0) return false;
+      if (editingMessage) void commitEditMessage(editingMessage.id, editDraft);
+      else sendMessage();
+      return true;
+    },
+    'stop-agent': () => {
+      if (!isThinking) return false;
+      // 弹窗/菜单/抽屉打开时 Esc 先用于关闭它们，不参与双击停止。
+      if (hasOpenOverlay() || mobileSidebarOpen) return false;
+      const now = Date.now();
+      const isDoublePress = now - lastEscPressRef.current < 500;
+      lastEscPressRef.current = now;
+      if (!isDoublePress) return false;
+      stopMessage();
+      return true;
+    },
+    'toggle-sidebar': () => {
+      if (isNarrowViewport) setMobileSidebarOpen((value) => !value);
+      else setSidebarCollapsed((value) => !value);
+      return true;
+    },
+    'toggle-right-panel': () => {
+      setRightSidebarOpen((value) => !value);
+      return true;
+    },
+    'toggle-bottom-panel': () => {
+      setBottomPanelView('terminal');
+      setBottomPanelOpen((value) => !value);
+      return true;
+    },
+    'attach-file': () => {
+      setActiveView('chat');
+      requestAnimationFrame(() => composerApiRef.current?.attachFiles());
+      return true;
+    },
+    'regenerate': () => {
+      if (isThinking) return false;
+      const currentId = sessionIdRef.current;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const assistant = messages[index];
+        if (!assistant || assistant.role !== 'assistant') continue;
+        if (currentId && assistant.sessionId && assistant.sessionId !== currentId) continue;
+        let hasTrigger = false;
+        for (let j = index - 1; j >= 0; j -= 1) {
+          const candidate = messages[j];
+          if (!candidate) continue;
+          if (currentId && candidate.sessionId && candidate.sessionId !== currentId) continue;
+          if (candidate.role === 'user') {
+            hasTrigger = true;
+            break;
+          }
+        }
+        if (!hasTrigger) return false;
+        void handleRegenerateMessage(assistant.id);
+        return true;
+      }
+      return false;
+    },
+    'edit-last-user-message': () => {
+      if (isThinking) return false;
+      const currentId = sessionIdRef.current;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const user = messages[index];
+        if (!user || user.role !== 'user' || !user.content) continue;
+        if (currentId && user.sessionId && user.sessionId !== currentId) continue;
+        setActiveView('chat');
+        beginEditMessage(user.id, user.content);
+        requestAnimationFrame(() => composerApiRef.current?.focus());
+        return true;
+      }
+      return false;
+    },
+    'view-providers': () => {
+      setActiveView('providers');
+      return true;
+    },
+    'view-mcp': () => {
+      setActiveView('mcp');
+      return true;
+    },
+    'view-skills': () => {
+      setActiveView('skills');
+      return true;
+    },
+    'view-memory': () => {
+      setActiveView('memory');
+      return true;
+    },
+    'view-org': () => {
+      setActiveView('org');
+      return true;
+    },
+    'view-chat': () => {
+      // Esc 语义：先关弹窗/菜单/抽屉，其次「返回上级」逐层退回，最后才到对话视图。
+      if (hasOpenOverlay() || mobileSidebarOpen) return false;
+      if (activeView === 'settings' && settingsPage !== 'main') {
+        // 设置子页（快捷键/主题/网页/审计）→ 设置主页
+        setSettingsPage('main');
+        return true;
+      }
+      if (activeView !== 'chat') {
+        setActiveView('chat');
+        setSettingsPage('main');
+        return true;
+      }
+      return false;
+    },
+    'copy-last-response': () => {
+      const currentId = sessionIdRef.current;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (!message) continue;
+        if (message.role !== 'assistant' || !message.content?.trim()) continue;
+        if (currentId && message.sessionId && message.sessionId !== currentId) continue;
+        void navigator.clipboard.writeText(message.content).catch(() => {});
+        return true;
+      }
+      return false;
+    },
+    'toggle-autonomy': () => {
+      setAutonomy((prev) => (prev === 'supervised' ? 'guarded' : prev === 'guarded' ? 'autonomous' : 'supervised'));
+      return true;
     },
   });
 
@@ -1349,7 +1509,7 @@ function App() {
   };
 
   const openSettingsPage = (page: SettingsPage) => {
-    setSettingsInitialPage(page);
+    setSettingsPage(page);
     setWebHintDismissed(true);
     setWebSetupHint(null);
     setActiveView('settings');
@@ -4164,6 +4324,7 @@ function App() {
                         onAttachmentsChange={setAttachments}
                         onReferencesChange={setReferences}
                         onResolveSession={resolveSessionReference}
+                        apiRef={composerApiRef}
                         onCancelEdit={() => {
                           setEditingMessage(null);
                           setEditDraft('');
@@ -4223,9 +4384,12 @@ function App() {
                   onMemorySettingsChange={changeMemorySettings}
                   modelOptions={modelOptions}
                   updateCenter={updateCenter}
-                  onClose={() => setActiveView('chat')}
-                  initialPage={settingsInitialPage ?? 'main'}
-                  onInitialPageConsumed={() => setSettingsInitialPage(null)}
+                  onClose={() => {
+                    setSettingsPage('main');
+                    setActiveView('chat');
+                  }}
+                  settingsPage={settingsPage}
+                  onSettingsPageChange={setSettingsPage}
                 />
               )}
             </section>
