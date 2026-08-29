@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { t } from "../lib/i18n";
-import { SHORTCUTS } from "../keys";
+import { useShortcut } from "../keys";
 import type { Autonomy, ComposerAttachment, OrgRosterEntry, SessionReference, WorkMode } from "../types";
 import { Button } from "./ui/button";
 import { CardSlot } from "./ui/card-slot";
@@ -251,6 +251,7 @@ export function ChatInput({
   const [addError, setAddError] = useState<string | null>(null);
   const addErrorTimer = useRef<number | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const toggleShortcut = useShortcut("toggle-work-mode");
 
   const showAddError = (message: string) => {
     setAddError(message);
@@ -1013,7 +1014,7 @@ export function ChatInput({
                     </Select>
                   </div>
 
-                  <Tooltip content={SHORTCUTS.TOGGLE_WORK_MODE.label}>
+                  <Tooltip content={toggleShortcut.enabled ? toggleShortcut.label : t('shortcuts.disabled')}>
                     <button type="button" className="composer-toggle-button" onClick={() => onWorkModeChange(workMode === "plan" ? "build" : "plan")} aria-label={t("chat.toggle_work_mode")}>
                       <ListChecks size={14} />
                       <span>{t(workMode === "plan" ? "chat.work_plan" : "chat.work_build")}</span>

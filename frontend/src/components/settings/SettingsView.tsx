@@ -6,6 +6,7 @@ import type { Autonomy, MemorySettings, MemorySettingsPatch, WebSettings } from 
 import type { UpdateCenter } from '../../lib/useUpdateCenter';
 import { useSound } from '../sound-provider';
 import { chatService } from '../../services/chatService';
+import { SHORTCUT_REGISTRY } from '../../keys';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
 import { SettingsList } from './SettingsList';
@@ -13,6 +14,7 @@ import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
 import { UpdatePanel } from './UpdatePanel';
 import { WebSettingsPage } from './WebSettingsPage';
+import { ShortcutsPage } from './ShortcutsPage';
 import { autonomyOptions, languageOptions, themeOptions } from './preference-options';
 
 interface SettingsViewProps {
@@ -36,7 +38,7 @@ interface SettingsViewProps {
   onInitialPageConsumed?: () => void;
 }
 
-export type SettingsPage = 'main' | 'theme' | 'audit' | 'web';
+export type SettingsPage = 'main' | 'theme' | 'audit' | 'web' | 'shortcuts';
 
 export function SettingsView({
   themeSettings,
@@ -128,6 +130,10 @@ export function SettingsView({
     return <WebSettingsPage settings={current} onChange={setWebSettings} onBack={() => setSettingsPage('main')} />;
   }
 
+  if (settingsPage === 'shortcuts') {
+    return <ShortcutsPage onBack={() => setSettingsPage('main')} />;
+  }
+
   return (
     <WorkspacePage
       eyebrow={t('settings.title')}
@@ -173,6 +179,15 @@ export function SettingsView({
                 actionLabel: t('settings.configure'),
                 meta: <span className="settings-chip">{t(currentPreset?.labelKey ?? 'theme.preset_mineral')}</span>,
                 onAction: () => setSettingsPage('theme'),
+              },
+              {
+                id: 'shortcuts',
+                type: 'action',
+                label: t('settings.shortcuts_entry'),
+                description: t('settings.shortcuts_entry_desc'),
+                actionLabel: t('settings.configure'),
+                meta: <span className="settings-chip">{t('settings.shortcuts_count', { count: SHORTCUT_REGISTRY.length })}</span>,
+                onAction: () => setSettingsPage('shortcuts'),
               },
             ],
           },

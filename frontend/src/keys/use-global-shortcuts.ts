@@ -1,29 +1,29 @@
 import { useEffect, useRef } from 'react';
-import { SHORTCUTS } from './config';
+import { SHORTCUT_REGISTRY } from './config';
+import { eventMatchesBinding, getEffectiveShortcut } from './shortcuts-store';
 
-interface UseGlobalShortcutsOptions {
-  onToggleWorkMode?: () => void;
-}
+export type GlobalShortcutHandlers = Record<string, (event: KeyboardEvent) => void>;
 
-export function useGlobalShortcuts({ onToggleWorkMode }: UseGlobalShortcutsOptions) {
-  const onToggleWorkModeRef = useRef(onToggleWorkMode);
-  onToggleWorkModeRef.current = onToggleWorkMode;
+/**
+ * Registry-driven global shortcut dispatcher. Handlers are keyed by the
+ * shortcut id defined in `SHORTCUT_REGISTRY`; enabled state and custom
+ * bindings are read live from the shortcuts store.
+ */
+export function useGlobalShortcuts(handlers: GlobalShortcutHandlers) {
+  const handlersRef = useRef(handlers);
+  handlersRef.current = handlers;
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      const { key, metaKey, ctrlKey } = event;
-
-      // Cmd+. on macOS or Ctrl+. on other platforms
-      if (key !== SHORTCUTS.TOGGLE_WORK_MODE.key) return;
-      const modPressed = (metaKey && SHORTCUTS.TOGGLE_WORK_MODE.mod === 'Meta')
-        || (ctrlKey && SHORTCUTS.TOGGLE_WORK_MODE.mod === 'Control');
-      if (!modPressed) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (onToggleWorkModeRef.current) {
-        onToggleWorkModeRef.current();
+      for (const definition of SHORTCUT_REGISTRY) {
+        const effective = getEffectiveShortcut(definition.id);
+        if (!effective.enabled) continue;
+        const callback = handlersRef.current[definition.id];
+        if (!callback) continue;
+        if (!eventMatchesBinding(event, effective.binding)) continue;
+        event.preventDefault();
+        event.stopPropagation();
+        callback(event);
       }
     };
 

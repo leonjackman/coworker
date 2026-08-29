@@ -4298,6 +4298,29 @@ body.bottom-panel-resizing {
   background: color-mix(in srgb, var(--success, #2f9e44) 10%, var(--material-control));
 }
 
+.settings-chip--dim {
+  color: var(--muted-foreground);
+  opacity: 0.55;
+}
+
+.settings-chip--recording {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--material-border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--material-control));
+}
+
+.settings-shortcut-row__control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-row--recording {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
 .settings-key-row {
   display: inline-flex;
   align-items: center;

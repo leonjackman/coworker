@@ -605,9 +605,9 @@ function App() {
   const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
   const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnostic[]>([]);
 
-  // Global keyboard shortcuts (e.g. Cmd+. / Ctrl+. to toggle plan/build).
+  // Global keyboard shortcuts (registry-driven; Cmd+. / Ctrl+. to toggle plan/build).
   useGlobalShortcuts({
-    onToggleWorkMode: () => {
+    'toggle-work-mode': () => {
       setWorkMode((prev) => (prev === 'plan' ? 'build' : 'plan'));
     },
   });
