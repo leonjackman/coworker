@@ -9,6 +9,12 @@ from .atomicio import atomic_write_text
 
 CONFIG_VERSION = 2
 
+# 系统保留的「聊天」项目：固定 id 与 memory_dir，行为与普通项目一致，但不可
+# 删除/重命名，其 workspace 由系统指定（沙箱目录）。前端按 ``is_chat`` 标记
+# 本地化显示名称。
+CHAT_PROJECT_ID = "__chat__"
+CHAT_MEMORY_DIR = "__chat__"
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -136,6 +142,32 @@ class ProjectStore:
         project.updated_at = _now()
         self.save(config)
         return project.memory_dir
+
+    def ensure_system_project(self, name: str, workspace_path: str, memory_dir: str) -> Project:
+        """Idempotently ensure the reserved system project (e.g. 聊天) exists.
+
+        Uses a deterministic ``id`` so the record is recoverable and stable
+        across restarts, unlike ``create()`` which generates a fresh uuid. If a
+        project with the reserved id is missing it is recreated; the caller
+        uses this for startup self-healing (folder / record / memory can be
+        deleted manually).
+        """
+        config = self.load()
+        existing = config.find(CHAT_PROJECT_ID)
+        if existing is not None:
+            return existing
+        now = _now()
+        project = Project(
+            id=CHAT_PROJECT_ID,
+            name=name[:60],
+            created_at=now,
+            updated_at=now,
+            workspace_path=workspace_path.strip(),
+            memory_dir=memory_dir,
+        )
+        config.projects.append(project)
+        self.save(config)
+        return project
 
     def create(self, name: str, workspace_path: str, memory_dir: str = "") -> Project:
         cleaned = name.strip()

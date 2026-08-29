@@ -5453,6 +5453,15 @@ body.bottom-panel-resizing {
   line-height: 1.65;
 }
 
+.first-run-start__hint {
+  max-width: 520px;
+  margin: 10px 0 0;
+  color: var(--muted-foreground);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+
 .first-run-start__actions {
   display: flex;
   flex-wrap: wrap;

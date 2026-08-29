@@ -25,6 +25,7 @@ import { ChangesPanel } from './components/ChangesPanel';
 import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, tOrDefault, translateError, useLanguage } from './lib/i18n';
 import { useUpdateCenter } from './lib/useUpdateCenter';
+import { displayProjectName } from './lib/projectName';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
@@ -1498,7 +1499,8 @@ function App() {
   useEffect(() => {
     if (sessionId || messages.length > 0 || projects.length === 0 || sessions.length > 0) return;
     if (activeProjectId && projects.some((project) => project.id === activeProjectId)) return;
-    const firstProject = projects[0];
+    // 只自动选中真实项目；仅有系统聊天项目时不自动选中，保留空态 onboarding。
+    const firstProject = projects.find((p) => !p.is_chat);
     if (!firstProject) return;
     pendingProjectIdRef.current = firstProject.id;
     setActiveProjectId(firstProject.id);
@@ -3254,8 +3256,12 @@ function App() {
 
   // 新对话：不再弹窗。在项目内新建则继承该项目 workspace；
   // 全局新建则进入空态，由 composer 顶部的 workspace 选择器指定。
+  // 首启无任何真实项目时，全局「新对话」直接落到系统保留的聊天项目。
   const startNewChat = (projectId?: string, agentId?: string) => {
-    startProjectDraft(projectId, '', agentId);
+    const realProjects = projects.filter((p) => !p.is_chat);
+    const chatProject = projects.find((p) => p.is_chat);
+    const effectiveProjectId = projectId ?? (realProjects.length === 0 ? chatProject?.id : undefined);
+    startProjectDraft(effectiveProjectId, '', agentId);
     setDraftMode(true);
   };
 
@@ -3515,6 +3521,8 @@ function App() {
   const createProject = () => setCreateProjectDialogOpen(true);
 
   const renameProject = async (project: ProjectEntry) => {
+    // 系统聊天项目不可重命名（后端同样拒绝）。
+    if (project.is_chat) return;
     try {
       const name = window.prompt(t('sidebar.project_rename'), project.name);
       if (!name || name.trim() === project.name) return;
@@ -3526,6 +3534,8 @@ function App() {
   };
 
   const deleteProject = async (projectId: string) => {
+    // 系统聊天项目不可删除（后端同样拒绝）。
+    if (projects.find((p) => p.id === projectId)?.is_chat) return;
     const confirmed = window.confirm(t('sidebar.project_delete_confirm'));
     if (!confirmed) return;
     try {
@@ -3897,14 +3907,14 @@ function App() {
   const sessionProjectId = sessions.find((session) => session.id === sessionId)?.project_id;
   const currentProjectId = activeProjectId || sessionProjectId;
   const activeProject = projects.find((project) => project.id === currentProjectId);
-  const titlebarProjectName = activeProject?.name ?? t('sidebar.default_project');
+  const titlebarProjectName = activeProject ? displayProjectName(activeProject) : t('sidebar.default_project');
   const activeProjectSessions = activeProject ? sessions.filter((session) => session.project_id === activeProject.id) : [];
   const showNewChatHero = activeView === 'chat' && !sessionId  && runtimeStatus === 'ready' && (!activeProject || draftMode);
-  const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.length === 0 && sessions.length === 0 && !sessionId && !draftMode;
+  const showFirstRunStart = activeView === 'chat' && runtimeStatus === 'ready' && projects.filter((p) => !p.is_chat).length === 0 && sessions.length === 0 && !sessionId && !draftMode;
   const showProjectSessionList = activeView === 'chat' && activeProject && !sessionId && runtimeStatus === 'ready' && !draftMode;
   const workspaceOptions = projects.map((project) => ({
     id: project.id,
-    name: project.name,
+    name: displayProjectName(project),
     path: project.workspace_path,
   }));
   const agentOptions = activeProject?.mode === 'single' ? [{
@@ -4220,7 +4230,7 @@ function App() {
                   {showFirstRunStart ? (
                     <FirstRunStart onCreateProject={createProject} onNewSession={() => startNewChat()} />
                   ) : showNewChatHero ? (
-                    <NewChatHero {...(activeProject?.name ? { workspaceName: activeProject.name } : {})} />
+                    <NewChatHero {...(activeProject ? { workspaceName: displayProjectName(activeProject) } : {})} />
                   ) : showProjectSessionList ? (
                     <ProjectSessionList
                       project={activeProject}

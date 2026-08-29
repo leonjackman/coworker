@@ -1,4 +1,4 @@
-import { FolderPlus, MessageSquarePlus } from 'lucide-react';
+import { FolderPlus, MessageCircle } from 'lucide-react';
 import { t } from '../lib/i18n';
 import { Button } from './ui/button';
 import coworkerLogoBlack from '../../../assets/brand/png/coworker-logo-black.png';
@@ -20,14 +20,15 @@ export function FirstRunStart({ onCreateProject, onNewSession }: FirstRunStartPr
         <p className="first-run-start__eyebrow">{t('first_run.eyebrow')}</p>
         <h1 id="first-run-title">{t('first_run.title')}</h1>
         <p className="first-run-start__description">{t('first_run.description')}</p>
+        <p className="first-run-start__hint">{t('first_run.chat_project_hint')}</p>
         <div className="first-run-start__actions">
           <Button variant="primary" size="lg" onClick={onCreateProject}>
             <FolderPlus size={17} />
             {t('first_run.create_project')}
           </Button>
           <Button variant="secondary" size="lg" onClick={onNewSession}>
-            <MessageSquarePlus size={17} />
-            {t('first_run.new_session')}
+            <MessageCircle size={17} />
+            {t('first_run.chat_project_cta')}
           </Button>
         </div>
       </div>

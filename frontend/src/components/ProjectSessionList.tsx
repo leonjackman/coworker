@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { WorkspacePage } from './ui/workspace-page';
 import { t } from '../lib/i18n';
+import { displayProjectName } from '../lib/projectName';
 import { formatTimeAgo } from '../lib/utils';
 import type { OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
 
@@ -111,7 +112,7 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
       className="workspace-page--sessions"
       contentClassName="workspace-page__content--sessions"
       eyebrow={project.workspace_path}
-      title={project.name}
+      title={displayProjectName(project)}
       description={sessions.length === 0 ? t('project_session.empty_state') : t('project_session.project_sessions_count', { count: sessions.length })}
       action={onOpenOrgSettings && !isSingle ? (
         <button type="button" className="project-session-list__team-btn" onClick={() => onOpenOrgSettings(project.id)}>

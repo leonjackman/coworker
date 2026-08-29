@@ -52,7 +52,7 @@ from coworker.platform import default_shell as _platform_default_shell
 from coworker.config import load_settings
 from coworker.config_controller import AppConfigController
 from coworker.events import WorkerEventBus, session_event_bus, worker_event_bus
-from coworker.projects import ProjectStore
+from coworker.projects import CHAT_MEMORY_DIR, CHAT_PROJECT_ID, ProjectStore
 from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
@@ -315,7 +315,14 @@ def _memory_agent_name(project_dir: str, agent_id: str) -> str:
 
 
 memory_manager.scanner.agent_name_resolver = _memory_agent_name
-workspace_controller = WorkspaceController(project_store, session_store, settings.workspace_dir, settings.data_dir, org_store=org_store)
+workspace_controller = WorkspaceController(
+    project_store,
+    session_store,
+    settings.workspace_dir,
+    settings.data_dir,
+    org_store=org_store,
+    chat_workspace_path=settings.data_dir / "chat",
+)
 # The runtime checkpoint DB is a disposable per-turn scratch (single-writer
 # model): every /chat/stream deletes the session's thread and rebuilds from the
 # session history, so there is no "dirty checkpoint from an aborted turn" to
@@ -403,9 +410,39 @@ async def _tracked_stream(stream_iter: Any, session_id: str):
             pass
 
 
+CHAT_PROJECT_NAME = "聊天"
+
+
+def _ensure_chat_project() -> str:
+    """Idempotent startup self-healing for the reserved 聊天 project.
+
+    Ensures all three artifacts exist: the project record (projects.json), the
+    system-designated sandbox workspace folder, and the memory scaffold. Any of
+    them can be lost (manual folder deletion, projects.json edit) — this
+    recreates them so the 聊天 project is always present and reachable. The
+    display name is localized by the frontend via the ``is_chat`` flag.
+    """
+    chat_workspace = settings.data_dir / "chat"
+    chat_workspace.mkdir(parents=True, exist_ok=True)
+    project = project_store.ensure_system_project(CHAT_PROJECT_NAME, str(chat_workspace), CHAT_MEMORY_DIR)
+    try:
+        memory_manager.registry.ensure_project(project.memory_dir, workspace_root=str(chat_workspace))
+        _ensure_org(project.memory_dir, ORG_MODE_SINGLE)
+        memory_manager.registry.ensure_agent(memory_manager.root / project.memory_dir, DEFAULT_AGENT)
+    except Exception as exc:  # noqa: BLE001 - scaffold must not block startup
+        logger.warning("chat project memory scaffold failed: %s", exc)
+    return project.id
+
+
 @app.on_event("startup")
 async def _startup_checkpoint_maintenance() -> None:
     global _checkpoint_sweep_task
+    # 系统保留「聊天」项目自愈：记录 + 沙箱文件夹 + memory scaffold 三者缺失
+    # 都重建，保证应用启动后聊天项目始终存在（用户手动删除也无效）。
+    try:
+        _ensure_chat_project()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("chat project ensure failed: %s", exc)
     # Apply persisted logging overrides (level/rotation/json/http) now that the
     # whole module is loaded — init_logger() ran at import time with env defaults.
     try:
@@ -1001,6 +1038,8 @@ def _unique_memory_dir(created_at: str, mode: str) -> str:
 
     base = f"{memory_dir_from_created_at(created_at)}_{mode}"
     taken = {p.memory_dir for p in project_store.list_projects() if p.memory_dir}
+    # 系统保留的聊天项目 memory_dir 永远不可被普通项目占用。
+    taken.add(CHAT_MEMORY_DIR)
     candidate = base
     index = 2
     while candidate in taken or (memory_manager.root / candidate).exists():
@@ -1934,7 +1973,8 @@ async def chat_stream(request: ChatStreamRequest):
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     else:
-        session = session_store.create("", project_id=request.project_id or "", agent_id=agent)
+        # 无项目兜底：归入系统保留的聊天项目（沙箱），绝不产生空项目会话。
+        session = session_store.create("", project_id=request.project_id or CHAT_PROJECT_ID, agent_id=agent)
         session_id = session.id
 
     # Correlate this turn's app.log records with the session. The id arrives in
@@ -4288,6 +4328,9 @@ async def create_project(request: ProjectCreateRequest):
         if request.mode not in ORG_MODES:
             raise ValueError(f"mode must be one of {list(ORG_MODES)}")
         workspace_path = workspace_controller.validate_workspace_path(request.workspace_path)
+        # 系统保留的聊天沙箱目录不可被用户项目占用。
+        if workspace_path == str((settings.data_dir / "chat").resolve()):
+            raise ValueError("该文件夹为系统保留的聊天项目工作区，不可创建新项目")
         # A folder hosts at most two projects (one single + one multi); reject
         # a second project with the same mode on the same workspace path.
         for existing in project_store.list_by_workspace_path(workspace_path):
@@ -4318,6 +4361,8 @@ async def create_project(request: ProjectCreateRequest):
 
 @app.post("/projects/{project_id}/rename")
 async def rename_project(project_id: str, request: ProjectRenameRequest):
+    if project_id == CHAT_PROJECT_ID:
+        raise HTTPException(status_code=400, detail="聊天项目为系统保留项目，不可重命名")
     try:
         project = project_store.rename(project_id, request.name)
     except KeyError as exc:
@@ -4329,6 +4374,8 @@ async def rename_project(project_id: str, request: ProjectRenameRequest):
 
 @app.delete("/projects/{project_id}")
 async def delete_project(project_id: str):
+    if project_id == CHAT_PROJECT_ID:
+        raise HTTPException(status_code=400, detail="聊天项目为系统保留项目，不可删除")
     try:
         memory_dir = project_store.memory_dir_for(project_id)
     except (KeyError, ValueError):
