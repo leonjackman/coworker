@@ -31,6 +31,7 @@ from ..logger import get_logger
 from ..mcp.mcp import McpManager
 from ..memory.layout import DEFAULT_AGENT_NAME
 from ..project_snapshot import ProjectSnapshotManager
+from ..projects import CHAT_MEMORY_DIR
 from ..providers import ProviderEntry, ProviderManager
 from ..sessions import SessionStore
 from ..traces import AGENT_TRACE_FILENAME, AgentTraceStore
@@ -849,10 +850,16 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         """
         web_tools = self._web_tools_for(session_id)
         browser_tool = self._browser_tool_for(session_id)
+        # 聊天模式是增强项，探测失败（如缺 project_store 的裸实例）绝不能阻断建图。
+        try:
+            chat_mode = self._resolve_project_dir() == CHAT_MEMORY_DIR
+        except Exception:  # noqa: BLE001 - defensive
+            chat_mode = False
         key = (
             work_mode,
             language,
             autonomy,
+            chat_mode,
             frozenset(self.referenced_sessions),
             tuple(sorted(getattr(t, "name", "") for t in web_tools)),
             bool(browser_tool),
@@ -904,6 +911,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             work_mode=work_mode,
             language=language,
             autonomy=autonomy,
+            chat_mode=chat_mode,
             checkpointer=checkpointer,
             approval_store=self.approval_store,
             data_dir=self.data_dir,

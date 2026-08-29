@@ -123,3 +123,65 @@ def test_chat_stream_requires_project_invariant():
     with TestClient(main.app) as client:
         resp = client.post("/chat/stream", json={"message": "hi"})
     assert resp.status_code == 400
+
+
+def test_chat_system_prompt_lazy_persona():
+    """代码层：聊天项目使用 Lazzzy Boy 人设 base 提示词，普通项目不受影响。"""
+    from coworker.agent.system_prompt import build_cw_chat_system_prompt, build_cw_system_prompt
+
+    chat = build_cw_chat_system_prompt()
+    normal = build_cw_system_prompt()
+    assert "Lazzzy" in chat and "懒懒" in chat
+    assert "聊天项目" in chat
+    assert "Lazzzy" not in normal
+    assert chat != normal
+
+
+def test_chat_assembler_replaces_phase_fragment():
+    """代码层：聊天模式下 phase 片段替换为聊天契约，去掉编码执行指令。"""
+    from coworker.agent.middleware.system_assembler import SystemAssembler
+
+    class FakeReq:
+        def __init__(self, state: dict, system_message: str):
+            self.state = state
+            self.system_message = type("SM", (), {"content": system_message})()
+
+        def override(self, **kwargs):
+            return kwargs
+
+    state = {"language": "zh", "phase": "execute", "work_mode": "build", "autonomy": "guarded", "messages": []}
+    base = "BASE PROMPT"
+
+    chat_text = SystemAssembler(chat_mode=True)._overrides(FakeReq(state, base))["system_message"].content
+    assert "BASE PROMPT" in chat_text
+    assert "聊天对话" in chat_text
+    assert "edit files" not in chat_text.lower()
+
+    normal_text = SystemAssembler(chat_mode=False)._overrides(FakeReq(state, base))["system_message"].content
+    assert "edit files" in normal_text.lower()
+
+
+def test_chat_memory_seeded():
+    """记忆层：聊天项目的 SOUL/AGENT/CHAT/CONTEXT 预置 Lazzzy Boy 内容。"""
+    root = main.memory_manager.root / "__chat__"
+    soul = root / "default_agent" / "BASE" / "SOUL.md"
+    agent_md = root / "default_agent" / "BASE" / "AGENT.md"
+    # 模拟全新骨架后再自愈预置，保证用例顺序无关。
+    soul.write_text("# SOUL\n\n（agent 的灵魂文件：人格、语气、核心行为）\n", encoding="utf-8")
+    agent_md.write_text("# AGENT\n\n（agent 的工作模式：擅长领域、工具偏好）\n", encoding="utf-8")
+    main._ensure_chat_project()
+
+    assert "懒懒" in soul.read_text(encoding="utf-8")
+    assert "Lazzzy" in agent_md.read_text(encoding="utf-8")
+    assert "沙箱" in (root / "BASE" / "CHAT.md").read_text(encoding="utf-8")
+    assert "聊天模式约束" in (root / "BASE" / "PROJECT" / "CONTEXT.md").read_text(encoding="utf-8")
+
+
+def test_chat_memory_not_clobbered():
+    """记忆层：用户编辑过的 SOUL.md 在再次 ensure 后不被覆盖。"""
+    root = main.memory_manager.root / "__chat__"
+    soul = root / "default_agent" / "BASE" / "SOUL.md"
+    custom = "# SOUL\n\n用户自定义人格。\n"
+    soul.write_text(custom, encoding="utf-8")
+    main._ensure_chat_project()
+    assert soul.read_text(encoding="utf-8") == custom
