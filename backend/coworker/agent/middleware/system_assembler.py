@@ -91,12 +91,16 @@ class SystemAssembler(AgentMiddleware):
         memory_manager: Any | None = None,
         skill_manager: Any | None = None,
         mcp_summary_provider: Callable[[], str | None] | None = None,
+        chat_mode: bool = False,
     ):
         self.capabilities = capabilities
         self.workspace = workspace
         self.memory_manager = memory_manager
         self.skill_manager = skill_manager
         self.mcp_summary_provider = mcp_summary_provider
+        # 聊天项目（__chat__）：替换 phase 片段为聊天契约，去掉"可修改文件/运行
+        # 命令/write_todos"的编码执行指令（base 已由 build_cw_chat_system_prompt 接管）。
+        self.chat_mode = chat_mode
         # P3: workspace layout is turn-cached per phase; invalidated when the
         # root dir mtime changes (top-level files/dirs added or removed).
         self._ws_cache: dict[tuple[Any, float], str] = {}
@@ -179,10 +183,20 @@ class SystemAssembler(AgentMiddleware):
         except Exception:  # noqa: BLE001 - never break on a missing base prompt
             base = ""
 
+        # 聊天项目：phase 片段退化为"语言跟随 + 聊天语气"，不注入编码执行契约。
+        if self.chat_mode:
+            phase_frag = (
+                "Reply in the same language as the user's message.\n"
+                "这是一个轻松的聊天对话。保持自然随和，直接凭知识回答；"
+                "除非用户明确要求，否则不要修改文件、运行命令或调用工具。"
+            )
+        else:
+            phase_frag = phase_system_prompt(language, phase, autonomy)
+
         # (priority, label, text) — higher priority = kept first under budget.
         fragments: list[tuple[int, str, str]] = [
             (100, "behaviour", base),
-            (90, "phase", phase_system_prompt(language, phase, autonomy)),
+            (90, "phase", phase_frag),
         ]
         if self.capabilities:
             fragments.append((80, "capabilities", self.capabilities))

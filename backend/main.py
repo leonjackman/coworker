@@ -429,9 +429,102 @@ def _ensure_chat_project() -> str:
         memory_manager.registry.ensure_project(project.memory_dir, workspace_root=str(chat_workspace))
         _ensure_org(project.memory_dir, ORG_MODE_SINGLE)
         memory_manager.registry.ensure_agent(memory_manager.root / project.memory_dir, DEFAULT_AGENT)
+        _seed_chat_memory(project.memory_dir, chat_workspace)
     except Exception as exc:  # noqa: BLE001 - scaffold must not block startup
         logger.warning("chat project memory scaffold failed: %s", exc)
     return project.id
+
+
+# ---------------------------------------------------------------------------
+# 聊天项目人设记忆（Lazzzy Boy）
+# ---------------------------------------------------------------------------
+# 预置聊天项目的记忆文件，让 agent 在聊天项目里知道自己的"懒懒男孩"人设与对话
+# 边界。仅当目标文件仍是默认骨架（或不存在）时写入，绝不覆盖用户编辑——与
+# MemoryRegistry 的"seed once, never clobber"策略一致。
+
+_CHAT_SOUL_MD = (
+    "# SOUL\n"
+    "\n"
+    "你是「聊天」项目里的 CoWorker「懒懒男孩」（Lazzzy Boy），来自相信「懒是美德、"
+    "技术本该让生活更轻松」的 Lazzzy Boy 工作室。\n"
+    "\n"
+    "- 语气自然口语化，像一位靠谱又有点懒散的同事，而不是客服或说明书。\n"
+    "- 先给结论，再给原因；能一句话说清，就绝不说三句。\n"
+    "- 严肃的问题也可以用轻松的口吻来答。\n"
+)
+
+_CHAT_AGENT_MD = (
+    "# AGENT\n"
+    "\n"
+    "这是系统内置的「聊天」项目（Lazzzy Boy 的懒哲学：少做事、做对事）。\n"
+    "\n"
+    "- 这里是对话场景，不是代码开发任务。除非用户明确要求，否则不读取/创建/修改\n"
+    "  任何文件、不运行命令、不调用搜索或 MCP 等工具。\n"
+    "- 可以直接凭知识回答，不必刻意调用工具。\n"
+    "- 用户提到「项目 / 代码 / 写文件」时，先确认是想在聊天里讨论，还是想真正开发\n"
+    "  （后者建议用户去创建一个项目）。\n"
+)
+
+_CHAT_BASE_MD = (
+    "# 聊天项目说明\n"
+    "\n"
+    "本目录是系统为「聊天」项目分配的沙箱工作区，用于隔离简单对话。\n"
+    "\n"
+    "- 日常对话直接回答即可，不要修改这里的任何文件。\n"
+    "- 只有用户明确要求时，才在本目录内创建/保存内容。\n"
+)
+
+
+def _chat_context_md(workspace: Path) -> str:
+    return (
+        "# 项目背景与约束\n"
+        "\n"
+        "（由系统生成与维护 — 记录项目的高层级背景、约束与上下文）\n"
+        "\n"
+        "## 项目信息\n"
+        "\n"
+        f"- **项目名**: 聊天（系统内置）\n"
+        f"- **项目根路径**: `{workspace}`（沙箱工作区）\n"
+        "\n"
+        "## 聊天模式约束\n"
+        "\n"
+        "这是系统内置的「聊天」项目，用于和用户轻松对话、答疑与讨论，不是代码开发项目。"
+        "除非用户明确要求，否则不要修改本目录的文件、不要运行命令。\n"
+    )
+
+
+def _seed_chat_memory(memory_dir: str, workspace: Path) -> None:
+    """Seed the chat project's memory with the Lazzzy Boy persona + chat rules.
+
+    Idempotent: each file is written only when it is still the default skeleton
+    (or missing), so user edits survive every startup/self-heal.
+    """
+    from coworker.memory.layout import AGENT_SKELETON
+
+    project_dir = memory_manager.root / memory_dir
+    agent_base = project_dir / DEFAULT_AGENT / "BASE"
+    project_base = project_dir / "BASE"
+
+    def _write_if_unchanged(path: Path, expected: str | None, content: str) -> None:
+        try:
+            if path.exists():
+                current = path.read_text(encoding="utf-8", errors="replace").strip()
+                if expected is not None and current != expected.strip():
+                    return  # 用户已编辑，绝不覆盖
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - best-effort
+            logger.warning("chat memory seed failed for %s: %s", path, exc)
+
+    _write_if_unchanged(agent_base / "SOUL.md", AGENT_SKELETON.get("SOUL.md"), _CHAT_SOUL_MD)
+    _write_if_unchanged(agent_base / "AGENT.md", AGENT_SKELETON.get("AGENT.md"), _CHAT_AGENT_MD)
+    _write_if_unchanged(project_base / "CHAT.md", None, _CHAT_BASE_MD)
+
+    # CONTEXT.md：仅在仍是自动种子（build_project_context_md 输出）时替换为聊天背景。
+    from coworker.agent.system_prompt import build_project_context_md
+
+    auto_seed = build_project_context_md(workspace)
+    _write_if_unchanged(project_base / "PROJECT" / "CONTEXT.md", auto_seed, _chat_context_md(workspace))
 
 
 @app.on_event("startup")

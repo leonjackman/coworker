@@ -35,6 +35,7 @@
 | Feature | Description |
 | --- | --- |
 | 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
+| 💬 **Built-in Chat Project** | A system-reserved "Chat" project ships on first launch — start a casual conversation without creating a project. It lives in its own sandbox folder, is pinned to the top of the sidebar, and can't be deleted or renamed; the agent there adopts a relaxed **Lazzzy Boy** persona and only touches files / commands when you explicitly ask |
 | 📥 **Message Queue & Interject** | Keep typing while the agent works — sends queue up per session and auto-send one-by-one when the stream finishes; interject (↳) any queued message to steer the running reply without interrupting it |
 | 🔌 **Multi-Provider** | 32 built-in provider presets — OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen / DashScope, Moonshot (Kimi), Zhipu (GLM), Doubao, Minimax, Cohere, Groq, xAI, Mistral, Ollama, vLLM, OpenRouter, SiliconFlow and more — plus any OpenAI-compatible custom endpoint, with live context-window discovery |
 | 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract, zip export / import, trash recovery, and cross-directory migration |
@@ -175,6 +176,29 @@ cd frontend && npm run dev
 # Terminal 3 — Electron (points to Vite dev server)
 NODE_ENV=development npx electron . --no-sandbox
 ```
+
+---
+
+## Chat Project (Built-in Casual Chat)
+
+Coworker ships with a system-reserved **Chat** project pinned to the top of the
+sidebar, so you can start a casual conversation right away — no need to create a
+project first.
+
+- **Zero-setup chat** — on first launch the onboarding screen offers "Start
+  chatting"; the global new-chat action falls back to the Chat project when you
+  have no real projects yet.
+- **Always there & safe** — it is created automatically at startup and
+  self-heals if its folder is deleted; it cannot be deleted or renamed. Its
+  workspace is a system-designated sandbox folder (`COWORKER_DATA_DIR/chat`),
+  fully isolated from your real projects.
+- **Lazzzy Boy persona** — the agent in the Chat project adopts the relaxed
+  "lazy boy" personality of the [Lazzzy Boy](https://lazzzyboy.com) studio:
+  casual, concise, and smart. Unless you explicitly ask, it won't read or edit
+  files, run commands, or call search / MCP tools — it just talks. (Tools remain
+  available, so it can still work inside the sandbox on request.)
+- **Localized name** — the project name follows your UI language
+  (Chat / 聊天 / チャット …).
 
 ---
 

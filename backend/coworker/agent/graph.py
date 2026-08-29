@@ -723,6 +723,7 @@ def build_coworker_agent_graph(
     browser_capability: str = "",
     max_output_tokens: int = 0,
     calibration_key: str = "",
+    chat_mode: bool = False,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -836,6 +837,7 @@ def build_coworker_agent_graph(
             memory_manager=memory_manager,
             skill_manager=skill_manager,
             mcp_summary_provider=mcp_middleware._mcp_summary,
+            chat_mode=chat_mode,
         )
     )
 
@@ -876,7 +878,7 @@ def build_coworker_agent_graph(
     )
     middleware.append(context_guard)
 
-    from .system_prompt import build_cw_system_prompt
+    from .system_prompt import build_cw_chat_system_prompt, build_cw_system_prompt
 
     # Behaviour-only base prompt. The workspace layout, MCP attribution, memory
     # index and skills catalog are composed by SystemAssembler (behaviour first,
@@ -884,7 +886,7 @@ def build_coworker_agent_graph(
     # duplicate `## Workspace` / `## Available tools` sections (~60KB+ per
     # request), which diluted instructions and degraded tool calling (the 降智
     # regression).
-    system_prompt = build_cw_system_prompt()
+    system_prompt = build_cw_chat_system_prompt() if chat_mode else build_cw_system_prompt()
 
     kwargs: dict[str, Any] = {
         "model": llm,

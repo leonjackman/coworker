@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { t, translateError } from '../lib/i18n';
+import { displayMemoryProjectName } from '../lib/projectName';
 import { chatService } from '../services/chatService';
 import type {
   MemoryAgentView,
@@ -407,7 +408,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
     ];
     if (library) {
       for (const project of library.projects) {
-        const label = project.project_name || project.name;
+        const label = displayMemoryProjectName(project);
         options.push({ value: `${project.rel}/BASE`, label: `${label} / BASE` });
         options.push({ value: `${project.rel}/BASE/PROJECT`, label: `${label} / BASE / PROJECT` });
         for (const agent of project.agents) {
@@ -841,7 +842,7 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
                     checked={exportProjectDirs.includes(project.name)}
                     onChange={() => toggleExportProject(project.name)}
                   />
-                  {project.project_name || project.name}
+                  {displayMemoryProjectName(project)}
                 </label>
               ))}
             </div>
@@ -1012,7 +1013,7 @@ function ProjectBranch({
       >
         {isCollapsed(`p:${project.rel}`) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         <Folder size={14} className="memory-tree__icon" />
-        <span className="memory-tree__label">{project.project_name || project.name}</span>
+        <span className="memory-tree__label">{displayMemoryProjectName(project)}</span>
         <span className="memory-tree__rel">{project.name}</span>
       </button>
       {!isCollapsed(`p:${project.rel}`) && (
