@@ -1148,9 +1148,11 @@ class AgentRuntimeRegistry:
         self.memory_manager = memory_manager
         self.project_store = project_store
         self.default_workspace = Workspace(
-            settings.workspace_dir,
+            # 空项目兜底永远指向系统保留的聊天沙箱目录，绝不落到应用自身仓库
+            # 根目录（settings.workspace_dir），避免 agent 拥有应用源码读写权限。
+            settings.data_dir / "chat",
             settings.data_dir / TOOL_AUDIT_FILENAME,
-            fingerprint_path_for(settings.data_dir, settings.workspace_dir),
+            fingerprint_path_for(settings.data_dir, settings.data_dir / "chat"),
         )
         self.approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)

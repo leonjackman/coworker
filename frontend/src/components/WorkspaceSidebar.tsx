@@ -1,7 +1,8 @@
-import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
+import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import type { AppView, OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
+import { displayProjectName } from '../lib/projectName';
 import { formatTimeAgo } from '../lib/utils';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
@@ -105,7 +106,8 @@ function orderProjects(projects: ProjectEntry[], preferred: string[]): ProjectEn
       seen.add(project.id);
     }
   }
-  return result;
+  // 系统保留的聊天项目始终置顶固定。
+  return result.sort((a, b) => Number(b.is_chat) - Number(a.is_chat));
 }
 
 function SessionRow({ session, active, running, onOpen, onDelete }: SessionRowProps) {
@@ -293,13 +295,14 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
 function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null);
+  const isChat = Boolean(project.is_chat);
   const {
     listeners,
     setNodeRef,
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: project.id });
+  } = useSortable({ id: project.id, disabled: isChat });
   const dragStyle: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -355,8 +358,13 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
     ...(onOpenOrgSettings && !isSingle
       ? [{ id: 'team', label: t('sidebar.org_team_manage'), icon: <Users size={14} />, dividerBefore: true, onSelect: () => onOpenOrgSettings(project.id) }]
       : []),
-    { id: 'rename', label: t('sidebar.project_rename'), icon: <Pencil size={14} />, dividerBefore: true, onSelect: () => onRenameProject(project) },
-    { id: 'delete', label: t('sidebar.project_delete'), icon: <Trash2 size={14} />, danger: true, onSelect: () => onDeleteProject(project.id) },
+    // 系统聊天项目不可重命名/删除（后端同样拒绝）。
+    ...(isChat
+      ? []
+      : [
+          { id: 'rename', label: t('sidebar.project_rename'), icon: <Pencil size={14} />, dividerBefore: true, onSelect: () => onRenameProject(project) },
+          { id: 'delete', label: t('sidebar.project_delete'), icon: <Trash2 size={14} />, danger: true, onSelect: () => onDeleteProject(project.id) },
+        ]),
   ];
 
   return (
@@ -368,8 +376,8 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
         onContextMenu={(e) => { e.preventDefault(); setProjectMenu({ x: e.clientX, y: e.clientY }); }}
       >
         <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
-          {expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />)}
-          <span>{project.name}</span>
+          {isChat ? <MessageCircle size={16} /> : (expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />))}
+          <span>{displayProjectName(project)}</span>
           <span className="sidebar-project__chevron-icon" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} onPointerDown={(e) => e.stopPropagation()}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
           </span>
@@ -393,14 +401,18 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
                   </>
                 )}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => onRenameProject(project)}>
-                  <Pencil size={14} />
-                  {t('sidebar.project_rename')}
-                </DropdownMenuItem>
-                <DropdownMenuItem variant="destructive" onClick={() => onDeleteProject(project.id)}>
-                  <Trash2 size={14} />
-                  {t('sidebar.project_delete')}
-                </DropdownMenuItem>
+                {!isChat && (
+                  <>
+                    <DropdownMenuItem onClick={() => onRenameProject(project)}>
+                      <Pencil size={14} />
+                      {t('sidebar.project_rename')}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem variant="destructive" onClick={() => onDeleteProject(project.id)}>
+                      <Trash2 size={14} />
+                      {t('sidebar.project_delete')}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
             <button type="button" className="sidebar-project__new-trigger" onClick={(e) => { e.stopPropagation(); onNewChat(project.id); }} title={t('sidebar.new_chat')} aria-label={t('sidebar.new_chat')}>

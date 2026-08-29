@@ -3,19 +3,23 @@ from typing import Any
 from uuid import uuid4
 
 from .org import ORG_MODE_MULTI, ORG_MODE_SINGLE
-from .projects import ProjectStore
+from .projects import CHAT_PROJECT_ID, ProjectStore
 from .sessions import SessionStore
 from .workspace import TOOL_AUDIT_FILENAME, Workspace, fingerprint_path_for
 
 
 class WorkspaceController:
-    def __init__(self, project_store: ProjectStore, session_store: SessionStore, default_workspace: Path, data_dir: Path, org_store=None):
+    def __init__(self, project_store: ProjectStore, session_store: SessionStore, default_workspace: Path, data_dir: Path, org_store=None, chat_workspace_path: Path | None = None):
         self.project_store = project_store
         self.session_store = session_store
         self.default_workspace = default_workspace
         self.audit_path = data_dir / TOOL_AUDIT_FILENAME
         self.data_dir = data_dir
         self.org_store = org_store
+        # 系统保留「聊天」项目的沙箱目录。空项目回退永远指向这里，绝不落到
+        # 应用自身仓库根目录（``default_workspace``），避免 agent 拥有对应用
+        # 源码的读写权限（安全修正）。
+        self.chat_workspace_path = Path(chat_workspace_path or (data_dir / "chat")).resolve()
         # W1 (compile-cache prerequisite): a stable Workspace per path so tool
         # closures compiled once can be reused across turns without pinning a
         # per-turn object. Per-turn state is reset via ``Workspace.begin_turn()``
@@ -59,12 +63,27 @@ class WorkspaceController:
         return ws
 
     def default(self) -> Workspace:
-        return self.create_workspace(str(self.default_workspace))
+        """Return the reserved 聊天 project's sandbox workspace.
+
+        Never falls back to the app repo root: any session without a project
+        must only ever see the system-designated sandbox, not the application's
+        own source code. The sandbox folder is (re)created on demand so a
+        manually-deleted folder self-heals without a restart.
+        """
+        path = Path(self.chat_workspace_path)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return self.create_workspace(str(path))
 
     def workspace_for_project(self, project_id: str) -> Workspace:
         project = self.project_store.require(project_id)
         if not project.workspace_path:
             raise ValueError(f"project {project_id} has no workspace path")
+        # 系统保留项目（聊天）自愈：沙箱文件夹被手动删除后在此按需重建。
+        if project_id == CHAT_PROJECT_ID:
+            Path(project.workspace_path).mkdir(parents=True, exist_ok=True)
         workspace_path = self.validate_workspace_path(project.workspace_path)
         return self.create_workspace(workspace_path)
 
@@ -103,4 +122,5 @@ class WorkspaceController:
             "memory_dir": project.memory_dir,
             "mode": mode,
             "roster": roster,
+            "is_chat": project.id == CHAT_PROJECT_ID,
         }

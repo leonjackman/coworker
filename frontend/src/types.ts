@@ -460,6 +460,7 @@ export interface ProjectEntry {
   memory_dir?: string;
   mode?: ProjectMode;
   roster?: OrgRosterEntry[];
+  is_chat?: boolean;
 }
 
 export interface CreateProjectRequest {
