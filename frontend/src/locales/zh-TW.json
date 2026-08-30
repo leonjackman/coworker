@@ -1070,5 +1070,7 @@
   "dashboard.preview_design": "設計檔案無法在此預覽，請用設計軟體開啟。",
   "dashboard.preview_archive": "壓縮檔無法在此預覽，請用解壓軟體開啟。",
   "dashboard.preview_font": "字型檔案無法在此預覽，請用字型工具開啟。",
-  "dashboard.preview_executable": "可執行檔無法在此預覽。"
+  "dashboard.preview_executable": "可執行檔無法在此預覽。",
+  "settings.memory_open": "記憶庫",
+  "settings.memory_open_desc": "瀏覽和編輯項目記憶，agent 會跨會話持久保存這些內容。"
 }

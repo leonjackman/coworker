@@ -36,6 +36,7 @@ interface SettingsViewProps {
   onClose: () => void;
   settingsPage: SettingsPage;
   onSettingsPageChange: (page: SettingsPage) => void;
+  onOpenMemory?: () => void;
 }
 
 export type SettingsPage = 'main' | 'theme' | 'audit' | 'web' | 'shortcuts';
@@ -59,6 +60,7 @@ export function SettingsView({
   onClose,
   settingsPage,
   onSettingsPageChange,
+  onOpenMemory,
 }: SettingsViewProps) {
   const { enabled: soundEnabled, toggleEnabled: toggleSound } = useSound();
   const [webSettings, setWebSettings] = useState<WebSettings | null>(null);
@@ -263,6 +265,14 @@ export function SettingsView({
             description: t('settings.runtime_group_desc'),
             items: [
               {
+                id: 'open_memory',
+                type: 'action',
+                label: t('settings.memory_open'),
+                description: t('settings.memory_open_desc'),
+                actionLabel: t('settings.web_open'),
+                onAction: () => onOpenMemory?.(),
+              },
+              {
                 id: 'max_attachment_mb',
                 type: 'number_input',
                 label: t('settings.max_attachment_mb'),
@@ -351,6 +361,11 @@ export function SettingsView({
           },
         ]}
       />
+      <footer className="settings-brand-mark">
+        <a href="https://coworker.lazzzyboy.com" target="_blank" rel="noreferrer">
+          coworker.lazzzyboy.com
+        </a>
+      </footer>
     </WorkspacePage>
   );
 }

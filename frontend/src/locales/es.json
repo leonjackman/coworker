@@ -1043,5 +1043,7 @@
   "dashboard.preview_design": "Los archivos de diseño no se pueden previsualizar aquí. Ábrelos con una aplicación de diseño.",
   "dashboard.preview_archive": "Los archivos comprimidos no se pueden previsualizar aquí. Ábrelos con un descompresor.",
   "dashboard.preview_font": "Las fuentes no se pueden previsualizar aquí. Ábrelas con una aplicación de fuentes.",
-  "dashboard.preview_executable": "Los archivos ejecutables no se pueden previsualizar aquí."
+  "dashboard.preview_executable": "Los archivos ejecutables no se pueden previsualizar aquí.",
+  "settings.memory_open": "Biblioteca de memoria",
+  "settings.memory_open_desc": "Explora y edita la memoria del proyecto que los agentes guardan entre sesiones."
 }

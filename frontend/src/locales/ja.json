@@ -1070,5 +1070,7 @@
   "dashboard.preview_design": "デザインファイルはここではプレビューできません。デザインアプリで開いてください。",
   "dashboard.preview_archive": "アーカイブはここではプレビューできません。解凍アプリで開いてください。",
   "dashboard.preview_font": "フォントファイルはここではプレビューできません。フォントアプリで開いてください。",
-  "dashboard.preview_executable": "実行可能ファイルはここではプレビューできません。"
+  "dashboard.preview_executable": "実行可能ファイルはここではプレビューできません。",
+  "settings.memory_open": "メモリライブラリ",
+  "settings.memory_open_desc": "エージェントがセッションをまたいで保存するプロジェクトメモリを閲覧・編集します。"
 }

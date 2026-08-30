@@ -1070,5 +1070,7 @@
   "dashboard.preview_design": "Les fichiers de conception ne peuvent pas être prévisualisés ici. Ouvrez-les avec une application de conception.",
   "dashboard.preview_archive": "Les archives ne peuvent pas être prévisualisées ici. Ouvrez-les avec une application d'archivage.",
   "dashboard.preview_font": "Les fichiers de police ne peuvent pas être prévisualisés ici. Ouvrez-les avec une application de polices.",
-  "dashboard.preview_executable": "Les fichiers exécutables ne peuvent pas être prévisualisés ici."
+  "dashboard.preview_executable": "Les fichiers exécutables ne peuvent pas être prévisualisés ici.",
+  "settings.memory_open": "Bibliothèque de mémoire",
+  "settings.memory_open_desc": "Parcourez et modifiez la mémoire du projet que les agents conservent entre les sessions."
 }

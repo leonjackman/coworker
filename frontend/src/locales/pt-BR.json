@@ -1070,5 +1070,7 @@
   "dashboard.preview_design": "Arquivos de design não podem ser visualizados aqui. Abra-os em um aplicativo de design.",
   "dashboard.preview_archive": "Arquivos compactados não podem ser visualizados aqui. Abra-os em um descompactador.",
   "dashboard.preview_font": "Fontes não podem ser visualizadas aqui. Abra-as em um aplicativo de fontes.",
-  "dashboard.preview_executable": "Arquivos executáveis não podem ser visualizados aqui."
+  "dashboard.preview_executable": "Arquivos executáveis não podem ser visualizados aqui.",
+  "settings.memory_open": "Biblioteca de memória",
+  "settings.memory_open_desc": "Explore e edite a memória do projeto que os agentes preservam entre sessões."
 }

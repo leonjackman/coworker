@@ -1072,5 +1072,7 @@
   "dashboard.preview_design": "Design files cannot be previewed here. Open them in a design application.",
   "dashboard.preview_archive": "Archive files cannot be previewed here. Open them in an archive application.",
   "dashboard.preview_font": "Font files cannot be previewed here. Open them in a font application.",
-  "dashboard.preview_executable": "Executable files cannot be previewed here."
+  "dashboard.preview_executable": "Executable files cannot be previewed here.",
+  "settings.memory_open": "Memory library",
+  "settings.memory_open_desc": "Browse and edit the project memory that agents persist across sessions."
 }

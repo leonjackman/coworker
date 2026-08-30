@@ -68,6 +68,11 @@ export function ProjectDashboard({
     [projectName],
   );
 
+  const sessionsByProject = useMemo(
+    () => sessions.filter((session) => session.project_id === projectId),
+    [sessions, projectId],
+  );
+
   const tabs = useMemo(
     () => [
       { id: 'overview', label: t('dashboard.overview') },
@@ -75,14 +80,13 @@ export function ProjectDashboard({
       { id: 'agents', label: t('dashboard.agents') },
       { id: 'tools', label: t('dashboard.tools') },
       { id: 'memory', label: t('dashboard.memory') },
-      { id: 'sessions', label: t('dashboard.sessions'), count: sessions.length },
+      {
+        id: 'sessions',
+        label: t('dashboard.sessions'),
+        ...(sessionsByProject.length > 0 ? { count: sessionsByProject.length } : {}),
+      },
     ],
-    [sessions.length],
-  );
-
-  const sessionsByProject = useMemo(
-    () => sessions.filter((session) => session.project_id === projectId),
-    [sessions, projectId],
+    [sessionsByProject.length],
   );
 
   return (

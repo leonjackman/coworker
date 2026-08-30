@@ -1072,5 +1072,7 @@
   "dashboard.preview_design": "设计文件无法在此预览，请用设计软件打开。",
   "dashboard.preview_archive": "压缩包无法在此预览，请用解压软件打开。",
   "dashboard.preview_font": "字体文件无法在此预览，请用字体工具打开。",
-  "dashboard.preview_executable": "可执行文件无法在此预览。"
+  "dashboard.preview_executable": "可执行文件无法在此预览。",
+  "settings.memory_open": "记忆库",
+  "settings.memory_open_desc": "浏览和编辑项目记忆，agent 会跨会话持久保存这些内容。"
 }

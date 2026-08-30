@@ -1070,5 +1070,7 @@
   "dashboard.preview_design": "Design-Dateien können hier nicht in der Vorschau angezeigt werden. Öffnen Sie sie mit einer Design-Anwendung.",
   "dashboard.preview_archive": "Archive können hier nicht in der Vorschau angezeigt werden. Öffnen Sie sie mit einer Archiv-Anwendung.",
   "dashboard.preview_font": "Schriftdateien können hier nicht in der Vorschau angezeigt werden. Öffnen Sie sie mit einer Schrift-Anwendung.",
-  "dashboard.preview_executable": "Ausführbare Dateien können hier nicht in der Vorschau angezeigt werden."
+  "dashboard.preview_executable": "Ausführbare Dateien können hier nicht in der Vorschau angezeigt werden.",
+  "settings.memory_open": "Gedächtnis-Bibliothek",
+  "settings.memory_open_desc": "Durchsuchen und bearbeiten Sie das Projektgedächtnis, das Agents über Sitzungen hinweg speichern."
 }

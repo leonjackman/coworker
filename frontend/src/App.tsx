@@ -760,10 +760,6 @@ function App() {
       setActiveView('skills');
       return true;
     },
-    'view-memory': () => {
-      setActiveView('memory');
-      return true;
-    },
     'view-chat': () => {
       // Esc 语义：先关弹窗/菜单/抽屉，其次「返回上级」逐层退回，最后才到对话视图。
       if (hasOpenOverlay() || mobileSidebarOpen) return false;
@@ -4454,6 +4450,10 @@ function App() {
                   }}
                   settingsPage={settingsPage}
                   onSettingsPageChange={setSettingsPage}
+                  onOpenMemory={() => {
+                    setSettingsPage('main');
+                    setActiveView('memory');
+                  }}
                 />
               )}
             </section>

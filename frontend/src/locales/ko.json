@@ -1070,5 +1070,7 @@
   "dashboard.preview_design": "디자인 파일은 여기서 미리 볼 수 없습니다. 디자인 응용 프로그램으로 여세요.",
   "dashboard.preview_archive": "압축 파일은 여기서 미리 볼 수 없습니다. 압축 응용 프로그램으로 여세요.",
   "dashboard.preview_font": "글꼴 파일은 여기서 미리 볼 수 없습니다. 글꼴 응용 프로그램으로 여세요.",
-  "dashboard.preview_executable": "실행 파일은 여기서 미리 볼 수 없습니다."
+  "dashboard.preview_executable": "실행 파일은 여기서 미리 볼 수 없습니다.",
+  "settings.memory_open": "메모리 라이브러리",
+  "settings.memory_open_desc": "에이전트가 세션 간에 저장하는 프로젝트 메모리를 탐색하고 편집합니다."
 }

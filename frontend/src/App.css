@@ -11255,3 +11255,23 @@ body.dashboard-files__dragging * {
   border-radius: 8px;
   padding: 8px 10px;
 }
+
+/* ── Settings brand mark ───────────────────────────────────────── */
+.settings-brand-mark {
+  margin-top: 28px;
+  padding-bottom: 8px;
+  text-align: center;
+}
+
+.settings-brand-mark a {
+  color: var(--muted-foreground, #888);
+  opacity: 0.55;
+  font-size: 12px;
+  text-decoration: none;
+  letter-spacing: 0.02em;
+  transition: opacity 0.15s ease;
+}
+
+.settings-brand-mark a:hover {
+  opacity: 1;
+}
