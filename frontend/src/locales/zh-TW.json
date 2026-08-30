@@ -1059,5 +1059,7 @@
   "dashboard.binary_file": "二進位檔案",
   "common.on": "開",
   "common.off": "關",
-  "project_session.empty_state_text": "尚無對話階段。開一個新對話階段開始吧。"
+  "project_session.empty_state_text": "尚無對話階段。開一個新對話階段開始吧。",
+  "shortcuts.open_dashboard": "項目儀表盤",
+  "shortcuts.open_dashboard_desc": "開啟目前項目的儀表盤。"
 }

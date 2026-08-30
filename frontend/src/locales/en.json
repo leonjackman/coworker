@@ -1061,5 +1061,7 @@
   "dashboard.binary_file": "Binary file",
   "common.on": "On",
   "common.off": "Off",
-  "project_session.empty_state_text": "No sessions yet. Start a new chat to begin."
+  "project_session.empty_state_text": "No sessions yet. Start a new chat to begin.",
+  "shortcuts.open_dashboard": "Project Dashboard",
+  "shortcuts.open_dashboard_desc": "Open the current project's dashboard."
 }

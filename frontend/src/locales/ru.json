@@ -1059,5 +1059,7 @@
   "dashboard.binary_file": "Бинарный файл",
   "common.on": "Вкл",
   "common.off": "Выкл",
-  "project_session.empty_state_text": "Сессий пока нет. Начните новый чат."
+  "project_session.empty_state_text": "Сессий пока нет. Начните новый чат.",
+  "shortcuts.open_dashboard": "Панель проекта",
+  "shortcuts.open_dashboard_desc": "Открывает панель текущего проекта."
 }

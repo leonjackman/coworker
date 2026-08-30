@@ -1059,5 +1059,7 @@
   "dashboard.binary_file": "Fichier binaire",
   "common.on": "Activé",
   "common.off": "Désactivé",
-  "project_session.empty_state_text": "Aucune session pour le moment. Démarrez une nouvelle discussion."
+  "project_session.empty_state_text": "Aucune session pour le moment. Démarrez une nouvelle discussion.",
+  "shortcuts.open_dashboard": "Tableau de bord du projet",
+  "shortcuts.open_dashboard_desc": "Ouvre le tableau de bord du projet actuel."
 }

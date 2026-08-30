@@ -141,6 +141,12 @@ export const SHORTCUT_REGISTRY: readonly ShortcutDefinition[] = [
     defaultBinding: { key: '4', mod: modKey() },
   },
   {
+    id: 'open-dashboard',
+    labelKey: 'shortcuts.open_dashboard',
+    descriptionKey: 'shortcuts.open_dashboard_desc',
+    defaultBinding: { key: 'o', mod: modKey() },
+  },
+  {
     id: 'toggle-sidebar',
     labelKey: 'shortcuts.toggle_sidebar',
     descriptionKey: 'shortcuts.toggle_sidebar_desc',

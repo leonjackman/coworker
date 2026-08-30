@@ -1059,5 +1059,7 @@
   "dashboard.binary_file": "Binärdatei",
   "common.on": "Ein",
   "common.off": "Aus",
-  "project_session.empty_state_text": "Noch keine Sitzungen. Starte einen neuen Chat."
+  "project_session.empty_state_text": "Noch keine Sitzungen. Starte einen neuen Chat.",
+  "shortcuts.open_dashboard": "Projekt-Dashboard",
+  "shortcuts.open_dashboard_desc": "Öffnet das Dashboard des aktuellen Projekts."
 }

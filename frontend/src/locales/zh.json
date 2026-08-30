@@ -1061,5 +1061,7 @@
   "dashboard.binary_file": "二进制文件",
   "common.on": "开",
   "common.off": "关",
-  "project_session.empty_state_text": "暂无会话。新建一个会话开始吧。"
+  "project_session.empty_state_text": "暂无会话。新建一个会话开始吧。",
+  "shortcuts.open_dashboard": "项目仪表盘",
+  "shortcuts.open_dashboard_desc": "打开当前项目的仪表盘。"
 }

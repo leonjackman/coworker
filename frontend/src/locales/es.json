@@ -1032,5 +1032,7 @@
   "dashboard.binary_file": "Archivo binario",
   "common.on": "Activado",
   "common.off": "Desactivado",
-  "project_session.empty_state_text": "Sin sesiones aún. Inicia un nuevo chat."
+  "project_session.empty_state_text": "Sin sesiones aún. Inicia un nuevo chat.",
+  "shortcuts.open_dashboard": "Panel del proyecto",
+  "shortcuts.open_dashboard_desc": "Abre el panel del proyecto actual."
 }

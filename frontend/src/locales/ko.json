@@ -1059,5 +1059,7 @@
   "dashboard.binary_file": "바이너리 파일",
   "common.on": "켜기",
   "common.off": "끄기",
-  "project_session.empty_state_text": "아직 세션이 없습니다. 새 대화를 시작하세요."
+  "project_session.empty_state_text": "아직 세션이 없습니다. 새 대화를 시작하세요.",
+  "shortcuts.open_dashboard": "프로젝트 대시보드",
+  "shortcuts.open_dashboard_desc": "현재 프로젝트의 대시보드를 엽니다."
 }

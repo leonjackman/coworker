@@ -529,6 +529,7 @@ function App() {
   const [draftAgentId, setDraftAgentId] = useState<string>('default_agent');
   const [orgProjectId, setOrgProjectId] = useState<string | undefined>();
   const [dashboardProjectId, setDashboardProjectId] = useState<string | undefined>();
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
   // useLanguage() 订阅语言变化以触发重渲染（返回值不直接使用）。
   useLanguage();
   const updateCenter = useUpdateCenter();
@@ -641,6 +642,12 @@ function App() {
     },
     'open-settings': () => {
       openSettingsPage('main');
+      return true;
+    },
+    'open-dashboard': () => {
+      const target = selectedProjectId || currentProjectId;
+      if (!target) return false;
+      openDashboard(target);
       return true;
     },
     'focus-input': () => {
@@ -3250,6 +3257,7 @@ function App() {
     setContextUsage(null); // 新会话不残留上一会话的上下文预算（B10）
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
+    setSelectedProjectId(projectId);
     const project = projects.find((p) => p.id === projectId);
     const resolvedAgent = project?.mode === 'single' ? 'default_agent' : (agentId ?? 'default_agent');
     setDraftAgentId(resolvedAgent);
@@ -3271,6 +3279,7 @@ function App() {
   const selectDraftWorkspace = (projectId: string) => {
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
+    setSelectedProjectId(projectId);
     setDraftMode(true);
     setActiveView('chat');
   };
@@ -3290,6 +3299,10 @@ function App() {
     setDashboardProjectId(projectId);
     setDraftMode(false);
     setActiveView('dashboard');
+  };
+
+  const selectProject = (projectId: string) => {
+    setSelectedProjectId(projectId);
   };
 
   const pickWorkspaceDirectory = async () => {
@@ -3444,6 +3457,7 @@ function App() {
         }, delay);
       }
       setActiveProjectId(response.session.project_id || undefined);
+      setSelectedProjectId(response.session.project_id || undefined);
       // 归而非覆盖：保留本地 status === 'running' 的消息 — 包括从其它会话切走后
       // 仍在后台续流的半截回复，以便切回时继续看到流式内容。
       // 注意：后端仅在流终结时（done/error/断开）才持久化 assistant 消息，因此
@@ -4207,6 +4221,7 @@ function App() {
           onNewChat={startNewChat}
           onOpenProject={openProject}
           onOpenDashboard={openDashboard}
+          onSelectProject={selectProject}
           onOpenSession={openSession}
           onDeleteSession={deleteSession}
           onCreateProject={createProject}

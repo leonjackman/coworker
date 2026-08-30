@@ -45,6 +45,7 @@ interface WorkspaceSidebarProps {
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenProject: (projectId: string) => void;
   onOpenDashboard: (projectId: string) => void;
+  onSelectProject: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onCreateProject: () => void;
@@ -180,6 +181,7 @@ interface ProjectRowProps {
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenProject: (projectId: string) => void;
   onOpenDashboard: (projectId: string) => void;
+  onSelectProject: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onRenameProject: (project: ProjectEntry) => void;
@@ -294,7 +296,7 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
   );
 }
 
-function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenDashboard, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
+function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenDashboard, onSelectProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const isChat = Boolean(project.is_chat);
@@ -353,6 +355,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
 
   const handleTitleClick = () => {
     setExpanded((v) => !v);
+    onSelectProject(project.id);
   };
 
   const projectMenuItems: ContextMenuItem[] = [
@@ -493,6 +496,7 @@ export function WorkspaceSidebar({
   onNewChat,
   onOpenProject,
   onOpenDashboard,
+  onSelectProject,
   onOpenSession,
   onDeleteSession,
   onCreateProject,
@@ -659,6 +663,7 @@ export function WorkspaceSidebar({
                     onNewChat={onNewChat}
                     onOpenProject={onOpenProject}
                     onOpenDashboard={onOpenDashboard}
+                    onSelectProject={onSelectProject}
                     onOpenSession={onOpenSession}
                     onDeleteSession={onDeleteSession}
                     onRenameProject={onRenameProject}

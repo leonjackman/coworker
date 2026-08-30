@@ -1059,5 +1059,7 @@
   "dashboard.binary_file": "バイナリファイル",
   "common.on": "オン",
   "common.off": "オフ",
-  "project_session.empty_state_text": "まだセッションがありません。新しいチャットを開始してください。"
+  "project_session.empty_state_text": "まだセッションがありません。新しいチャットを開始してください。",
+  "shortcuts.open_dashboard": "プロジェクトダッシュボード",
+  "shortcuts.open_dashboard_desc": "現在のプロジェクトのダッシュボードを開きます。"
 }
