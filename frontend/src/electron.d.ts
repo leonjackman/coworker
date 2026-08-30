@@ -44,6 +44,7 @@ import type {
   WorkspaceTreeResponse,
   WorkspaceDirResponse,
   WorkspaceFileResponse,
+  WorkspaceFilePreviewResponse,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
@@ -116,6 +117,8 @@ declare global {
       getWorkspaceTree: (projectId: string, path?: string) => Promise<WorkspaceTreeResponse>;
       getWorkspaceDir: (projectId: string, path?: string) => Promise<WorkspaceDirResponse>;
       getWorkspaceFile: (projectId: string, path: string) => Promise<WorkspaceFileResponse>;
+      getWorkspaceFilePreview: (projectId: string, path: string) => Promise<WorkspaceFilePreviewResponse>;
+      openFileExternally: (filePath: string) => Promise<{ status: string }>;
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;

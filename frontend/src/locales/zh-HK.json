@@ -1061,5 +1061,14 @@
   "common.off": "關",
   "project_session.empty_state_text": "暫無會話。開一個新會話開始吧。",
   "shortcuts.open_dashboard": "項目儀表盤",
-  "shortcuts.open_dashboard_desc": "開啟當前項目的儀表盤。"
+  "shortcuts.open_dashboard_desc": "開啟當前項目的儀表盤。",
+  "dashboard.preview_office": "辦公文件無法在此預覽，請用外部程式開啟。",
+  "dashboard.preview_not_supported": "此檔案類型無法預覽。",
+  "dashboard.preview_too_large": "檔案過大，無法內嵌預覽。",
+  "dashboard.preview_open_external": "用外部程式開啟",
+  "dashboard.preview_reveal": "在資料夾中顯示",
+  "dashboard.preview_design": "設計檔案無法在此預覽，請用設計軟件開啟。",
+  "dashboard.preview_archive": "壓縮檔無法在此預覽，請用解壓軟件開啟。",
+  "dashboard.preview_font": "字型檔案無法在此預覽，請用字型工具開啟。",
+  "dashboard.preview_executable": "可執行檔無法在此預覽。"
 }

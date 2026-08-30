@@ -1063,5 +1063,14 @@
   "common.off": "Off",
   "project_session.empty_state_text": "No sessions yet. Start a new chat to begin.",
   "shortcuts.open_dashboard": "Project Dashboard",
-  "shortcuts.open_dashboard_desc": "Open the current project's dashboard."
+  "shortcuts.open_dashboard_desc": "Open the current project's dashboard.",
+  "dashboard.preview_office": "Office documents cannot be previewed here. Open them in an external application.",
+  "dashboard.preview_not_supported": "This file type cannot be previewed.",
+  "dashboard.preview_too_large": "The file is too large to preview inline.",
+  "dashboard.preview_open_external": "Open externally",
+  "dashboard.preview_reveal": "Reveal in folder",
+  "dashboard.preview_design": "Design files cannot be previewed here. Open them in a design application.",
+  "dashboard.preview_archive": "Archive files cannot be previewed here. Open them in an archive application.",
+  "dashboard.preview_font": "Font files cannot be previewed here. Open them in a font application.",
+  "dashboard.preview_executable": "Executable files cannot be previewed here."
 }

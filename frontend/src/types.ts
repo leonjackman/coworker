@@ -570,6 +570,31 @@ export interface WorkspaceFileResponse {
   };
 }
 
+export type WorkspaceFilePreviewKind = 'text' | 'table' | 'image' | 'pdf' | 'audio' | 'video' | 'office' | 'design' | 'archive' | 'font' | 'executable' | 'other';
+
+export interface WorkspaceFilePreview {
+  kind: WorkspaceFilePreviewKind;
+  mime: string;
+  size: number;
+  previewable?: boolean;
+  too_large?: boolean;
+  error?: string;
+  data?: string;
+  content?: string | null;
+  binary?: boolean;
+  truncated?: boolean;
+  total_lines?: number;
+  offset?: number;
+  next_offset?: number;
+  hint?: string;
+}
+
+export interface WorkspaceFilePreviewResponse {
+  status: string;
+  path: string;
+  preview: WorkspaceFilePreview;
+}
+
 export interface WorkspaceBranchResponse {
   status: string;
   is_repo: boolean;

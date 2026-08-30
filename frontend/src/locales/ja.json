@@ -1061,5 +1061,14 @@
   "common.off": "オフ",
   "project_session.empty_state_text": "まだセッションがありません。新しいチャットを開始してください。",
   "shortcuts.open_dashboard": "プロジェクトダッシュボード",
-  "shortcuts.open_dashboard_desc": "現在のプロジェクトのダッシュボードを開きます。"
+  "shortcuts.open_dashboard_desc": "現在のプロジェクトのダッシュボードを開きます。",
+  "dashboard.preview_office": "Office文書はここではプレビューできません。外部アプリケーションで開いてください。",
+  "dashboard.preview_not_supported": "このファイル形式はプレビューできません。",
+  "dashboard.preview_too_large": "ファイルが大きすぎてインライン表示できません。",
+  "dashboard.preview_open_external": "外部で開く",
+  "dashboard.preview_reveal": "フォルダーに表示",
+  "dashboard.preview_design": "デザインファイルはここではプレビューできません。デザインアプリで開いてください。",
+  "dashboard.preview_archive": "アーカイブはここではプレビューできません。解凍アプリで開いてください。",
+  "dashboard.preview_font": "フォントファイルはここではプレビューできません。フォントアプリで開いてください。",
+  "dashboard.preview_executable": "実行可能ファイルはここではプレビューできません。"
 }

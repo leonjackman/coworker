@@ -4534,6 +4534,19 @@ async def workspace_file(path: str, project_id: str = ""):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+@app.get("/workspace/file/preview")
+async def workspace_file_preview(path: str, project_id: str = ""):
+    """Rich dashboard file preview: text content, or base64 image/PDF/audio/video
+    payload, or a non-previewable classification (office archives etc.)."""
+    try:
+        workspace = workspace_controller.workspace_for_project(project_id) if project_id else workspace_controller.default()
+        return {"status": "ok", "path": path, "preview": workspace.read_preview_payload(path)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 @app.get("/sessions/{session_id}/changes")
 async def session_changes(session_id: str):
     """All file changes made by the agent in this session, grouped by turn."""

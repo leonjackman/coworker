@@ -1061,5 +1061,14 @@
   "common.off": "Désactivé",
   "project_session.empty_state_text": "Aucune session pour le moment. Démarrez une nouvelle discussion.",
   "shortcuts.open_dashboard": "Tableau de bord du projet",
-  "shortcuts.open_dashboard_desc": "Ouvre le tableau de bord du projet actuel."
+  "shortcuts.open_dashboard_desc": "Ouvre le tableau de bord du projet actuel.",
+  "dashboard.preview_office": "Les documents Office ne peuvent pas être prévisualisés ici. Ouvrez-les avec une application externe.",
+  "dashboard.preview_not_supported": "Ce type de fichier ne peut pas être prévisualisé.",
+  "dashboard.preview_too_large": "Le fichier est trop volumineux pour être prévisualisé en ligne.",
+  "dashboard.preview_open_external": "Ouvrir à l'extérieur",
+  "dashboard.preview_reveal": "Afficher dans le dossier",
+  "dashboard.preview_design": "Les fichiers de conception ne peuvent pas être prévisualisés ici. Ouvrez-les avec une application de conception.",
+  "dashboard.preview_archive": "Les archives ne peuvent pas être prévisualisées ici. Ouvrez-les avec une application d'archivage.",
+  "dashboard.preview_font": "Les fichiers de police ne peuvent pas être prévisualisés ici. Ouvrez-les avec une application de polices.",
+  "dashboard.preview_executable": "Les fichiers exécutables ne peuvent pas être prévisualisés ici."
 }

@@ -26,6 +26,7 @@ import type {
   WorkspaceTreeResponse,
   WorkspaceDirResponse,
   WorkspaceFileResponse,
+  WorkspaceFilePreviewResponse,
   ProviderPayload,
   ProviderEntry,
   ProvidersListResponse,
@@ -156,6 +157,8 @@ export interface ChatService {
   getWorkspaceTree: (projectId: string, path?: string) => Promise<WorkspaceTreeResponse>;
   getWorkspaceDir: (projectId: string, path?: string) => Promise<WorkspaceDirResponse>;
   getWorkspaceFile: (projectId: string, path: string) => Promise<WorkspaceFileResponse>;
+  getWorkspaceFilePreview: (projectId: string, path: string) => Promise<WorkspaceFilePreviewResponse>;
+  openFileExternally: (filePath: string) => Promise<{ status: string }>;
   redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
   beginEditMessage: (sessionId: string, messageId: string, revertCode: boolean) => Promise<EditBeginResponse>;
   cancelEditMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
@@ -727,6 +730,16 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.getWorkspaceFile(projectId, path);
   }
 
+  async getWorkspaceFilePreview(projectId: string, path: string): Promise<WorkspaceFilePreviewResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceFilePreview(projectId, path);
+  }
+
+  async openFileExternally(filePath: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.openFileExternally(filePath);
+  }
+
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.redoMessage(sessionId, messageId);
@@ -1283,6 +1296,18 @@ class HttpChatService implements ChatService {
     params.set('path', path);
     params.set('project_id', projectId);
     return this.request<WorkspaceFileResponse>(`/workspace/file?${params.toString()}`);
+  }
+
+  async getWorkspaceFilePreview(projectId: string, path: string): Promise<WorkspaceFilePreviewResponse> {
+    const params = new URLSearchParams();
+    params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceFilePreviewResponse>(`/workspace/file/preview?${params.toString()}`);
+  }
+
+  async openFileExternally(filePath: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.openFileExternally(filePath);
   }
 
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {

@@ -1061,5 +1061,14 @@
   "common.off": "Desativado",
   "project_session.empty_state_text": "Nenhuma sessão ainda. Inicie uma nova conversa.",
   "shortcuts.open_dashboard": "Painel do projeto",
-  "shortcuts.open_dashboard_desc": "Abre o painel do projeto atual."
+  "shortcuts.open_dashboard_desc": "Abre o painel do projeto atual.",
+  "dashboard.preview_office": "Documentos do Office não podem ser visualizados aqui. Abra-os em um aplicativo externo.",
+  "dashboard.preview_not_supported": "Este tipo de arquivo não pode ser visualizado.",
+  "dashboard.preview_too_large": "O arquivo é grande demais para visualizar inline.",
+  "dashboard.preview_open_external": "Abrir externamente",
+  "dashboard.preview_reveal": "Mostrar na pasta",
+  "dashboard.preview_design": "Arquivos de design não podem ser visualizados aqui. Abra-os em um aplicativo de design.",
+  "dashboard.preview_archive": "Arquivos compactados não podem ser visualizados aqui. Abra-os em um descompactador.",
+  "dashboard.preview_font": "Fontes não podem ser visualizadas aqui. Abra-as em um aplicativo de fontes.",
+  "dashboard.preview_executable": "Arquivos executáveis não podem ser visualizados aqui."
 }

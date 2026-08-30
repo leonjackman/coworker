@@ -1063,5 +1063,14 @@
   "common.off": "关",
   "project_session.empty_state_text": "暂无会话。新建一个会话开始吧。",
   "shortcuts.open_dashboard": "项目仪表盘",
-  "shortcuts.open_dashboard_desc": "打开当前项目的仪表盘。"
+  "shortcuts.open_dashboard_desc": "打开当前项目的仪表盘。",
+  "dashboard.preview_office": "办公文档无法在此预览，请用外部程序打开。",
+  "dashboard.preview_not_supported": "此文件类型无法预览。",
+  "dashboard.preview_too_large": "文件过大，无法内嵌预览。",
+  "dashboard.preview_open_external": "用外部程序打开",
+  "dashboard.preview_reveal": "在文件夹中显示",
+  "dashboard.preview_design": "设计文件无法在此预览，请用设计软件打开。",
+  "dashboard.preview_archive": "压缩包无法在此预览，请用解压软件打开。",
+  "dashboard.preview_font": "字体文件无法在此预览，请用字体工具打开。",
+  "dashboard.preview_executable": "可执行文件无法在此预览。"
 }

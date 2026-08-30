@@ -1061,5 +1061,14 @@
   "common.off": "Aus",
   "project_session.empty_state_text": "Noch keine Sitzungen. Starte einen neuen Chat.",
   "shortcuts.open_dashboard": "Projekt-Dashboard",
-  "shortcuts.open_dashboard_desc": "Öffnet das Dashboard des aktuellen Projekts."
+  "shortcuts.open_dashboard_desc": "Öffnet das Dashboard des aktuellen Projekts.",
+  "dashboard.preview_office": "Office-Dokumente können hier nicht in der Vorschau angezeigt werden. Öffnen Sie sie mit einer externen Anwendung.",
+  "dashboard.preview_not_supported": "Dieser Dateityp kann nicht in der Vorschau angezeigt werden.",
+  "dashboard.preview_too_large": "Die Datei ist zu groß für die Inline-Vorschau.",
+  "dashboard.preview_open_external": "Extern öffnen",
+  "dashboard.preview_reveal": "Im Ordner anzeigen",
+  "dashboard.preview_design": "Design-Dateien können hier nicht in der Vorschau angezeigt werden. Öffnen Sie sie mit einer Design-Anwendung.",
+  "dashboard.preview_archive": "Archive können hier nicht in der Vorschau angezeigt werden. Öffnen Sie sie mit einer Archiv-Anwendung.",
+  "dashboard.preview_font": "Schriftdateien können hier nicht in der Vorschau angezeigt werden. Öffnen Sie sie mit einer Schrift-Anwendung.",
+  "dashboard.preview_executable": "Ausführbare Dateien können hier nicht in der Vorschau angezeigt werden."
 }

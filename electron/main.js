@@ -2318,6 +2318,21 @@ ipcMain.handle('reveal-in-folder', async (event, filePath) => {
   return { status: 'ok' };
 });
 
+ipcMain.handle('open-file-externally', async (event, filePath) => {
+  if (typeof filePath === 'string' && filePath) {
+    const error = await shell.openPath(filePath);
+    if (error) return { status: 'error', detail: error };
+  }
+  return { status: 'ok' };
+});
+
+ipcMain.handle('get-workspace-file-preview', async (event, { projectId, path = '' } = {}) => {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (projectId) params.set('project_id', projectId);
+  return requestBackend(`/workspace/file/preview?${params.toString()}`);
+});
+
 ipcMain.handle('search-memory', (event, query = '', limit = 50) => {
   const params = new URLSearchParams({ q: query ?? '' });
   if (limit) params.set('limit', String(limit));

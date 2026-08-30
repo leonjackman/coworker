@@ -1061,5 +1061,14 @@
   "common.off": "Выкл",
   "project_session.empty_state_text": "Сессий пока нет. Начните новый чат.",
   "shortcuts.open_dashboard": "Панель проекта",
-  "shortcuts.open_dashboard_desc": "Открывает панель текущего проекта."
+  "shortcuts.open_dashboard_desc": "Открывает панель текущего проекта.",
+  "dashboard.preview_office": "Документы Office нельзя просмотреть здесь. Откройте их во внешнем приложении.",
+  "dashboard.preview_not_supported": "Этот тип файла нельзя просмотреть.",
+  "dashboard.preview_too_large": "Файл слишком велик для встроенного просмотра.",
+  "dashboard.preview_open_external": "Открыть во внешней программе",
+  "dashboard.preview_reveal": "Показать в папке",
+  "dashboard.preview_design": "Дизайн-файлы нельзя просмотреть здесь. Откройте их в дизайн-приложении.",
+  "dashboard.preview_archive": "Архивы нельзя просмотреть здесь. Откройте их в архиваторе.",
+  "dashboard.preview_font": "Файлы шрифтов нельзя просмотреть здесь. Откройте их в приложении для шрифтов.",
+  "dashboard.preview_executable": "Исполняемые файлы нельзя просмотреть здесь."
 }

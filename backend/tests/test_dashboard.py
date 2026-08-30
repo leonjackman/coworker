@@ -145,6 +145,53 @@ def test_dashboard_unknown_project_returns_404(client):
     assert resp.status_code == 404
 
 
+def test_file_preview_kinds(client, workspace):
+    """Dashboard file preview returns the right kind/payload per file type."""
+    import base64
+
+    (workspace / "notes.md").write_text("# hello\nworld\n", encoding="utf-8")
+    (workspace / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x00binary")
+    (workspace / "doc.pdf").write_bytes(b"%PDF-1.4 fake")
+    (workspace / "sheet.xlsx").write_bytes(b"PK\x03\x04fake zip")
+    (workspace / "deck.pptx").write_bytes(b"PK\x03\x04fake pptx")
+    (workspace / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (workspace / "config.log").write_text("info: started\n", encoding="utf-8")
+
+    project_id = _create_project(client, "preview-proj", str(workspace))
+
+    def preview(path):
+        resp = client.get(f"/workspace/file/preview?path={path}&project_id={project_id}")
+        assert resp.status_code == 200, resp.text
+        return resp.json()["preview"]
+
+    text = preview("notes.md")
+    assert text["kind"] == "text"
+    assert "hello" in text["content"]
+
+    img = preview("pic.png")
+    assert img["kind"] == "image"
+    assert img["data"] == base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x00binary").decode("ascii")
+
+    pdf = preview("doc.pdf")
+    assert pdf["kind"] == "pdf"
+    assert pdf["data"]
+
+    # xlsx is renderable inline → base64 payload provided
+    sheet = preview("sheet.xlsx")
+    assert sheet["kind"] == "office"
+    assert sheet["data"]
+
+    # pptx is not inline-renderable → classified, no payload
+    deck = preview("deck.pptx")
+    assert deck["kind"] == "office"
+    assert deck["previewable"] is False
+    assert "data" not in deck
+
+    # csv → table, log → text (engineering artifacts preview as text)
+    assert preview("data.csv")["kind"] == "table"
+    assert preview("config.log")["kind"] == "text"
+
+
 def test_memory_discover_scoped_to_project(client, workspace):
     """Dashboard memory tab: ``scope=project`` must only surface the given
     project's memory, never other projects' memory."""

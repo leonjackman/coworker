@@ -115,7 +115,13 @@ export function ProjectDashboard({
       ) : !data ? null : (
         <div className="dashboard-body">
           {tab === 'overview' && <DashboardOverview data={data} />}
-          {tab === 'files' && <DashboardFiles projectId={projectId} workspaceAvailable={data.project.workspace_available} />}
+          {tab === 'files' && (
+            <DashboardFiles
+              projectId={projectId}
+              workspaceAvailable={data.project.workspace_available}
+              workspacePath={data.project.workspace_path}
+            />
+          )}
           {tab === 'agents' && (
             <DashboardAgents
               data={data}

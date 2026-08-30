@@ -1061,5 +1061,14 @@
   "common.off": "끄기",
   "project_session.empty_state_text": "아직 세션이 없습니다. 새 대화를 시작하세요.",
   "shortcuts.open_dashboard": "프로젝트 대시보드",
-  "shortcuts.open_dashboard_desc": "현재 프로젝트의 대시보드를 엽니다."
+  "shortcuts.open_dashboard_desc": "현재 프로젝트의 대시보드를 엽니다.",
+  "dashboard.preview_office": "Office 문서는 여기서 미리 볼 수 없습니다. 외부 응용 프로그램으로 여세요.",
+  "dashboard.preview_not_supported": "이 파일 형식은 미리 볼 수 없습니다.",
+  "dashboard.preview_too_large": "파일이 너무 커서 인라인으로 미리 볼 수 없습니다.",
+  "dashboard.preview_open_external": "외부에서 열기",
+  "dashboard.preview_reveal": "폴더에 표시",
+  "dashboard.preview_design": "디자인 파일은 여기서 미리 볼 수 없습니다. 디자인 응용 프로그램으로 여세요.",
+  "dashboard.preview_archive": "압축 파일은 여기서 미리 볼 수 없습니다. 압축 응용 프로그램으로 여세요.",
+  "dashboard.preview_font": "글꼴 파일은 여기서 미리 볼 수 없습니다. 글꼴 응용 프로그램으로 여세요.",
+  "dashboard.preview_executable": "실행 파일은 여기서 미리 볼 수 없습니다."
 }
