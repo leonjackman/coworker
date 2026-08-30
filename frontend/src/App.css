@@ -11010,8 +11010,13 @@ body.dashboard-files__dragging * {
 }
 
 .dashboard-files__docx {
+  background: #ffffff;
+  color: #1a1a1a;
+  padding: 14px;
+  border-radius: 6px;
   font-size: 13px;
   line-height: 1.6;
+  overflow-x: auto;
 }
 
 .dashboard-files__docx p {

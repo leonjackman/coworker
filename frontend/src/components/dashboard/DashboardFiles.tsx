@@ -390,19 +390,41 @@ function PreviewContent({
   }
 
   if (kind === 'office' && data) {
-    if (/\.(docx)$/i.test(path)) {
-      return <DocxPreview data={data} />;
-    }
-    if (/\.(xlsx|xls)$/i.test(path)) {
-      return <XlsxPreview data={data} />;
-    }
+    return (
+      <OfficePreview
+        path={path}
+        data={data}
+        {...(workspacePath ? { workspacePath } : {})}
+      />
+    );
   }
 
   return (
+    <UnsupportedBlock
+      path={path}
+      preview={preview}
+      messageKey={UNSAFE_KIND_KEYS[kind] ?? 'dashboard.preview_not_supported'}
+      {...(workspacePath ? { workspacePath } : {})}
+    />
+  );
+}
+
+function UnsupportedBlock({
+  path,
+  preview,
+  messageKey,
+  workspacePath,
+}: {
+  path: string;
+  preview?: WorkspaceFilePreview;
+  messageKey: string;
+  workspacePath?: string;
+}) {
+  return (
     <div className="dashboard-files__unsupported">
       <FolderSearch size={28} className="dashboard-files__unsupported-icon" />
-      <p>{preview.error ?? t(UNSAFE_KIND_KEYS[kind] ?? 'dashboard.preview_not_supported')}</p>
-      {preview.too_large && <p className="dashboard-files__unsupported-note">{t('dashboard.preview_too_large')}</p>}
+      <p>{preview?.error ?? t(messageKey)}</p>
+      {preview?.too_large && <p className="dashboard-files__unsupported-note">{t('dashboard.preview_too_large')}</p>}
       {workspacePath && (
         <div className="dashboard-files__unsupported-actions">
           <Button
@@ -423,6 +445,41 @@ function PreviewContent({
         </div>
       )}
     </div>
+  );
+}
+
+/** Office renderer with graceful fallback to the external-open block. */
+function OfficePreview({
+  path,
+  data,
+  workspacePath,
+}: {
+  path: string;
+  data: string;
+  workspacePath?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <UnsupportedBlock
+        path={path}
+        messageKey="dashboard.preview_office"
+        {...(workspacePath ? { workspacePath } : {})}
+      />
+    );
+  }
+  if (/\.(docx)$/i.test(path)) {
+    return <DocxPreview data={data} onError={() => setFailed(true)} />;
+  }
+  if (/\.(xlsx|xls|xlsb|xlc)$/i.test(path)) {
+    return <XlsxPreview data={data} onError={() => setFailed(true)} />;
+  }
+  return (
+    <UnsupportedBlock
+      path={path}
+      messageKey="dashboard.preview_office"
+      {...(workspacePath ? { workspacePath } : {})}
+    />
   );
 }
 
@@ -487,9 +544,8 @@ function TablePreview({ content }: { content: string }) {
   );
 }
 
-function DocxPreview({ data }: { data: string }) {
+function DocxPreview({ data, onError }: { data: string; onError?: () => void }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -502,23 +558,19 @@ function DocxPreview({ data }: { data: string }) {
           ignoreHeight: true,
           breakPages: false,
         });
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } catch {
+        if (!cancelled) onError?.();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [data]);
-  if (error) {
-    return <div className="dashboard-state dashboard-state--error">{error}</div>;
-  }
+  }, [data, onError]);
   return <div ref={containerRef} className="dashboard-files__docx" />;
 }
 
-function XlsxPreview({ data }: { data: string }) {
+function XlsxPreview({ data, onError }: { data: string; onError?: () => void }) {
   const [grid, setGrid] = useState<string[][] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -531,17 +583,14 @@ function XlsxPreview({ data }: { data: string }) {
         if (!sheet) throw new Error('empty workbook');
         const rows = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, defval: '' });
         if (!cancelled) setGrid(rows.slice(0, 500));
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } catch {
+        if (!cancelled) onError?.();
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [data]);
-  if (error) {
-    return <div className="dashboard-state dashboard-state--error">{error}</div>;
-  }
+  }, [data, onError]);
   if (!grid) {
     return (
       <div className="dashboard-state">

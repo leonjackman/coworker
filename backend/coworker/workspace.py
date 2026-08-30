@@ -1501,9 +1501,9 @@ class Workspace:
         "application/vnd.apple.numbers",
         "application/vnd.apple.keynote",
     }
-    _OFFICE_SUFFIXES = frozenset({".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".pages", ".numbers", ".key", ".wps"})
+    _OFFICE_SUFFIXES = frozenset({".doc", ".docx", ".xls", ".xlsx", ".xlsb", ".xlc", ".xla", ".xlam", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".pages", ".numbers", ".key", ".wps"})
     # Office formats the renderer can actually render inline (base64 payload).
-    _OFFICE_RENDERABLE_SUFFIXES = frozenset({".docx", ".xlsx", ".xls"})
+    _OFFICE_RENDERABLE_SUFFIXES = frozenset({".docx", ".xlsx", ".xls", ".xlsb", ".xlc"})
     _DESIGN_SUFFIXES = frozenset({".psd", ".ai", ".eps", ".sketch", ".fig", ".xd", ".afdesign", ".afphoto", ".indd", ".blend", ".fbx", ".obj", ".stl", ".gltf", ".glb", ".usdz", ".dwg", ".dxf"})
     _ARCHIVE_SUFFIXES = frozenset({".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".zst", ".z"})
     _FONT_SUFFIXES = frozenset({".ttf", ".otf", ".woff", ".woff2", ".eot"})
