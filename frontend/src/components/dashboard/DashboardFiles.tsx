@@ -4,7 +4,7 @@ import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
 import type { FileTreeNode, WorkspaceDirEntry, WorkspaceFilePreview } from '../../types';
 import { Button } from '../ui/button';
-import { MarkdownContent } from '../MarkdownContent';
+import { CodeBlock, MarkdownContent } from '../MarkdownContent';
 
 interface DashboardFilesProps {
   projectId: string;
@@ -321,6 +321,28 @@ const UNSAFE_KIND_KEYS: Record<string, string> = {
   other: 'dashboard.preview_not_supported',
 };
 
+/** Map a file path to a Shiki language name for syntax highlighting. */
+function languageFromPath(path: string): string {
+  const ext = (path.split('.').pop() ?? '').toLowerCase();
+  const byExt: Record<string, string> = {
+    py: 'python', js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
+    ts: 'typescript', tsx: 'tsx', json: 'json', jsonc: 'jsonc', md: 'markdown',
+    markdown: 'markdown', css: 'css', scss: 'css', html: 'html', htm: 'html',
+    sh: 'bash', bash: 'bash', zsh: 'bash', yaml: 'yaml', yml: 'yaml', xml: 'xml',
+    java: 'java', go: 'go', rs: 'rust', c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp',
+    cc: 'cpp', cs: 'csharp', sql: 'sql', php: 'php', rb: 'ruby', kt: 'kotlin',
+    kts: 'kotlin', swift: 'swift', ps1: 'powershell', toml: 'toml', ini: 'ini',
+    cfg: 'ini', conf: 'ini', graphql: 'graphql', gql: 'graphql', vue: 'vue',
+    svelte: 'svelte', scala: 'scala', dart: 'dart', lua: 'lua', r: 'r',
+    hs: 'haskell', fish: 'fish', diff: 'diff', patch: 'diff', proto: 'protobuf',
+    sol: 'solidity', zig: 'zig',
+  };
+  const byName: Record<string, string> = {
+    makefile: 'makefile', dockerfile: 'dockerfile', gemfile: 'ruby', rakefile: 'ruby',
+  };
+  return byExt[ext] ?? byName[path.toLowerCase()] ?? 'text';
+}
+
 function PreviewContent({
   path,
   preview,
@@ -340,7 +362,11 @@ function PreviewContent({
         </div>
       );
     }
-    return <pre>{content || ' '}</pre>;
+    return (
+      <div className="dashboard-files__code">
+        <CodeBlock code={content ?? ''} language={languageFromPath(path)} />
+      </div>
+    );
   }
 
   if (kind === 'table' && content) {

@@ -10951,6 +10951,43 @@ body.dashboard-files__dragging * {
   line-height: 1.6;
 }
 
+.dashboard-files__code {
+  font-size: 12px;
+}
+
+.dashboard-files__code .markdown-code {
+  margin: 0;
+}
+
+.dashboard-files__code .markdown-code__body {
+  counter-reset: line;
+  overflow-x: auto;
+}
+
+.dashboard-files__code .markdown-code__body pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow: visible;
+  white-space: pre;
+}
+
+.dashboard-files__code .markdown-code__body .line {
+  counter-increment: line;
+}
+
+.dashboard-files__code .markdown-code__body .line::before {
+  content: counter(line);
+  display: inline-block;
+  min-width: 2.4em;
+  margin-right: 1.1em;
+  text-align: right;
+  color: var(--muted-foreground, #888);
+  opacity: 0.55;
+  user-select: none;
+}
+
 .dashboard-files__table-wrap {
   overflow: auto;
   max-height: 52vh;
