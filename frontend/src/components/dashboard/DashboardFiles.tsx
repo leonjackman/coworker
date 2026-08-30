@@ -523,25 +523,63 @@ function parseDelimited(content: string, delimiter: ',' | '\t'): string[][] {
   return rows.filter((r) => r.some((cell) => cell.trim() !== '')).slice(0, 500);
 }
 
+const TABLE_ROW_HEIGHT = 24;
+const TABLE_OVERSCAN = 10;
+const TABLE_MAX_COLS = 60;
+
+/** Windowed table: only renders rows in (or near) the scroll viewport, so
+ *  large sheets scroll smoothly instead of building tens of thousands of
+ *  <td> nodes at once. */
+function VirtualizedTable({ rows }: { rows: string[][] }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(300);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => setViewportH(el.clientHeight);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const maxCols = useMemo(
+    () => Math.min(TABLE_MAX_COLS, rows.reduce((max, row) => Math.max(max, row.length), 0)),
+    [rows],
+  );
+  const totalHeight = rows.length * TABLE_ROW_HEIGHT;
+  const start = Math.max(0, Math.floor(scrollTop / TABLE_ROW_HEIGHT) - TABLE_OVERSCAN);
+  const end = Math.min(rows.length, Math.ceil((scrollTop + viewportH) / TABLE_ROW_HEIGHT) + TABLE_OVERSCAN);
+
+  return (
+    <div
+      ref={wrapRef}
+      className="dashboard-files__table-wrap"
+      onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+    >
+      <div className="dashboard-files__table-spacer" style={{ height: totalHeight }}>
+        <table className="dashboard-files__table" style={{ transform: `translateY(${start * TABLE_ROW_HEIGHT}px)` }}>
+          <tbody>
+            {rows.slice(start, end).map((row, i) => (
+              <tr key={start + i} style={{ height: TABLE_ROW_HEIGHT }}>
+                {Array.from({ length: maxCols }).map((_, c) => (
+                  <td key={c}>{row[c] ?? ''}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function TablePreview({ content }: { content: string }) {
   const isTsv = content.includes('\t');
   const rows = useMemo(() => parseDelimited(content, isTsv ? '\t' : ','), [content, isTsv]);
-  const maxCols = useMemo(() => rows.reduce((max, r) => Math.max(max, r.length), 0), [rows]);
-  return (
-    <div className="dashboard-files__table-wrap">
-      <table className="dashboard-files__table">
-        <tbody>
-          {rows.map((row, i) => (
-            <tr key={i}>
-              {Array.from({ length: maxCols }).map((_, c) => (
-                <td key={c}>{row[c] ?? ''}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  return <VirtualizedTable rows={rows} />;
 }
 
 function DocxPreview({ data, onError }: { data: string; onError?: () => void }) {
@@ -598,22 +636,7 @@ function XlsxPreview({ data, onError }: { data: string; onError?: () => void }) 
       </div>
     );
   }
-  const maxCols = grid.reduce((max, r) => Math.max(max, r.length), 0);
-  return (
-    <div className="dashboard-files__table-wrap">
-      <table className="dashboard-files__table">
-        <tbody>
-          {grid.map((row, i) => (
-            <tr key={i}>
-              {Array.from({ length: maxCols }).map((_, c) => (
-                <td key={c}>{row[c] ?? ''}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  return <VirtualizedTable rows={grid} />;
 }
 
 interface TreeNodeProps {

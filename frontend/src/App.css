@@ -10989,13 +10989,22 @@ body.dashboard-files__dragging * {
 }
 
 .dashboard-files__table-wrap {
+  position: relative;
   overflow: auto;
   max-height: 52vh;
 }
 
+.dashboard-files__table-spacer {
+  position: relative;
+  min-width: 100%;
+}
+
 .dashboard-files__table {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 100%;
   border-collapse: collapse;
-  width: 100%;
   font-size: 12px;
   font-family: var(--font-mono, monospace);
 }
