@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, ExternalLink, FileText, Folder, FolderSearch, Loader2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
 import type { FileTreeNode, WorkspaceDirEntry, WorkspaceFilePreview } from '../../types';
@@ -29,6 +29,36 @@ export function DashboardFiles({ projectId, workspaceAvailable, workspacePath }:
   const [split, setSplit] = useState(50);
   const filesRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ startX: number; startPct: number } | null>(null);
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const rowRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
+  const { visibleRows, parentOf } = useMemo(() => {
+    const rows: Array<{ path: string; name: string; type: 'dir' | 'file' }> = [];
+    const parents: Record<string, string> = {};
+    const walk = (node: FileTreeNode | WorkspaceDirEntry, parent: string | null) => {
+      rows.push({ path: node.path, name: node.name, type: node.type });
+      if (parent !== null) parents[node.path] = parent;
+      if (node.type !== 'dir') return;
+      if (!expanded.has(node.path)) return;
+      const children = lazyChildren[node.path] ?? (node as FileTreeNode).children ?? [];
+      for (const child of children) walk(child, node.path);
+    };
+    const rootChildren = tree ? (lazyChildren[tree.path]?.map(toNode) ?? tree.children ?? []) : [];
+    for (const child of rootChildren) walk(child, null);
+    return { visibleRows: rows, parentOf: parents };
+  }, [tree, expanded, lazyChildren]);
+
+  const focusRow = useCallback((path: string | null) => {
+    if (!path) return;
+    setFocusedPath(path);
+    const el = rowRefs.current.get(path);
+    el?.scrollIntoView({ block: 'nearest' });
+  }, []);
+
+  useEffect(() => {
+    if (!focusedPath) return;
+    rowRefs.current.get(focusedPath)?.focus();
+  }, [focusedPath]);
 
   const onDividerMouseDown = useCallback((e: ReactMouseEvent) => {
     e.preventDefault();
@@ -130,6 +160,53 @@ export function DashboardFiles({ projectId, workspaceAvailable, workspacePath }:
     [projectId],
   );
 
+  const onTreeKeyDown = useCallback(
+    (e: ReactKeyboardEvent) => {
+      const index = focusedPath ? visibleRows.findIndex((row) => row.path === focusedPath) : -1;
+      const current = index >= 0 ? visibleRows[index] : undefined;
+      const focusIndex = (next: number) => {
+        const clamped = (next + visibleRows.length) % visibleRows.length;
+        const row = visibleRows[clamped];
+        if (row) focusRow(row.path);
+      };
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          focusIndex(index < 0 ? 0 : index + 1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          focusIndex(index < 0 ? 0 : index - 1);
+          break;
+        case 'ArrowRight': {
+          if (!current) return;
+          e.preventDefault();
+          if (current.type === 'dir' && expanded.has(current.path)) {
+            const firstChild = visibleRows[index + 1];
+            if (firstChild && parentOf[firstChild.path] === current.path) focusRow(firstChild.path);
+          } else if (current.type === 'dir') {
+            void expandDir(current.path);
+          }
+          break;
+        }
+        case 'ArrowLeft': {
+          if (!current) return;
+          e.preventDefault();
+          if (current.type === 'dir' && expanded.has(current.path)) {
+            collapseDir(current.path);
+          } else {
+            const parent = parentOf[current.path];
+            if (parent) focusRow(parent);
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [focusedPath, visibleRows, parentOf, expanded, expandDir, collapseDir, focusRow],
+  );
+
   const rootChildren = useMemo(() => {
     if (!tree) return [];
     return lazyChildren[tree.path]?.map(toNode) ?? tree.children ?? [];
@@ -163,7 +240,12 @@ export function DashboardFiles({ projectId, workspaceAvailable, workspacePath }:
       className="dashboard-files"
       style={{ gridTemplateColumns: `${split}% minmax(8px, 10px) ${100 - split}%` }}
     >
-      <div className="dashboard-files__tree">
+      <div
+        className="dashboard-files__tree"
+        role="tree"
+        aria-label={t('dashboard.files')}
+        onKeyDown={onTreeKeyDown}
+      >
         {rootChildren.map((node) => (
           <TreeNode
             key={node.path}
@@ -172,8 +254,11 @@ export function DashboardFiles({ projectId, workspaceAvailable, workspacePath }:
             expanded={expanded}
             loadingDir={loadingDir}
             lazyChildren={lazyChildren}
+            focusedPath={focusedPath}
+            rowRefs={rowRefs}
             onToggleDir={toggleDir}
             onOpenFile={(path) => void openFile(path)}
+            onFocusPath={focusRow}
           />
         ))}
       </div>
@@ -462,27 +547,42 @@ interface TreeNodeProps {
   expanded: Set<string>;
   loadingDir: string | null;
   lazyChildren: Record<string, WorkspaceDirEntry[]>;
+  focusedPath: string | null;
+  rowRefs: React.MutableRefObject<Map<string, HTMLButtonElement>>;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
+  onFocusPath: (path: string) => void;
 }
 
 function toNode(entry: WorkspaceDirEntry): FileTreeNode {
   return { name: entry.name, path: entry.path, type: entry.type, size: entry.size ?? null };
 }
 
-function TreeNode({ node, depth, expanded, loadingDir, lazyChildren, onToggleDir, onOpenFile }: TreeNodeProps) {
+function TreeNode({ node, depth, expanded, loadingDir, lazyChildren, focusedPath, rowRefs, onToggleDir, onOpenFile, onFocusPath }: TreeNodeProps) {
   const isDir = node.type === 'dir';
   const isExpanded = expanded.has(node.path);
+  const isFocused = focusedPath === node.path;
   const children = isDir ? (lazyChildren[node.path] ?? (node as FileTreeNode).children ?? []) : [];
   const isLoading = loadingDir === node.path;
 
   return (
     <div className="dashboard-tree-node">
       <button
+        ref={(el) => {
+          if (el) rowRefs.current.set(node.path, el);
+          else rowRefs.current.delete(node.path);
+        }}
         type="button"
-        className="dashboard-tree-row"
+        role="treeitem"
+        aria-selected={isFocused}
+        {...(isDir ? { 'aria-expanded': isExpanded } : {})}
+        className={`dashboard-tree-row${isFocused ? ' dashboard-tree-row--focused' : ''}`}
         style={{ paddingLeft: 6 + depth * 14 }}
-        onClick={() => (isDir ? onToggleDir(node.path) : onOpenFile(node.path))}
+        onClick={() => {
+          onFocusPath(node.path);
+          if (isDir) onToggleDir(node.path);
+          else onOpenFile(node.path);
+        }}
       >
         {isDir ? (
           isLoading ? (
@@ -511,8 +611,11 @@ function TreeNode({ node, depth, expanded, loadingDir, lazyChildren, onToggleDir
               expanded={expanded}
               loadingDir={loadingDir}
               lazyChildren={lazyChildren}
+              focusedPath={focusedPath}
+              rowRefs={rowRefs}
               onToggleDir={onToggleDir}
               onOpenFile={onOpenFile}
+              onFocusPath={onFocusPath}
             />
           ))}
         </div>
