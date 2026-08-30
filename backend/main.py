@@ -1344,8 +1344,13 @@ class MemorySettingsUpdate(BaseModel):
 
 
 @app.get("/api/memory/discover")
-async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
-    """Memory library tree: system files + project views (BASE/PROJECT/agents)."""
+async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT, scope: str = "all"):
+    """Memory library tree: system files + project views (BASE/PROJECT/agents).
+
+    ``scope="project"`` restricts the result to the given project's own memory
+    (matched by ``memory_dir``), excluding system files and every other project
+    — used by the dashboard's project memory tab.
+    """
     project_dir = _project_memory_dir(project_id)
     if project_dir:
         _ensure_agent_skeleton(project_dir, agent)
@@ -1353,9 +1358,13 @@ async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
             _ensure_org(project_dir)
         except Exception:  # noqa: BLE001 - org scaffold must not break discovery
             pass
+    if scope == "project" and not project_dir:
+        raise HTTPException(status_code=404, detail=f"unknown project {project_id!r}")
     library = memory_manager.scanner.scan(include_missing=True)
     projects = []
     for view in library.projects:
+        if scope == "project" and view.name != project_dir:
+            continue
         mode = ORG_MODE_MULTI
         if org_store.exists(view.name):
             mode = org_store.load(view.name).mode
@@ -1364,7 +1373,7 @@ async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
         projects.append(view)
     return {
         "root": str(library.root),
-        "system": [n.to_dict() for n in library.system],
+        "system": [] if scope == "project" else [n.to_dict() for n in library.system],
         "projects": [p.to_dict() for p in projects],
     }
 
@@ -4555,6 +4564,31 @@ async def workspace_branch(project_id: str = ""):
         result = workspace_git_branch(workspace.root)
         return {"status": "ok", **result}
     except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/projects/{project_id}/dashboard")
+async def project_dashboard(project_id: str):
+    """Aggregate read-only dashboard bundle for one project.
+
+    Phase 0 of the business-agent roadmap: makes the project's files, agents,
+    tools and capabilities visible so they can later become configurable.
+    """
+    from coworker.dashboard import build_dashboard_data
+
+    try:
+        return build_dashboard_data(
+            project_id=project_id,
+            workspace_controller=workspace_controller,
+            session_store=session_store,
+            org_store=org_store,
+            mcp_manager=mcp_manager,
+            skill_manager=skill_manager,
+            settings=settings,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

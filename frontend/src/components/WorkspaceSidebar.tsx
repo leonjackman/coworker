@@ -1,4 +1,4 @@
-import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, Loader2, MessageCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
+import { BrainCircuit, Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, LayoutDashboard, Loader2, MessageCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import type { AppView, OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -44,6 +44,7 @@ interface WorkspaceSidebarProps {
   onViewChange: (view: AppView) => void;
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenProject: (projectId: string) => void;
+  onOpenDashboard: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onCreateProject: () => void;
@@ -178,6 +179,7 @@ interface ProjectRowProps {
   defaultExpanded?: boolean;
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenProject: (projectId: string) => void;
+  onOpenDashboard: (projectId: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onRenameProject: (project: ProjectEntry) => void;
@@ -292,7 +294,7 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
   );
 }
 
-function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
+function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenDashboard, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const isChat = Boolean(project.is_chat);
@@ -354,7 +356,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
   };
 
   const projectMenuItems: ContextMenuItem[] = [
-    { id: 'history', label: t('sidebar.session_history'), icon: <MessageSquare size={14} />, onSelect: () => onOpenProject(project.id) },
+    { id: 'dashboard', label: t('sidebar.dashboard'), icon: <LayoutDashboard size={14} />, onSelect: () => onOpenDashboard(project.id) },
     ...(onOpenOrgSettings && !isSingle
       ? [{ id: 'team', label: t('sidebar.org_team_manage'), icon: <Users size={14} />, dividerBefore: true, onSelect: () => onOpenOrgSettings(project.id) }]
       : []),
@@ -387,9 +389,9 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
                 <span className="more-icon-wrapper"><MoreHorizontal size={15} /></span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" alignOffset={-8} className="min-w-44">
-                <DropdownMenuItem onClick={() => onOpenProject(project.id)}>
-                  <MessageSquare size={14} />
-                  {t('sidebar.session_history')}
+                <DropdownMenuItem onClick={() => onOpenDashboard(project.id)}>
+                  <LayoutDashboard size={14} />
+                  {t('sidebar.dashboard')}
                 </DropdownMenuItem>
                 {onOpenOrgSettings && !isSingle && (
                   <>
@@ -490,6 +492,7 @@ export function WorkspaceSidebar({
   onViewChange,
   onNewChat,
   onOpenProject,
+  onOpenDashboard,
   onOpenSession,
   onDeleteSession,
   onCreateProject,
@@ -655,6 +658,7 @@ export function WorkspaceSidebar({
                     defaultExpanded={expandedProjectIds.has(project.id)}
                     onNewChat={onNewChat}
                     onOpenProject={onOpenProject}
+                    onOpenDashboard={onOpenDashboard}
                     onOpenSession={onOpenSession}
                     onDeleteSession={onDeleteSession}
                     onRenameProject={onRenameProject}

@@ -8,3 +8,4 @@ pybackend.spec
 .test_stop_data/
 .test_interject_data/
 .test_chat_data/
+.test_dashboard_data/

@@ -15,6 +15,7 @@ import type {
   McpTestRequest,
   McpTestResult,
   ProjectResponse,
+  ProjectDashboardResponse,
   ProjectsListResponse,
   ProviderPayload,
   ProvidersListResponse,
@@ -40,6 +41,9 @@ import type {
   MarketSkillsResponse,
   MarketInstallResponse,
   WorkspaceBranchResponse,
+  WorkspaceTreeResponse,
+  WorkspaceDirResponse,
+  WorkspaceFileResponse,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
@@ -108,6 +112,10 @@ declare global {
       renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
       deleteProject: (projectId: string) => Promise<{ status: string }>;
       getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
+      getProjectDashboard: (projectId: string) => Promise<ProjectDashboardResponse>;
+      getWorkspaceTree: (projectId: string, path?: string) => Promise<WorkspaceTreeResponse>;
+      getWorkspaceDir: (projectId: string, path?: string) => Promise<WorkspaceDirResponse>;
+      getWorkspaceFile: (projectId: string, path: string) => Promise<WorkspaceFileResponse>;
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
@@ -150,7 +158,7 @@ declare global {
       listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
       getMemoryStatus: () => Promise<MemoryStatusResponse>;
-      discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
+      discoverMemory: (projectId?: string, scope?: string) => Promise<MemoryDiscoverResponse>;
       getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
       resolveMemoryPath: (rel: string) => Promise<{ rel: string; path: string }>;
       saveMemoryFile: (payload: { rel: string; content: string }) => Promise<MemoryFileSaveResponse>;

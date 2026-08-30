@@ -3,7 +3,7 @@ import type { Language } from './lib/i18n';
 export type AgentMode = 'single';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
-export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org';
+export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org' | 'dashboard';
 
 export interface McpToolEntry {
   name: string;
@@ -536,12 +536,98 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
+export interface WorkspaceDirEntry {
+  name: string;
+  path: string;
+  type: 'dir' | 'file';
+  size?: number | null;
+}
+
+export interface WorkspaceTreeResponse {
+  status: string;
+  root: string;
+  tree: FileTreeNode;
+}
+
+export interface WorkspaceDirResponse {
+  status: string;
+  path: string;
+  entries: WorkspaceDirEntry[];
+}
+
+export interface WorkspaceFileResponse {
+  status: string;
+  path: string;
+  file: {
+    content?: string | null;
+    binary?: boolean;
+    size?: number;
+    truncated?: boolean;
+    total_lines?: number;
+    offset?: number;
+    next_offset?: number;
+    hint?: string;
+  };
+}
+
 export interface WorkspaceBranchResponse {
   status: string;
   is_repo: boolean;
   branch: string | null;
   workspace?: string;
 }
+
+/** One entry in the dashboard's static builtin tool catalog. */
+export interface DashboardBuiltinTool {
+  name: string;
+  description: string;
+  group: string;
+  access: 'read' | 'write' | 'exec' | 'ask';
+  mode?: ProjectMode;
+}
+
+export interface DashboardAgent {
+  id: string;
+  name: string;
+  role: string;
+  team: string;
+  status: string;
+  session_count: number;
+  is_default: boolean;
+}
+
+export interface DashboardCapabilities {
+  mode: ProjectMode;
+  memory_enabled: boolean;
+  web_enabled: boolean;
+  browser_enabled: boolean;
+}
+
+export interface DashboardGitStatus {
+  git: boolean;
+  is_repo?: boolean;
+  branch: string | null;
+  note?: string;
+  files?: Array<{ path: string; added: number; removed: number; binary: boolean }>;
+  untracked?: string[];
+  truncated_diff?: boolean;
+}
+
+export interface ProjectDashboardData {
+  status: string;
+  project: ProjectEntry;
+  git: DashboardGitStatus;
+  agents: DashboardAgent[];
+  capabilities: DashboardCapabilities;
+  tools: {
+    builtin: DashboardBuiltinTool[];
+    mcp_servers: McpServerEntry[];
+    skills: Array<{ name: string; description: string; enabled: boolean; source?: string }>;
+  };
+  sessions: SessionSummary[];
+}
+
+export type ProjectDashboardResponse = ProjectDashboardData;
 
 export interface ToolAuditEvent {
   timestamp: string;

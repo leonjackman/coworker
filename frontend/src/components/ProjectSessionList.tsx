@@ -15,6 +15,8 @@ interface ProjectSessionListProps {
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onOpenOrgSettings?: (projectId: string) => void;
+  /** Embedded mode (dashboard tab): suppresses the page heading. */
+  hideHeading?: boolean;
 }
 
 const DEFAULT_AGENT_ID = 'default_agent';
@@ -29,7 +31,7 @@ interface AgentGroupData {
   sessions: SessionSummary[];
 }
 
-export function ProjectSessionList({ project, sessions, runningSessionIds, onNewChat, onOpenSession, onDeleteSession, onOpenOrgSettings }: ProjectSessionListProps) {
+export function ProjectSessionList({ project, sessions, runningSessionIds, onNewChat, onOpenSession, onDeleteSession, onOpenOrgSettings, hideHeading = false }: ProjectSessionListProps) {
   const [expandedAgentIds, setExpandedAgentIds] = useState<Set<string>>(() => new Set());
   const [expandedLists, setExpandedLists] = useState<Set<string>>(() => new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -111,10 +113,9 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
     <WorkspacePage
       className="workspace-page--sessions"
       contentClassName="workspace-page__content--sessions"
-      eyebrow={project.workspace_path}
-      title={displayProjectName(project)}
-      description={sessions.length === 0 ? t('project_session.empty_state') : t('project_session.project_sessions_count', { count: sessions.length })}
-      action={onOpenOrgSettings && !isSingle ? (
+      {...(hideHeading ? {} : { eyebrow: project.workspace_path, title: displayProjectName(project) })}
+      {...(hideHeading ? {} : { description: sessions.length === 0 ? t('project_session.empty_state') : t('project_session.project_sessions_count', { count: sessions.length }) })}
+      action={!hideHeading && onOpenOrgSettings && !isSingle ? (
         <button type="button" className="project-session-list__team-btn" onClick={() => onOpenOrgSettings(project.id)}>
           <Users size={15} />
           {t('sidebar.org_team_manage')}

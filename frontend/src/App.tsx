@@ -16,6 +16,7 @@ import { FirstRunStart } from './components/FirstRunStart';
 import { NewChatHero } from './components/NewChatHero';
 import { SettingsView, type SettingsPage } from './components/settings/SettingsView';
 import { OrgSettingsPage } from './components/settings/OrgSettingsPage';
+import { ProjectDashboard } from './components/dashboard/ProjectDashboard';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
@@ -527,6 +528,7 @@ function App() {
   const [draftMode, setDraftMode] = useState(false);
   const [draftAgentId, setDraftAgentId] = useState<string>('default_agent');
   const [orgProjectId, setOrgProjectId] = useState<string | undefined>();
+  const [dashboardProjectId, setDashboardProjectId] = useState<string | undefined>();
   // useLanguage() 订阅语言变化以触发重渲染（返回值不直接使用）。
   useLanguage();
   const updateCenter = useUpdateCenter();
@@ -3284,6 +3286,12 @@ function App() {
     setActiveView('org');
   };
 
+  const openDashboard = (projectId: string) => {
+    setDashboardProjectId(projectId);
+    setDraftMode(false);
+    setActiveView('dashboard');
+  };
+
   const pickWorkspaceDirectory = async () => {
     return chatService.openDirectoryPicker({ title: t('project_dialog.pick_workspace') });
   };
@@ -3926,6 +3934,7 @@ function App() {
   } satisfies OrgRosterEntry] : (activeProject?.roster ?? []);
   const currentProjectMode = activeProject?.mode ?? 'single';
   const orgProjectName = orgProjectId ? projects.find((p) => p.id === orgProjectId)?.name : undefined;
+  const dashboardProjectName = dashboardProjectId ? projects.find((p) => p.id === dashboardProjectId)?.name : undefined;
   const currentSessionPending = sessionId
     ? pendingRequests.filter((item) => item.session_id === sessionId)
     : [];
@@ -4197,6 +4206,7 @@ function App() {
           onViewChange={setActiveView}
           onNewChat={startNewChat}
           onOpenProject={openProject}
+          onOpenDashboard={openDashboard}
           onOpenSession={openSession}
           onDeleteSession={deleteSession}
           onCreateProject={createProject}
@@ -4393,6 +4403,19 @@ function App() {
                   {...(orgProjectName ? { projectName: orgProjectName } : {})}
                   onBack={() => setActiveView('chat')}
                   onChanged={() => void refreshProjects()}
+                />
+              ) : activeView === 'dashboard' && dashboardProjectId ? (
+                <ProjectDashboard
+                  projectId={dashboardProjectId}
+                  {...(dashboardProjectName ? { projectName: dashboardProjectName } : {})}
+                  sessions={sessions}
+                  runningSessionIds={runningSessionIds}
+                  onBack={() => setActiveView('chat')}
+                  onViewChange={(view) => setActiveView(view)}
+                  onNewChat={startNewChat}
+                  onOpenSession={openSession}
+                  onDeleteSession={deleteSession}
+                  onOpenOrgSettings={openOrgSettings}
                 />
               ) : (
                 <SettingsView

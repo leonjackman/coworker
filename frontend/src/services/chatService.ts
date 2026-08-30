@@ -21,7 +21,11 @@ import type {
   McpTestRequest,
   McpTestResult,
   ProjectResponse,
+  ProjectDashboardResponse,
   ProjectsListResponse,
+  WorkspaceTreeResponse,
+  WorkspaceDirResponse,
+  WorkspaceFileResponse,
   ProviderPayload,
   ProviderEntry,
   ProvidersListResponse,
@@ -148,6 +152,10 @@ export interface ChatService {
   getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
   getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
   getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
+  getProjectDashboard: (projectId: string) => Promise<ProjectDashboardResponse>;
+  getWorkspaceTree: (projectId: string, path?: string) => Promise<WorkspaceTreeResponse>;
+  getWorkspaceDir: (projectId: string, path?: string) => Promise<WorkspaceDirResponse>;
+  getWorkspaceFile: (projectId: string, path: string) => Promise<WorkspaceFileResponse>;
   redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
   beginEditMessage: (sessionId: string, messageId: string, revertCode: boolean) => Promise<EditBeginResponse>;
   cancelEditMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
@@ -197,7 +205,7 @@ export interface ChatService {
   listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
   getMemoryStatus: () => Promise<MemoryStatusResponse>;
-  discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
+  discoverMemory: (projectId?: string, scope?: string) => Promise<MemoryDiscoverResponse>;
   getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
   resolveMemoryPath: (rel: string) => Promise<{ rel: string; path: string }>;
   saveMemoryFile: (rel: string, content: string) => Promise<MemoryFileSaveResponse>;
@@ -514,9 +522,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.getMemoryStatus();
   }
 
-  async discoverMemory(projectId?: string): Promise<MemoryDiscoverResponse> {
+  async discoverMemory(projectId?: string, scope = 'all'): Promise<MemoryDiscoverResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.discoverMemory(projectId);
+    return window.electronAPI.discoverMemory(projectId, scope);
   }
 
   async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
@@ -697,6 +705,26 @@ class ElectronChatService implements ChatService {
   async getWorkspaceBranch(projectId?: string): Promise<WorkspaceBranchResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.getWorkspaceBranch(projectId);
+  }
+
+  async getProjectDashboard(projectId: string): Promise<ProjectDashboardResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getProjectDashboard(projectId);
+  }
+
+  async getWorkspaceTree(projectId: string, path = ''): Promise<WorkspaceTreeResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceTree(projectId, path);
+  }
+
+  async getWorkspaceDir(projectId: string, path = ''): Promise<WorkspaceDirResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceDir(projectId, path);
+  }
+
+  async getWorkspaceFile(projectId: string, path: string): Promise<WorkspaceFileResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceFile(projectId, path);
   }
 
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
@@ -1232,6 +1260,31 @@ class HttpChatService implements ChatService {
     return this.request<WorkspaceBranchResponse>(`/workspace/branch${query ? `?${query}` : ''}`);
   }
 
+  async getProjectDashboard(projectId: string): Promise<ProjectDashboardResponse> {
+    return this.request<ProjectDashboardResponse>(`/projects/${encodeURIComponent(projectId)}/dashboard`);
+  }
+
+  async getWorkspaceTree(projectId: string, path = ''): Promise<WorkspaceTreeResponse> {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceTreeResponse>(`/workspace/tree?${params.toString()}`);
+  }
+
+  async getWorkspaceDir(projectId: string, path = ''): Promise<WorkspaceDirResponse> {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceDirResponse>(`/workspace/dir?${params.toString()}`);
+  }
+
+  async getWorkspaceFile(projectId: string, path: string): Promise<WorkspaceFileResponse> {
+    const params = new URLSearchParams();
+    params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceFileResponse>(`/workspace/file?${params.toString()}`);
+  }
+
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
     return this.request<RedoResponse>(
       `/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/redo`,
@@ -1725,9 +1778,12 @@ class HttpChatService implements ChatService {
     return this.request<MemoryStatusResponse>('/api/memory/status');
   }
 
-  async discoverMemory(projectId?: string): Promise<MemoryDiscoverResponse> {
-    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-    return this.request<MemoryDiscoverResponse>(`/api/memory/discover${query}`);
+  async discoverMemory(projectId?: string, scope = 'all'): Promise<MemoryDiscoverResponse> {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project_id', projectId);
+    if (scope && scope !== 'all') params.set('scope', scope);
+    const query = params.toString();
+    return this.request<MemoryDiscoverResponse>(`/api/memory/discover${query ? `?${query}` : ''}`);
   }
 
   async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
