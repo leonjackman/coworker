@@ -2293,6 +2293,11 @@ ipcMain.handle('delete-skill', (event, name) =>
 );
 ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));
+ipcMain.handle('list-pending-skills', () => requestBackend('/skills/pending', 'GET'));
+ipcMain.handle('get-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}`, 'GET'));
+ipcMain.handle('update-pending-skill', (event, name, content) => requestBackend(`/skills/pending/${encodeURIComponent(name)}`, 'PUT', { content }));
+ipcMain.handle('approve-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}/approve`, 'POST', {}));
+ipcMain.handle('reject-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}/reject`, 'POST', {}));
 ipcMain.handle('get-memory-status', () => requestBackend('/api/memory/status', 'GET'));
 ipcMain.handle('discover-memory', (event, { projectId = '', scope = 'all' } = {}) => {
   const params = new URLSearchParams();

@@ -1089,5 +1089,14 @@
   "dashboard.preview_font": "Файлы шрифтов нельзя просмотреть здесь. Откройте их в приложении для шрифтов.",
   "dashboard.preview_executable": "Исполняемые файлы нельзя просмотреть здесь.",
   "settings.memory_open": "Библиотека памяти",
-  "settings.memory_open_desc": "Просмотр и редактирование памяти проекта, которую агенты сохраняют между сессиями."
+  "settings.memory_open_desc": "Просмотр и редактирование памяти проекта, которую агенты сохраняют между сессиями.",
+  "skills.pending": "Ожидает проверки",
+  "skills.agent_generated": "Создано агентом",
+  "skills.preview": "Предпросмотр",
+  "skills.approve": "Одобрить",
+  "skills.reject": "Отклонить",
+  "skills.save_draft": "Сохранить черновик",
+  "skills.pending_review": "Проверить черновик навыка",
+  "dashboard.skills_pending": "{count} ожидают",
+  "dashboard.skills_pending_tip": "Навыки, созданные агентом, ожидают вашего одобрения"
 }

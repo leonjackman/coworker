@@ -647,7 +647,16 @@ export interface ProjectDashboardData {
   tools: {
     builtin: DashboardBuiltinTool[];
     mcp_servers: McpServerEntry[];
-    skills: Array<{ name: string; description: string; enabled: boolean; source?: string }>;
+    skills: Array<{
+      name: string;
+      description: string;
+      enabled: boolean;
+      source?: string;
+      status?: string;
+      provenance?: string;
+      sources?: string[];
+      created_at?: string;
+    }>;
   };
   sessions: SessionSummary[];
 }
@@ -870,6 +879,32 @@ export interface SkillEntry {
   enabled: boolean;
   commands?: Array<{ name: string; description?: string }>;
   body?: string;
+  provenance?: string;
+  status?: string;
+  sources?: string[];
+  created_at?: string;
+}
+
+export interface PendingSkill {
+  name: string;
+  description: string;
+  version: string;
+  file_path: string;
+  provenance: string;
+  status: string;
+  sources: string[];
+  created_at: string;
+}
+
+export interface PendingSkillsResponse {
+  status: string;
+  pending: PendingSkill[];
+}
+
+export interface PendingSkillResponse {
+  status: string;
+  name: string;
+  content: string;
 }
 
 export interface SkillDiagnostic {

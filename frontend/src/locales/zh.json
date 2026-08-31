@@ -1077,5 +1077,14 @@
   "dashboard.preview_font": "字体文件无法在此预览，请用字体工具打开。",
   "dashboard.preview_executable": "可执行文件无法在此预览。",
   "settings.memory_open": "记忆库",
-  "settings.memory_open_desc": "浏览和编辑项目记忆，agent 会跨会话持久保存这些内容。"
+  "settings.memory_open_desc": "浏览和编辑项目记忆，agent 会跨会话持久保存这些内容。",
+  "skills.pending": "待审核",
+  "skills.agent_generated": "Agent 生成",
+  "skills.preview": "预览",
+  "skills.approve": "批准",
+  "skills.reject": "拒绝",
+  "skills.save_draft": "保存草稿",
+  "skills.pending_review": "审核技能草稿",
+  "dashboard.skills_pending": "{count} 个待审核",
+  "dashboard.skills_pending_tip": "Agent 生成的技能，等待你的批准"
 }

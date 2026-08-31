@@ -5946,6 +5946,60 @@ def install_skill_from_content(request: SkillInstallRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/skills/pending")
+def list_pending_skills():
+    """List draft skills awaiting approval (self-calibration review queue)."""
+    return {"status": "ok", "pending": skill_manager.pending()}
+
+
+class SkillPendingUpdateRequest(BaseModel):
+    """Request body for editing a pending draft before approval."""
+    content: str  # full proposed SKILL.md content
+
+
+def _pending_skill_404(name: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"no pending draft: {name}")
+
+
+@app.get("/skills/pending/{skill_name}")
+def get_pending_skill(skill_name: str):
+    """Full proposed SKILL.md of one pending draft (for review/edit)."""
+    body = skill_manager.read_pending(skill_name)
+    if body is None:
+        raise _pending_skill_404(skill_name)
+    return {"status": "ok", "name": skill_name, "content": body}
+
+
+@app.put("/skills/pending/{skill_name}")
+def update_pending_skill(skill_name: str, request: SkillPendingUpdateRequest):
+    """Edit a pending draft in place (edit-before-approve)."""
+    result = skill_manager.update_pending(skill_name, request.content)
+    if result.get("status") != "ok":
+        status_code = 404 if "no pending draft" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=status_code, detail=result.get("message", "update failed"))
+    return {"status": "ok", "name": skill_name}
+
+
+@app.post("/skills/pending/{skill_name}/approve")
+def approve_pending_skill(skill_name: str):
+    """Approve a draft: activate a new skill or apply a replacement."""
+    result = skill_manager.approve_pending(skill_name)
+    if result.get("status") != "ok":
+        status_code = 404 if "no pending draft" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=status_code, detail=result.get("message", "approval failed"))
+    return {"status": "ok", "name": skill_name, "approved": True}
+
+
+@app.post("/skills/pending/{skill_name}/reject")
+def reject_pending_skill(skill_name: str):
+    """Reject a draft (delete it from the queue)."""
+    result = skill_manager.reject_pending(skill_name)
+    if result.get("status") != "ok":
+        status_code = 404 if "no pending draft" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=status_code, detail=result.get("message", "rejection failed"))
+    return {"status": "ok", "name": skill_name, "rejected": True}
+
+
 @app.get("/skills/{skill_name}")
 def get_skill(skill_name: str, command: str | None = None):
     """Return one skill's catalog entry plus its body (progressive disclosure).

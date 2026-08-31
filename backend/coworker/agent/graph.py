@@ -55,6 +55,7 @@ from .core import (
     ReadFileArgs,
     ReadSessionArgs,
     ReplaceInFileArgs,
+    SkillManageArgs,
     RunCommandArgs,
     CommandStatusArgs,
     SearchFilesArgs,
@@ -304,6 +305,37 @@ def build_workspace_tools(
             )
         except Exception as exc:
             return _error_result(exc, "load_skill")
+
+    @tool(args_schema=SkillManageArgs)
+    def skill_manage(
+        action: str,
+        name: str,
+        content: str | None = None,
+        old_string: str | None = None,
+        new_string: str | None = None,
+    ) -> str:
+        """Create, patch, edit, or delete a skill (procedural memory).
+
+        Use this when you discover a repeatable multi-step procedure worth
+        capturing — especially when the user corrects your approach. create
+        authors a NEW skill; patch and edit modify an existing one; delete
+        removes it. Every create/patch/edit write is STAGED as a draft for the
+        user's approval and never affects future conversations until approved.
+        """
+        try:
+            if skill_manager is None:
+                return _error_result(ValueError("skill system unavailable"), "skill_manage")
+            result = skill_manager.skill_manage(
+                action,
+                name,
+                content=content,
+                old_string=old_string,
+                new_string=new_string,
+                sources=[f"session:{session_id}"] if session_id else None,
+            )
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "skill_manage")
 
     @tool(args_schema=GitStatusArgs)
     def git_status() -> str:
@@ -589,7 +621,7 @@ def build_workspace_tools(
             return json.dumps({"goal": None}, ensure_ascii=False)
         return json.dumps(goal.to_dict(), ensure_ascii=False)
 
-    tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
+    tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, skill_manage, git_status]
     if readonly:
         # Reviewer/auditor sub-agents get no workspace mutation tools.
         tools = [search_files, read_file, git_status]

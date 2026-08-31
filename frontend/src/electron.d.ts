@@ -34,6 +34,8 @@ import type {
   SkillUpdateRequest,
   SkillValidateRequest,
   SkillValidateResponse,
+  PendingSkillsResponse,
+  PendingSkillResponse,
   StreamEvent,
   ToolAuditResponse,  MarketSourceResponse,
   MarketCategoriesResponse,
@@ -155,6 +157,11 @@ declare global {
       deleteSkill: (name: string) => Promise<SkillDeleteResponse>;
       scanSkills: () => Promise<SkillsListResponse>;
       validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
+      listPendingSkills: () => Promise<PendingSkillsResponse>;
+      getPendingSkill: (name: string) => Promise<PendingSkillResponse>;
+      updatePendingSkill: (name: string, content: string) => Promise<{ status: string }>;
+      approvePendingSkill: (name: string) => Promise<{ status: string }>;
+      rejectPendingSkill: (name: string) => Promise<{ status: string }>;
       listMarketSources: () => Promise<MarketSourceResponse>;
       listMarketCategories: (source: string) => Promise<MarketCategoriesResponse>;
       searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;

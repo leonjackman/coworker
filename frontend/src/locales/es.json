@@ -1089,5 +1089,14 @@
   "dashboard.preview_font": "Las fuentes no se pueden previsualizar aquí. Ábrelas con una aplicación de fuentes.",
   "dashboard.preview_executable": "Los archivos ejecutables no se pueden previsualizar aquí.",
   "settings.memory_open": "Biblioteca de memoria",
-  "settings.memory_open_desc": "Explora y edita la memoria del proyecto que los agentes guardan entre sesiones."
+  "settings.memory_open_desc": "Explora y edita la memoria del proyecto que los agentes guardan entre sesiones.",
+  "skills.pending": "Pendiente de revisión",
+  "skills.agent_generated": "Generado por el agente",
+  "skills.preview": "Vista previa",
+  "skills.approve": "Aprobar",
+  "skills.reject": "Rechazar",
+  "skills.save_draft": "Guardar borrador",
+  "skills.pending_review": "Revisar borrador de habilidad",
+  "dashboard.skills_pending": "{count} pendientes",
+  "dashboard.skills_pending_tip": "Habilidades generadas por el agente que esperan tu aprobación"
 }

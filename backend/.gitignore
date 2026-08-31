@@ -9,3 +9,4 @@ pybackend.spec
 .test_interject_data/
 .test_chat_data/
 .test_dashboard_data/
+.test_self_author_data/

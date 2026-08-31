@@ -219,6 +219,12 @@ def command_approval_middleware(
             "sessions and injects the skill's instructions into future conversations.",
             "when": _needs_sensitive_approval,
         },
+        "skill_manage": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to create/patch/edit/delete a skill (staged for review). "
+            "Approved drafts persist across sessions and affect future conversations.",
+            "when": _needs_sensitive_approval,
+        },
         "ask_user": {
             "allowed_decisions": ["respond", "reject"],
             "description": "Coworker asks the user a question that needs an answer.",

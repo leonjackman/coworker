@@ -45,6 +45,8 @@ import type {
   SkillDeleteResponse,
   SkillDetailResponse,
   SkillsListResponse,
+  PendingSkillsResponse,
+  PendingSkillResponse,
   SkillUpdateRequest,
   SkillValidateRequest,
   SkillValidateResponse,
@@ -202,6 +204,11 @@ export interface ChatService {
   deleteSkill: (name: string) => Promise<SkillDeleteResponse>;
   scanSkills: () => Promise<SkillsListResponse>;
   validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
+  listPendingSkills: () => Promise<PendingSkillsResponse>;
+  getPendingSkill: (name: string) => Promise<PendingSkillResponse>;
+  updatePendingSkill: (name: string, content: string) => Promise<{ status: string }>;
+  approvePendingSkill: (name: string) => Promise<{ status: string }>;
+  rejectPendingSkill: (name: string) => Promise<{ status: string }>;
   listMarketSources: () => Promise<MarketSourceResponse>;
   listMarketCategories: (source: string) => Promise<MarketCategoriesResponse>;
   searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
@@ -493,6 +500,31 @@ class ElectronChatService implements ChatService {
   async validateSkill(request: SkillValidateRequest): Promise<SkillValidateResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.validateSkill(request);
+  }
+
+  async listPendingSkills(): Promise<PendingSkillsResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listPendingSkills();
+  }
+
+  async getPendingSkill(name: string): Promise<PendingSkillResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getPendingSkill(name);
+  }
+
+  async updatePendingSkill(name: string, content: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.updatePendingSkill(name, content);
+  }
+
+  async approvePendingSkill(name: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.approvePendingSkill(name);
+  }
+
+  async rejectPendingSkill(name: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.rejectPendingSkill(name);
   }
 
   async listMarketSources(): Promise<MarketSourceResponse> {
@@ -1766,6 +1798,34 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
+    });
+  }
+
+  async listPendingSkills(): Promise<PendingSkillsResponse> {
+    return this.request<PendingSkillsResponse>('/skills/pending');
+  }
+
+  async getPendingSkill(name: string): Promise<PendingSkillResponse> {
+    return this.request<PendingSkillResponse>(`/skills/pending/${encodeURIComponent(name)}`);
+  }
+
+  async updatePendingSkill(name: string, content: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/skills/pending/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async approvePendingSkill(name: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/skills/pending/${encodeURIComponent(name)}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectPendingSkill(name: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/skills/pending/${encodeURIComponent(name)}/reject`, {
+      method: 'POST',
     });
   }
 

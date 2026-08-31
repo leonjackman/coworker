@@ -26,6 +26,7 @@ export function DashboardTools({ data, onViewChange }: DashboardToolsProps) {
   }, [tools.builtin]);
 
   const enabledSkills = useMemo(() => tools.skills.filter((skill) => skill.enabled).length, [tools.skills]);
+  const pendingSkills = useMemo(() => tools.skills.filter((skill) => skill.status === 'draft').length, [tools.skills]);
 
   return (
     <div className="dashboard-tools">
@@ -94,6 +95,11 @@ export function DashboardTools({ data, onViewChange }: DashboardToolsProps) {
           <Sparkles size={14} />
           {t('dashboard.skills')}
           <span className="dashboard-agents__count">{enabledSkills}/{tools.skills.length}</span>
+          {pendingSkills > 0 && (
+            <span className="settings-chip settings-chip--mode" title={t('dashboard.skills_pending_tip')}>
+              {t('dashboard.skills_pending', { count: pendingSkills })}
+            </span>
+          )}
           <button type="button" className="dashboard-deep-link dashboard-deep-link--inline" onClick={() => onViewChange('skills')}>
             {t('dashboard.open_skills')}
             <ExternalLink size={12} />

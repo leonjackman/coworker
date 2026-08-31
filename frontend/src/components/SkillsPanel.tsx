@@ -8,6 +8,7 @@ import { CategoryTabs, type CategoryTabItem } from './ui/category-tabs';
 import { GridCard } from './ui/grid-card';
 import { DetailModal } from './ui/detail-modal';
 import { SkillsMarketTab } from './SkillsMarketTab';
+import { SkillPendingPanel } from './settings/SkillPendingPanel';
 import { TagBar } from './ui/tag-bar';
 import type { SkillDiagnostic, SkillEntry } from '../types';
 
@@ -247,6 +248,9 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
               onRefresh={() => void rescan()}
               refreshAriaLabel={t('skills.refresh')}
             />
+
+            {/* ── Pending review queue (self-calibration) ── */}
+            <SkillPendingPanel onChanged={refresh} />
 
             {/* ── Installed grid ── */}
             {visibleSkills.length === 0 ? (

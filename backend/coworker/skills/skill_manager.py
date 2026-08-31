@@ -23,8 +23,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .skill_discovery import ScanResult, SkillScanner
-from .skills import SkillDiagnostic, SkillEntry
+from .skill_discovery import AGENTS_SKILLS_DIR, ScanResult, SkillScanner
+from .skills import SkillDiagnostic, SkillEntry, set_frontmatter_value
 
 from coworker.logger import get_logger
 logger = get_logger(__name__)
@@ -105,6 +105,10 @@ class SkillManager:
                         disable_model_invocation=skill.disable_model_invocation,
                         enabled=skill.name not in disabled,
                         commands=skill.commands,
+                        provenance=skill.provenance,
+                        status=skill.status,
+                        sources=list(skill.sources),
+                        created_at=skill.created_at,
                     )
                 )
             self._cached = ScanResult(skills=skills, diagnostics=result.diagnostics)
@@ -193,18 +197,320 @@ class SkillManager:
             disable_model_invocation=skill.disable_model_invocation,
             enabled=skill.name not in disabled,
             commands=skill.commands,
+            provenance=skill.provenance,
+            status=skill.status,
+            sources=list(skill.sources),
+            created_at=skill.created_at,
         )
 
     def injection_list(self) -> list[SkillEntry]:
-        """Skills eligible for system-prompt injection (enabled + allowed)."""
+        """Skills eligible for system-prompt injection.
+
+        Only **active** skills are injected — drafts awaiting approval are
+        never surfaced to the agent. Filtered further by enabled + permission.
+        """
         permissions = self._config.get("permissions", {})
         skills = []
         for skill in self.list(enabled_only=True):
+            if skill.status != "active":
+                continue
             perm = permissions.get(skill.name, "allow")
             if perm == "deny":
                 continue
             skills.append(skill)
         return skills
+
+    def pending(self) -> list[SkillEntry]:
+        """Draft skills awaiting approval (self-calibration queue)."""
+        return [s for s in self.list() if s.status == "draft"]
+
+    def set_status(self, name: str, status: str) -> SkillEntry | None:
+        """Flip a skill between ``active`` and ``draft`` (approve/reopen).
+
+        Rewrites the ``status`` key in the SKILL.md frontmatter and refreshes
+        the catalog. Returns the updated entry, or ``None`` if unknown.
+        """
+        if status not in ("active", "draft"):
+            raise ValueError("status must be 'active' or 'draft'")
+        skill = self.get(name)
+        if skill is None:
+            return None
+        try:
+            content = skill.file_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise ValueError(f"unreadable skill: {exc}") from exc
+        updated = set_frontmatter_value(content, "status", status)
+        if updated == content:
+            return skill
+        try:
+            skill.file_path.write_text(updated, encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"unable to write skill: {exc}") from exc
+        self.refresh()
+        return self.get(name)
+
+    # -- self-calibration draft queue -----------------------------------
+    #
+    # Agent-written skills (self-calibration) are staged under
+    # ``<user_skills>/.pending/<name>/SKILL.md`` — a hidden directory the
+    # scanner ignores — so a draft can never be injected into the agent's
+    # context before a human approves it. Approving a NEW skill moves it into
+    # the main skills dir; approving a REPLACEMENT overwrites the existing
+    # active skill's SKILL.md.
+
+    @property
+    def _pending_root(self) -> Path:
+        return self.scanner.user_skills_dir / AGENTS_SKILLS_DIR / ".pending"
+
+    def _pending_skill_file(self, name: str) -> Path:
+        return self._pending_root / name / "SKILL.md"
+
+    @property
+    def _user_skills_dir(self) -> Path:
+        return self.scanner.user_skills_dir / AGENTS_SKILLS_DIR
+
+    def _normalize_agent_draft(self, content: str, *, sources: list[str] | None = None) -> str:
+        """Force self-calibration metadata onto a staged SKILL.md."""
+        from datetime import datetime, timezone
+
+        from .skills import parse_frontmatter, set_frontmatter_list
+
+        out = set_frontmatter_value(content, "status", "draft")
+        out = set_frontmatter_value(out, "provenance", "agent")
+        if sources:
+            out = set_frontmatter_list(out, "sources", sources)
+        fm, _ = parse_frontmatter(out)
+        existing_created = fm.get("created_at") if isinstance(fm.get("created_at"), str) else ""
+        if not existing_created.strip():
+            out = set_frontmatter_value(
+                out, "created_at", datetime.now(timezone.utc).isoformat(timespec="seconds")
+            )
+        return out
+
+    def _write_pending(
+        self,
+        name: str,
+        content: str,
+        *,
+        require_existing: bool,
+        sources: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if not name or not name.strip():
+            return {"status": "error", "message": "Skill name is required"}
+        if not content or not content.strip():
+            return {"status": "error", "message": "Skill content (SKILL.md) is required"}
+        from .skills import parse_frontmatter, validate_description, validate_name
+
+        frontmatter, _ = parse_frontmatter(content)
+        resolved = name.strip()
+        if isinstance(frontmatter.get("name"), str):
+            resolved = frontmatter["name"].strip() or resolved
+        desc = frontmatter.get("description") if isinstance(frontmatter.get("description"), str) else ""
+        problems = validate_name(resolved) + validate_description(desc)
+        if problems:
+            return {"status": "error", "message": "; ".join(problems)}
+
+        existing = self.get(resolved)
+        if require_existing and existing is None:
+            return {"status": "error", "message": f"skill not found: {resolved}"}
+        if not require_existing and existing is not None:
+            return {"status": "error", "message": f"skill already exists: {resolved}"}
+
+        normalized = self._normalize_agent_draft(content, sources=sources)
+        target = self._pending_skill_file(resolved)
+        # The exists() check and the write must be atomic: two background reviews
+        # (e.g. an original turn + a regenerate) could otherwise both pass the
+        # check and clobber each other's draft. self._lock is never held while
+        # calling self.get()/refresh() (non-reentrant), so only the critical
+        # section goes under it.
+        with self._lock:
+            if target.exists():
+                return {"status": "error", "message": f"a pending draft already exists: {resolved}"}
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(normalized, encoding="utf-8")
+            except OSError as exc:
+                return {"status": "error", "message": f"unable to stage draft: {exc}"}
+        return {"status": "ok", "name": resolved, "staged": True}
+
+    def stage_skill_draft(self, name: str, content: str, *, sources: list[str] | None = None) -> dict[str, Any]:
+        """Stage a NEW skill (agent-created) as a pending draft for approval."""
+        return self._write_pending(name, content, require_existing=False, sources=sources)
+
+    def stage_skill_replacement(
+        self, name: str, content: str, *, sources: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Stage a full replacement of an EXISTING skill (edit) for approval."""
+        return self._write_pending(name, content, require_existing=True, sources=sources)
+
+    def stage_skill_patch(
+        self,
+        name: str,
+        old_string: str,
+        new_string: str,
+        *,
+        sources: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Propose a targeted patch to an existing active skill (staged)."""
+        skill = self.get(name)
+        if skill is None:
+            return {"status": "error", "message": f"skill not found: {name}"}
+        try:
+            base = skill.file_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return {"status": "error", "message": f"unreadable skill: {exc}"}
+        if not old_string or old_string not in base:
+            return {"status": "error", "message": "old_string was not found in the skill body"}
+        proposed = base.replace(old_string, new_string, 1)
+        return self._write_pending(name, proposed, require_existing=True, sources=sources)
+
+    def pending(self) -> list[dict[str, Any]]:
+        """List pending drafts (the self-calibration review queue)."""
+        root = self._pending_root
+        if not root.is_dir():
+            return []
+        drafts: list[dict[str, Any]] = []
+        from .skills import parse_frontmatter
+
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            skill_file = child / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+            try:
+                content = skill_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            fm, _ = parse_frontmatter(content)
+            name = fm.get("name") if isinstance(fm.get("name"), str) else child.name
+            description = fm.get("description") if isinstance(fm.get("description"), str) else ""
+            version = fm.get("version") if isinstance(fm.get("version"), str) else ""
+            raw_sources = fm.get("sources")
+            sources = [s for s in raw_sources if isinstance(s, str)] if isinstance(raw_sources, list) else []
+            created_at = fm.get("created_at") if isinstance(fm.get("created_at"), str) else ""
+            drafts.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "version": version,
+                    "file_path": str(skill_file),
+                    "provenance": "agent",
+                    "status": "draft",
+                    "sources": sources,
+                    "created_at": created_at,
+                }
+            )
+        return drafts
+
+    def read_pending(self, name: str) -> str | None:
+        """Full SKILL.md content of a pending draft (or ``None``)."""
+        skill_file = self._pending_skill_file(name)
+        if not skill_file.is_file():
+            return None
+        try:
+            return skill_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+    def update_pending(self, name: str, content: str) -> dict[str, Any]:
+        """Overwrite a pending draft (edit-before-approve)."""
+        skill_file = self._pending_skill_file(name)
+        if not skill_file.is_file():
+            return {"status": "error", "message": f"no pending draft: {name}"}
+        if not content or not content.strip():
+            return {"status": "error", "message": "Skill content (SKILL.md) is required"}
+        from .skills import parse_frontmatter, validate_description, validate_name
+
+        fm, _ = parse_frontmatter(content)
+        resolved = name.strip()
+        if isinstance(fm.get("name"), str):
+            resolved = fm["name"].strip() or resolved
+        desc = fm.get("description") if isinstance(fm.get("description"), str) else ""
+        problems = validate_name(resolved) + validate_description(desc)
+        if problems:
+            return {"status": "error", "message": "; ".join(problems)}
+        normalized = self._normalize_agent_draft(content)
+        try:
+            skill_file.write_text(normalized, encoding="utf-8")
+        except OSError as exc:
+            return {"status": "error", "message": f"unable to update draft: {exc}"}
+        return {"status": "ok", "name": name, "updated": True}
+
+    def approve_pending(self, name: str) -> dict[str, Any]:
+        """Approve a draft: activate a NEW skill or apply a replacement."""
+        src = self._pending_skill_file(name)
+        if not src.is_file():
+            return {"status": "error", "message": f"no pending draft: {name}"}
+        try:
+            content = src.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return {"status": "error", "message": f"unreadable draft: {exc}"}
+        content = set_frontmatter_value(content, "status", "active")
+        existing = self.get(name)
+        try:
+            if existing is None:
+                target = self._user_skills_dir / name
+                if target.exists():
+                    return {"status": "error", "message": f"target skill directory already exists: {name}"}
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "SKILL.md").write_text(content, encoding="utf-8")
+            else:
+                existing.file_path.write_text(content, encoding="utf-8")
+            shutil.rmtree(src.parent)
+        except OSError as exc:
+            return {"status": "error", "message": f"unable to approve draft: {exc}"}
+        self.refresh()
+        return {"status": "ok", "name": name, "approved": True}
+
+    def reject_pending(self, name: str) -> dict[str, Any]:
+        """Reject a draft (delete it from the queue)."""
+        src = self._pending_skill_file(name)
+        if not src.is_file():
+            return {"status": "error", "message": f"no pending draft: {name}"}
+        try:
+            shutil.rmtree(src.parent)
+        except OSError as exc:
+            return {"status": "error", "message": f"unable to reject draft: {exc}"}
+        return {"status": "ok", "name": name, "rejected": True}
+
+    def skill_manage(
+        self,
+        action: str,
+        name: str,
+        *,
+        content: str | None = None,
+        old_string: str | None = None,
+        new_string: str | None = None,
+        sources: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Orchestrator for the agent's ``skill_manage`` tool.
+
+        ``create`` stages a new skill; ``edit``/``patch`` stage a replacement of
+        an existing skill; ``delete`` removes it immediately (HITL-gated). Every
+        write is staged as a draft awaiting approval — the agent never enables a
+        skill on its own.
+        """
+        action = (action or "").lower()
+        if action == "create":
+            if not content:
+                return {"status": "error", "message": "content (SKILL.md) is required for create"}
+            return self.stage_skill_draft(name, content, sources=sources)
+        if action == "edit":
+            if not content:
+                return {"status": "error", "message": "content (SKILL.md) is required for edit"}
+            return self.stage_skill_replacement(name, content, sources=sources)
+        if action == "patch":
+            return self.stage_skill_patch(name, old_string or "", new_string or "", sources=sources)
+        if action == "delete":
+            if self.get(name) is None:
+                return {"status": "error", "message": f"skill not found: {name}"}
+            try:
+                self.delete_skill(name)
+            except ValueError as exc:
+                return {"status": "error", "message": str(exc)}
+            return {"status": "ok", "name": name, "deleted": True}
+        return {"status": "error", "message": f"unknown skill_manage action: {action}"}
 
     def read_body(self, name: str) -> tuple[str, str] | None:
         """Return ``(body_markdown, base_dir)`` for a skill, or ``None``.

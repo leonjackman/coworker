@@ -45,6 +45,10 @@ _KNOWN_KEYS = frozenset(
         "prerequisites",
         "required_environment_variables",
         "setup",
+        "provenance",
+        "status",
+        "sources",
+        "created_at",
     }
 )
 
@@ -79,6 +83,11 @@ class SkillEntry:
     disable_model_invocation: bool = False
     enabled: bool = True
     commands: list[SkillCommand] = field(default_factory=list)
+    # ── self-calibration metadata ─────────────────────────────────────
+    provenance: str = "user"  # "user" | "market" | "agent"
+    status: str = "active"  # "active" | "draft" (draft = waiting for approval)
+    sources: list[str] = field(default_factory=list)  # evidence chain
+    created_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +100,10 @@ class SkillEntry:
             "disable_model_invocation": self.disable_model_invocation,
             "enabled": self.enabled,
             "commands": [c.to_dict() for c in self.commands],
+            "provenance": self.provenance,
+            "status": self.status,
+            "sources": list(self.sources),
+            "created_at": self.created_at,
         }
 
 
@@ -142,6 +155,86 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 def _frontmatter_str(frontmatter: dict[str, Any], key: str) -> str:
     value = frontmatter.get(key)
     return value if isinstance(value, str) else ""
+
+
+def set_frontmatter_value(content: str, key: str, value: str) -> str:
+    """Set a scalar frontmatter key in a SKILL.md string, preserving formatting.
+
+    Replaces an existing ``key:`` line in place; injects one before the closing
+    ``---`` when absent; prepends a fresh frontmatter block when the file has
+    none. Values that YAML would coerce (ISO timestamps, numbers, booleans) are
+    quoted so they stay strings. Returns the (possibly unchanged) content.
+    """
+    import re as _re
+
+    if _re.search(r"[:#\[\]{},&*!|>'\"]", value) or _re.fullmatch(r"-?\d+(\.\d+)?", value) or value.lower() in {
+        "true",
+        "false",
+        "null",
+        "yes",
+        "no",
+        "on",
+        "off",
+    }:
+        value = f'"{value.replace(chr(34), chr(92) + chr(34))}"'
+    if not content.startswith("---"):
+        body = content.lstrip("\n")
+        return f"---\n{key}: {value}\n---\n\n{body}"
+    lines = content.split("\n")
+    close = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+    if close is None:
+        return content
+    replaced = False
+    out: list[str] = []
+    for i, line in enumerate(lines[:close]):
+        if i == 0:
+            out.append(line)
+            continue
+        stripped = line.strip()
+        if stripped.startswith(f"{key}:") or stripped.startswith(f"{key} :"):
+            indent = line[: len(line) - len(line.lstrip())]
+            out.append(f"{indent}{key}: {value}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        out.append(f"{key}: {value}")
+    out.extend(lines[close:])
+    return "\n".join(out)
+
+
+def set_frontmatter_list(content: str, key: str, items: list[str]) -> str:
+    """Set a list-valued frontmatter key (e.g. ``sources``) in a SKILL.md string.
+
+    Replaces an existing ``key:`` block (including its indented list items), or
+    injects one before the closing ``---``. Returns the (possibly unchanged)
+    content.
+    """
+    import json as _json
+
+    def _scalar(item: str) -> str:
+        if item.startswith(("'", '"')):
+            return item
+        return _json.dumps(item, ensure_ascii=False)
+
+    block_lines = [f"{key}:"] + [f"  - {_scalar(i)}" for i in items]
+    if not content.startswith("---"):
+        return f"---\n" + "\n".join(block_lines) + "\n---\n\n" + content.lstrip("\n")
+    lines = content.split("\n")
+    close = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+    if close is None:
+        return content
+    key_idx = next(
+        (i for i in range(1, close) if lines[i].strip() == key or lines[i].strip().startswith(key + ":")),
+        None,
+    )
+    if key_idx is None:
+        lines[close:close] = block_lines
+        return "\n".join(lines)
+    end = key_idx + 1
+    while end < close and (lines[end].startswith(" ") or lines[end].startswith("\t")):
+        end += 1
+    return "\n".join(lines[:key_idx] + block_lines + lines[end:])
 
 
 def _parse_commands(frontmatter: dict[str, Any]) -> list[SkillCommand]:
@@ -249,6 +342,14 @@ def load_skill_from_file(
     version = version_raw or content_version(content)
     commands = _parse_commands(frontmatter)
 
+    provenance_raw = _frontmatter_str(frontmatter, "provenance").strip().lower()
+    provenance = provenance_raw if provenance_raw in {"user", "market", "agent"} else "user"
+    status_raw = _frontmatter_str(frontmatter, "status").strip().lower()
+    status = status_raw if status_raw in {"active", "draft"} else "active"
+    sources_raw = frontmatter.get("sources")
+    sources = [s for s in sources_raw if isinstance(s, str)] if isinstance(sources_raw, list) else []
+    created_at = _frontmatter_str(frontmatter, "created_at").strip()
+
     return (
         SkillEntry(
             name=name,
@@ -259,6 +360,10 @@ def load_skill_from_file(
             version=version,
             disable_model_invocation=disable_model_invocation,
             commands=commands,
+            provenance=provenance,
+            status=status,
+            sources=sources,
+            created_at=created_at,
         ),
         diagnostics,
     )
