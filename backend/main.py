@@ -3213,6 +3213,10 @@ async def delete_session(session_id: str):
     agent_registry.evict_runtime(session_id)
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
+    # Orphaned approvals would otherwise stay pending forever (active records
+    # are never pruned) and linger in the global to-do view with no resume
+    # target — purge them together with the session.
+    command_approval_store.purge_session(session_id)
     _cleanup_session_screenshots(session_id)
     return {"status": "ok"}
 
@@ -4489,6 +4493,7 @@ async def delete_project(project_id: str):
         agent_registry.evict_runtime(session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
+        command_approval_store.purge_session(session["id"])
         _cleanup_session_screenshots(session["id"])
     session_store.delete_by_project(project_id)
     if memory_dir:

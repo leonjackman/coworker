@@ -1,9 +1,10 @@
 import { Download, FileText, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
-import type { AgentTraceEvent, CommandApproval, ToolAuditEvent } from '../../types';
+import type { ApprovalDecisionPayload, ApprovalOption, CommandApproval, PendingRequest } from '../../types';
 import { Button } from '../ui/button';
+import { PendingDocks } from '../PendingDocks';
 
 function downloadText(filename: string, text: string): void {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
@@ -16,101 +17,117 @@ function downloadText(filename: string, text: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function formatAuditTime(timestamp: string): string {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return timestamp;
-  return new Intl.DateTimeFormat(undefined, {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function summarizeDetails(details?: Record<string, unknown>): string {
-  if (!details) return '';
-  const parts = [
-    typeof details.path === 'string' ? details.path : '',
-    Array.isArray(details.command) ? details.command.join(' ') : '',
-    typeof details.return_code === 'number' ? `exit ${details.return_code}` : '',
-    details.timed_out === true ? 'timeout' : '',
-    typeof details.error === 'string' ? details.error : '',
-  ].filter(Boolean);
-  return parts.join(' · ');
+/**
+ * Backend `CommandApproval` → UI `PendingRequest`, mirroring the mapping the
+ * main chat does in `restorePendingForSession` (and the backend's own
+ * `stream_event_from_interrupt`), so the settings page renders the exact same
+ * cards as the chat area — for command / question / plan / mcp alike.
+ */
+function approvalToPending(approval: CommandApproval): PendingRequest {
+  const context = isRecord(approval.context) ? approval.context : {};
+  const kind: PendingRequest['kind'] =
+    context.kind === 'question' || context.kind === 'mcp' || context.kind === 'plan' ? context.kind : 'command';
+  const base: PendingRequest = {
+    approval_id: approval.id,
+    kind,
+    session_id: typeof context.session_id === 'string' ? context.session_id : '',
+    approval_status: approval.status,
+    messageId: '',
+  };
+  if (kind === 'question') {
+    const args = isRecord(context.action_args) ? context.action_args : {};
+    return {
+      ...base,
+      ...(typeof args.question === 'string' ? { question: args.question } : {}),
+      ...(typeof args.header === 'string' ? { header: args.header } : {}),
+      ...(Array.isArray(args.options) ? { options: args.options as ApprovalOption[] } : {}),
+      ...(typeof args.multiple === 'boolean' ? { multiple: args.multiple } : {}),
+    };
+  }
+  if (kind === 'plan') {
+    const args = isRecord(context.action_args) ? context.action_args : {};
+    return {
+      ...base,
+      ...(typeof args.plan_text === 'string' ? { plan: args.plan_text } : {}),
+    };
+  }
+  if (kind === 'mcp') {
+    const args = isRecord(context.action_args) ? context.action_args : {};
+    const mcp = isRecord(context.mcp) ? context.mcp : {};
+    const annotations = isRecord(mcp.annotations) ? mcp.annotations : {};
+    return {
+      ...base,
+      ...(typeof context.tool_name === 'string' ? { tool_name: context.tool_name } : {}),
+      ...(isRecord(args) && Object.keys(args).length > 0 ? { tool_args: args } : {}),
+      ...(typeof mcp.server_name === 'string' ? { server_name: mcp.server_name } : {}),
+      ...(typeof mcp.server_id === 'string' ? { server_id: mcp.server_id } : {}),
+      ...(typeof mcp.remote_name === 'string' ? { remote_name: mcp.remote_name } : {}),
+      ...(mcp.read_only === true ? { read_only: true } : {}),
+      ...(annotations.destructive === true ? { destructive: true } : {}),
+    };
+  }
+  return {
+    ...base,
+    command: Array.isArray(approval.command) ? approval.command : [],
+    ...(approval.cwd ? { cwd: approval.cwd } : {}),
+  };
 }
 
-function contextLabel(context?: Record<string, unknown>): string {
-  if (!context) return '';
-  const provider = typeof context.provider === 'string' ? context.provider : '';
-  const model = typeof context.model === 'string' ? context.model : '';
-  return [provider, model].filter(Boolean).join(' / ');
-}
+type PanelTab = 'pending' | 'logs';
 
-function summarizeTrace(event: AgentTraceEvent): string {
-  const details = event.details || {};
-  const parts = [
-    typeof details.stage === 'string' ? details.stage : '',
-    Array.isArray(details.approval_ids) ? `approvals ${details.approval_ids.join(', ')}` : '',
-    typeof details.approval_id === 'string' ? `approval ${details.approval_id}` : '',
-    typeof details.content_chars === 'number' ? `${details.content_chars} chars` : '',
-    typeof details.error === 'string' ? details.error : '',
-  ].filter(Boolean);
-  return parts.join(' · ');
-}
-
-export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
-  const [events, setEvents] = useState<ToolAuditEvent[]>([]);
-  const [traces, setTraces] = useState<AgentTraceEvent[]>([]);
+export function ToolAuditPanel() {
+  const [tab, setTab] = useState<PanelTab>('pending');
   const [approvals, setApprovals] = useState<CommandApproval[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [resumeMessage, setResumeMessage] = useState('');
-  const [traceLines, setTraceLines] = useState(100);
-  const [auditLines, setAuditLines] = useState(100);
+  const [flash, setFlash] = useState('');
+  // Logs
   const [logLevel, setLogLevel] = useState('INFO');
   const [jsonLog, setJsonLog] = useState(true);
   const [logFilePath, setLogFilePath] = useState('');
   const [logLines, setLogLines] = useState<string[]>([]);
   const [logTotalLines, setLogTotalLines] = useState(0);
   const [logLoading, setLogLoading] = useState(false);
+  // Audit retention
+  const [auditLines, setAuditLines] = useState(100);
+
+  const pending = useMemo(
+    () => approvals.filter((approval) => approval.status === 'pending').map(approvalToPending),
+    [approvals],
+  );
+
+  async function refreshApprovals() {
+    setLoading(true);
+    try {
+      const response = await chatService.listCommandApprovals();
+      setApprovals(response.approvals);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('settings.audit_load_failed'));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function loadRetention() {
     try {
       const r = await chatService.getRetentionSettings();
-      setTraceLines(r.trace_lines);
       setAuditLines(r.audit_lines);
     } catch {
-      // default 100/100
+      // default 100
     }
   }
 
-  async function exportTrace() {
-    const text = await chatService.exportAgentTraces();
-    downloadText('agent_trace.jsonl', text);
-  }
-
-  async function exportAudit() {
-    const text = await chatService.exportToolAudit();
-    downloadText('tool_audit.jsonl', text);
-  }
-
-  async function clearTrace() {
-    await chatService.clearAgentTraces();
-    await refreshAudit();
-  }
-
-  async function clearAudit() {
-    await chatService.clearToolAudit();
-    await refreshAudit();
-  }
-
   async function saveRetention() {
-    const trace = Number.isFinite(traceLines) && traceLines >= 1 ? Math.floor(traceLines) : 100;
     const audit = Number.isFinite(auditLines) && auditLines >= 1 ? Math.floor(auditLines) : 100;
-    setTraceLines(trace);
     setAuditLines(audit);
     try {
-      await chatService.saveRetentionSettings({ trace_lines: trace, audit_lines: audit });
+      await chatService.saveRetentionSettings({ audit_lines: audit });
+      setFlash(t('settings.retention_saved'));
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('settings.audit_load_failed'));
@@ -125,6 +142,7 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
       setJsonLog(settings.json_log);
       setLogFilePath(settings.log_file);
       setLogLines([]);
+      setError('');
     } catch {
       // ignore
     } finally {
@@ -146,151 +164,121 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
     try {
       await chatService.setLogLevel(newLevel);
       setLogLevel(newLevel);
+      setFlash(t('settings.log_level_saved'));
     } catch {
       // ignore
     }
   }
 
   async function clearLog() {
+    if (!window.confirm(t('settings.log_clear_confirm'))) return;
     try {
       // maxBytes=0 tells the backend to clear the log file completely.
       await chatService.truncateLog(0);
-      await fetchLogLines();
+      setLogLines([]);
+      setLogTotalLines(0);
+      setFlash(t('settings.audit_action_done'));
     } catch {
       // ignore
     }
   }
 
-  async function refreshAudit() {
-    setLoading(true);
-    setError('');
+  async function exportAudit() {
+    const text = await chatService.exportToolAudit();
+    downloadText('tool_audit.jsonl', text);
+  }
+
+  async function clearAudit() {
+    if (!window.confirm(t('settings.audit_clear_confirm'))) return;
+    await chatService.clearToolAudit();
+    setFlash(t('settings.audit_action_done'));
+  }
+
+  async function handleResolve(request: PendingRequest, decision: ApprovalDecisionPayload) {
     try {
-      const [auditResponse, traceResponse, approvalsResponse] = await Promise.all([
-        chatService.listToolAudit(80),
-        chatService.listAgentTraces(80),
-        chatService.listCommandApprovals(),
-      ]);
-      setEvents(auditResponse.events);
-      setTraces(traceResponse.events);
-      setApprovals(approvalsResponse.approvals);
+      await chatService.resolveCommandApproval(request.approval_id, decision);
+      setFlash(t('settings.audit_action_done'));
+      setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : t('settings.audit_load_failed'));
     } finally {
-      setLoading(false);
+      await refreshApprovals();
     }
   }
 
-  async function refreshApprovalsOnly() {
-    try {
-      const approvalsResponse = await chatService.listCommandApprovals();
-      setApprovals(approvalsResponse.approvals);
-    } catch {
-      // ignore background poll failures
-    }
-  }
-
-  async function updateApproval(approvalId: string, action: 'approve' | 'deny') {
-    setLoading(true);
-    setError('');
-    try {
-      setResumeMessage('');
-      const response = await chatService.resolveCommandApproval(approvalId, { type: action === 'approve' ? 'approve' : 'reject' });
-      const done = response.events?.findLast((event) => event.type === 'done');
-      setResumeMessage(done?.content || '');
-      await refreshAudit();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('settings.command_approval_failed'));
-      setLoading(false);
-    }
-  }
+  // Auto-expire the transient "done" feedback.
+  useEffect(() => {
+    if (!flash) return;
+    const timer = window.setTimeout(() => setFlash(''), 3000);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
 
   useEffect(() => {
-    void refreshAudit();
+    void refreshApprovals();
     void loadRetention();
     void refreshLogConfig();
-    const timer = window.setInterval(() => {
-      void refreshApprovalsOnly();
-    }, 5000);
-    return () => window.clearInterval(timer);
   }, []);
 
+  // Global to-do center: keep the pending list fresh while this tab is visible.
+  useEffect(() => {
+    if (tab !== 'pending') return;
+    const timer = window.setInterval(() => void refreshApprovals(), 5000);
+    return () => window.clearInterval(timer);
+  }, [tab]);
+
   return (
-    <section className="settings-group settings-audit" aria-labelledby={embedded ? undefined : 'settings-group-audit'}>
-      {!embedded && (
-        <div className="settings-group__heading settings-audit__heading">
-          <div>
-            <h2 id="settings-group-audit">{t('settings.audit_group')}</h2>
-            <p>{t('settings.audit_group_desc')}</p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={refreshAudit} disabled={loading}>
-              <RefreshCw size={14} className={loading ? 'settings-audit__spin' : ''} />
-              {t('settings.audit_refresh')}
-            </Button>
-            <Button variant="secondary" onClick={refreshLogConfig} disabled={loading}>
-              <RefreshCw size={14} className={logLoading ? 'settings-audit__spin' : ''} />
-              {t('settings.logs')}
-            </Button>
-          </div>
-        </div>
-      )}
+    <section className="settings-group settings-audit" aria-label={t('settings.audit_group')}>
+      <div className="settings-audit__tabs">
+        <button
+          type="button"
+          className={tab === 'pending' ? 'settings-audit__tab settings-audit__tab--active' : 'settings-audit__tab'}
+          onClick={() => setTab('pending')}
+        >
+          {t('settings.audit_tabs_pending')}
+          {pending.length > 0 ? ` · ${pending.length}` : ''}
+        </button>
+        <button
+          type="button"
+          className={tab === 'logs' ? 'settings-audit__tab settings-audit__tab--active' : 'settings-audit__tab'}
+          onClick={() => setTab('logs')}
+        >
+          {t('settings.audit_tabs_logs')}
+        </button>
+      </div>
 
-      {embedded && (
-        <div className="settings-audit__toolbar">
-          <Button variant="secondary" onClick={refreshAudit} disabled={loading}>
-            <RefreshCw size={14} className={loading ? 'settings-audit__spin' : ''} />
-            {t('settings.audit_refresh')}
-          </Button>
-        </div>
-      )}
+      {error && <div className="settings-audit__banner settings-audit__banner--error">{error}</div>}
+      {!error && flash && <div className="settings-audit__banner">{flash}</div>}
 
-      <div className="settings-card settings-audit__card">
-        <div className="settings-audit__retention">
-          <label>
-            {t('settings.retention_trace')}
-            <input
-              type="number"
-              min={1}
-              max={10000}
-              value={traceLines}
-              onChange={(e) => setTraceLines(Number(e.target.value))}
-            />
-          </label>
-          <label>
-            {t('settings.retention_audit')}
-            <input
-              type="number"
-              min={1}
-              max={10000}
-              value={auditLines}
-              onChange={(e) => setAuditLines(Number(e.target.value))}
-            />
-          </label>
-          <Button variant="secondary" onClick={saveRetention}>{t('settings.retention_save')}</Button>
-          <span className="settings-audit__retention-actions">
-            <Button variant="secondary" onClick={exportTrace} title={t('settings.export_trace')}>
-              <Download size={14} /> {t('settings.export_trace')}
-            </Button>
-            <Button variant="secondary" onClick={exportAudit} title={t('settings.export_audit')}>
-              <Download size={14} /> {t('settings.export_audit')}
-            </Button>
-            <Button variant="ghost" onClick={clearTrace} title={t('settings.clear_trace')}>
-              <Trash2 size={14} /> {t('settings.clear_trace')}
-            </Button>
-            <Button variant="ghost" onClick={clearAudit} title={t('settings.clear_audit')}>
-              <Trash2 size={14} /> {t('settings.clear_audit')}
-            </Button>
-          </span>
+      {tab === 'pending' ? (
+        <div className="settings-audit__card">
+          {pending.length === 0 ? (
+            <div className="settings-audit__empty">
+              <ShieldCheck size={18} />
+              <span>{loading ? t('settings.audit_loading') : t('settings.audit_pending_none')}</span>
+            </div>
+          ) : (
+            <>
+              <p className="settings-audit__pending-hint">{t('settings.audit_pending_desc')}</p>
+              <PendingDocks
+                requests={pending}
+                onResolve={handleResolve}
+                onDismiss={(request) => void handleResolve(request, { type: 'reject' })}
+              />
+            </>
+          )}
         </div>
-
-        {/* Logging configuration */}
-        <div className="settings-audit__retention">
-          <div>
-            <h3 style={{marginBottom: '8px', fontSize: '14px', fontWeight: 600}}>{t('settings.logging')}</h3>
-            <div style={{display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap'}}>
-              <label htmlFor="log-level-select" style={{fontSize: '12px', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap'}}>
-                {t('settings.log_level')}
-              </label>
+      ) : (
+        <div className="settings-audit__card">
+          <div className="settings-audit__group">
+            <div className="settings-audit__group-head">
+              <h3>{t('settings.logging')}</h3>
+              <Button variant="secondary" size="sm" onClick={refreshLogConfig} disabled={logLoading}>
+                <RefreshCw size={14} />
+                {t('settings.audit_refresh')}
+              </Button>
+            </div>
+            <div className="settings-audit__row">
+              <label htmlFor="log-level-select">{t('settings.log_level')}</label>
               <select
                 id="log-level-select"
                 className="settings-input"
@@ -304,123 +292,59 @@ export function ToolAuditPanel({ embedded = false }: { embedded?: boolean }) {
               </select>
             </div>
             {logFilePath && (
-              <div style={{fontSize: '11px', color: 'var(--color-text-secondary)', marginBottom: '8px', wordBreak: 'break-all'}}>
+              <div className="settings-audit__meta">
                 {t('settings.log_file')}: {logFilePath}
-                {jsonLog && <span style={{marginLeft: '8px', color: 'var(--color-text-accent)'}}>(JSON)</span>}
+                {jsonLog && <span> (JSON)</span>}
                 {logTotalLines > 0 && <span> · {logTotalLines} {t('settings.lines')}</span>}
               </div>
             )}
-            <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
-              <Button variant="secondary" onClick={fetchLogLines} disabled={logLoading} size="sm">
-                <FileText size={14} /> {t('settings.load_log')}
+            <div className="settings-audit__row">
+              <Button variant="secondary" size="sm" onClick={fetchLogLines} disabled={logLoading}>
+                <FileText size={14} />
+                {t('settings.load_log')}
               </Button>
-              <Button variant="ghost" onClick={clearLog} size="sm">
-                <Trash2 size={14} /> {t('settings.clear_log')}
+              <Button variant="ghost" size="sm" onClick={clearLog}>
+                <Trash2 size={14} />
+                {t('settings.clear_log')}
               </Button>
             </div>
             {logLines.length > 0 && (
-              <pre style={{
-                maxHeight: '200px',
-                overflowY: 'auto',
-                fontSize: '11px',
-                background: 'var(--color-surface-secondary)',
-                padding: '8px',
-                borderRadius: '4px',
-                marginTop: '8px',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-all',
-                lineHeight: 1.5,
-              }}>
-                {logLines.join('\n')}
-              </pre>
+              <pre className="settings-audit__log">{logLines.join('\n')}</pre>
             )}
           </div>
-        </div>
 
-        {error && <div className="settings-audit__empty">{error}</div>}
-        {!error && resumeMessage && (
-          <article className="settings-audit__event settings-audit__event--approval">
-            <div className="settings-audit__event-top">
-              <strong>{t('settings.command_resume_complete')}</strong>
-              <span className="settings-audit__status settings-audit__status--success">done</span>
+          <div className="settings-audit__group">
+            <div className="settings-audit__group-head">
+              <h3>{t('settings.audit_records')}</h3>
             </div>
-            <p>{resumeMessage}</p>
-          </article>
-        )}
-        {!error && approvals.filter((approval) => approval.status === 'pending').map((approval) => (
-          <article className="settings-audit__event settings-audit__event--approval" key={approval.id}>
-            <div className="settings-audit__event-top">
-              <strong>{t('settings.command_approval_required')}</strong>
-              <span className="settings-audit__status settings-audit__status--pending">{approval.status}</span>
-            </div>
-            <div className="settings-audit__event-meta">
-              <span>{formatAuditTime(approval.updated_at)}</span>
-              <span>{approval.cwd || '.'}</span>
-            </div>
-            <p>{approval.command.join(' ')}</p>
-            <div className="settings-audit__actions">
-              <Button variant="secondary" onClick={() => updateApproval(approval.id, 'deny')} disabled={loading}>
-                {t('settings.command_deny')}
-              </Button>
-              <Button onClick={() => updateApproval(approval.id, 'approve')} disabled={loading}>
-                {t('settings.command_approve_once')}
+            <div className="settings-audit__row">
+              <label>{t('settings.retention_audit')}</label>
+              <input
+                type="number"
+                min={1}
+                max={10000}
+                value={auditLines}
+                onChange={(e) => setAuditLines(Number(e.target.value))}
+                className="settings-audit__number"
+              />
+              <Button variant="secondary" size="sm" onClick={saveRetention}>
+                {t('settings.retention_save')}
               </Button>
             </div>
-          </article>
-        ))}
-        {!error && events.length === 0 && approvals.filter((approval) => approval.status === 'pending').length === 0 && (
-          traces.length === 0 && (
-          <div className="settings-audit__empty">
-            <ShieldCheck size={18} />
-            <span>{loading ? t('settings.audit_loading') : t('settings.audit_empty')}</span>
+            <p className="settings-audit__meta">{t('settings.retention_audit_desc')}</p>
+            <div className="settings-audit__row">
+              <Button variant="secondary" size="sm" onClick={exportAudit} title={t('settings.export_audit')}>
+                <Download size={14} />
+                {t('settings.export_audit')}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={clearAudit} title={t('settings.clear_audit')}>
+                <Trash2 size={14} />
+                {t('settings.clear_audit')}
+              </Button>
+            </div>
           </div>
-          )
-        )}
-        {!error && traces.length > 0 && (
-          <div className="settings-audit__section">
-            <h3>{t('settings.trace_group')}</h3>
-            {traces.map((trace, index) => {
-              const context = contextLabel(trace.context);
-              const detail = summarizeTrace(trace);
-              return (
-                <article className="settings-audit__event" key={`${trace.timestamp}-${trace.event}-${index}`}>
-                  <div className="settings-audit__event-top">
-                    <strong>{trace.event}</strong>
-                    <span className={`settings-audit__status settings-audit__status--${trace.status}`}>{trace.status}</span>
-                  </div>
-                  <div className="settings-audit__event-meta">
-                    <span>{formatAuditTime(trace.timestamp)}</span>
-                    {context && <span>{context}</span>}
-                  </div>
-                  {detail && <p>{detail}</p>}
-                </article>
-              );
-            })}
-          </div>
-        )}
-        {!error && events.length > 0 && (
-          <div className="settings-audit__section">
-            <h3>{t('settings.tool_audit_group')}</h3>
-        {!error && events.map((event, index) => {
-          const detail = summarizeDetails(event.details);
-          const context = contextLabel(event.context);
-          return (
-            <article className="settings-audit__event" key={`${event.timestamp}-${event.operation}-${index}`}>
-              <div className="settings-audit__event-top">
-                <strong>{event.operation}</strong>
-                <span className={`settings-audit__status settings-audit__status--${event.status}`}>{event.status}</span>
-              </div>
-              <div className="settings-audit__event-meta">
-                <span>{formatAuditTime(event.timestamp)}</span>
-                {context && <span>{context}</span>}
-              </div>
-              {detail && <p>{detail}</p>}
-            </article>
-          );
-        })}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -107,7 +107,7 @@ export function SettingsView({
           </Button>
         )}
       >
-        <ToolAuditPanel embedded />
+        <ToolAuditPanel />
       </WorkspacePage>
     );
   }

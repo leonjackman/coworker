@@ -318,6 +318,21 @@ class CommandApprovalStore:
             payload["approvals"] = pruned
             self.save_payload(payload)
 
+    def purge_session(self, session_id: str) -> int:
+        """Drop every approval record belonging to a deleted session.
+
+        Deleting a session leaves its pending/approved approvals orphaned: the
+        resume target is gone, so they can never be acted on, yet they stay
+        ``pending`` forever (active records are never pruned) and keep showing
+        up in the global to-do view. Remove all records of that session so the
+        store stays clean. Returns the number of removed records.
+        """
+        approvals = self.load()
+        kept = [a for a in approvals if not (isinstance(a.get("context"), dict) and a.get("context", {}).get("session_id") == session_id)]
+        if len(kept) != len(approvals):
+            self.save(kept)
+        return len(approvals) - len(kept)
+
     def allowlist(self) -> list[str]:
         allowlist = self.load_payload().get("allowlist")
         return allowlist if isinstance(allowlist, list) else []
