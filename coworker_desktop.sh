@@ -27,10 +27,14 @@ fi
 ok "Cleared port $BACKEND_PORT"
 
 echo "[1/6] Preparing Python backend..."
-ok "Python backend ready"
+# Shared dependency checks (venv + node_modules sync).
+# shellcheck source=scripts/check-deps.sh
+source "$ROOT_DIR/scripts/check-deps.sh"
+ensure_python_venv "$ROOT_DIR/backend/venv" "$ROOT_DIR/backend/requirements.txt" || exit 1
 
 echo "[2/6] Preparing Node dependencies..."
-ok "Node dependencies ready"
+ensure_node_deps "$ROOT_DIR" "Root dependencies" || exit 1
+ensure_node_deps "$ROOT_DIR/frontend" "Frontend dependencies" || exit 1
 
 echo "[3/6] Building frontend..."
 (cd "$ROOT_DIR/frontend" && npm run build) && ok "Frontend built"
@@ -53,11 +57,9 @@ if command -v lsof >/dev/null 2>&1; then
   done
 fi
 
-if [ -x "$ROOT_DIR/backend/venv/bin/python" ]; then
-  BACKEND_PY="$ROOT_DIR/backend/venv/bin/python"
-else
-  BACKEND_PY="$(command -v python3 || command -v python)"
-fi
+# PYTHON_BIN was resolved by ensure_python_venv (step [1/6]); use it for the
+# backend so the exact venv that had its requirements installed is the one run.
+BACKEND_PY="${PYTHON_BIN:-$ROOT_DIR/backend/venv/bin/python}"
 
 # Persistent LLM request logging (messages + tools + sampling params → data_dir/llm-requests.log).
 # On by default so every launch captures the exact bodies CW sends — useful for

@@ -23,19 +23,54 @@ foreach ($l in $listeners) {
 Write-Host "  OK"
 
 Write-Host "[1/6] Preparing Python backend..."
-if (Test-Path "$RootDir\backend\venv\Scripts\python.exe") {
-  $BackendPy = "$RootDir\backend\venv\Scripts\python.exe"
-} else {
-  $BackendPy = (Get-Command python -ErrorAction SilentlyContinue).Source
-  if (-not $BackendPy) { throw "No python found. Create a venv at backend\venv first." }
+$venvPy = "$RootDir\backend\venv\Scripts\python.exe"
+if (-not (Test-Path $venvPy)) {
+  Write-Host "  Python venv missing at backend\venv - creating it"
+  python -m venv "$RootDir\backend\venv" -ErrorAction Stop
 }
+$venvPy = "$RootDir\backend\venv\Scripts\python.exe"
+if (-not (Test-Path $venvPy)) { throw "Failed to create Python venv at backend\venv." }
+# (Re)install requirements when the venv binary is older than requirements.txt.
+$reqFile = "$RootDir\backend\requirements.txt"
+if ((Test-Path $reqFile) -and ((Get-Item $venvPy).LastWriteTime -lt (Get-Item $reqFile).LastWriteTime)) {
+  Write-Host "  Python dependencies out of date - installing $reqFile"
+  & $venvPy -m pip install --upgrade pip
+  if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
+  & $venvPy -m pip install -r $reqFile
+  if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+} else {
+  Write-Host "  Python venv ready"
+}
+$BackendPy = $venvPy
 
 Write-Host "[2/6] Preparing Node dependencies..."
-Write-Host "  OK"
+function Test-NodeTreeComplete {
+  param([string]$Dir)
+  if (-not (Test-Path "$Dir\node_modules")) { return $false }
+  $manifest = Get-Content "$Dir\package.json" -Raw | ConvertFrom-Json
+  $deps = @{}
+  if ($manifest.dependencies) { $manifest.dependencies.PSObject.Properties | ForEach-Object { $deps[$_.Name] = $_.Value } }
+  if ($manifest.devDependencies) { $manifest.devDependencies.PSObject.Properties | ForEach-Object { $deps[$_.Name] = $_.Value } }
+  foreach ($name in $deps.Keys) {
+    if (-not (Test-Path "$Dir\node_modules\$name")) { return $false }
+  }
+  return $true
+}
+foreach ($dir in @("$RootDir", "$RootDir\frontend")) {
+  $what = if ($dir -eq $RootDir) { "Root dependencies" } else { "Frontend dependencies" }
+  if (Test-NodeTreeComplete -Dir $dir) {
+    Write-Host "  $what ready"
+  } else {
+    Write-Host "  $what incomplete - running npm install"
+    Push-Location $dir
+    try { npm install | Out-Host; if ($LASTEXITCODE -ne 0) { throw "npm install failed in $dir" } } finally { Pop-Location }
+    if (-not (Test-NodeTreeComplete -Dir $dir)) { throw "$what still incomplete after npm install." }
+  }
+}
 
 Write-Host "[3/6] Building frontend..."
 Push-Location "$RootDir\frontend"
-try { npm run build | Out-Host } finally { Pop-Location }
+try { npm run build | Out-Host; if ($LASTEXITCODE -ne 0) { throw "Frontend build failed" } } finally { Pop-Location }
 Write-Host "  OK"
 
 Write-Host "[4/6] Starting backend..."
