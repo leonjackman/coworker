@@ -4506,6 +4506,12 @@ body.bottom-panel-resizing {
   word-break: break-all;
 }
 
+.settings-audit__hint {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .settings-audit__number {
   width: 84px;
   padding: 3px 8px;

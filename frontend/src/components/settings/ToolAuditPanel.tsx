@@ -1,5 +1,5 @@
-import { Download, FileText, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Download, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
 import type { ApprovalDecisionPayload, ApprovalOption, CommandApproval, PendingRequest } from '../../types';
@@ -94,6 +94,7 @@ export function ToolAuditPanel() {
   const [logLines, setLogLines] = useState<string[]>([]);
   const [logTotalLines, setLogTotalLines] = useState(0);
   const [logLoading, setLogLoading] = useState(false);
+  const logPreRef = useRef<HTMLPreElement>(null);
   // Audit retention
   const [auditLines, setAuditLines] = useState(100);
 
@@ -166,7 +167,7 @@ export function ToolAuditPanel() {
     try {
       await chatService.setLogLevel(newLevel);
       setLogLevel(newLevel);
-      setFlash(t('settings.log_level_saved'));
+      setFlash(newLevel === 'DEBUG' ? t('settings.log_level_debug_hint') : t('settings.log_level_saved'));
     } catch {
       // ignore
     }
@@ -179,7 +180,7 @@ export function ToolAuditPanel() {
       await chatService.truncateLog(0);
       setLogLines([]);
       setLogTotalLines(0);
-      setFlash(t('settings.audit_action_done'));
+      setFlash(t('settings.log_cleared'));
     } catch {
       // ignore
     }
@@ -228,6 +229,20 @@ export function ToolAuditPanel() {
     return () => window.clearInterval(timer);
   }, [tab]);
 
+  // Entering the logs tab auto-loads the latest lines — the first thing a user
+  // opening "logs" wants to see is the log, not a button.
+  useEffect(() => {
+    if (tab !== 'logs') return;
+    void fetchLogLines();
+  }, [tab]);
+
+  // Keep the newest line visible after load/refresh.
+  useEffect(() => {
+    if (tab !== 'logs' || logLines.length === 0) return;
+    const el = logPreRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [tab, logLines]);
+
   return (
     <section className="settings-group settings-audit" aria-label={t('settings.audit_group')}>
       <div className="settings-audit__tabs">
@@ -274,10 +289,6 @@ export function ToolAuditPanel() {
           <div className="settings-audit__group">
             <div className="settings-audit__group-head">
               <h3>{t('settings.logging')}</h3>
-              <Button variant="secondary" size="sm" onClick={refreshLogConfig} disabled={logLoading}>
-                <RefreshCw size={14} />
-                {t('settings.audit_refresh')}
-              </Button>
             </div>
             <div className="settings-audit__row">
               <label htmlFor="log-level-select">{t('settings.log_level')}</label>
@@ -292,17 +303,18 @@ export function ToolAuditPanel() {
                   <option key={level} value={level}>{level}</option>
                 ))}
               </select>
+              <span className="settings-audit__hint">{t('settings.log_level_hint')}</span>
             </div>
             {logFilePath && (
               <div className="settings-audit__meta">
                 {t('settings.log_file')}: {logFilePath}
                 {jsonLog && <span> (JSON)</span>}
-                {logTotalLines > 0 && <span> · {logTotalLines} {t('settings.lines')}</span>}
+                {logTotalLines > 0 && logLines.length > 0 && <span> · {t('settings.log_range', { total: logTotalLines, count: logLines.length })}</span>}
               </div>
             )}
             <div className="settings-audit__row">
               <Button variant="secondary" size="sm" onClick={fetchLogLines} disabled={logLoading}>
-                <FileText size={14} />
+                <RefreshCw size={14} />
                 {t('settings.load_log')}
               </Button>
               <Button variant="ghost" size="sm" onClick={clearLog}>
@@ -311,7 +323,7 @@ export function ToolAuditPanel() {
               </Button>
             </div>
             {logLines.length > 0 && (
-              <pre className="settings-audit__log">{logLines.join('\n')}</pre>
+              <pre ref={logPreRef} className="settings-audit__log">{logLines.join('\n')}</pre>
             )}
           </div>
 
