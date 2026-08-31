@@ -400,4 +400,13 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
             "read_only": bool(mcp.get("read_only")),
             "destructive": annotations.get("destructive") is True,
         }
-    return {**base, "type": "approval_required", "kind": "command", "command": approval.get("command", []), "cwd": approval.get("cwd", "")}
+    return {
+        **base, "type": "approval_required", "kind": "command",
+        "command": approval.get("command", []),
+        "cwd": approval.get("cwd", ""),
+        # Non-command tools (write_file, memory, …) are classified as "command"
+        # with an empty argv — carry the tool identity so the UI can still show
+        # what the agent wants to do instead of a blank card.
+        "tool_name": str(context.get("tool_name") or ""),
+        "tool_args": _json_safe(context.get("action_args") or {}),
+    }

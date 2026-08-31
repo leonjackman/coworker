@@ -446,7 +446,13 @@ function pendingRequestFromEvent(
       destructive: Boolean(event.destructive),
     };
   }
-  return { ...base, command: event.command, cwd: event.cwd };
+  return {
+    ...base,
+    command: event.command,
+    cwd: event.cwd,
+    ...(event.tool_name ? { tool_name: event.tool_name } : {}),
+    ...(event.tool_args && Object.keys(event.tool_args).length > 0 ? { tool_args: event.tool_args } : {}),
+  };
 }
 
 function createMessage(
@@ -3345,10 +3351,13 @@ function App() {
             ...(typeof args.plan_text === 'string' ? { plan: args.plan_text } : {}),
           });
         } else {
+          const args = typeof context.action_args === 'object' && context.action_args ? (context.action_args as Record<string, unknown>) : {};
           restored.push({
             ...base,
             command: Array.isArray(approval.command) ? approval.command : [],
             ...(approval.cwd ? { cwd: approval.cwd } : {}),
+            ...(typeof context.tool_name === 'string' && context.tool_name ? { tool_name: context.tool_name } : {}),
+            ...(Object.keys(args).length > 0 ? { tool_args: args } : {}),
           });
         }
       }

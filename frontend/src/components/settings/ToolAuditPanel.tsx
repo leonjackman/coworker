@@ -74,6 +74,8 @@ function approvalToPending(approval: CommandApproval): PendingRequest {
     ...base,
     command: Array.isArray(approval.command) ? approval.command : [],
     ...(approval.cwd ? { cwd: approval.cwd } : {}),
+    ...(typeof context.tool_name === 'string' && context.tool_name ? { tool_name: context.tool_name } : {}),
+    ...(isRecord(context.action_args) && Object.keys(context.action_args).length > 0 ? { tool_args: context.action_args } : {}),
   };
 }
 
