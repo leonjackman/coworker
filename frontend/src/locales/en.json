@@ -473,6 +473,7 @@
   "browser.menu.agent_explain_page": "Ask agent to explain this page",
   "browser.menu.agent_scrape_page": "Scrape the whole page",
   "sidebar.projects_empty": "No projects yet",
+  "sidebar.project_has_pending": "Has sessions processing or awaiting action",
   "sidebar.project_empty": "No sessions yet",
   "sidebar.project_new": "New project",
   "sidebar.project_rename": "Rename project",

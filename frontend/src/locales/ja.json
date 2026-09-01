@@ -482,6 +482,7 @@
   "browser.menu.agent_explain_page": "このページをagentに解説させる",
   "browser.menu.agent_scrape_page": "ページ全体のデータを取得",
   "sidebar.projects_empty": "まだプロジェクトはありません",
+  "sidebar.project_has_pending": "処理中または未処理のセッションがあります",
   "sidebar.project_empty": "まだセッションはありません",
   "sidebar.project_new": "新規プロジェクト",
   "sidebar.project_rename": "プロジェクトの名前を変更",

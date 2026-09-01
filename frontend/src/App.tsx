@@ -1431,6 +1431,28 @@ function App() {
     }
   };
 
+  // 標記會話已讀：後端更新 last_read_at（並順帶清空 last_error），前端本地
+  // 立即歸零 unread_count / last_error，讓側欄角標即時消失（不必等下一輪輪詢）。
+  // 失敗時靜默：未讀是軟狀態，不阻塞交互，下次輪詢會自然收斂。
+  const markSessionReadLocal = useCallback((sid: string) => {
+    void chatService.markSessionRead(sid).catch(() => {});
+    setSessions((current) =>
+      current.map((s) => (s.id === sid ? { ...s, unread_count: 0, last_error: null } : s)),
+    );
+  }, []);
+
+  // 停留在当前会话时自动清除未读：若用户正看着某会话（或后台流又产生了
+  // 新消息 / 新错误），不应显示未读/错误角标。sessions 每次轮询刷新都会
+  // 触发本 effect，unread_count 归零后不再重复调用，无循环风险。
+  useEffect(() => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    const session = sessions.find((s) => s.id === sid);
+    if (session && ((session.unread_count ?? 0) > 0 || session.last_error)) {
+      markSessionReadLocal(sid);
+    }
+  }, [sessions, markSessionReadLocal]);
+
   const refreshProjects = async () => {
     try {
       const response = await chatService.listProjects();
@@ -3408,6 +3430,10 @@ function App() {
     setDraftAgentId('');
     // 保存当前 sessionId，供 fetch 失败时回滚。
     const prevSessionId = sessionIdRef.current;
+    // 切走会话 = 已查看其消息与错误状态 → 标记旧会话已读（未读 + 错误角标即时清除）。
+    if (prevSessionId && prevSessionId !== sessionIdToOpen) {
+      markSessionReadLocal(prevSessionId);
+    }
     try {
       const response = await chatService.getSession(sessionIdToOpen);
       const records = response.session.messages ?? [];
@@ -3432,6 +3458,9 @@ function App() {
       );
       setSessionId(sessionIdToOpen);
       sessionIdRef.current = sessionIdToOpen;
+      // 打开会话 = 用户正在查看该会话 → 标记已读并清除错误标记（含同会话
+      // 后端在后台产生新消息 / 新错误的情况）。
+      markSessionReadLocal(sessionIdToOpen);
       // 打开会话时立即按「当前模型配置」拉取最新上下文预算，而非残留上一会话
       // 的旧值（否则旧会话会一直显示改动前的窗口，例如 252k 而非最新的 192k）。
       // 服务端按当前 providers 配置解析窗口，因此改过 context_window 后旧会话

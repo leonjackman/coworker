@@ -320,7 +320,8 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessi
 
   // 匯總專案下所有會話的「有任務狀態」計數（正在處理 + 未處理）
   // 只要任何會話有 running / unread / approvals / error，角標就顯示
-  const projectUnread = useMemo(() => {
+  // （running-only 時無計數，渲染為小圓點而非數字）。
+  const projectBadge = useMemo(() => {
     let total = 0;
     let hasActive = false;
     for (const session of sessions) {
@@ -335,8 +336,10 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessi
       }
     }
     // 如果沒有任何 active 狀態，不顯示角標（即使 total > 0 也隱藏）
-    return hasActive ? total : 0;
+    return { hasActive, total };
   }, [sessions, sessionBadges]);
+  const projectBadgeActive = projectBadge.hasActive;
+  const projectUnread = projectBadge.total;
 
   const groups = useMemo<AgentGroupData[]>(() => {
     if (isSingle) return [];
@@ -406,9 +409,16 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessi
       >
         <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
           {isChat ? <MessageCircle size={16} /> : (expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />))}
-          {projectUnread > 0 && (
-            <span className="sidebar-project__unread-badge" aria-label={`${projectUnread} unread`}>
-              {projectUnread > 99 ? '99+' : projectUnread}
+          {projectBadgeActive && (
+            <span
+              className={`sidebar-project__unread-badge${projectUnread === 0 ? ' sidebar-project__unread-badge--dot' : ''}`}
+              aria-label={
+                projectUnread > 0
+                  ? `${projectUnread} unread`
+                  : t('sidebar.project_has_pending')
+              }
+            >
+              {projectUnread > 0 ? (projectUnread > 99 ? '99+' : projectUnread) : ''}
             </span>
           )}
           <span>{displayProjectName(project)}</span>

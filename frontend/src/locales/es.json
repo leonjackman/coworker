@@ -502,6 +502,7 @@
   "browser.menu.agent_explain_page": "Pedir al agente que explique esta página",
   "browser.menu.agent_scrape_page": "Obtener datos de toda la página",
   "sidebar.projects_empty": "Sin proyectos aún",
+  "sidebar.project_has_pending": "Hay sesiones en proceso o pendientes",
   "sidebar.project_empty": "Sin sesiones aún",
   "sidebar.project_new": "Nuevo proyecto",
   "sidebar.project_rename": "Renombrar proyecto",

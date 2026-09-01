@@ -96,6 +96,7 @@ declare global {
       fetchProviderModels: (payload: { base_url: string; api_key: string; provider_type: string }) => Promise<{ status: string; models: string[]; error?: string }>;
       listSessions: () => Promise<SessionsListResponse>;
       listActiveSessions: () => Promise<string[]>;
+      markSessionRead: (sessionId: string) => Promise<{ status: string; session: SessionDetailResponse['session'] | null }>;
       createSession: (payload: CreateSessionRequest) => Promise<SessionResponse>;
       deleteSession: (sessionId: string) => Promise<{ status: string }>;
       renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;

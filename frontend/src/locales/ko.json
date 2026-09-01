@@ -677,6 +677,7 @@
   "sidebar.project_rename": "프로젝트 이름 변경",
   "sidebar.projects": "프로젝트",
   "sidebar.projects_empty": "아직 프로젝트가 없습니다",
+  "sidebar.project_has_pending": "처리 중이거나 대기 중인 세션이 있습니다",
   "sidebar.resize": "사이드바 크기 조절",
   "sidebar.session_copy_id": "세션 ID 복사",
   "sidebar.session_delete": "세션 삭제",

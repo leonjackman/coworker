@@ -514,6 +514,7 @@
   "browser.menu.agent_scrape_page": "抓取整页数据",
   "sidebar.projects_empty": "暂无项目",
   "sidebar.project_empty": "暂无会话",
+  "sidebar.project_has_pending": "有会话正在处理或待处理",
   "sidebar.project_new": "新项目",
   "sidebar.project_rename": "重命名项目",
   "sidebar.project_delete": "删除项目",

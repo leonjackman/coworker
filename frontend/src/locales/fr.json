@@ -68,6 +68,7 @@
   "sidebar.session_copy_id": "Copier l'ID de session",
   "sidebar.session_id_copied": "Copié",
   "sidebar.projects_empty": "Aucun projet pour le moment",
+  "sidebar.project_has_pending": "Des sessions en cours ou en attente",
   "sidebar.project_empty": "Aucune session pour le moment",
   "sidebar.project_new": "Nouveau projet",
   "sidebar.project_rename": "Renommer le projet",

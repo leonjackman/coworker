@@ -473,6 +473,7 @@
   "browser.menu.agent_explain_page": "Попросить агента объяснить эту страницу",
   "browser.menu.agent_scrape_page": "Извлечь данные всей страницы",
   "sidebar.projects_empty": "Проектов пока нет",
+  "sidebar.project_has_pending": "Есть сессии в обработке или ожидании",
   "sidebar.project_empty": "Сессий пока нет",
   "sidebar.project_new": "Новый проект",
   "sidebar.project_rename": "Переименовать проект",

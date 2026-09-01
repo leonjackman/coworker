@@ -129,6 +129,7 @@ export interface ChatService {
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;
   listActiveSessions: () => Promise<string[]>;
+  markSessionRead: (sessionId: string) => Promise<void>;
   createSession: (request: CreateSessionRequest) => Promise<SessionResponse>;
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
@@ -318,6 +319,19 @@ class ElectronChatService implements ChatService {
   async listActiveSessions(): Promise<string[]> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listActiveSessions();
+  }
+
+  async markSessionRead(sessionId: string): Promise<void> {
+    if (window.electronAPI?.markSessionRead) {
+      await window.electronAPI.markSessionRead(sessionId);
+      return;
+    }
+    // Fallback for web builds without the IPC bridge: hit the backend directly.
+    const response = await fetch(`${BACKEND_URL}/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.detail || `Backend returned ${response.status}`);
+    }
   }
 
   async createSession(request: CreateSessionRequest): Promise<SessionResponse> {
@@ -1157,6 +1171,10 @@ class HttpChatService implements ChatService {
   async listActiveSessions(): Promise<string[]> {
     const response = await this.request<{ status: string; session_ids: string[] }>('/sessions/active');
     return response.session_ids ?? [];
+  }
+
+  async markSessionRead(sessionId: string): Promise<void> {
+    await this.request(`/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' });
   }
 
   async interject(request: InterjectRequest): Promise<{ status: string; steer_id: string; session_id: string }> {

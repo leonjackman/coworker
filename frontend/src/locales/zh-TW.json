@@ -482,6 +482,7 @@
   "browser.menu.agent_explain_page": "讓 agent 解讀此頁面",
   "browser.menu.agent_scrape_page": "抓取整頁數據",
   "sidebar.projects_empty": "尚無專案",
+  "sidebar.project_has_pending": "有會議正在處理或待處理",
   "sidebar.project_empty": "尚無對話階段",
   "sidebar.project_new": "新增專案",
   "sidebar.project_rename": "重新命名專案",

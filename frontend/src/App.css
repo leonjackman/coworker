@@ -469,6 +469,16 @@ body.sidebar-resizing {
   pointer-events: none;
 }
 
+/* 僅有 running/error 等無計數狀態時渲染為小圓點 */
+.sidebar-project__unread-badge--dot {
+  width: 8px;
+  min-width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 50%;
+  margin-right: 14px;
+}
+
 .sidebar-group__header {
   justify-content: space-between;
   gap: 6px;

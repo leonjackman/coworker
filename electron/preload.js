@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchProviderModels: (payload) => ipcRenderer.invoke('fetch-provider-models', payload),
   listSessions: () => ipcRenderer.invoke('list-sessions'),
   listActiveSessions: () => ipcRenderer.invoke('list-active-sessions'),
+  markSessionRead: (sessionId) => ipcRenderer.invoke('session-mark-read', sessionId),
   createSession: (payload) => ipcRenderer.invoke('create-session', payload),
   deleteSession: (sessionId) => ipcRenderer.invoke('delete-session', sessionId),
   renameSession: (sessionId, title) => ipcRenderer.invoke('rename-session', { session_id: sessionId, title }),

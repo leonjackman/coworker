@@ -80,6 +80,7 @@
   "sidebar.session_copy_id": "複製會話 ID",
   "sidebar.session_id_copied": "已複製",
   "sidebar.projects_empty": "仲未有任何專案",
+  "sidebar.project_has_pending": "有會議正在處理或待處理",
   "sidebar.project_empty": "仲未有任何會話",
   "sidebar.project_new": "新增專案",
   "sidebar.project_rename": "重新命名專案",

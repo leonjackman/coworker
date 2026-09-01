@@ -474,6 +474,7 @@
   "browser.menu.agent_explain_page": "Agent diese Seite erklären lassen",
   "browser.menu.agent_scrape_page": "Ganze Seite erfassen",
   "sidebar.projects_empty": "Noch keine Projekte",
+  "sidebar.project_has_pending": "Sitzungen werden verarbeitet oder warten",
   "sidebar.project_empty": "Noch keine Sitzungen",
   "sidebar.project_new": "Neues Projekt",
   "sidebar.project_rename": "Projekt umbenennen",

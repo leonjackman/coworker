@@ -56,7 +56,7 @@ from coworker.projects import CHAT_MEMORY_DIR, CHAT_PROJECT_ID, ProjectStore
 from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
-from coworker.sessions import SessionStore
+from coworker.sessions import SessionStore, _now
 from coworker.goal_prompts import (
     is_degenerate_text,
     render_budget_limit,
@@ -3285,12 +3285,17 @@ async def mark_session_read(session_id: str):
 
     Called by the frontend when the user opens a session or explicitly clears
     unread state.  Idempotent.
+
+    Opening a session also counts as having seen its error state, so the
+    persisted `last_error` marker is cleared here as well — otherwise the error
+    badge would linger forever after the user has already viewed it.
     """
     try:
         session = session_store.require(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     session.last_read_at = _now()
+    session.last_error = ""
     session_store.save(session)
     return {"status": "ok", "session": session.public()}
 

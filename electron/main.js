@@ -1987,9 +1987,15 @@ ipcMain.handle('start-worker-stream', async (event, { requestId, worker_run_id }
 });
 
 
- ipcMain.handle('list-sessions', async () => {
-   return requestBackendOr('/sessions', { status: 'ok', sessions: [] });
- });
+ipcMain.handle('list-sessions', async () => {
+  return requestBackendOr('/sessions', { status: 'ok', sessions: [] });
+});
+
+ipcMain.handle('session-mark-read', async (event, sessionId) => {
+  // Mark a session's messages as read (also clears its error marker on the
+  // backend). Best-effort: unread is a soft state, never block the UI on it.
+  return requestBackendOr(`/sessions/${encodeURIComponent(sessionId)}/read`, { status: 'ok', session: null }, { method: 'POST' });
+});
 
  ipcMain.handle('list-active-sessions', async () => {
    const envelope = await requestBackendOr('/sessions/active', { session_ids: [] });
