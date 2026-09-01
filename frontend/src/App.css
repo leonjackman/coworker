@@ -3073,6 +3073,12 @@ body.bottom-panel-resizing {
   position: relative;
 }
 
+/* 输入框常驻聚焦：取消 composer 的 focus-within 高亮，避免始终亮着的描边/光晕 */
+.composer__card:focus-within {
+  border-color: var(--material-border);
+  box-shadow: 0 10px 34px -8px var(--material-shadow);
+}
+
 .composer__card--drag-active {
   outline: 2px dashed var(--accent, #3b82f6);
   outline-offset: -6px;
