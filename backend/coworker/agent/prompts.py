@@ -45,7 +45,11 @@ def phase_system_prompt(language: Language, phase: Phase, autonomy: Autonomy) ->
     # Chat replies mirror the user's message language (mainstream behaviour) —
     # we no longer force a fixed UI language. The `language` hint is only kept
     # for prompts that have no user text to mirror (e.g. title generation).
-    lang_line = "Reply in the same language as the user's message."
+    lang_line = (
+        "Reply in the same language as the user's message. "
+        "Also keep ALL intermediate narration and step-by-step commentary in that "
+        "same language — never switch to another language mid-turn."
+    )
     todo_hint = (
         "Break your work into a visible task list: call write_todos with the concrete steps "
         "you intend to take, then call write_todos again as each step completes to update its "
