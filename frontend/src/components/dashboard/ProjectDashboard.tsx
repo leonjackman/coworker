@@ -11,9 +11,8 @@ import { MemoryPanel } from '../MemoryPanel';
 import { DashboardAgents } from './DashboardAgents';
 import { DashboardFiles } from './DashboardFiles';
 import { DashboardOverview } from './DashboardOverview';
-import { DashboardTools } from './DashboardTools';
 
-type DashboardTab = 'overview' | 'files' | 'agents' | 'tools' | 'memory' | 'sessions';
+type DashboardTab = 'overview' | 'files' | 'agents' | 'memory' | 'sessions';
 
 interface ProjectDashboardProps {
   projectId: string;
@@ -21,7 +20,6 @@ interface ProjectDashboardProps {
   sessions: SessionSummary[];
   sessionBadges: Map<string, { running: boolean; approvals: number; unread: number; error: string | null }>;
   onBack: () => void;
-  onViewChange: (view: 'mcp' | 'skills') => void;
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
@@ -34,7 +32,6 @@ export function ProjectDashboard({
   sessions,
   sessionBadges,
   onBack,
-  onViewChange,
   onNewChat,
   onOpenSession,
   onDeleteSession,
@@ -78,7 +75,6 @@ export function ProjectDashboard({
       { id: 'overview', label: t('dashboard.overview') },
       { id: 'files', label: t('dashboard.files') },
       { id: 'agents', label: t('dashboard.agents') },
-      { id: 'tools', label: t('dashboard.tools') },
       { id: 'memory', label: t('dashboard.memory') },
       {
         id: 'sessions',
@@ -133,7 +129,6 @@ export function ProjectDashboard({
               {...(onOpenOrgSettings ? { onOpenOrgSettings } : {})}
             />
           )}
-          {tab === 'tools' && <DashboardTools data={data} onViewChange={onViewChange} />}
           {tab === 'memory' && (
             <div className="dashboard-memory">
               <MemoryPanel projectId={projectId} scope="project" embedded actionsHost={memoryActionsHost} />

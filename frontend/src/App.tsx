@@ -4501,7 +4501,6 @@ function App() {
                   sessions={sessions}
                   sessionBadges={sessionBadges}
                   onBack={() => setActiveView('chat')}
-                  onViewChange={(view) => setActiveView(view)}
                   onNewChat={startNewChat}
                   onOpenSession={openSession}
                   onDeleteSession={deleteSession}
