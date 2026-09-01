@@ -135,42 +135,38 @@ function SessionRow({ session, active, badges, onOpen, onDelete }: SessionRowPro
 
   return (
     <>
-    <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`} onContextMenu={(e) => { e.preventDefault(); setSessionMenu({ x: e.clientX, y: e.clientY }); }}>
-      <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
-        {badges && <SessionStatusBadge badges={badges.get(session.id)} />}
-        <span className="sidebar-session__title">{session.title}</span>
-        {badges && (badges.get(session.id)?.unread ?? 0) > 0 && (
-          <span className="sidebar-session__unread-pill">{badges.get(session.id)?.unread}</span>
-        )}
-        <DropdownMenu>
-          <DropdownMenuTrigger className="sidebar-session__more-trigger" aria-label="Session actions">
-            <span className="sidebar-session__more-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
-            <MoreHorizontal size={15} className="sidebar-session__more-icon" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" alignOffset={-8}>
-            <DropdownMenuItem onClick={() => onOpen(session.id)}>
-              <FolderOpen size={14} />
-              {t('sidebar.session_open')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => void handleCopyId()}>
-              {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id')}
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive" onClick={() => onDelete(session.id)}>
-              <Trash2 size={14} />
-              {t('common.delete')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </button>
+    <div className="sidebar-session__container">
+      {badges && <SessionStatusBadge badges={badges.get(session.id)} />}
+      {badges && (badges.get(session.id)?.unread ?? 0) > 0 && (
+        <span className="sidebar-session__unread-pill">{badges.get(session.id)?.unread}</span>
+      )}
+      <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`} onContextMenu={(e) => { e.preventDefault(); setSessionMenu({ x: e.clientX, y: e.clientY }); }}>
+        <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
+          <span className="sidebar-session__title">{session.title}</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger className="sidebar-session__more-trigger" aria-label="Session actions">
+              <span className="sidebar-session__more-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
+              <MoreHorizontal size={15} className="sidebar-session__more-icon" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" alignOffset={-8}>
+              <DropdownMenuItem onClick={() => onOpen(session.id)}>
+                <FolderOpen size={14} />
+                {t('sidebar.session_open')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void handleCopyId()}>
+                {copied ? <Check size={14} /> : <Copy size={14} />}
+                {copied ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id')}
+              </DropdownMenuItem>
+              <DropdownMenuItem variant="destructive" onClick={() => onDelete(session.id)}>
+                <Trash2 size={14} />
+                {t('common.delete')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </button>
+      </div>
+      <ContextMenu open={sessionMenu !== null} x={sessionMenu?.x ?? 0} y={sessionMenu?.y ?? 0} onClose={() => setSessionMenu(null)} items={sessionMenuItems} />
     </div>
-    <ContextMenu
-      open={sessionMenu !== null}
-      x={sessionMenu?.x ?? 0}
-      y={sessionMenu?.y ?? 0}
-      onClose={() => setSessionMenu(null)}
-      items={sessionMenuItems}
-    />
     </>
   );
 }
@@ -410,14 +406,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessi
         <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
           {isChat ? <MessageCircle size={16} /> : (expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />))}
           {projectBadgeActive && (
-            <span
-              className={`sidebar-project__unread-badge${projectUnread === 0 ? ' sidebar-project__unread-badge--dot' : ''}`}
-              aria-label={
-                projectUnread > 0
-                  ? `${projectUnread} unread`
-                  : t('sidebar.project_has_pending')
-              }
-            >
+            <span className={`sidebar-project__unread-badge${projectUnread === 0 ? ' sidebar-project__unread-badge--dot' : ''}`} aria-label={ projectUnread > 0 ? `${projectUnread} unread` : t('sidebar.project_has_pending') }>
               {projectUnread > 0 ? (projectUnread > 99 ? '99+' : projectUnread) : ''}
             </span>
           )}
