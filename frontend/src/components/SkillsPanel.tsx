@@ -18,6 +18,7 @@ interface SkillsPanelProps {
   setSkills: React.Dispatch<React.SetStateAction<SkillEntry[]>>;
   setDiagnostics?: React.Dispatch<React.SetStateAction<SkillDiagnostic[]>>;
   onSkillsChange?: () => void;
+  onPendingCountChange?: () => void;
 }
 
 // ── Deterministic emoji per skill name (stable across renders) ───────────────
@@ -41,7 +42,7 @@ function sourceLabel(source: string): string {
   return t(SOURCE_LABELS[source] ?? source);
 }
 
-export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, onSkillsChange }: SkillsPanelProps) {
+export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, onSkillsChange, onPendingCountChange }: SkillsPanelProps) {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [loading, setLoading] = useState(false);
@@ -76,7 +77,8 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
     } finally {
       setLoading(false);
     }
-  }, [setSkills, setDiagnostics]);
+    onPendingCountChange?.();
+  }, [setSkills, setDiagnostics, onPendingCountChange]);
 
   const rescan = useCallback(async () => {
     setLoading(true);

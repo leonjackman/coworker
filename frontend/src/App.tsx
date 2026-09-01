@@ -2665,6 +2665,7 @@ function App() {
         localParts = settleRunningTools(localParts);
         commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
+        playSound('reply_done');
         void maybeCheckSkillDrafts(event.session_id ?? currentSessionId);
       } else if (event.type === 'todos') {
         setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
@@ -4274,6 +4275,23 @@ function App() {
     }
   }, []);
 
+  // Real-time-ish badge: light periodic poll + refresh when the window regains
+  // focus, so the sidebar "待審核 N" stays in sync even when a background skill
+  // review stages a draft a few seconds after the turn ends.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshPendingSkillCount();
+    }, 15000);
+    const onFocus = () => {
+      void refreshPendingSkillCount();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [refreshPendingSkillCount]);
+
   const maybeCheckSkillDrafts = useCallback(
     async (sessionId: string | undefined) => {
       const count = await refreshPendingSkillCount();
@@ -4290,7 +4308,8 @@ function App() {
   const openSkillsForReview = useCallback(() => {
     setSkillDraftNote(null);
     setActiveView('skills');
-  }, []);
+    void refreshSkills();
+  }, [refreshSkills]);
 
     return (
     <main
@@ -4557,6 +4576,7 @@ function App() {
                   setSkills={setSkillEntries}
                   setDiagnostics={setSkillDiagnostics}
                   onSkillsChange={refreshSkills}
+                  onPendingCountChange={() => void refreshPendingSkillCount()}
                 />
               ) : activeView === 'memory' ? (
                 <MemoryPanel projectId={currentProjectId} />
