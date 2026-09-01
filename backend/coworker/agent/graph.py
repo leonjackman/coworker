@@ -255,23 +255,30 @@ def build_workspace_tools(
 
     @tool(args_schema=InstallSkillArgs)
     def install_skill(name: str, content: str, commands: list[dict[str, str]] | None = None) -> str:
-        """Install a NEW skill by writing its SKILL.md into the user skills directory.
+        """Install a NEW skill from chat (the file tools cannot write outside
+        the workspace sandbox). ``content`` must be the complete SKILL.md text
+        with YAML frontmatter (``name`` + ``description``).
 
-        Use ONLY this tool to add a brand-new skill from chat (the file tools
-        cannot write outside the workspace sandbox). ``content`` must be the
-        complete SKILL.md text with YAML frontmatter (``name`` + ``description``).
-        Optional ``commands`` write ``/<command>`` entries. On success the skill
-        becomes available immediately.
+        When the user requires approval for auto skills, this stages a DRAFT
+        that waits in the review queue; otherwise it takes effect immediately.
+        Either way the write goes through the same self-calibration path as
+        ``skill_manage`` — a brand-new agent-authored skill is never silently
+        committed past the user's approval preference.
         """
         try:
-            if skill_market_manager is None:
-                from ..skills.skill_market import SkillMarketManager
-
-                mkt = SkillMarketManager(_Path.home())
+            if skill_manager is None:
+                return _error_result(ValueError("skill system unavailable"), "install_skill")
+            if auto_apply_skills:
+                result = skill_manager.apply_agent_skill(
+                    "create", name, content,
+                    sources=[f"session:{session_id}"] if session_id else None,
+                )
             else:
-                mkt = skill_market_manager
-            result = mkt.install_from_content(name, content, commands=commands)
-            if result.get("status") == "ok" and skill_manager is not None:
+                result = skill_manager.stage_skill_draft(
+                    name, content,
+                    sources=[f"session:{session_id}"] if session_id else None,
+                )
+            if result.get("status") == "ok":
                 try:
                     skill_manager.refresh()
                 except Exception:  # refresh must not mask the install result

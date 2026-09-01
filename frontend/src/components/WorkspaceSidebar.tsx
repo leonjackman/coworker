@@ -38,6 +38,7 @@ interface WorkspaceSidebarProps {
   activeSessionId?: string;
   activeProjectId?: string;
   sessionBadges: SessionBadgeMap;
+  pendingSkillCount?: number;
   collapsed: boolean;
   onResizeStart: () => void;
   onResizeEnd: () => void;
@@ -521,6 +522,7 @@ export function WorkspaceSidebar({
   activeSessionId,
   activeProjectId,
   sessionBadges,
+  pendingSkillCount = 0,
   collapsed,
   onResizeStart,
   onResizeEnd,
@@ -656,6 +658,11 @@ export function WorkspaceSidebar({
         <button className={`sidebar-nav-item ${activeView === 'skills' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('skills')}>
           <FileText size={17} />
           {!collapsed && <span>{t('nav.skills')}</span>}
+          {pendingSkillCount > 0 && (
+            <span className="sidebar-nav-item__badge" title={t('skills.pending')}>
+              {t('skills.pending')} {pendingSkillCount}
+            </span>
+          )}
         </button>
       </nav>
 

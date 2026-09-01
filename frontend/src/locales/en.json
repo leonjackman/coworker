@@ -1100,5 +1100,10 @@
   "settings.skill_review_level_passive": "Passive",
   "settings.skill_review_approval": "Auto skills · Human approval",
   "settings.skill_review_approval_desc": "Agent-created skills wait for your approval before taking effect.",
-  "settings.skill_review_approval_off_desc": "Off: agent-created skills take effect immediately (no review)."
+  "settings.skill_review_approval_off_desc": "Off: agent-created skills take effect immediately (no review).",
+  "skills.draft_note": "Agent learned {count} new procedure(s) — awaiting your review.",
+  "common.close": "Close",
+  "skills.bundle_agent_learned": "Agent learned",
+  "skills.bundle_custom": "Custom",
+  "skills.bundle_market": "Market"
 }

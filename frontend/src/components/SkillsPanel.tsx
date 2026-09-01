@@ -1,4 +1,4 @@
-import { Check, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from './ui/button';
 import { t, translateError } from '../lib/i18n';
@@ -101,19 +101,54 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
 
   const installedCount = useMemo(() => skills.filter((s) => s.enabled).length, [skills]);
 
+  const bundleOf = useCallback((skill: SkillEntry): string => {
+    if (skill.bundle) return skill.bundle;
+    if (skill.provenance === 'agent') return 'agent-learned';
+    if (skill.source === 'market' || skill.source === 'coworker-user' || skill.source === 'coworker-project') return 'market';
+    return 'custom';
+  }, []);
+
+  const bundleLabel = useCallback(
+    (bundle: string): string => {
+      switch (bundle) {
+        case 'agent-learned':
+          return t('skills.bundle_agent_learned');
+        case 'custom':
+          return t('skills.bundle_custom');
+        case 'market':
+          return t('skills.bundle_market');
+        default:
+          return bundle;
+      }
+    },
+    [t],
+  );
+
+  // Category tabs are driven by SKILL BUNDLES, and a bundle tab is only shown
+  // when it is a real subset — otherwise it duplicates "全部" (the old flat
+  // `source` field made "全部" and "用戶級" identical).
   const categories = useMemo<CategoryTabItem[]>(() => {
-    const sources = ['user', 'project', 'coworker-user', 'coworker-project'];
     const items: CategoryTabItem[] = [{ id: 'all', label: t('skills.cat_all'), count: skills.length }];
-    for (const src of sources) {
-      const count = skills.filter((s) => s.source === src).length;
-      if (count > 0) items.push({ id: src, label: sourceLabel(src), count });
+    const counts = new Map<string, number>();
+    for (const skill of skills) {
+      const bundle = bundleOf(skill);
+      counts.set(bundle, (counts.get(bundle) ?? 0) + 1);
+    }
+    if (counts.size <= 1) return items; // single bundle → just "全部"
+    const order = ['agent-learned', 'custom', 'market'];
+    for (const bundle of order) {
+      const count = counts.get(bundle);
+      if (count && count > 0) items.push({ id: bundle, label: bundleLabel(bundle), count });
+    }
+    for (const [bundle, count] of counts) {
+      if (!order.includes(bundle) && count > 0) items.push({ id: bundle, label: bundleLabel(bundle), count });
     }
     return items;
-  }, [skills]);
+  }, [skills, bundleOf, bundleLabel]);
 
   const visibleSkills = useMemo(() => {
     let list = skills;
-    if (category !== 'all') list = list.filter((s) => s.source === category);
+    if (category !== 'all') list = list.filter((s) => bundleOf(s) === category);
     const needle = search.trim().toLowerCase();
     if (needle) {
       list = list.filter(
@@ -121,7 +156,28 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
       );
     }
     return list;
-  }, [skills, category, search]);
+  }, [skills, category, search, bundleOf]);
+
+  const bundleSections = useMemo(() => {
+    const map = new Map<string, SkillEntry[]>();
+    for (const skill of visibleSkills) {
+      const bundle = bundleOf(skill);
+      const list = map.get(bundle) ?? [];
+      list.push(skill);
+      map.set(bundle, list);
+    }
+    return [...map.entries()].map(([bundle, items]) => ({ bundle, items }));
+  }, [visibleSkills, bundleOf]);
+
+  const [collapsedBundles, setCollapsedBundles] = useState<Set<string>>(new Set());
+  const toggleBundle = useCallback((bundle: string) => {
+    setCollapsedBundles((current) => {
+      const next = new Set(current);
+      if (next.has(bundle)) next.delete(bundle);
+      else next.add(bundle);
+      return next;
+    });
+  }, []);
 
   const handleToggle = useCallback(
     async (skill: SkillEntry) => {
@@ -252,46 +308,67 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
             {/* ── Pending review queue (self-calibration) ── */}
             <SkillPendingPanel onChanged={refresh} />
 
-            {/* ── Installed grid ── */}
+            {/* ── Installed grid (grouped by bundle) ── */}
             {visibleSkills.length === 0 ? (
               <div className="skill-empty">
                 <p>{skills.length === 0 ? t('skills.empty') : t('skills.no_match')}</p>
               </div>
             ) : (
-              <div className="skills-grid">
-                {visibleSkills.map((skill) => (
-                  <GridCard
-                    key={skill.name}
-                    icon={<span className="skill-emoji">{skillEmoji(skill.name)}</span>}
-                    title={skill.name}
-                    subtitle={`v${skill.version || '1.0.0'} · ${sourceLabel(skill.source)}`}
-                    description={skill.description}
-                    added={skill.enabled}
-                    onClick={() => void openDetail(skill)}
-                    trailing={
-                      <>
-                        <Button
-                          variant={skill.enabled ? 'secondary' : 'primary'}
-                          size="icon-xs"
-                          onClick={() => void handleToggle(skill)}
-                          aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
-                          title={skill.enabled ? t('skills.added') : t('skills.add')}
-                        >
-                          {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
-                        </Button>
-                        <Button
-                          variant="destructive"
-                          size="icon-xs"
-                          onClick={() => void handleDelete(skill)}
-                          aria-label={t('skills.delete')}
-                          title={t('skills.delete')}
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </>
-                    }
-                  />
-                ))}
+              <div className="skills-bundles">
+                {bundleSections.map(({ bundle, items }) => {
+                  const collapsed = collapsedBundles.has(bundle);
+                  return (
+                    <section key={bundle} className="skills-bundle">
+                      <button
+                        type="button"
+                        className="skills-bundle__head"
+                        onClick={() => toggleBundle(bundle)}
+                        aria-expanded={!collapsed}
+                      >
+                        {collapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                        <span className="skills-bundle__label">{bundleLabel(bundle)}</span>
+                        <span className="skills-bundle__count">{items.length}</span>
+                      </button>
+                      {!collapsed && (
+                        <div className="skills-grid">
+                          {items.map((skill) => (
+                            <GridCard
+                              key={skill.name}
+                              icon={<span className="skill-emoji">{skillEmoji(skill.name)}</span>}
+                              title={skill.name}
+                              subtitle={`v${skill.version || '1.0.0'} · ${sourceLabel(skill.source)}`}
+                              description={skill.description}
+                              added={skill.enabled}
+                              onClick={() => void openDetail(skill)}
+                              trailing={
+                                <>
+                                  <Button
+                                    variant={skill.enabled ? 'secondary' : 'primary'}
+                                    size="icon-xs"
+                                    onClick={() => void handleToggle(skill)}
+                                    aria-label={skill.enabled ? t('skills.disable') : t('skills.enable')}
+                                    title={skill.enabled ? t('skills.added') : t('skills.add')}
+                                  >
+                                    {skill.enabled ? <Check size={14} /> : <Plus size={14} />}
+                                  </Button>
+                                  <Button
+                                    variant="destructive"
+                                    size="icon-xs"
+                                    onClick={() => void handleDelete(skill)}
+                                    aria-label={t('skills.delete')}
+                                    title={t('skills.delete')}
+                                  >
+                                    <Trash2 size={14} />
+                                  </Button>
+                                </>
+                              }
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  );
+                })}
               </div>
             )}
           </>

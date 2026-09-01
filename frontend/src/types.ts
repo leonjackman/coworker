@@ -908,6 +908,7 @@ export interface SkillEntry {
   status?: string;
   sources?: string[];
   created_at?: string;
+  bundle?: string;
 }
 
 export interface PendingSkill {
@@ -919,6 +920,7 @@ export interface PendingSkill {
   status: string;
   sources: string[];
   created_at: string;
+  bundle?: string;
 }
 
 export interface PendingSkillsResponse {

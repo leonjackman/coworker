@@ -11460,3 +11460,117 @@ body.dashboard-files__dragging * {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* ── Auto-skills: inline draft note + sidebar badge ─────────────── */
+.skill-draft-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent, #4f8cff) 45%, var(--color-border, #333));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #4f8cff) 7%, transparent);
+  font-size: 13px;
+}
+
+.skill-draft-note__icon {
+  color: var(--accent, #4f8cff);
+  flex-shrink: 0;
+}
+
+.skill-draft-note__text {
+  flex: 1;
+  min-width: 0;
+  color: var(--foreground, inherit);
+}
+
+.skill-draft-note__action {
+  flex-shrink: 0;
+  border: 1px solid var(--accent, #4f8cff);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent, #4f8cff);
+  font-size: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.skill-draft-note__action:hover {
+  background: color-mix(in srgb, var(--accent, #4f8cff) 15%, transparent);
+}
+
+.skill-draft-note__close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground, #888);
+  cursor: pointer;
+}
+
+.skill-draft-note__close:hover {
+  background: var(--color-border, #333);
+  background: color-mix(in srgb, var(--color-border, #333) 45%, transparent);
+}
+
+.sidebar-nav-item__badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent, #4f8cff) 45%, transparent);
+}
+
+/* ── Skill bundle grouping ───────────────────────────────────────── */
+.skills-bundles {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.skills-bundle {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.skills-bundle__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground, inherit);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.skills-bundle__head:hover {
+  background: var(--color-border, #333);
+  background: color-mix(in srgb, var(--color-border, #333) 40%, transparent);
+}
+
+.skills-bundle__label {
+  flex: 1;
+}
+
+.skills-bundle__count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground, #888);
+}

@@ -1112,5 +1112,10 @@
   "settings.skill_review_level_passive": "Passiv",
   "settings.skill_review_approval": "Automatische Skills · Menschliche Genehmigung",
   "settings.skill_review_approval_desc": "Vom Agenten erstellte Skills warten auf Ihre Genehmigung, bevor sie wirksam werden.",
-  "settings.skill_review_approval_off_desc": "Aus: Vom Agenten erstellte Skills wirken sofort (keine Prüfung)."
+  "settings.skill_review_approval_off_desc": "Aus: Vom Agenten erstellte Skills wirken sofort (keine Prüfung).",
+  "skills.draft_note": "Der Agent hat {count} neue Vorgehensweise(n) gelernt — warten auf deine Prüfung.",
+  "common.close": "Schließen",
+  "skills.bundle_agent_learned": "Vom Agenten gelernt",
+  "skills.bundle_custom": "Eigene",
+  "skills.bundle_market": "Markt"
 }

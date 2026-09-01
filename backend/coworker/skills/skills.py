@@ -49,6 +49,7 @@ _KNOWN_KEYS = frozenset(
         "status",
         "sources",
         "created_at",
+        "bundle",
     }
 )
 
@@ -88,6 +89,7 @@ class SkillEntry:
     status: str = "active"  # "active" | "draft" (draft = waiting for approval)
     sources: list[str] = field(default_factory=list)  # evidence chain
     created_at: str = ""
+    bundle: str = ""  # product grouping (e.g. "agent-learned", "custom", "market")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -104,6 +106,7 @@ class SkillEntry:
             "status": self.status,
             "sources": list(self.sources),
             "created_at": self.created_at,
+            "bundle": self.bundle,
         }
 
 
@@ -349,6 +352,7 @@ def load_skill_from_file(
     sources_raw = frontmatter.get("sources")
     sources = [s for s in sources_raw if isinstance(s, str)] if isinstance(sources_raw, list) else []
     created_at = _frontmatter_str(frontmatter, "created_at").strip()
+    bundle = _frontmatter_str(frontmatter, "bundle").strip()
 
     return (
         SkillEntry(
@@ -364,6 +368,7 @@ def load_skill_from_file(
             status=status,
             sources=sources,
             created_at=created_at,
+            bundle=bundle,
         ),
         diagnostics,
     )

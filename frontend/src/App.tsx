@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Sparkles, X } from 'lucide-react';
 import { ChatInput, extractSessionIds, type CommandChip, type ComposerApi } from './components/ChatInput';
 import { useGlobalShortcuts } from './keys';
 import { MessageList } from './components/MessageList';
@@ -577,6 +578,9 @@ function App() {
   });
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
   const [skillReviewSettings, setSkillReviewSettings] = useState<SkillReviewSettings | null>(null);
+  const [pendingSkillCount, setPendingSkillCount] = useState(0);
+  const [skillDraftNote, setSkillDraftNote] = useState<{ count: number; sessionId: string } | null>(null);
+  const skillCountRef = useRef(0);
   const MAX_ATTACHMENT_MB_STORAGE_KEY = 'coworker-max-attachment-mb';
   const DEFAULT_MAX_ATTACHMENT_MB = 25;
   const MIN_MAX_ATTACHMENT_MB = 1;
@@ -1513,6 +1517,10 @@ function App() {
         try {
           const skillSettings = await chatService.getSkillReviewSettings();
           if (mounted) setSkillReviewSettings(skillSettings);
+        } catch { /* ignore */ }
+        try {
+          const count = await refreshPendingSkillCount();
+          skillCountRef.current = count;
         } catch { /* ignore */ }
       } catch (error) {
         console.error('Failed to load runtime config:', error);
@@ -2657,6 +2665,7 @@ function App() {
         localParts = settleRunningTools(localParts);
         commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
+        void maybeCheckSkillDrafts(event.session_id ?? currentSessionId);
       } else if (event.type === 'todos') {
         setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
       } else if (event.type === 'stage') {
@@ -2904,6 +2913,7 @@ function App() {
         commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_done');
+        void maybeCheckSkillDrafts(event.session_id ?? currentSessionId);
       } else if (event.type === 'todos') {
         setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
       } else if (event.type === 'stage') {
@@ -3158,6 +3168,7 @@ function App() {
             resumeParts = settleRunningTools(resumeParts);
             applyResume('done');
             clearSessionTodos(event.session_id ?? resumeSessionId);
+            void maybeCheckSkillDrafts(event.session_id ?? resumeSessionId);
             // 拒絕/關閉卡片：只回饋失敗音效，避免 resume 流同時發出 done（成功）與
             // error（失敗）導致兩種音效疊在一起。
             if (isReject) {
@@ -4250,6 +4261,37 @@ function App() {
     chatService.saveSkillReviewSettings(patch).catch(() => { /* ignore */ });
   };
 
+  // Auto-skills notification: refresh the pending-skill count (sidebar badge)
+  // and, after a turn that produced NEW drafts, surface an inline "去審核" card.
+  const refreshPendingSkillCount = useCallback(async (): Promise<number> => {
+    try {
+      const response = await chatService.listPendingSkills();
+      const count = response.pending.length;
+      setPendingSkillCount(count);
+      return count;
+    } catch {
+      return 0;
+    }
+  }, []);
+
+  const maybeCheckSkillDrafts = useCallback(
+    async (sessionId: string | undefined) => {
+      const count = await refreshPendingSkillCount();
+      if (count > skillCountRef.current) {
+        setSkillDraftNote({ count: count - skillCountRef.current, sessionId: sessionId ?? '' });
+      }
+      skillCountRef.current = count;
+    },
+    [refreshPendingSkillCount],
+  );
+
+  const dismissSkillDraftNote = useCallback(() => setSkillDraftNote(null), []);
+
+  const openSkillsForReview = useCallback(() => {
+    setSkillDraftNote(null);
+    setActiveView('skills');
+  }, []);
+
     return (
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
@@ -4314,6 +4356,7 @@ function App() {
           onDeleteProject={deleteProject}
           onOpenOrgSettings={openOrgSettings}
           sessionBadges={sessionBadges}
+          pendingSkillCount={pendingSkillCount}
         />
         <section ref={workspaceFrameRef} className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
@@ -4371,6 +4414,26 @@ function App() {
                   )}
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
+                      {skillDraftNote && (
+                        <div className="skill-draft-note">
+                          <Sparkles size={15} className="skill-draft-note__icon" />
+                          <span className="skill-draft-note__text">
+                            {t('skills.draft_note', { count: skillDraftNote.count })}
+                          </span>
+                          <button type="button" className="skill-draft-note__action" onClick={openSkillsForReview}>
+                            {t('skills.pending_review')}
+                          </button>
+                          <button
+                            type="button"
+                            className="skill-draft-note__close"
+                            aria-label={t('common.close')}
+                            title={t('common.close')}
+                            onClick={dismissSkillDraftNote}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      )}
                       {/* Task list (write_todos) — the agent's self-decomposed
                           checklist, shown in every mode above the composer.
                           Queued messages are listed in the same card so the user

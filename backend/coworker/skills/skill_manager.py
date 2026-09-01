@@ -109,6 +109,7 @@ class SkillManager:
                         status=skill.status,
                         sources=list(skill.sources),
                         created_at=skill.created_at,
+                        bundle=skill.bundle,
                     )
                 )
             self._cached = ScanResult(skills=skills, diagnostics=result.diagnostics)
@@ -201,6 +202,7 @@ class SkillManager:
             status=skill.status,
             sources=list(skill.sources),
             created_at=skill.created_at,
+            bundle=skill.bundle,
         )
 
     def injection_list(self) -> list[SkillEntry]:
@@ -277,6 +279,7 @@ class SkillManager:
 
         out = set_frontmatter_value(content, "status", "draft")
         out = set_frontmatter_value(out, "provenance", "agent")
+        out = set_frontmatter_value(out, "bundle", "agent-learned")
         if sources:
             out = set_frontmatter_list(out, "sources", sources)
         fm, _ = parse_frontmatter(out)
@@ -389,6 +392,7 @@ class SkillManager:
             raw_sources = fm.get("sources")
             sources = [s for s in raw_sources if isinstance(s, str)] if isinstance(raw_sources, list) else []
             created_at = fm.get("created_at") if isinstance(fm.get("created_at"), str) else ""
+            bundle = fm.get("bundle") if isinstance(fm.get("bundle"), str) else "agent-learned"
             drafts.append(
                 {
                     "name": name,
@@ -399,6 +403,7 @@ class SkillManager:
                     "status": "draft",
                     "sources": sources,
                     "created_at": created_at,
+                    "bundle": bundle,
                 }
             )
         return drafts
@@ -554,6 +559,7 @@ class SkillManager:
 
         out = set_frontmatter_value(content, "status", "active")
         out = set_frontmatter_value(out, "provenance", "agent")
+        out = set_frontmatter_value(out, "bundle", "agent-learned")
         if sources:
             out = set_frontmatter_list(out, "sources", sources)
         try:

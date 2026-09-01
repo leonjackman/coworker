@@ -213,18 +213,10 @@ def command_approval_middleware(
             "description": "Coworker wants to update its long-term memory for this project.",
             "when": _needs_sensitive_approval,
         },
-        "install_skill": {
-            "allowed_decisions": ["approve", "reject"],
-            "description": "Coworker wants to install a new skill. Installing persists across "
-            "sessions and injects the skill's instructions into future conversations.",
-            "when": _needs_sensitive_approval,
-        },
-        "skill_manage": {
-            "allowed_decisions": ["approve", "reject"],
-            "description": "Coworker wants to create/patch/edit/delete a skill (staged for review). "
-            "Approved drafts persist across sessions and affect future conversations.",
-            "when": _needs_sensitive_approval,
-        },
+        # Skill writes (install_skill / skill_manage) are NOT HITL-gated: they
+        # stage a DRAFT that waits in the review queue (per the auto-skills
+        # "require approval" setting). A second immediate card would double-gate
+        # the same write — the pending panel is the single approval surface.
         "ask_user": {
             "allowed_decisions": ["respond", "reject"],
             "description": "Coworker asks the user a question that needs an answer.",

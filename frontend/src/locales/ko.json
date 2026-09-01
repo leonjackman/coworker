@@ -1112,5 +1112,10 @@
   "settings.skill_review_level_passive": "수동",
   "settings.skill_review_approval": "자동 스킬 · 인간 승인",
   "settings.skill_review_approval_desc": "에이전트가 만든 스킬은 승인 후에 적용됩니다.",
-  "settings.skill_review_approval_off_desc": "끔: 에이전트가 만든 스킬이 즉시 적용됩니다(검토 없음)."
+  "settings.skill_review_approval_off_desc": "끔: 에이전트가 만든 스킬이 즉시 적용됩니다(검토 없음).",
+  "skills.draft_note": "에이전트가 {count}개의 새 절차를 배웠습니다. 검토를 기다립니다.",
+  "common.close": "닫기",
+  "skills.bundle_agent_learned": "에이전트 학습",
+  "skills.bundle_custom": "사용자 지정",
+  "skills.bundle_market": "마켓"
 }

@@ -1112,5 +1112,10 @@
   "settings.skill_review_level_passive": "Пассивная",
   "settings.skill_review_approval": "Автонавыки · Одобрение человека",
   "settings.skill_review_approval_desc": "Навыки, созданные агентом, ждут вашего одобрения перед вступлением в силу.",
-  "settings.skill_review_approval_off_desc": "Выкл: навыки, созданные агентом, вступают в силу сразу (без проверки)."
+  "settings.skill_review_approval_off_desc": "Выкл: навыки, созданные агентом, вступают в силу сразу (без проверки).",
+  "skills.draft_note": "Агент изучил {count} новую(-ые) процедуру(-ы) — ждёт вашего одобрения.",
+  "common.close": "Закрыть",
+  "skills.bundle_agent_learned": "Изучено агентом",
+  "skills.bundle_custom": "Пользовательские",
+  "skills.bundle_market": "Маркет"
 }

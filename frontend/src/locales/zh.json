@@ -1100,5 +1100,10 @@
   "settings.skill_review_level_passive": "被动",
   "settings.skill_review_approval": "自动技能 · 人工审核",
   "settings.skill_review_approval_desc": "Agent 生成的技能需经你批准后才生效。",
-  "settings.skill_review_approval_off_desc": "关闭：Agent 生成的技能立即生效（无需审核）。"
+  "settings.skill_review_approval_off_desc": "关闭：Agent 生成的技能立即生效（无需审核）。",
+  "skills.draft_note": "Agent 學到了 {count} 個新做法，等待你審核。",
+  "common.close": "关闭",
+  "skills.bundle_agent_learned": "Agent 学习",
+  "skills.bundle_custom": "自定义",
+  "skills.bundle_market": "技能市场"
 }

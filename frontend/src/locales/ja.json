@@ -1112,5 +1112,10 @@
   "settings.skill_review_level_passive": "受動的",
   "settings.skill_review_approval": "自動スキル · 人間の承認",
   "settings.skill_review_approval_desc": "エージェントが作成したスキルは承認後に有効になります。",
-  "settings.skill_review_approval_off_desc": "オフ：エージェントが作成したスキルは即時に有効になります（審査なし）。"
+  "settings.skill_review_approval_off_desc": "オフ：エージェントが作成したスキルは即時に有効になります（審査なし）。",
+  "skills.draft_note": "エージェントが {count} 件の新しい手順を学びました。レビュー待ちです。",
+  "common.close": "閉じる",
+  "skills.bundle_agent_learned": "エージェント学習",
+  "skills.bundle_custom": "カスタム",
+  "skills.bundle_market": "マーケット"
 }

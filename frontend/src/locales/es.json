@@ -1112,5 +1112,10 @@
   "settings.skill_review_level_passive": "Pasiva",
   "settings.skill_review_approval": "Habilidades automáticas · Aprobación humana",
   "settings.skill_review_approval_desc": "Las habilidades creadas por el agente esperan tu aprobación antes de surtir efecto.",
-  "settings.skill_review_approval_off_desc": "Desactivado: las habilidades creadas por el agente surten efecto de inmediato (sin revisión)."
+  "settings.skill_review_approval_off_desc": "Desactivado: las habilidades creadas por el agente surten efecto de inmediato (sin revisión).",
+  "skills.draft_note": "El agente aprendió {count} procedimiento(s) nuevo(s); esperando tu revisión.",
+  "common.close": "Cerrar",
+  "skills.bundle_agent_learned": "Aprendido por el agente",
+  "skills.bundle_custom": "Personalizado",
+  "skills.bundle_market": "Mercado"
 }
