@@ -140,9 +140,6 @@ export function ProjectSessionList({ project, sessions, sessionBadges, onNewChat
                       <SessionStatusBadge badges={sessionBadges.get(session.id)} />
                       <MessageSquare size={15} className="project-session-list__item-icon" />
                       <span className="project-session-list__item-title">{session.title}</span>
-                      {(() => { const u = sessionBadges.get(session.id)?.unread ?? 0; return u > 0; })() && (
-                        <span className="project-session-list__unread-pill">{sessionBadges.get(session.id)?.unread}</span>
-                      )}
                       <span className="project-session-list__item-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
                     </button>
                     <DropdownMenu>
@@ -217,9 +214,6 @@ export function ProjectSessionList({ project, sessions, sessionBadges, onNewChat
                               <SessionStatusBadge badges={sessionBadges.get(session.id)} />
                               <MessageSquare size={15} className="project-session-list__item-icon" />
                               <span className="project-session-list__item-title">{session.title}</span>
-                              {(() => { const u = sessionBadges.get(session.id)?.unread ?? 0; return u > 0; })() && (
-                                <span className="project-session-list__unread-pill">{sessionBadges.get(session.id)?.unread}</span>
-                              )}
                               <span className="project-session-list__item-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
                             </button>
                             <DropdownMenu>

@@ -9,19 +9,28 @@ interface SessionStatusBadgeProps {
 
 /**
  * 固定寬度的會話狀態槽：只渲染優先級最高的一種狀態
- * （待審批 > 錯誤 > 進行中）。
+ * （進行中 > 待審批 > 錯誤 > 未讀）。
  *
- * 優先級按「需要使用者介入的程度」排：待審批是阻塞（agent 卡住等人），
- * 錯誤是求救，進行中只是資訊。
+ * 優先級按「需要使用者介入的程度」排：進行中正在執行、待審批是阻塞
+ * （agent 卡住等人）、錯誤是求救、未讀只是資訊，故為最弱。
  *
  * 無狀態時仍渲染一個同寬的佔位元素——若直接回傳 null，指示器出現／消失
  * 時標題會左右跳動。
- *
- * 未讀不在此處競爭，由呼叫端獨立渲染於右側。
  */
 export function SessionStatusBadge({ badges, className }: SessionStatusBadgeProps) {
   if (!badges) {
     return <span className={`session-status ${className ?? ''}`.trim()} aria-hidden="true" />;
+  }
+
+  if (badges.running) {
+    return (
+      <span
+        className={`session-status session-status--running ${className ?? ''}`.trim()}
+        aria-label={t('session_status.running')}
+      >
+        <Loader2 size={13} className="session-status__spinner" />
+      </span>
+    );
   }
 
   if (badges.approvals > 0) {
@@ -49,13 +58,15 @@ export function SessionStatusBadge({ badges, className }: SessionStatusBadgeProp
     );
   }
 
-  if (badges.running) {
+  if (badges.unread > 0) {
+    const label = t('session_status.unread', { count: badges.unread });
     return (
       <span
-        className={`session-status session-status--running ${className ?? ''}`.trim()}
-        aria-label={t('session_status.running')}
+        className={`session-status session-status--unread ${className ?? ''}`.trim()}
+        title={label}
+        aria-label={label}
       >
-        <Loader2 size={13} className="session-status__spinner" />
+        <span className="session-status__dot" aria-hidden="true" />
       </span>
     );
   }

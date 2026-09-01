@@ -137,9 +137,6 @@ function SessionRow({ session, active, badges, onOpen, onDelete }: SessionRowPro
     <>
     <div className="sidebar-session__container">
       {badges && <SessionStatusBadge badges={badges.get(session.id)} />}
-      {badges && (badges.get(session.id)?.unread ?? 0) > 0 && (
-        <span className="sidebar-session__unread-pill">{badges.get(session.id)?.unread}</span>
-      )}
       <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`} onContextMenu={(e) => { e.preventDefault(); setSessionMenu({ x: e.clientX, y: e.clientY }); }}>
         <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
           <span className="sidebar-session__title">{session.title}</span>
@@ -336,6 +333,11 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessi
   }, [sessions, sessionBadges]);
   const projectBadgeActive = projectBadge.hasActive;
   const projectUnread = projectBadge.total;
+  const projectBadgeEl = projectBadgeActive && (
+    <span className={`sidebar-project__unread-badge${projectUnread === 0 ? ' sidebar-project__unread-badge--dot' : ''}`} aria-label={ projectUnread > 0 ? `${projectUnread} unread` : t('sidebar.project_has_pending') }>
+      {projectUnread > 0 ? (projectUnread > 99 ? '99+' : projectUnread) : ''}
+    </span>
+  );
 
   const groups = useMemo<AgentGroupData[]>(() => {
     if (isSingle) return [];
@@ -404,11 +406,14 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessi
         onContextMenu={(e) => { e.preventDefault(); setProjectMenu({ x: e.clientX, y: e.clientY }); }}
       >
         <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
-          {isChat ? <MessageCircle size={16} /> : (expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />))}
-          {projectBadgeActive && (
-            <span className={`sidebar-project__unread-badge${projectUnread === 0 ? ' sidebar-project__unread-badge--dot' : ''}`} aria-label={ projectUnread > 0 ? `${projectUnread} unread` : t('sidebar.project_has_pending') }>
-              {projectUnread > 0 ? (projectUnread > 99 ? '99+' : projectUnread) : ''}
-            </span>
+          {isChat ? (
+            <MessageCircle size={16} />
+          ) : expanded ? (
+            isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />
+          ) : projectBadgeActive ? (
+            projectBadgeEl
+          ) : (
+            isSingle ? <Folder size={16} /> : <FolderTree size={16} />
           )}
           <span>{displayProjectName(project)}</span>
           <span className="sidebar-project__chevron-icon" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} onPointerDown={(e) => e.stopPropagation()}>

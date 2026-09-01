@@ -1091,5 +1091,6 @@
   "session_status.running": "●",
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
+  "session_status.unread": "{count} unread",
   "sidebar.unread_count": "unread"
 }

@@ -1103,5 +1103,6 @@
   "session_status.running": "●",
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
+  "session_status.unread": "{count} non lu",
   "sidebar.unread_count": "non lu"
 }

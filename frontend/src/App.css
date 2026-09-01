@@ -454,34 +454,28 @@ body.sidebar-resizing {
   gap: 5px;
 }
 
-/* 專案未讀角標（紅點 pill） */
+/* 專案未讀角標：尺寸與佈局與文件夾圖標一致（16×16，flex 固定不伸縮、無邊距） */
 .sidebar-project__unread-badge {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  margin-left: 4px;
-  margin-right: 6px;
   border-radius: 8px;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   line-height: 1;
   color: #fff;
   background: var(--destructive);
-  flex-shrink: 0;
   pointer-events: none;
 }
 
 /* 僅有 running/error 等無計數狀態時渲染為小圓點 */
 .sidebar-project__unread-badge--dot {
   width: 8px;
-  min-width: 8px;
   height: 8px;
-  padding: 0;
   border-radius: 50%;
-  margin-right: 14px;
 }
 
 .sidebar-group__header {
@@ -2962,22 +2956,16 @@ body.bottom-panel-resizing {
   animation: spin 900ms linear infinite;
 }
 
-/* 未讀計數徽章（右側時間戳旁） */
-.sidebar-session__unread-pill {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 8px;
+/* 未讀：danger 紅點（最弱狀態，優先度最低） */
+.session-status--unread {
+  color: var(--danger);
+}
+
+.session-status__dot {
+  width: 8px;
   height: 8px;
-  padding: 0 5px;
-  font-size: 6px;
-  font-weight: 600;
-  color: var(--danger-foreground);
+  border-radius: 50%;
   background: var(--danger);
-  border-radius: 9px;
-  line-height: 1;
-  white-space: nowrap;
 }
 
 /* 專案會話列表中的狀態槽 */
@@ -6215,25 +6203,6 @@ body.bottom-panel-resizing {
   font-weight: 500;
   margin-left: auto;
   white-space: nowrap;
-}
-
-.project-session-list__unread-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  margin-left: 6px;
-  margin-right: 4px;
-  border-radius: 8px;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
-  color: #fff;
-  background: var(--destructive);
-  flex-shrink: 0;
-  pointer-events: none;
 }
 
 .project-session-list__item-more {

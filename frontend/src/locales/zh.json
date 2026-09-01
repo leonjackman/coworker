@@ -1091,5 +1091,6 @@
   "session_status.running": "執行中",
   "session_status.error": "錯誤",
   "session_status.pending_approval": "{count} 待審批",
+  "session_status.unread": "{count} 未讀",
   "sidebar.unread_count": "未讀"
 }
