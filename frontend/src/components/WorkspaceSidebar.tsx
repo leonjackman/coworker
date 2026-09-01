@@ -318,13 +318,24 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessi
   const roster = useMemo(() => project.roster ?? [], [project.roster]);
   const isSingle = project.mode === 'single';
 
-  // 匯總專案下所有會話的未讀數
+  // 匯總專案下所有會話的「有任務狀態」計數（正在處理 + 未處理）
+  // 只要任何會話有 running / unread / approvals / error，角標就顯示
   const projectUnread = useMemo(() => {
     let total = 0;
+    let hasActive = false;
     for (const session of sessions) {
-      total += sessionBadges.get(session.id)?.unread ?? 0;
+      const badges = sessionBadges.get(session.id);
+      if (badges) {
+        if (badges.running) hasActive = true;
+        if (badges.unread > 0) hasActive = true;
+        if (badges.approvals > 0) hasActive = true;
+        if (badges.error) hasActive = true;
+        total += badges.unread;
+        total += badges.approvals;
+      }
     }
-    return total;
+    // 如果沒有任何 active 狀態，不顯示角標（即使 total > 0 也隱藏）
+    return hasActive ? total : 0;
   }, [sessions, sessionBadges]);
 
   const groups = useMemo<AgentGroupData[]>(() => {
