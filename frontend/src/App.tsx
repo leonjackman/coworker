@@ -2324,8 +2324,10 @@ function App() {
     setReferences([]);
   };
 
-  const stopMessage = () => {
-    playSound('user_pause');
+  const stopMessage = (opts?: { silent?: boolean }) => {
+    // PendingDocks 的關閉/拒絕按鈕會同時觸發 onStop 與 reject，失敗音效由
+    // reject 路徑統一播一次；這裡僅在「真正暫停運行」時（Stop 鍵 / 雙按 Esc）播放。
+    if (!opts?.silent) playSound('user_pause');
     const key = streamKey(sessionIdRef.current);
     const assistantMessageId = activeAssistantMessageIdsRef.current[key];
     const streamStartAt = streamStartAtsRef.current[key];
@@ -2639,6 +2641,7 @@ function App() {
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
+        playSound('card_popup');
         localParts = settleRunningTools(localParts);
         commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
@@ -3030,6 +3033,8 @@ function App() {
       );
     }
     resolvingRef.current = true;
+    const isReject = decision.type === 'reject';
+    let rejectFeedbackPlayed = false;
     setPendingRequests((current) =>
       current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
     );
@@ -3037,6 +3042,12 @@ function App() {
     try {
       const response = await chatService.resolveCommandApproval(request.approval_id, decision);
       resumeId = response.resume_id;
+      // 拒絕/關閉卡片：後端已確認，立即播放一次失敗音效（後續 resume 流的
+      // done/error 由 rejectFeedbackPlayed 攔截，不會再補播）。
+      if (isReject && !rejectFeedbackPlayed) {
+        rejectFeedbackPlayed = true;
+        playSound('reply_error');
+      }
       const chained = (response.events ?? []).filter(
         (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }> =>
           event.type === 'approval_required' || event.type === 'question_required',
@@ -3045,7 +3056,7 @@ function App() {
         ...current.filter((item) => item.approval_id !== request.approval_id),
         ...chained.map((event): PendingRequest => pendingRequestFromEvent(event, request.session_id, targetMessageId)),
       ]);
-      if (chained.length > 0) playSound('card_popup');
+      if (chained.length > 0 && !isReject) playSound('card_popup');
     } catch (error) {
       console.error('Failed to resolve approval:', error);
       setPendingRequests((current) =>
@@ -3142,7 +3153,16 @@ function App() {
             resumeParts = settleRunningTools(resumeParts);
             applyResume('done');
             clearSessionTodos(event.session_id ?? resumeSessionId);
-            playSound('reply_done');
+            // 拒絕/關閉卡片：只回饋失敗音效，避免 resume 流同時發出 done（成功）與
+            // error（失敗）導致兩種音效疊在一起。
+            if (isReject) {
+              if (!rejectFeedbackPlayed) {
+                rejectFeedbackPlayed = true;
+                playSound('reply_error');
+              }
+            } else {
+              playSound('reply_done');
+            }
           } else if (event.type === 'todos') {
             setSessionTodos(event.session_id ?? resumeSessionId, targetMessageId, event.todos);
           } else if (event.type === 'steer_injected') {
@@ -3247,7 +3267,10 @@ function App() {
           ),
         );
         clearSessionTodos(event.session_id ?? resumeSessionId);
-        playSound('reply_error');
+        if (!isReject || !rejectFeedbackPlayed) {
+          rejectFeedbackPlayed = true;
+          playSound('reply_error');
+        }
           }
         },
         resumeController.signal,
@@ -4398,7 +4421,7 @@ function App() {
                             onDismiss={(request) => {
                               void resolvePendingRequest(request, { type: 'reject' });
                             }}
-                            onStop={stopMessage}
+                            onStop={() => stopMessage({ silent: true })}
                           />
                         </div>
                       ) : (

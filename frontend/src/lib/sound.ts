@@ -74,7 +74,10 @@ class SoundCache {
       const resp = await fetch(url);
       if (!resp.ok) return;
       const arrayBuffer = await resp.arrayBuffer();
-      const ctx = this.getCtx();
+      // Decode via OfflineAudioContext so preload never creates a suspended
+      // playback AudioContext (which Chromium may refuse to resume before the
+      // first user gesture, silently dropping the first sound of a session).
+      const ctx = new OfflineAudioContext(1, 1, 44100);
       const buffer = await ctx.decodeAudioData(arrayBuffer);
       this.cache.set(url, buffer);
     } catch {
@@ -82,12 +85,19 @@ class SoundCache {
     }
   }
 
-  play(event: SoundEvent): void {
+  async play(event: SoundEvent): Promise<void> {
     const url = SOUND_FILES[event];
     if (!url) return;
     const buffer = this.cache.get(url);
     if (!buffer) return;
     const ctx = this.getCtx();
+    if (ctx.state !== 'running') {
+      try {
+        await ctx.resume();
+      } catch {
+        // Autoplay policy may reject resume before any user gesture — best effort.
+      }
+    }
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
