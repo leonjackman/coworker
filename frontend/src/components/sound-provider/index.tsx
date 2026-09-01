@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { playSound as playSoundRaw, preloadSounds, setGlobalSoundEnabled, isSoundEnabled } from '../../lib/sound';
 
-export type SoundEventType = 'reply_done' | 'reply_error' | 'attention';
+export type SoundEventType = 'reply_done' | 'reply_error' | 'card_popup' | 'user_pause';
 
 interface SoundContextValue {
   enabled: boolean;
@@ -25,7 +25,7 @@ export function SoundProvider({ children }: { children: ReactNode }) {
   }, [enabled]);
 
   const playSound = useCallback((event: SoundEventType) => {
-    playSoundRaw(event as 'reply_done' | 'reply_error' | 'attention');
+    playSoundRaw(event as 'reply_done' | 'reply_error' | 'card_popup' | 'user_pause');
   }, []);
 
   const toggleEnabled = useCallback(() => {

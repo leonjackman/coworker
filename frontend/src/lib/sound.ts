@@ -10,24 +10,24 @@
  * Sound events:
  *   reply_done      — assistant replied successfully
  *   reply_error     — reply failed (network error, stream error)
- *   attention       — approval/question required (pending dock card)
+ *   card_popup      — approval/question card appeared (success tone)
+ *   user_pause      — user paused/stopped the running task (failure tone)
  *
  * 音效來源：
- *   assets/sound/done.mp3          → reply_done
- *   assets/sound/error.mp3         → reply_error
- *   assets/sound/attention.mp3     → attention
+ *   assets/sound/done.mp3          → reply_done / card_popup
+ *   assets/sound/error.mp3         → reply_error / user_pause
  */
 
 import doneMp3 from '../../../assets/sound/done.mp3?url';
 import errorMp3 from '../../../assets/sound/error.mp3?url';
-import attentionMp3 from '../../../assets/sound/attention.mp3?url';
 
-type SoundEvent = 'reply_done' | 'reply_error' | 'attention';
+type SoundEvent = 'reply_done' | 'reply_error' | 'card_popup' | 'user_pause';
 
 const SOUND_FILES: Record<SoundEvent, string> = {
   reply_done: doneMp3,
   reply_error: errorMp3,
-  attention: attentionMp3,
+  card_popup: doneMp3,
+  user_pause: errorMp3,
 };
 
 const STORAGE_KEY = 'cw-sound-enabled';

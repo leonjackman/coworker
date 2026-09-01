@@ -1964,7 +1964,7 @@ function App() {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
         const pending = pendingRequestFromEvent(event, sessionIdValue, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
-        playSound('attention');
+        playSound('card_popup');
         localParts = settleRunningTools(localParts);
         commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
@@ -2325,6 +2325,7 @@ function App() {
   };
 
   const stopMessage = () => {
+    playSound('user_pause');
     const key = streamKey(sessionIdRef.current);
     const assistantMessageId = activeAssistantMessageIdsRef.current[key];
     const streamStartAt = streamStartAtsRef.current[key];
@@ -2883,7 +2884,7 @@ function App() {
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
-        playSound('attention');
+        playSound('card_popup');
         localParts = settleRunningTools(localParts);
         commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
@@ -3044,7 +3045,7 @@ function App() {
         ...current.filter((item) => item.approval_id !== request.approval_id),
         ...chained.map((event): PendingRequest => pendingRequestFromEvent(event, request.session_id, targetMessageId)),
       ]);
-      if (chained.length > 0) playSound('attention');
+      if (chained.length > 0) playSound('card_popup');
     } catch (error) {
       console.error('Failed to resolve approval:', error);
       setPendingRequests((current) =>
@@ -3226,7 +3227,7 @@ function App() {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
               return [...current, pendingRequestFromEvent(event, resumeSessionId, targetMessageId)];
             });
-            playSound('attention');
+            playSound('card_popup');
             resumeParts = settleRunningTools(resumeParts);
             setMessages((current) =>
               current.map((item) =>
