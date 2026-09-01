@@ -2322,6 +2322,8 @@ ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api
 ipcMain.handle('delete-memory-file', (event, payload = {}) => requestBackend('/api/memory/delete', 'POST', payload));
 ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings', 'GET'));
 ipcMain.handle('save-memory-settings', (event, payload = {}) => requestBackend('/api/memory/settings', 'POST', payload));
+ipcMain.handle('get-skill-review-settings', () => requestBackend('/api/skill-review/settings', 'GET'));
+ipcMain.handle('save-skill-review-settings', (event, payload = {}) => requestBackend('/api/skill-review/settings', 'POST', payload));
 ipcMain.handle('reveal-in-folder', async (event, filePath) => {
   if (typeof filePath === 'string' && filePath) {
     shell.showItemInFolder(filePath);

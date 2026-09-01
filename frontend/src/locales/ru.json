@@ -1104,5 +1104,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} непрочитанных",
-  "sidebar.unread_count": "непрочитанные"
+  "sidebar.unread_count": "непрочитанные",
+  "settings.skill_review_aggressiveness": "Автонавыки · Активность",
+  "settings.skill_review_aggressiveness_desc": "Насколько активно Coworker предлагает сохранять повторяемые процедуры как навыки после задачи.",
+  "settings.skill_review_level_active": "Активная",
+  "settings.skill_review_level_cautious": "Осторожная",
+  "settings.skill_review_level_passive": "Пассивная",
+  "settings.skill_review_approval": "Автонавыки · Одобрение человека",
+  "settings.skill_review_approval_desc": "Навыки, созданные агентом, ждут вашего одобрения перед вступлением в силу.",
+  "settings.skill_review_approval_off_desc": "Выкл: навыки, созданные агентом, вступают в силу сразу (без проверки)."
 }

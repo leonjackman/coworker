@@ -37,7 +37,6 @@ Capture when (priority order):
 3. The agent hit errors/dead-ends and found the working path.
 
 Rules:
-- Only capture genuinely repeatable procedures — never one-off facts or trivial chat.
 - If an existing skill in <catalog> already covers this, respond with action=update using THAT skill's exact name.
   Otherwise action=create with a new lowercase-hyphen name.
 - The SKILL.md content MUST include YAML frontmatter (name + description) and exactly these four body sections,
@@ -123,14 +122,22 @@ async def run_skill_review(
     session_id: str,
     messages: list[Any],
     parts: list[Any],
+    aggressiveness: str = "cautious",
+    approval_required: bool = True,
 ) -> dict[str, Any]:
-    """Run one post-turn review; stages a draft when something is captured.
+    """Run one post-turn review; stages a draft (or applies directly when
+    ``approval_required`` is false) when something is captured.
+
+    ``aggressiveness`` selects the proposal strictness: ``active`` proposes
+    eagerly, ``cautious`` (default) only captures genuinely repeatable
+    procedures, ``passive`` should never be called (the runtime gate skips it).
 
     Never raises: the caller treats the review as best-effort.
     """
     tail = _conversation_tail(messages)
     tools = _tool_summary(parts)
     catalog = _format_catalog(skill_manager)
+    system_prompt = _build_system_prompt(aggressiveness)
 
     human = (
         "## Conversation tail\n"
@@ -145,7 +152,7 @@ async def run_skill_review(
     try:
         response = await llm.ainvoke(
             [
-                SystemMessage(content=REVIEW_SYSTEM_PROMPT),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=human),
             ]
         )
@@ -180,24 +187,61 @@ async def run_skill_review(
         return {"action": "none", "reason": "verdict missing name/content"}
 
     try:
-        if action == "update":
-            result = skill_manager.stage_skill_replacement(
-                name, skill_content, sources=[f"session:{session_id}"]
-            )
+        if approval_required:
+            if action == "update":
+                result = skill_manager.stage_skill_replacement(
+                    name, skill_content, sources=[f"session:{session_id}"]
+                )
+            else:
+                result = skill_manager.stage_skill_draft(
+                    name, skill_content, sources=[f"session:{session_id}"]
+                )
         else:
-            result = skill_manager.stage_skill_draft(
-                name, skill_content, sources=[f"session:{session_id}"]
+            # Hermes-style free write: apply directly, bypassing the draft queue.
+            result = skill_manager.apply_agent_skill(
+                action, name, skill_content, sources=[f"session:{session_id}"]
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("skill review staging failed: %s", exc)
         return {"action": action, "name": name, "reason": f"staging failed: {exc}"}
 
     if result.get("status") == "ok":
-        logger.info("skill review staged %s draft '%s'", action, name)
-        return {"action": action, "name": name, "staged": True}
+        logger.info(
+            "skill review %s skill '%s' (%s)",
+            "applied" if not approval_required else "staged",
+            name,
+            "direct" if not approval_required else "draft",
+        )
+        return {
+            "action": action,
+            "name": name,
+            "staged": approval_required,
+            "applied": not approval_required,
+        }
     # Common cause: update targeted a skill that doesn't exist / name collision.
     logger.debug("skill review staging skipped: %s", result.get("message"))
     return {"action": action, "name": name, "reason": result.get("message")}
+
+
+AGGRESSIVENESS_RULES: dict[str, str] = {
+    "active": (
+        "Proposal strictness: ACTIVE. Propose a skill whenever there is a plausible "
+        "reusable procedure — including one-off but high-value workflows the user is "
+        "likely to repeat. When unsure, prefer proposing (a draft is cheap to reject)."
+    ),
+    "cautious": (
+        "Proposal strictness: CAUTIOUS. Only capture genuinely repeatable procedures — "
+        "never one-off facts or trivial chat. When in doubt, respond with action=none."
+    ),
+    "passive": (
+        "Proposal strictness: PASSIVE. Do NOT propose any skill here; respond with action=none."
+    ),
+}
+
+
+def _build_system_prompt(aggressiveness: str) -> str:
+    rule = AGGRESSIVENESS_RULES.get(aggressiveness, AGGRESSIVENESS_RULES["cautious"])
+    return f"{REVIEW_SYSTEM_PROMPT}\n\n{rule}"
 
 
 def _format_catalog(skill_manager: Any) -> str:

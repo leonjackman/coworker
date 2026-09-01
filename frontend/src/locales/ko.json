@@ -1104,5 +1104,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} 안읽음",
-  "sidebar.unread_count": "안읽음"
+  "sidebar.unread_count": "안읽음",
+  "settings.skill_review_aggressiveness": "자동 스킬 · 적극성",
+  "settings.skill_review_aggressiveness_desc": "작업 후 재사용 가능한 절차를 스킬로 제안하는 적극성 수준입니다.",
+  "settings.skill_review_level_active": "적극적",
+  "settings.skill_review_level_cautious": "신중",
+  "settings.skill_review_level_passive": "수동",
+  "settings.skill_review_approval": "자동 스킬 · 인간 승인",
+  "settings.skill_review_approval_desc": "에이전트가 만든 스킬은 승인 후에 적용됩니다.",
+  "settings.skill_review_approval_off_desc": "끔: 에이전트가 만든 스킬이 즉시 적용됩니다(검토 없음)."
 }

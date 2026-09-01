@@ -1104,5 +1104,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} 未讀",
-  "sidebar.unread_count": "未讀"
+  "sidebar.unread_count": "未讀",
+  "settings.skill_review_aggressiveness": "自動技能 · 積極度",
+  "settings.skill_review_aggressiveness_desc": "任務後 Coworker 主動提議將可重用流程沉澱為技能的積極程度。",
+  "settings.skill_review_level_active": "積極",
+  "settings.skill_review_level_cautious": "謹慎",
+  "settings.skill_review_level_passive": "被動",
+  "settings.skill_review_approval": "自動技能 · 人工審核",
+  "settings.skill_review_approval_desc": "Agent 生成的技能需經你批准後才生效。",
+  "settings.skill_review_approval_off_desc": "關閉：Agent 生成的技能立即生效（無需審核）。"
 }

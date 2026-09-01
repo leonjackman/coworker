@@ -1104,5 +1104,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} ungelesen",
-  "sidebar.unread_count": "ungelesen"
+  "sidebar.unread_count": "ungelesen",
+  "settings.skill_review_aggressiveness": "Automatische Skills · Aggressivität",
+  "settings.skill_review_aggressiveness_desc": "Wie aktiv Coworker nach einer Aufgabe vorschlägt, wiederverwendbare Abläufe als Skills zu erfassen.",
+  "settings.skill_review_level_active": "Aktiv",
+  "settings.skill_review_level_cautious": "Vorsichtig",
+  "settings.skill_review_level_passive": "Passiv",
+  "settings.skill_review_approval": "Automatische Skills · Menschliche Genehmigung",
+  "settings.skill_review_approval_desc": "Vom Agenten erstellte Skills warten auf Ihre Genehmigung, bevor sie wirksam werden.",
+  "settings.skill_review_approval_off_desc": "Aus: Vom Agenten erstellte Skills wirken sofort (keine Prüfung)."
 }

@@ -1343,6 +1343,59 @@ class MemorySettingsUpdate(BaseModel):
     auto_extract: bool | None = None
 
 
+class SkillReviewSettingsUpdate(BaseModel):
+    """Request body for updating the auto-skills review settings (partial patch)."""
+    aggressiveness: str | None = None
+    approval_required: bool | None = None
+
+
+def read_user_skill_review_settings() -> dict:
+    """Read auto-skills review settings from .coworker_settings.json (defaults fallback)."""
+    from coworker.config import read_skill_review_settings
+
+    return read_skill_review_settings(settings.data_dir)
+
+
+def save_user_skill_review_settings(patch: dict) -> dict:
+    """Merge auto-skills review settings into .coworker_settings.json."""
+    from coworker.config import SKILL_REVIEW_AGGRESSIVENESS, default_skill_review_settings
+
+    existing = _load_user_settings_file()
+    current = existing.get("skill_review")
+    if not isinstance(current, dict):
+        current = default_skill_review_settings()
+    merged = dict(current)
+    if "aggressiveness" in patch and patch["aggressiveness"] in SKILL_REVIEW_AGGRESSIVENESS:
+        merged["aggressiveness"] = patch["aggressiveness"]
+    if "approval_required" in patch and isinstance(patch["approval_required"], bool):
+        merged["approval_required"] = patch["approval_required"]
+    existing["skill_review"] = merged
+    _save_user_settings_file(existing)
+    return merged
+
+
+@app.get("/api/skill-review/settings")
+async def get_skill_review_settings():
+    """Auto-skills review settings (the Settings page surface)."""
+    return read_user_skill_review_settings()
+
+
+@app.post("/api/skill-review/settings")
+async def save_skill_review_settings(request: SkillReviewSettingsUpdate):
+    """Persist auto-skills review settings and apply at runtime."""
+    patch = {}
+    if request.aggressiveness is not None:
+        patch["aggressiveness"] = request.aggressiveness
+    if request.approval_required is not None:
+        patch["approval_required"] = request.approval_required
+    try:
+        merged = save_user_skill_review_settings(patch)
+    except OSError as exc:  # noqa: BLE001 - settings persistence must not fail the request
+        logger.warning("Failed to persist skill-review settings: %s", exc)
+        return read_user_skill_review_settings()
+    return merged
+
+
 @app.get("/api/memory/discover")
 async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT, scope: str = "all"):
     """Memory library tree: system files + project views (BASE/PROJECT/agents).

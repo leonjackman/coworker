@@ -2,7 +2,7 @@ import { ArrowLeft, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
-import type { Autonomy, MemorySettings, MemorySettingsPatch, WebSettings } from '../../types';
+import type { Autonomy, MemorySettings, MemorySettingsPatch, SkillReviewSettings, SkillReviewSettingsPatch, WebSettings } from '../../types';
 import type { UpdateCenter } from '../../lib/useUpdateCenter';
 import { useSound } from '../sound-provider';
 import { chatService } from '../../services/chatService';
@@ -30,6 +30,8 @@ interface SettingsViewProps {
   onAutonomyChange: (mode: Autonomy) => void;
   memorySettings: MemorySettings | null;
   onMemorySettingsChange: (patch: MemorySettingsPatch) => void;
+  skillReviewSettings: SkillReviewSettings | null;
+  onSkillReviewSettingsChange: (patch: SkillReviewSettingsPatch) => void;
   modelOptions: { id: string; label: string; provider: string }[];
   updateCenter: UpdateCenter;
   onLanguageChange?: () => void;
@@ -54,6 +56,8 @@ export function SettingsView({
   onAutonomyChange,
   memorySettings,
   onMemorySettingsChange,
+  skillReviewSettings,
+  onSkillReviewSettingsChange,
   modelOptions,
   updateCenter,
   onLanguageChange,
@@ -318,6 +322,33 @@ export function SettingsView({
                   { value: 'false', label: t('memory.disabled') },
                 ],
                 onChange: (value) => toggleSound(),
+              },
+              {
+                id: 'skill_review_aggressiveness',
+                type: 'select',
+                label: t('settings.skill_review_aggressiveness'),
+                description: t('settings.skill_review_aggressiveness_desc'),
+                value: skillReviewSettings?.aggressiveness ?? 'cautious',
+                options: [
+                  { value: 'active', label: t('settings.skill_review_level_active') },
+                  { value: 'cautious', label: t('settings.skill_review_level_cautious') },
+                  { value: 'passive', label: t('settings.skill_review_level_passive') },
+                ],
+                onChange: (value) => onSkillReviewSettingsChange({ aggressiveness: value as SkillReviewSettings['aggressiveness'] }),
+              },
+              {
+                id: 'skill_review_approval',
+                type: 'toggle',
+                label: t('settings.skill_review_approval'),
+                description: skillReviewSettings?.approval_required
+                  ? t('settings.skill_review_approval_desc')
+                  : t('settings.skill_review_approval_off_desc'),
+                value: skillReviewSettings?.approval_required ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onSkillReviewSettingsChange({ approval_required: value === 'true' }),
               },
             ],
           },

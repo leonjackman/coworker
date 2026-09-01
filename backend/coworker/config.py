@@ -101,3 +101,41 @@ def load_settings() -> BackendSettings:
         json_log=json_log,
         max_concurrent_workers=max_concurrent_workers,
     )
+
+
+# Aggressiveness levels for the automatic skill self-calibration review.
+SKILL_REVIEW_AGGRESSIVENESS = frozenset({"active", "cautious", "passive"})
+
+
+def default_skill_review_settings() -> dict:
+    """Product defaults for the auto-skills review."""
+    return {
+        "aggressiveness": "cautious",  # active | cautious | passive
+        "approval_required": True,
+    }
+
+
+def read_skill_review_settings(data_dir: Path) -> dict:
+    """Read the user's auto-skills review settings from ``.coworker_settings.json``.
+
+    Shared by the settings API (main.py) and the runtime review loop so a
+    single source of truth drives the review behavior. Absent/malformed values
+    fall back to the product defaults.
+    """
+    import json
+
+    defaults = default_skill_review_settings()
+    try:
+        raw = json.loads((data_dir / ".coworker_settings.json").read_text() or "{}")
+    except Exception:  # noqa: BLE001 - a broken settings file must never crash
+        return dict(defaults)
+    stored = raw.get("skill_review")
+    if not isinstance(stored, dict):
+        return dict(defaults)
+    out = dict(defaults)
+    aggr = stored.get("aggressiveness")
+    if isinstance(aggr, str) and aggr in SKILL_REVIEW_AGGRESSIVENESS:
+        out["aggressiveness"] = aggr
+    if isinstance(stored.get("approval_required"), bool):
+        out["approval_required"] = stored["approval_required"]
+    return out

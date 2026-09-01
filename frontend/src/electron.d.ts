@@ -60,6 +60,8 @@ import type {
   MemoryImportPreviewResponse,
   MemoryImportApplyResponse,
   MemorySettings,
+  SkillReviewSettings,
+  SkillReviewSettingsPatch,
   MemorySettingsPatch,
   BrowserCaptureResult,
   BrowserContextMenuPayload,
@@ -182,6 +184,8 @@ declare global {
       applyMemoryImport: (payload: { token: string; decisions: Record<string, string> }) => Promise<MemoryImportApplyResponse>;
       getMemorySettings: () => Promise<MemorySettings>;
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
+      getSkillReviewSettings: () => Promise<SkillReviewSettings>;
+      saveSkillReviewSettings: (payload: SkillReviewSettingsPatch) => Promise<SkillReviewSettings>;
       getWebSettings: () => Promise<WebSettings>;
       saveWebSettings: (payload: WebConfigPatch) => Promise<WebSettings>;
       setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;

@@ -1104,5 +1104,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} 未読",
-  "sidebar.unread_count": "未読"
+  "sidebar.unread_count": "未読",
+  "settings.skill_review_aggressiveness": "自動スキル · 積極度",
+  "settings.skill_review_aggressiveness_desc": "タスク後に、再利用可能な手順をスキルとして提案する積極度。",
+  "settings.skill_review_level_active": "積極的",
+  "settings.skill_review_level_cautious": "慎重",
+  "settings.skill_review_level_passive": "受動的",
+  "settings.skill_review_approval": "自動スキル · 人間の承認",
+  "settings.skill_review_approval_desc": "エージェントが作成したスキルは承認後に有効になります。",
+  "settings.skill_review_approval_off_desc": "オフ：エージェントが作成したスキルは即時に有効になります（審査なし）。"
 }

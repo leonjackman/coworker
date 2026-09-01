@@ -512,6 +512,65 @@ class SkillManager:
             return {"status": "ok", "name": name, "deleted": True}
         return {"status": "error", "message": f"unknown skill_manage action: {action}"}
 
+    def apply_agent_skill(
+        self,
+        action: str,
+        name: str,
+        content: str,
+        *,
+        sources: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Write an agent-produced skill DIRECTLY as active (no draft queue).
+
+        Used when the user disables "require approval" (Hermes-style free write)
+        for both the review loop and the in-conversation ``skill_manage`` tool.
+        ``action`` is ``create`` (new skill) or ``update`` (overwrite existing).
+        """
+        from .skills import parse_frontmatter, validate_description, validate_name
+
+        if action not in ("create", "update"):
+            return {"status": "error", "message": f"unsupported apply action: {action}"}
+        if not name or not name.strip():
+            return {"status": "error", "message": "Skill name is required"}
+        if not content or not content.strip():
+            return {"status": "error", "message": "Skill content (SKILL.md) is required"}
+
+        frontmatter, _ = parse_frontmatter(content)
+        resolved = name.strip()
+        if isinstance(frontmatter.get("name"), str):
+            resolved = frontmatter["name"].strip() or resolved
+        desc = frontmatter.get("description") if isinstance(frontmatter.get("description"), str) else ""
+        problems = validate_name(resolved) + validate_description(desc)
+        if problems:
+            return {"status": "error", "message": "; ".join(problems)}
+
+        existing = self.get(resolved)
+        if action == "create" and existing is not None:
+            return {"status": "error", "message": f"skill already exists: {resolved}"}
+        if action == "update" and existing is None:
+            return {"status": "error", "message": f"skill not found: {resolved}"}
+
+        from .skills import set_frontmatter_list, set_frontmatter_value
+
+        out = set_frontmatter_value(content, "status", "active")
+        out = set_frontmatter_value(out, "provenance", "agent")
+        if sources:
+            out = set_frontmatter_list(out, "sources", sources)
+        try:
+            with self._lock:
+                if existing is None:
+                    target = self._user_skills_dir / resolved
+                    if target.exists():
+                        return {"status": "error", "message": f"target skill directory already exists: {resolved}"}
+                    target.mkdir(parents=True, exist_ok=True)
+                    (target / "SKILL.md").write_text(out, encoding="utf-8")
+                else:
+                    existing.file_path.write_text(out, encoding="utf-8")
+        except OSError as exc:
+            return {"status": "error", "message": f"unable to apply skill: {exc}"}
+        self.refresh()
+        return {"status": "ok", "name": resolved, "applied": True, "action": action}
+
     def read_body(self, name: str) -> tuple[str, str] | None:
         """Return ``(body_markdown, base_dir)`` for a skill, or ``None``.
 

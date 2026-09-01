@@ -100,6 +100,7 @@ def build_workspace_tools(
     readonly: bool = False,
     web_tools: list | None = None,
     browser_tool: Any | None = None,
+    auto_apply_skills: bool = False,
     # WorkerAgent 集成（单 agent 模式）
     use_worker_enabled: bool = False,
     language: str = "zh",
@@ -325,14 +326,34 @@ def build_workspace_tools(
         try:
             if skill_manager is None:
                 return _error_result(ValueError("skill system unavailable"), "skill_manage")
-            result = skill_manager.skill_manage(
-                action,
-                name,
-                content=content,
-                old_string=old_string,
-                new_string=new_string,
-                sources=[f"session:{session_id}"] if session_id else None,
-            )
+            if auto_apply_skills and action in ("create", "patch", "edit"):
+                if action == "create":
+                    result = skill_manager.apply_agent_skill(
+                        "create", name, content or "", sources=[f"session:{session_id}"] if session_id else None
+                    )
+                elif action == "patch":
+                    current = skill_manager.get(name)
+                    base = current.file_path.read_text(encoding="utf-8", errors="replace") if current else ""
+                    if not old_string or old_string not in base:
+                        result = {"status": "error", "message": "old_string was not found in the skill body"}
+                    else:
+                        proposed = base.replace(old_string, new_string or "", 1)
+                        result = skill_manager.apply_agent_skill(
+                            "update", name, proposed, sources=[f"session:{session_id}"] if session_id else None
+                        )
+                else:  # edit
+                    result = skill_manager.apply_agent_skill(
+                        "update", name, content or "", sources=[f"session:{session_id}"] if session_id else None
+                    )
+            else:
+                result = skill_manager.skill_manage(
+                    action,
+                    name,
+                    content=content,
+                    old_string=old_string,
+                    new_string=new_string,
+                    sources=[f"session:{session_id}"] if session_id else None,
+                )
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "skill_manage")

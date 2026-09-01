@@ -31,7 +31,7 @@ import { displayProjectName } from './lib/projectName';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, CommandApproval, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SessionBadgeMap, SessionBadges, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, CommandApproval, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SessionBadgeMap, SessionBadges, SkillDiagnostic, SkillEntry, SkillReviewSettings, SkillReviewSettingsPatch, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -576,6 +576,7 @@ function App() {
     return stored === 'supervised' || stored === 'guarded' || stored === 'autonomous' ? stored : 'guarded';
   });
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
+  const [skillReviewSettings, setSkillReviewSettings] = useState<SkillReviewSettings | null>(null);
   const MAX_ATTACHMENT_MB_STORAGE_KEY = 'coworker-max-attachment-mb';
   const DEFAULT_MAX_ATTACHMENT_MB = 25;
   const MIN_MAX_ATTACHMENT_MB = 1;
@@ -1508,6 +1509,10 @@ function App() {
         try {
           const memSettings = await chatService.getMemorySettings();
           if (mounted) setMemorySettings(memSettings);
+        } catch { /* ignore */ }
+        try {
+          const skillSettings = await chatService.getSkillReviewSettings();
+          if (mounted) setSkillReviewSettings(skillSettings);
         } catch { /* ignore */ }
       } catch (error) {
         console.error('Failed to load runtime config:', error);
@@ -4240,6 +4245,11 @@ function App() {
     chatService.saveMemorySettings(patch).catch(() => { /* ignore */ });
   };
 
+  const changeSkillReviewSettings = (patch: SkillReviewSettingsPatch) => {
+    setSkillReviewSettings((current) => (current ? { ...current, ...patch } : current));
+    chatService.saveSkillReviewSettings(patch).catch(() => { /* ignore */ });
+  };
+
     return (
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
@@ -4520,6 +4530,8 @@ function App() {
                   onAutonomyChange={setAutonomy}
                   memorySettings={memorySettings}
                   onMemorySettingsChange={changeMemorySettings}
+                  skillReviewSettings={skillReviewSettings}
+                  onSkillReviewSettingsChange={changeSkillReviewSettings}
                   modelOptions={modelOptions}
                   updateCenter={updateCenter}
                   onClose={() => {

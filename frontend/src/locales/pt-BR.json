@@ -1104,5 +1104,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} não lidas",
-  "sidebar.unread_count": "não lidas"
+  "sidebar.unread_count": "não lidas",
+  "settings.skill_review_aggressiveness": "Habilidades automáticas · Agressividade",
+  "settings.skill_review_aggressiveness_desc": "Com que entusiasmo o Coworker propõe capturar procedimentos reutilizáveis como habilidades após uma tarefa.",
+  "settings.skill_review_level_active": "Ativa",
+  "settings.skill_review_level_cautious": "Cautelosa",
+  "settings.skill_review_level_passive": "Passiva",
+  "settings.skill_review_approval": "Habilidades automáticas · Aprovação humana",
+  "settings.skill_review_approval_desc": "Habilidades criadas pelo agente aguardam sua aprovação antes de entrar em vigor.",
+  "settings.skill_review_approval_off_desc": "Desativado: habilidades criadas pelo agente entram em vigor imediatamente (sem revisão)."
 }

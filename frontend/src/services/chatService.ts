@@ -67,6 +67,8 @@ import type {
   MemoryImportPreviewResponse,
   MemoryImportApplyResponse,
   MemorySettings,
+  SkillReviewSettings,
+  SkillReviewSettingsPatch,
   MemorySettingsPatch,
   WebSettings,
   WebConfigPatch,
@@ -229,6 +231,8 @@ export interface ChatService {
   applyMemoryImport: (token: string, decisions: Record<string, string>) => Promise<MemoryImportApplyResponse>;
   getMemorySettings: () => Promise<MemorySettings>;
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
+  getSkillReviewSettings: () => Promise<SkillReviewSettings>;
+  saveSkillReviewSettings: (patch: SkillReviewSettingsPatch) => Promise<SkillReviewSettings>;
   getWebSettings: () => Promise<WebSettings>;
   saveWebSettings: (patch: WebConfigPatch) => Promise<WebSettings>;
   setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
@@ -634,6 +638,16 @@ class ElectronChatService implements ChatService {
   async saveMemorySettings(settings: MemorySettingsPatch): Promise<MemorySettings> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.saveMemorySettings(settings);
+  }
+
+  async getSkillReviewSettings(): Promise<SkillReviewSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getSkillReviewSettings();
+  }
+
+  async saveSkillReviewSettings(patch: SkillReviewSettingsPatch): Promise<SkillReviewSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveSkillReviewSettings(patch);
   }
 
   async getWebSettings(): Promise<WebSettings> {
@@ -1963,6 +1977,18 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
+    });
+  }
+
+  async getSkillReviewSettings(): Promise<SkillReviewSettings> {
+    return this.request<SkillReviewSettings>('/api/skill-review/settings');
+  }
+
+  async saveSkillReviewSettings(patch: SkillReviewSettingsPatch): Promise<SkillReviewSettings> {
+    return this.request<SkillReviewSettings>('/api/skill-review/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
     });
   }
 

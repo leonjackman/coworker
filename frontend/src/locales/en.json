@@ -1092,5 +1092,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} unread",
-  "sidebar.unread_count": "unread"
+  "sidebar.unread_count": "unread",
+  "settings.skill_review_aggressiveness": "Auto skills · Aggressiveness",
+  "settings.skill_review_aggressiveness_desc": "How eagerly Coworker proposes capturing reusable procedures as skills after a task.",
+  "settings.skill_review_level_active": "Active",
+  "settings.skill_review_level_cautious": "Cautious",
+  "settings.skill_review_level_passive": "Passive",
+  "settings.skill_review_approval": "Auto skills · Human approval",
+  "settings.skill_review_approval_desc": "Agent-created skills wait for your approval before taking effect.",
+  "settings.skill_review_approval_off_desc": "Off: agent-created skills take effect immediately (no review)."
 }

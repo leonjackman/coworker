@@ -1104,5 +1104,13 @@
   "session_status.error": "Error",
   "session_status.pending_approval": "{count} pending",
   "session_status.unread": "{count} non lu",
-  "sidebar.unread_count": "non lu"
+  "sidebar.unread_count": "non lu",
+  "settings.skill_review_aggressiveness": "Compétences automatiques · Aggressivité",
+  "settings.skill_review_aggressiveness_desc": "À quel point Coworker propose activement de capturer des procédures réutilisables comme compétences après une tâche.",
+  "settings.skill_review_level_active": "Active",
+  "settings.skill_review_level_cautious": "Prudente",
+  "settings.skill_review_level_passive": "Passive",
+  "settings.skill_review_approval": "Compétences automatiques · Approbation humaine",
+  "settings.skill_review_approval_desc": "Les compétences créées par l'agent attendent votre approbation avant de prendre effet.",
+  "settings.skill_review_approval_off_desc": "Désactivé : les compétences créées par l'agent prennent effet immédiatement (sans révision)."
 }

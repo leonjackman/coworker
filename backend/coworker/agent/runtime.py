@@ -351,6 +351,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 return
             if os.getenv("COWORKER_SKILL_SELF_REVIEW", "1") not in ("1", "true", "True"):
                 return
+            from coworker.config import read_skill_review_settings
+
+            review_cfg = read_skill_review_settings(self.data_dir)
+            if review_cfg.get("aggressiveness") == "passive":
+                return
             used_tools = any(
                 isinstance(p, dict)
                 and p.get("type") in ("tool_start", "tool_delta", "tool_end", "tool")
@@ -370,6 +375,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     session_id=session_id,
                     messages=messages or [],
                     parts=parts,
+                    aggressiveness=str(review_cfg.get("aggressiveness") or "cautious"),
+                    approval_required=bool(review_cfg.get("approval_required", True)),
                 )
             )
         except Exception:  # noqa: BLE001 - a review scheduling hiccup must never break a turn

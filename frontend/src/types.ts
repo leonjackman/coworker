@@ -1200,6 +1200,18 @@ export interface MemorySettings {
   auto_extract: boolean;
 }
 
+export type SkillReviewAggressiveness = 'active' | 'cautious' | 'passive';
+
+export interface SkillReviewSettings {
+  aggressiveness: SkillReviewAggressiveness;
+  approval_required: boolean;
+}
+
+export interface SkillReviewSettingsPatch {
+  aggressiveness?: SkillReviewAggressiveness;
+  approval_required?: boolean;
+}
+
 export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'auto_extract'>>;
 
 // ── Web search / fetch (Tavily) ─────────────────────────────────────────
