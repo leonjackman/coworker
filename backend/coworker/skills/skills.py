@@ -128,12 +128,55 @@ class SkillDiagnostic:
         }
 
 
+def _lenient_yaml_load(raw: str) -> dict[str, Any] | None:
+    """Load frontmatter YAML, tolerating unquoted values that contain a
+    colon+space (e.g. ``description: 加 front matter（project: coworker）``).
+
+    A plain-scalar value with ``: `` is invalid YAML, so agent-written
+    descriptions routinely break ``yaml.safe_load`` and the whole frontmatter
+    was discarded — surfacing as a misleading "description is required". This
+    retry quotes such scalar values on simple ``key: value`` lines before
+    re-parsing; complex blocks (``|``/``>``), lists and already-quoted values
+    are left untouched.
+    """
+    import json as _json
+
+    import yaml
+
+    try:
+        data = yaml.safe_load(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001 - fall through to the lenient retry
+        pass
+
+    lines = raw.splitlines()
+    fixed: list[str] = []
+    for line in lines:
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
+        if match and not line.startswith((" ", "-", "\t")):
+            key, value = match.group(1), match.group(2)
+            if (
+                value
+                and not value[0] in ('"', "'", "[", "{", "|", ">", "-", "&", "*", "!")
+                and (": " in value or " #" in value or value.endswith(":"))
+            ):
+                value = _json.dumps(value, ensure_ascii=False)
+            line = f"{key}: {value}"
+        fixed.append(line)
+    try:
+        data = yaml.safe_load("\n".join(fixed))
+    except Exception:  # noqa: BLE001 - unparseable frontmatter stays unparseable
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from markdown content.
 
     Returns ``(frontmatter, body)``; ``({}, content)`` when there is no valid
     frontmatter block. Malformed YAML is treated as "no frontmatter" so a
-    single broken skill never breaks the whole scan.
+    single broken skill never breaks the whole scan — but a lenient retry first
+    tolerates agent-written values that contain ``: ``.
     """
     if not content.startswith("---"):
         return {}, content
@@ -148,10 +191,7 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
         import yaml
     except ImportError:  # pragma: no cover - PyYAML is a project dependency
         return {}, body
-    try:
-        data = yaml.safe_load(raw)
-    except Exception:
-        return {}, body
+    data = _lenient_yaml_load(raw)
     return (data if isinstance(data, dict) else {}), body
 
 

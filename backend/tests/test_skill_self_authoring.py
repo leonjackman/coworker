@@ -450,3 +450,24 @@ def test_passive_aggressiveness_skips_review(manager):
     assert manager.get("should-not-exist") is None
     # restore defaults so this mutation doesn't leak into other tests
     _write_review_settings(aggressiveness="cautious", approval_required=True)
+
+
+def test_agent_description_with_colon_space_parses(manager):
+    """Regression: an agent-written description containing ': ' (e.g.
+    'project: coworker') is invalid YAML plain-scalar and used to make the
+    whole frontmatter unparseable → misleading 'description is required'."""
+    content = (
+        "---\n"
+        "name: colon-desc\n"
+        "description: 加 front matter（project: coworker, author: leon）。掃描 .md 檔。\n"
+        "version: \"1.0.0\"\n"
+        "---\n\n"
+        "## When to Use\n## Procedure\n1. x\n## Pitfalls\n## Verification\n"
+    )
+    result = manager.stage_skill_draft("colon-desc", content, sources=["session:s1"])
+    assert result["status"] == "ok", result
+    assert len(manager.pending()) == 1
+    # and the value is preserved correctly
+    from coworker.skills.skills import parse_frontmatter
+    fm, _ = parse_frontmatter(content)
+    assert "project: coworker" in fm["description"]
