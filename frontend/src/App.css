@@ -2854,6 +2854,14 @@ body.bottom-panel-resizing {
   font-weight: 650;
 }
 
+.sidebar-session--active:hover {
+  background: color-mix(in srgb, var(--accent) 80%, var(--sidebar) 20%);
+}
+
+.sidebar-session--active:hover .sidebar-session__more-trigger {
+  color: var(--accent);
+}
+
 /* Active session children must stay readable on the solid accent fill. */
 .sidebar-session--active .sidebar-session__time {
   color: var(--accent-foreground);
@@ -2884,31 +2892,41 @@ body.bottom-panel-resizing {
   animation: spin 900ms linear infinite;
 }
 
-.sidebar-session__time {
-  flex: 0 0 auto;
-  font-size: 11.5px;
-  color: var(--muted-foreground);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
+/* removed: inline session time now lives inside the more-trigger button */
 
 .sidebar-session__more-trigger {
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
   display: grid;
   place-items: center;
+  gap: 6px;
+  grid-auto-flow: column;
+  width: auto;
+  min-width: 56px;
+  justify-content: flex-end;
   border: 0;
   border-radius: 6px;
   color: var(--muted-foreground);
   background: transparent;
   cursor: pointer;
-  opacity: 0;
   transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
 }
 
-.sidebar-session:hover .sidebar-session__more-trigger {
-  opacity: 1;
+.sidebar-session__more-trigger > .sidebar-session__more-time {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sidebar-session__more-trigger > .sidebar-session__more-icon {
+  display: none;
+}
+
+.sidebar-session:hover .sidebar-session__more-trigger > .sidebar-session__more-time {
+  display: none;
+}
+
+.sidebar-session:hover .sidebar-session__more-trigger > .sidebar-session__more-icon {
+  display: inline-flex;
 }
 
 .sidebar-session__more-trigger:hover {

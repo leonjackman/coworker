@@ -1608,8 +1608,8 @@ class HttpChatService implements ChatService {
     return this.request<ProvidersListResponse>('/providers');
   }
 
-  async createProvider(request: ProviderPayload): Promise<void> {
-    await this.request('/providers', {
+  async createProvider(request: ProviderPayload): Promise<{ status: string; provider: ProviderEntry }> {
+    return await this.request<{ status: string; provider: ProviderEntry }>('/providers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),

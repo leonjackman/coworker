@@ -137,12 +137,12 @@ function SessionRow({ session, active, running, onOpen, onDelete }: SessionRowPr
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`} onContextMenu={(e) => { e.preventDefault(); setSessionMenu({ x: e.clientX, y: e.clientY }); }}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
         {running && <Loader2 size={13} className="sidebar-session__running-icon" aria-label="Running" />}
-        <span className="sidebar-session__title">{session.title}</span>
-        <span className="sidebar-session__time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
+        <span className="sidebar-session__title">{session.title}</span>      
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger className="sidebar-session__more-trigger" aria-label="Session actions">
-          <MoreHorizontal size={15} />
+          <span className="sidebar-session__more-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
+          <MoreHorizontal size={15} className="sidebar-session__more-icon" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" alignOffset={-8}>
           <DropdownMenuItem onClick={() => onOpen(session.id)}>
