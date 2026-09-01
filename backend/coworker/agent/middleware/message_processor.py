@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import Runtime
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from ...logger import get_logger
 from ...steer import steer_inbox
@@ -56,6 +56,64 @@ class NormalizeMessagesMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any])
         if normalized is None:
             return None
         return {"messages": normalized}
+
+
+class EnsureUserMessageMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
+    """Guard the model boundary against a DEGENERATE empty conversation.
+
+    A sequential HITL resume can restore an EMPTY ``messages`` channel (the
+    resumed graph's checkpoint lacks the conversation). Sending ``messages=[]``
+    to a strict provider (vLLM/Qwen) yields ``400 No user query found in
+    messages``. When the message list is empty, this middleware re-seeds the
+    recent conversation from the session store so the model always has context.
+
+    Healthy calls (messages present) are a no-op; the guard only acts on the
+    genuinely-empty degenerate case.
+    """
+
+    def __init__(self, session_store: Any | None = None, max_messages: int = 40) -> None:
+        super().__init__()
+        self.session_store = session_store
+        self.max_messages = max_messages
+
+    def _ensure(self, state: CoworkerAgentState) -> dict[str, Any] | None:
+        from langchain_core.messages import HumanMessage as HM
+
+        messages = state.get("messages", [])
+        if messages:
+            return None
+        session_id = str(state.get("session_id") or "")
+        if not session_id or self.session_store is None:
+            return None
+        try:
+            session = self.session_store.load(session_id)
+        except Exception:  # noqa: BLE001 - a session read must never break a model call
+            return None
+        if session is None:
+            return None
+        seeded: list[Any] = []
+        for message in getattr(session, "messages", [])[-self.max_messages :]:
+            content = getattr(message, "content", "")
+            if not content:
+                continue
+            role = str(getattr(message, "role", "") or "human")
+            if role == "assistant":
+                seeded.append(AIMessage(content=content))
+            elif role == "user":
+                seeded.append(HM(content=content))
+        if not seeded:
+            return None
+        logger.warning(
+            "ensure-user: degenerate empty conversation re-seeded %d messages for %s",
+            len(seeded), session_id,
+        )
+        return {"messages": seeded}
+
+    def before_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        return self._ensure(state)
+
+    async def abefore_model(self, state: CoworkerAgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        return self._ensure(state)
 
 
 class SteerInjectionMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):

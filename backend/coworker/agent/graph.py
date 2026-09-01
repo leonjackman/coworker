@@ -71,8 +71,9 @@ from .core import (
 )
 from .middleware import (
     ContextGuardMiddleware,
-    IdleLoopMiddleware,
     CoworkerSummarizationMiddleware,
+    EnsureUserMessageMiddleware,
+    IdleLoopMiddleware,
     NormalizeMessagesMiddleware,
     PhaseToolGateMiddleware,
     RepeatedToolCallMiddleware,
@@ -777,6 +778,7 @@ def build_coworker_agent_graph(
     max_output_tokens: int = 0,
     calibration_key: str = "",
     chat_mode: bool = False,
+    session_store: Any | None = None,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -930,6 +932,11 @@ def build_coworker_agent_graph(
         window_warning=context_window_warning,
     )
     middleware.append(context_guard)
+
+    # LAST guard at the model boundary: if a degenerate (sequential HITL)
+    # resume left the conversation empty, re-seed it from the session store so a
+    # strict provider (vLLM/Qwen) never receives `messages=[]` ("No user query").
+    middleware.append(EnsureUserMessageMiddleware(session_store=session_store))
 
     from .system_prompt import build_cw_chat_system_prompt, build_cw_system_prompt
 

@@ -21,7 +21,7 @@ from .hitl import (
 )
 
 # Message normalization & steer injection
-from .message_processor import NormalizeMessagesMiddleware, SteerInjectionMiddleware
+from .message_processor import EnsureUserMessageMiddleware, NormalizeMessagesMiddleware, SteerInjectionMiddleware
 
 # Context compaction / summarization
 from .context_compaction import CoworkerSummarizationMiddleware, _summarizer_candidates
@@ -75,6 +75,7 @@ __all__ = [
     "stream_event_from_interrupt",
     # Message
     "NormalizeMessagesMiddleware",
+    "EnsureUserMessageMiddleware",
     "SteerInjectionMiddleware",
     # Compaction
     "CoworkerSummarizationMiddleware",

@@ -979,6 +979,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             language=language,
             autonomy=autonomy,
             chat_mode=chat_mode,
+            session_store=self.session_store,
             checkpointer=checkpointer,
             approval_store=self.approval_store,
             data_dir=self.data_dir,
