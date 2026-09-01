@@ -43,7 +43,7 @@
 | 👤 **Sub-Agent Workers** | Spawn independent sub-agents in single-agent mode for parallel or sequential tasks, each with its own LLM graph, memory, and restricted toolset |
 | 🎯 **Goal Mode** | Set a persistent `/goal` and let the agent drive multi-round autonomous execution until complete or blocked, with a pinned progress card and pause / resume / clear controls |
 | 🔄 **MCP Integration** | Model Context Protocol — stdio / HTTP / SSE / WebSocket / Streamable HTTP transports, OAuth 2.1 + PKCE, template discovery, persistent sessions |
-| 📦 **Skills** | SKILL.md-based skills with marketplace browsing, one-click install (SkillHub · ClawHub), and in-chat install via the agent |
+| 📦 **Skills** | SKILL.md-based skills with marketplace browsing, one-click install (SkillHub · ClawHub), and in-chat install via the agent — plus **self-authoring**: the agent captures repeatable procedures as draft skills that wait in a review queue for your approval |
 | 🌐 **Web Search & Fetch** | Web search powered by [Tavily](https://tavily.com) (`web_search`) and web page fetching (`web_fetch`), with configurable search depth, result count, Cloudflare retry, and secure keychain storage for your API key |
 | 🖥️ **Built-in Browser** | Embedded Chromium view the agent can drive — navigate, click, type, scroll, screenshot, evaluate JS, and read DOM; right-click to capture elements or the whole page into your chat |
 | 🔒 **Human-In-The-Loop** | Approves commands, file writes, and MCP tools before they run — with supervised / guarded / autonomous levels |
@@ -60,6 +60,7 @@
 | 🔊 **Sound Notifications** | Audio feedback on agent reply done, errors, and attention events, with a global toggle |
 | 📊 **Context Budget Indicator** | Live context-window usage bar showing token / character consumption and compaction tracking, so you always know your budget |
 | 🔄 **Auto-Update** | Supports pre-release channels, progress bar, version skip, error classification, and local version notifications |
+| 📊 **Project Dashboard** | Per-project overview page — files, agents, git status, and session history at a glance, with a keyboard-navigable file tree, rich file previews (code highlight, CSV / XLSX tables), and open-in-external-app |
 
 > ⚠️ **Multi-Agent (Experimental)** — Multi-agent teams, departments, and delegation are an experimental capability still under active development: the feature set is not yet complete, behavior may change, and the project mode is immutable after creation. Prefer single-agent mode for daily work.
 
@@ -348,6 +349,21 @@ token-budget bar) is pinned in the task panel.
 - Goals are **strictly per-session** and never affect other sessions.
 - If a human-in-the-loop approval or question is raised mid-run, the loop pauses
   and resumes after you approve.
+
+---
+
+## Project Dashboard
+
+Every project has a read-only dashboard that makes its files, agents, git
+status and session history visible at a glance.
+
+- **Five tabs** — Overview (project info, git status, and stats) · Files · Agents · Memory · Session history.
+- **File explorer** — a keyboard-navigable file tree (ARIA accessible) with
+  rich previews: syntax-highlighted code with line numbers, virtual-scrolled
+  CSV / XLSX tables, and a draggable split pane.
+- **Open externally** — any file can be opened in your system's default app
+  right from the dashboard.
+- **Quick access** — open it from the sidebar or with the `Cmd+O` shortcut.
 
 ---
 

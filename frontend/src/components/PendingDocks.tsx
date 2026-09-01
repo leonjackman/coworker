@@ -101,6 +101,36 @@ function describeCommand(argv: string[] | undefined, _cwd?: string): string {
   return `执行命令：${bin}`;
 }
 
+/**
+ * Human-readable intent for a NON-command tool approval (write_file, memory,
+ * …). Backend classifies these as "command" with an empty argv, so without
+ * this the card would show nothing actionable. Falls back to the raw tool name.
+ */
+function describeToolCall(name: string, args?: Record<string, unknown>): string {
+  if (!name) return '执行操作';
+  const path = typeof args?.path === 'string' && args.path ? args.path : '';
+  const label =
+    name === 'write_file' ? '写入文件'
+    : name === 'replace_in_file' || name === 'apply_text_edits' || name === 'edit_file' ? '修改文件'
+    : name === 'read_file' ? '读取文件'
+    : name === 'memory' || name === 'remember' ? '读写长期记忆'
+    : name === 'web_search' ? '网页搜索'
+    : name === 'fetch_web' ? '抓取网页内容'
+    : name;
+  return path ? `${label} ${path}` : label;
+}
+
+/** Pretty-print tool args; truncates large payloads (e.g. write_file content). */
+function formatToolArgs(args: Record<string, unknown> | undefined): string {
+  if (!args || Object.keys(args).length === 0) return '';
+  try {
+    const text = JSON.stringify(args, null, 2);
+    return text.length > 600 ? `${text.slice(0, 600)}\n…` : text;
+  } catch {
+    return String(args);
+  }
+}
+
 function ApprovalDock({ request, onResolve, onStop }: { request: PendingRequest & { kind: 'command' }; onResolve: (req: PendingRequest & { kind: 'command' }, decision: ApprovalDecisionPayload) => Promise<void>; onStop?: () => void }) {
   const [resolving, setResolving] = useState(false);
 
@@ -114,7 +144,10 @@ function ApprovalDock({ request, onResolve, onStop }: { request: PendingRequest 
     }
   }, [resolving, request, onResolve]);
 
-  const intent = describeCommand(request.command, request.cwd);
+  const intent = request.command && request.command.length > 0
+    ? describeCommand(request.command, request.cwd)
+    : describeToolCall(request.tool_name ?? '', request.tool_args);
+  const toolArgsText = formatToolArgs(request.tool_args);
 
   return (
     <div className="pending-dock__body">
@@ -136,6 +169,11 @@ function ApprovalDock({ request, onResolve, onStop }: { request: PendingRequest 
             </span>
           ) : null}
         </div>
+      ) : request.tool_name ? (
+        <div className="pending-dock__command">
+          <span className="pending-dock__command-line">{request.tool_name}</span>
+          {toolArgsText ? <pre className="pending-dock__command-args">{toolArgsText}</pre> : null}
+        </div>
       ) : null}
       <div className="pending-dock__footer" data-slot="approval-actions">
         <button
@@ -155,7 +193,7 @@ function ApprovalDock({ request, onResolve, onStop }: { request: PendingRequest 
           onClick={() => dispatch({ type: 'always' })}
           disabled={resolving}
         >
-          {t('chat.approval_always', { command: request.command?.[0] || '' })}
+          {t('chat.approval_always', { command: request.command?.[0] || request.tool_name || '' })}
         </button>
         <button
           type="button"
@@ -168,16 +206,6 @@ function ApprovalDock({ request, onResolve, onStop }: { request: PendingRequest 
       </div>
     </div>
   );
-}
-
-/** Pretty-print MCP tool args; falls back to the raw value if it is not JSON-safe. */
-function formatToolArgs(args: Record<string, unknown> | undefined): string {
-  if (!args || Object.keys(args).length === 0) return '';
-  try {
-    return JSON.stringify(args, null, 2);
-  } catch {
-    return String(args);
-  }
 }
 
 /**

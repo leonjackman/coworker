@@ -1,6 +1,6 @@
 import json
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields as dc_fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -126,6 +126,30 @@ class Session:
     messages: list[SessionMessage] = field(default_factory=list)
     # Persistent session-scoped goal (唯一 goal 真源). None = no goal.
     goal: GoalState | None = None
+    # 未讀水位線：assistant 訊息的 created_at 大於此值的算未讀。預設空值＝全部已讀。
+    last_read_at: str = ""
+    # 最近一輪以錯誤終止時的摘要；空值 = 無錯誤。
+    last_error: str = ""
+
+    @classmethod
+    def _coerce_message(cls, item: Any, index: int) -> SessionMessage | None:
+        """Tolerate malformed persisted messages.
+
+        A single legacy/corrupt message must never take down the whole
+        ``/sessions`` list. Non-dict entries are dropped; entries missing an
+        ``id`` (older snapshots) get a stable fallback id so they stay loadable
+        and editable — the next ``save`` rewrites the file with real ids.
+        Unknown keys (e.g. a leftover ``status``) are filtered out instead of
+        raising a TypeError on ``SessionMessage(**item)``.
+        """
+        if not isinstance(item, dict):
+            return None
+        known = {f.name for f in dc_fields(SessionMessage)}
+        msg = {k: v for k, v in item.items() if k in known}
+        if not msg.get("id"):
+            stamp = str(msg.get("created_at", "") or uuid.uuid4().hex[:8])
+            msg["id"] = f"legacy-{index}-{stamp}"
+        return SessionMessage(**msg)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Session":
@@ -134,6 +158,12 @@ class Session:
             # Legacy sessions stored access_mode ("default"/"full").
             legacy = str(payload.get("access_mode", "default") or "default")
             autonomy = "autonomous" if legacy == "full" else "guarded"
+        raw_messages = payload.get("messages", [])
+        messages = [
+            msg
+            for index, item in enumerate(raw_messages)
+            if (msg := cls._coerce_message(item, index)) is not None
+        ]
         return cls(
             id=str(payload.get("id", "")),
             title=str(payload.get("title", "新会话")),
@@ -152,14 +182,17 @@ class Session:
             context_summary=str(payload.get("context_summary", "") or ""),
             context_compact_count=int(payload.get("context_compact_count", 0) or 0),
             context_summarized_fingerprints=[str(x) for x in payload.get("context_summarized_fingerprints", []) if isinstance(x, str)],
-            messages=[SessionMessage(**item) for item in payload.get("messages", [])],
+            messages=messages,
             goal=GoalState.from_dict(payload.get("goal")),
+            last_read_at=str(payload.get("last_read_at", "") or ""),
+            last_error=str(payload.get("last_error", "") or ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def public(self) -> dict[str, Any]:
+        unread_count = self.unread_count()
         return {
             "id": self.id,
             "title": self.title,
@@ -172,7 +205,23 @@ class Session:
             "todos": self.todos,
             "goal": self.goal.to_dict() if self.goal is not None else None,
             "message_count": len(self.messages),
+            "unread_count": unread_count,
+            "last_error": self.last_error if self.last_error else None,
         }
+
+    def unread_count(self) -> int:
+        """Count of unread assistant messages.
+
+        Messages with ``created_at > last_read_at`` are unread.  An empty
+        ``last_read_at`` means "all read" (legacy sessions).  String comparison
+        works because ``_now()`` produces fixed ``+00:00`` ISO 8601.
+        """
+        if not self.last_read_at:
+            return 0
+        return sum(
+            1 for m in self.messages
+            if m.role == "assistant" and m.created_at > self.last_read_at
+        )
 
     def full(self) -> dict[str, Any]:
         return {

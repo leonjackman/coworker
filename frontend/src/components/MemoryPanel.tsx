@@ -19,7 +19,8 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { t, translateError } from '../lib/i18n';
 import { displayMemoryProjectName } from '../lib/projectName';
 import { chatService } from '../services/chatService';
@@ -41,6 +42,11 @@ import { WorkspacePage } from './ui/workspace-page';
 interface MemoryPanelProps {
   onClose?: () => void;
   projectId?: string | undefined;
+  scope?: 'all' | 'project';
+  /** Embedded mode (dashboard tab): hides the page heading and, when
+   *  ``actionsHost`` is provided, portals the toolbar buttons into it. */
+  embedded?: boolean;
+  actionsHost?: React.RefObject<HTMLDivElement | null>;
 }
 
 type Flash = { kind: 'ok' | 'error'; text: string } | null;
@@ -89,7 +95,7 @@ function isProtectedRel(rel: string): boolean {
   return false;
 }
 
-export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
+export function MemoryPanel({ onClose, projectId, scope = 'all', embedded = false, actionsHost }: MemoryPanelProps) {
   const [library, setLibrary] = useState<MemoryDiscoverResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -130,6 +136,11 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
 
   const canReveal = typeof window !== 'undefined' && Boolean((window as { electronAPI?: unknown }).electronAPI);
 
+  const [portalHost, setPortalHost] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    setPortalHost(embedded ? (actionsHost?.current ?? null) : null);
+  }, [embedded, actionsHost]);
+
   const notify = (kind: 'ok' | 'error', text: string) => {
     setFlash({ kind, text });
     window.setTimeout(() => setFlash(null), 3500);
@@ -138,14 +149,14 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await chatService.discoverMemory(projectId);
+      const res = await chatService.discoverMemory(projectId, scope);
       setLibrary(res);
     } catch (error) {
       notify('error', translateError(error));
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, scope]);
 
   useEffect(() => {
     void load();
@@ -512,42 +523,47 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
 
   const showSearch = Boolean(searchQuery.trim());
 
-  // ------------------------------------------------------------------- tree
-  return (
-    <WorkspacePage
-      eyebrow={t('memory.eyebrow')}
-      title={t('memory.title')}
-      description={t('memory.description')}
-      action={(
+  const toolbar = (
+    <>
+      {canReveal && (
         <>
-          {canReveal && (
-            <>
-              <Button variant="outline" size="sm" onClick={() => void doImport()} disabled={importBusy}>
-                {importBusy ? <Loader2 className="animate-spin" size={15} /> : <Download size={15} />}
-                {t('memory.import')}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
-                <Upload size={15} />
-                {t('memory.export')}
-              </Button>
-            </>
-          )}
-          <Button
-            variant="outline"
-            size="icon"
-            aria-label={t('common.refresh')}
-            title={t('common.refresh')}
-            onClick={() => void load()}
-          >
-            {loading ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+          <Button variant="outline" size="sm" onClick={() => void doImport()} disabled={importBusy}>
+            {importBusy ? <Loader2 className="animate-spin" size={15} /> : <Download size={15} />}
+            {t('memory.import')}
           </Button>
-          {onClose && (
-            <Button variant="outline" size="icon" aria-label={t('common.close')} onClick={onClose}>
-              <X size={16} />
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={() => setExportOpen(true)}>
+            <Upload size={15} />
+            {t('memory.export')}
+          </Button>
         </>
       )}
+      <Button
+        variant="outline"
+        size="icon"
+        aria-label={t('common.refresh')}
+        title={t('common.refresh')}
+        onClick={() => void load()}
+      >
+        {loading ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+      </Button>
+      {onClose && (
+        <Button variant="outline" size="icon" aria-label={t('common.close')} onClick={onClose}>
+          <X size={16} />
+        </Button>
+      )}
+    </>
+  );
+
+  const headingProps = embedded
+    ? {}
+    : { eyebrow: t('memory.eyebrow'), title: t('memory.title'), description: t('memory.description') };
+
+  // ------------------------------------------------------------------- tree
+  return (
+    <>
+    <WorkspacePage
+      {...headingProps}
+      action={embedded ? undefined : toolbar}
     >
       {flash && (
         <div className={`memory-flash memory-flash--${flash.kind}`} role="status">
@@ -632,17 +648,19 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
               </button>
             </div>
           )}
-          <TreeSection
-            label={t('memory.tree.system')}
-            relPrefix=""
-            nodes={library?.system ?? []}
-            collapsed={isCollapsed('system')}
-            onToggle={() => toggle('system')}
-            onOpen={openEditor}
-            onDelete={deleteFile}
-            onRename={startMove}
-            onAdd={() => startAdd('', 'system')}
-          />
+          {scope !== 'project' && (
+            <TreeSection
+              label={t('memory.tree.system')}
+              relPrefix=""
+              nodes={library?.system ?? []}
+              collapsed={isCollapsed('system')}
+              onToggle={() => toggle('system')}
+              onOpen={openEditor}
+              onDelete={deleteFile}
+              onRename={startMove}
+              onAdd={() => startAdd('', 'system')}
+            />
+          )}
 
           <TreeSection
             label={t('memory.tree.projects_list')}
@@ -912,6 +930,8 @@ export function MemoryPanel({ onClose, projectId }: MemoryPanelProps) {
         </div>
       </DetailModal>
     </WorkspacePage>
+    {embedded && portalHost && createPortal(toolbar, portalHost)}
+    </>
   );
 }
 

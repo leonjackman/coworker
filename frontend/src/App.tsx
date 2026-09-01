@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { Sparkles, X } from 'lucide-react';
 import { ChatInput, extractSessionIds, type CommandChip, type ComposerApi } from './components/ChatInput';
 import { useGlobalShortcuts } from './keys';
 import { MessageList } from './components/MessageList';
@@ -16,6 +17,7 @@ import { FirstRunStart } from './components/FirstRunStart';
 import { NewChatHero } from './components/NewChatHero';
 import { SettingsView, type SettingsPage } from './components/settings/SettingsView';
 import { OrgSettingsPage } from './components/settings/OrgSettingsPage';
+import { ProjectDashboard } from './components/dashboard/ProjectDashboard';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
@@ -25,11 +27,12 @@ import { ChangesPanel } from './components/ChangesPanel';
 import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, tOrDefault, translateError, useLanguage } from './lib/i18n';
 import { useUpdateCenter } from './lib/useUpdateCenter';
+import { useSessionBadges } from './lib/useSessionBadges';
 import { displayProjectName } from './lib/projectName';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, CommandApproval, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SessionBadgeMap, SessionBadges, SkillDiagnostic, SkillEntry, SkillReviewSettings, SkillReviewSettingsPatch, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -445,7 +448,13 @@ function pendingRequestFromEvent(
       destructive: Boolean(event.destructive),
     };
   }
-  return { ...base, command: event.command, cwd: event.cwd };
+  return {
+    ...base,
+    command: event.command,
+    cwd: event.cwd,
+    ...(event.tool_name ? { tool_name: event.tool_name } : {}),
+    ...(event.tool_args && Object.keys(event.tool_args).length > 0 ? { tool_args: event.tool_args } : {}),
+  };
 }
 
 function createMessage(
@@ -527,6 +536,8 @@ function App() {
   const [draftMode, setDraftMode] = useState(false);
   const [draftAgentId, setDraftAgentId] = useState<string>('default_agent');
   const [orgProjectId, setOrgProjectId] = useState<string | undefined>();
+  const [dashboardProjectId, setDashboardProjectId] = useState<string | undefined>();
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>();
   // useLanguage() 订阅语言变化以触发重渲染（返回值不直接使用）。
   useLanguage();
   const updateCenter = useUpdateCenter();
@@ -566,6 +577,10 @@ function App() {
     return stored === 'supervised' || stored === 'guarded' || stored === 'autonomous' ? stored : 'guarded';
   });
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
+  const [skillReviewSettings, setSkillReviewSettings] = useState<SkillReviewSettings | null>(null);
+  const [pendingSkillCount, setPendingSkillCount] = useState(0);
+  const [skillDraftNote, setSkillDraftNote] = useState<{ count: number; sessionId: string } | null>(null);
+  const skillCountRef = useRef(0);
   const MAX_ATTACHMENT_MB_STORAGE_KEY = 'coworker-max-attachment-mb';
   const DEFAULT_MAX_ATTACHMENT_MB = 25;
   const MIN_MAX_ATTACHMENT_MB = 1;
@@ -639,6 +654,12 @@ function App() {
     },
     'open-settings': () => {
       openSettingsPage('main');
+      return true;
+    },
+    'open-dashboard': () => {
+      const target = selectedProjectId || currentProjectId;
+      if (!target) return false;
+      openDashboard(target);
       return true;
     },
     'focus-input': () => {
@@ -749,10 +770,6 @@ function App() {
     },
     'view-skills': () => {
       setActiveView('skills');
-      return true;
-    },
-    'view-memory': () => {
-      setActiveView('memory');
       return true;
     },
     'view-chat': () => {
@@ -1280,37 +1297,45 @@ function App() {
     }
   };
 
-  // 后端轮询到的活跃会话 id 集合（Phase 2 兜底：前端刷新/重启后不知道哪些
-  // 会话仍在后台运行）。只作为 runningSessionIds 的补充来源。
+  // 后端轮询到的活跃会话 id 集合（兜底：前端刷新/重启后不知道哪些会话仍在
+  // 后台运行）。只作为 running 徽章的补充来源。
   const [backendActiveSessionIds, setBackendActiveSessionIds] = useState<Set<string>>(new Set());
 
-  // 侧栏会话"运行中"指示器：来自前台消息流状态（实时）与后端轮询结果（兜底）
-  // 的并集。
-  const runningSessionIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const m of messages) {
-      if ((m.status === 'running' || m.status === 'waiting') && m.sessionId) ids.add(m.sessionId);
-    }
-    for (const id of backendActiveSessionIds) ids.add(id);
-    return ids;
-  }, [messages, backendActiveSessionIds]);
+  // sessionId → 该会话的待审批记录（status === 'pending'）。来自
+  // /command-approvals 的全域扫描（后端持久化在 command_approvals.json），
+  // 让背景会话的待审批在「开启该会话之前」就可见。
+  // 存完整记录而非笔数：开启会话时要拿它重建审批卡（需要 command / question /
+  // options 等字段），存笔数会逼我们再打一次 API。
+  const [pendingBySession, setPendingBySession] = useState<Map<string, CommandApproval[]>>(new Map());
 
-  // 轮询后端活跃会话（仅当前端判断可能遗漏时才持续；集合为空即停止以省资源）。
+  // 全域状态轮询：活跃会话 + 待审批。常驻运行，不再因集合为空而停止
+  // （否则背景会话的待审批永远等不到下一次刷新）。
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
-        const active = await chatService.listActiveSessions();
+        const [active, approvals] = await Promise.all([
+          chatService.listActiveSessions(),
+          chatService.listCommandApprovals(),
+        ]);
         if (cancelled) return;
         setBackendActiveSessionIds(new Set(active));
-        if (active.length > 0) {
-          timer = setTimeout(poll, 5000);
+        const bySession = new Map<string, CommandApproval[]>();
+        for (const approval of approvals.approvals) {
+          if (approval.status !== 'pending') continue;
+          const sessionId = approval.context?.session_id;
+          if (typeof sessionId !== 'string' || !sessionId) continue;
+          const list = bySession.get(sessionId);
+          if (list) list.push(approval);
+          else bySession.set(sessionId, [approval]);
         }
+        setPendingBySession(bySession);
       } catch {
-        if (!cancelled) {
-          timer = setTimeout(poll, 5000);
-        }
+        /* 静默失败：下一次轮询重试，不打断指示器既有状态 */
+      }
+      if (!cancelled) {
+        timer = setTimeout(poll, 5000);
       }
     };
     void poll();
@@ -1324,6 +1349,14 @@ function App() {
       if (timer) clearTimeout(timer);
     };
   }, [chatService]);
+
+  // 会话徽章聚合：四种状态的唯一真源，三处会话列表（侧栏/整页/Dashboard）共用。
+  const sessionBadges = useSessionBadges({
+    sessions,
+    messages,
+    backendActiveSessionIds,
+    pendingBySession,
+  });
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -1403,6 +1436,28 @@ function App() {
     }
   };
 
+  // 標記會話已讀：後端更新 last_read_at（並順帶清空 last_error），前端本地
+  // 立即歸零 unread_count / last_error，讓側欄角標即時消失（不必等下一輪輪詢）。
+  // 失敗時靜默：未讀是軟狀態，不阻塞交互，下次輪詢會自然收斂。
+  const markSessionReadLocal = useCallback((sid: string) => {
+    void chatService.markSessionRead(sid).catch(() => {});
+    setSessions((current) =>
+      current.map((s) => (s.id === sid ? { ...s, unread_count: 0, last_error: null } : s)),
+    );
+  }, []);
+
+  // 停留在当前会话时自动清除未读：若用户正看着某会话（或后台流又产生了
+  // 新消息 / 新错误），不应显示未读/错误角标。sessions 每次轮询刷新都会
+  // 触发本 effect，unread_count 归零后不再重复调用，无循环风险。
+  useEffect(() => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    const session = sessions.find((s) => s.id === sid);
+    if (session && ((session.unread_count ?? 0) > 0 || session.last_error)) {
+      markSessionReadLocal(sid);
+    }
+  }, [sessions, markSessionReadLocal]);
+
   const refreshProjects = async () => {
     try {
       const response = await chatService.listProjects();
@@ -1458,6 +1513,14 @@ function App() {
         try {
           const memSettings = await chatService.getMemorySettings();
           if (mounted) setMemorySettings(memSettings);
+        } catch { /* ignore */ }
+        try {
+          const skillSettings = await chatService.getSkillReviewSettings();
+          if (mounted) setSkillReviewSettings(skillSettings);
+        } catch { /* ignore */ }
+        try {
+          const count = await refreshPendingSkillCount();
+          skillCountRef.current = count;
         } catch { /* ignore */ }
       } catch (error) {
         console.error('Failed to load runtime config:', error);
@@ -1914,7 +1977,7 @@ function App() {
         const sessionIdValue = event.session_id ?? sessionIdRef.current ?? '';
         const pending = pendingRequestFromEvent(event, sessionIdValue, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
-        playSound('attention');
+        playSound('card_popup');
         localParts = settleRunningTools(localParts);
         commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
@@ -2274,7 +2337,10 @@ function App() {
     setReferences([]);
   };
 
-  const stopMessage = () => {
+  const stopMessage = (opts?: { silent?: boolean }) => {
+    // PendingDocks 的關閉/拒絕按鈕會同時觸發 onStop 與 reject，失敗音效由
+    // reject 路徑統一播一次；這裡僅在「真正暫停運行」時（Stop 鍵 / 雙按 Esc）播放。
+    if (!opts?.silent) playSound('user_pause');
     const key = streamKey(sessionIdRef.current);
     const assistantMessageId = activeAssistantMessageIdsRef.current[key];
     const streamStartAt = streamStartAtsRef.current[key];
@@ -2588,6 +2654,7 @@ function App() {
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
+        playSound('card_popup');
         localParts = settleRunningTools(localParts);
         commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
@@ -2598,6 +2665,8 @@ function App() {
         localParts = settleRunningTools(localParts);
         commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
+        playSound('reply_done');
+        void maybeCheckSkillDrafts(event.session_id ?? currentSessionId);
       } else if (event.type === 'todos') {
         setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
       } else if (event.type === 'stage') {
@@ -2833,7 +2902,7 @@ function App() {
       } else if (event.type === 'approval_required' || event.type === 'question_required') {
         const pending = pendingRequestFromEvent(event, currentSessionId, assistantMessageId);
         setPendingRequests((current) => [...current, pending]);
-        playSound('attention');
+        playSound('card_popup');
         localParts = settleRunningTools(localParts);
         commit(localParts, { content: t('chat.waiting_resolution'), status: 'waiting' });
       } else if (event.type === 'done') {
@@ -2845,6 +2914,7 @@ function App() {
         commit(localParts, { status: 'done', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_done');
+        void maybeCheckSkillDrafts(event.session_id ?? currentSessionId);
       } else if (event.type === 'todos') {
         setSessionTodos(event.session_id ?? currentSessionId, assistantMessageId, event.todos);
       } else if (event.type === 'stage') {
@@ -2979,6 +3049,8 @@ function App() {
       );
     }
     resolvingRef.current = true;
+    const isReject = decision.type === 'reject';
+    let rejectFeedbackPlayed = false;
     setPendingRequests((current) =>
       current.map((item) => (item.approval_id === request.approval_id ? { ...item, resolving: true } : item)),
     );
@@ -2986,6 +3058,12 @@ function App() {
     try {
       const response = await chatService.resolveCommandApproval(request.approval_id, decision);
       resumeId = response.resume_id;
+      // 拒絕/關閉卡片：後端已確認，立即播放一次失敗音效（後續 resume 流的
+      // done/error 由 rejectFeedbackPlayed 攔截，不會再補播）。
+      if (isReject && !rejectFeedbackPlayed) {
+        rejectFeedbackPlayed = true;
+        playSound('reply_error');
+      }
       const chained = (response.events ?? []).filter(
         (event): event is Extract<StreamEvent, { type: 'approval_required' } | { type: 'question_required' }> =>
           event.type === 'approval_required' || event.type === 'question_required',
@@ -2994,7 +3072,7 @@ function App() {
         ...current.filter((item) => item.approval_id !== request.approval_id),
         ...chained.map((event): PendingRequest => pendingRequestFromEvent(event, request.session_id, targetMessageId)),
       ]);
-      if (chained.length > 0) playSound('attention');
+      if (chained.length > 0 && !isReject) playSound('card_popup');
     } catch (error) {
       console.error('Failed to resolve approval:', error);
       setPendingRequests((current) =>
@@ -3091,7 +3169,17 @@ function App() {
             resumeParts = settleRunningTools(resumeParts);
             applyResume('done');
             clearSessionTodos(event.session_id ?? resumeSessionId);
-            playSound('reply_done');
+            void maybeCheckSkillDrafts(event.session_id ?? resumeSessionId);
+            // 拒絕/關閉卡片：只回饋失敗音效，避免 resume 流同時發出 done（成功）與
+            // error（失敗）導致兩種音效疊在一起。
+            if (isReject) {
+              if (!rejectFeedbackPlayed) {
+                rejectFeedbackPlayed = true;
+                playSound('reply_error');
+              }
+            } else {
+              playSound('reply_done');
+            }
           } else if (event.type === 'todos') {
             setSessionTodos(event.session_id ?? resumeSessionId, targetMessageId, event.todos);
           } else if (event.type === 'steer_injected') {
@@ -3176,7 +3264,7 @@ function App() {
               if (current.some((item) => item.approval_id === event.approval_id)) return current;
               return [...current, pendingRequestFromEvent(event, resumeSessionId, targetMessageId)];
             });
-            playSound('attention');
+            playSound('card_popup');
             resumeParts = settleRunningTools(resumeParts);
             setMessages((current) =>
               current.map((item) =>
@@ -3196,7 +3284,10 @@ function App() {
           ),
         );
         clearSessionTodos(event.session_id ?? resumeSessionId);
-        playSound('reply_error');
+        if (!isReject || !rejectFeedbackPlayed) {
+          rejectFeedbackPlayed = true;
+          playSound('reply_error');
+        }
           }
         },
         resumeController.signal,
@@ -3248,6 +3339,7 @@ function App() {
     setContextUsage(null); // 新会话不残留上一会话的上下文预算（B10）
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
+    setSelectedProjectId(projectId);
     const project = projects.find((p) => p.id === projectId);
     const resolvedAgent = project?.mode === 'single' ? 'default_agent' : (agentId ?? 'default_agent');
     setDraftAgentId(resolvedAgent);
@@ -3269,6 +3361,7 @@ function App() {
   const selectDraftWorkspace = (projectId: string) => {
     pendingProjectIdRef.current = projectId;
     setActiveProjectId(projectId);
+    setSelectedProjectId(projectId);
     setDraftMode(true);
     setActiveView('chat');
   };
@@ -3282,6 +3375,16 @@ function App() {
     setOrgProjectId(projectId);
     setDraftMode(false);
     setActiveView('org');
+  };
+
+  const openDashboard = (projectId: string) => {
+    setDashboardProjectId(projectId);
+    setDraftMode(false);
+    setActiveView('dashboard');
+  };
+
+  const selectProject = (projectId: string) => {
+    setSelectedProjectId(projectId);
   };
 
   const pickWorkspaceDirectory = async () => {
@@ -3328,10 +3431,13 @@ function App() {
             ...(typeof args.plan_text === 'string' ? { plan: args.plan_text } : {}),
           });
         } else {
+          const args = typeof context.action_args === 'object' && context.action_args ? (context.action_args as Record<string, unknown>) : {};
           restored.push({
             ...base,
             command: Array.isArray(approval.command) ? approval.command : [],
             ...(approval.cwd ? { cwd: approval.cwd } : {}),
+            ...(typeof context.tool_name === 'string' && context.tool_name ? { tool_name: context.tool_name } : {}),
+            ...(Object.keys(args).length > 0 ? { tool_args: args } : {}),
           });
         }
       }
@@ -3365,6 +3471,10 @@ function App() {
     setDraftAgentId('');
     // 保存当前 sessionId，供 fetch 失败时回滚。
     const prevSessionId = sessionIdRef.current;
+    // 切走会话 = 已查看其消息与错误状态 → 标记旧会话已读（未读 + 错误角标即时清除）。
+    if (prevSessionId && prevSessionId !== sessionIdToOpen) {
+      markSessionReadLocal(prevSessionId);
+    }
     try {
       const response = await chatService.getSession(sessionIdToOpen);
       const records = response.session.messages ?? [];
@@ -3389,6 +3499,9 @@ function App() {
       );
       setSessionId(sessionIdToOpen);
       sessionIdRef.current = sessionIdToOpen;
+      // 打开会话 = 用户正在查看该会话 → 标记已读并清除错误标记（含同会话
+      // 后端在后台产生新消息 / 新错误的情况）。
+      markSessionReadLocal(sessionIdToOpen);
       // 打开会话时立即按「当前模型配置」拉取最新上下文预算，而非残留上一会话
       // 的旧值（否则旧会话会一直显示改动前的窗口，例如 252k 而非最新的 192k）。
       // 服务端按当前 providers 配置解析窗口，因此改过 context_window 后旧会话
@@ -3436,6 +3549,7 @@ function App() {
         }, delay);
       }
       setActiveProjectId(response.session.project_id || undefined);
+      setSelectedProjectId(response.session.project_id || undefined);
       // 归而非覆盖：保留本地 status === 'running' 的消息 — 包括从其它会话切走后
       // 仍在后台续流的半截回复，以便切回时继续看到流式内容。
       // 注意：后端仅在流终结时（done/error/断开）才持久化 assistant 消息，因此
@@ -3926,6 +4040,7 @@ function App() {
   } satisfies OrgRosterEntry] : (activeProject?.roster ?? []);
   const currentProjectMode = activeProject?.mode ?? 'single';
   const orgProjectName = orgProjectId ? projects.find((p) => p.id === orgProjectId)?.name : undefined;
+  const dashboardProjectName = dashboardProjectId ? projects.find((p) => p.id === dashboardProjectId)?.name : undefined;
   const currentSessionPending = sessionId
     ? pendingRequests.filter((item) => item.session_id === sessionId)
     : [];
@@ -4142,6 +4257,60 @@ function App() {
     chatService.saveMemorySettings(patch).catch(() => { /* ignore */ });
   };
 
+  const changeSkillReviewSettings = (patch: SkillReviewSettingsPatch) => {
+    setSkillReviewSettings((current) => (current ? { ...current, ...patch } : current));
+    chatService.saveSkillReviewSettings(patch).catch(() => { /* ignore */ });
+  };
+
+  // Auto-skills notification: refresh the pending-skill count (sidebar badge)
+  // and, after a turn that produced NEW drafts, surface an inline "去審核" card.
+  const refreshPendingSkillCount = useCallback(async (): Promise<number> => {
+    try {
+      const response = await chatService.listPendingSkills();
+      const count = response.pending.length;
+      setPendingSkillCount(count);
+      return count;
+    } catch {
+      return 0;
+    }
+  }, []);
+
+  // Real-time-ish badge: light periodic poll + refresh when the window regains
+  // focus, so the sidebar "待審核 N" stays in sync even when a background skill
+  // review stages a draft a few seconds after the turn ends.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void refreshPendingSkillCount();
+    }, 15000);
+    const onFocus = () => {
+      void refreshPendingSkillCount();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [refreshPendingSkillCount]);
+
+  const maybeCheckSkillDrafts = useCallback(
+    async (sessionId: string | undefined) => {
+      const count = await refreshPendingSkillCount();
+      if (count > skillCountRef.current) {
+        setSkillDraftNote({ count: count - skillCountRef.current, sessionId: sessionId ?? '' });
+      }
+      skillCountRef.current = count;
+    },
+    [refreshPendingSkillCount],
+  );
+
+  const dismissSkillDraftNote = useCallback(() => setSkillDraftNote(null), []);
+
+  const openSkillsForReview = useCallback(() => {
+    setSkillDraftNote(null);
+    setActiveView('skills');
+    void refreshSkills();
+  }, [refreshSkills]);
+
     return (
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
@@ -4197,13 +4366,16 @@ function App() {
           onViewChange={setActiveView}
           onNewChat={startNewChat}
           onOpenProject={openProject}
+          onOpenDashboard={openDashboard}
+          onSelectProject={selectProject}
           onOpenSession={openSession}
           onDeleteSession={deleteSession}
           onCreateProject={createProject}
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
           onOpenOrgSettings={openOrgSettings}
-          runningSessionIds={runningSessionIds}
+          sessionBadges={sessionBadges}
+          pendingSkillCount={pendingSkillCount}
         />
         <section ref={workspaceFrameRef} className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
@@ -4235,7 +4407,7 @@ function App() {
                     <ProjectSessionList
                       project={activeProject}
                       sessions={activeProjectSessions}
-                      runningSessionIds={runningSessionIds}
+                      sessionBadges={sessionBadges}
                       onNewChat={startNewChat}
                       onOpenSession={openSession}
                       onDeleteSession={deleteSession}
@@ -4261,6 +4433,26 @@ function App() {
                   )}
                   {!showFirstRunStart && !showProjectSessionList && (
                     <div className="workspace-composer-slot">
+                      {skillDraftNote && (
+                        <div className="skill-draft-note">
+                          <Sparkles size={15} className="skill-draft-note__icon" />
+                          <span className="skill-draft-note__text">
+                            {t('skills.draft_note', { count: skillDraftNote.count })}
+                          </span>
+                          <button type="button" className="skill-draft-note__action" onClick={openSkillsForReview}>
+                            {t('skills.pending_review')}
+                          </button>
+                          <button
+                            type="button"
+                            className="skill-draft-note__close"
+                            aria-label={t('common.close')}
+                            title={t('common.close')}
+                            onClick={dismissSkillDraftNote}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      )}
                       {/* Task list (write_todos) — the agent's self-decomposed
                           checklist, shown in every mode above the composer.
                           Queued messages are listed in the same card so the user
@@ -4321,7 +4513,7 @@ function App() {
                             onDismiss={(request) => {
                               void resolvePendingRequest(request, { type: 'reject' });
                             }}
-                            onStop={stopMessage}
+                            onStop={() => stopMessage({ silent: true })}
                           />
                         </div>
                       ) : (
@@ -4384,6 +4576,7 @@ function App() {
                   setSkills={setSkillEntries}
                   setDiagnostics={setSkillDiagnostics}
                   onSkillsChange={refreshSkills}
+                  onPendingCountChange={() => void refreshPendingSkillCount()}
                 />
               ) : activeView === 'memory' ? (
                 <MemoryPanel projectId={currentProjectId} />
@@ -4393,6 +4586,18 @@ function App() {
                   {...(orgProjectName ? { projectName: orgProjectName } : {})}
                   onBack={() => setActiveView('chat')}
                   onChanged={() => void refreshProjects()}
+                />
+              ) : activeView === 'dashboard' && dashboardProjectId ? (
+                <ProjectDashboard
+                  projectId={dashboardProjectId}
+                  {...(dashboardProjectName ? { projectName: dashboardProjectName } : {})}
+                  sessions={sessions}
+                  sessionBadges={sessionBadges}
+                  onBack={() => setActiveView('chat')}
+                  onNewChat={startNewChat}
+                  onOpenSession={openSession}
+                  onDeleteSession={deleteSession}
+                  onOpenOrgSettings={openOrgSettings}
                 />
               ) : (
                 <SettingsView
@@ -4408,6 +4613,8 @@ function App() {
                   onAutonomyChange={setAutonomy}
                   memorySettings={memorySettings}
                   onMemorySettingsChange={changeMemorySettings}
+                  skillReviewSettings={skillReviewSettings}
+                  onSkillReviewSettingsChange={changeSkillReviewSettings}
                   modelOptions={modelOptions}
                   updateCenter={updateCenter}
                   onClose={() => {
@@ -4416,6 +4623,10 @@ function App() {
                   }}
                   settingsPage={settingsPage}
                   onSettingsPageChange={setSettingsPage}
+                  onOpenMemory={() => {
+                    setSettingsPage('main');
+                    setActiveView('memory');
+                  }}
                 />
               )}
             </section>

@@ -242,7 +242,7 @@ function languageFor(language?: string): SupportedLanguage {
   return 'text';
 }
 
-function CodeBlock({ code, language = 'text' }: CodeBlockProps) {
+export function CodeBlock({ code, language = 'text' }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const [html, setHtml] = useState<string | null>(null);
 

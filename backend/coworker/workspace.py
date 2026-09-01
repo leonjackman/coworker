@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import fnmatch
 import mimetypes
 import hashlib
@@ -316,6 +317,21 @@ class CommandApprovalStore:
             payload = self.load_payload()
             payload["approvals"] = pruned
             self.save_payload(payload)
+
+    def purge_session(self, session_id: str) -> int:
+        """Drop every approval record belonging to a deleted session.
+
+        Deleting a session leaves its pending/approved approvals orphaned: the
+        resume target is gone, so they can never be acted on, yet they stay
+        ``pending`` forever (active records are never pruned) and keep showing
+        up in the global to-do view. Remove all records of that session so the
+        store stays clean. Returns the number of removed records.
+        """
+        approvals = self.load()
+        kept = [a for a in approvals if not (isinstance(a.get("context"), dict) and a.get("context", {}).get("session_id") == session_id)]
+        if len(kept) != len(approvals):
+            self.save(kept)
+        return len(approvals) - len(kept)
 
     def allowlist(self) -> list[str]:
         allowlist = self.load_payload().get("allowlist")
@@ -1328,6 +1344,27 @@ class Workspace:
                 continue
         return node
 
+    # Source/script/config extensions treated as readable text. Keep broad so
+    # engineering artifacts (logs, diffs, env files, Makefiles…) preview as text.
+    _TEXT_SUFFIXES = frozenset({
+        ".md", ".markdown", ".json", ".jsonc", ".yaml", ".yml", ".toml", ".txt",
+        ".py", ".pyw", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".css", ".scss", ".sass", ".less",
+        ".html", ".htm", ".xml", ".svg", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+        ".c", ".h", ".cpp", ".hpp", ".cc", ".hh", ".cs", ".java", ".kt", ".kts", ".rs", ".go",
+        ".rb", ".php", ".swift", ".m", ".mm", ".scala", ".lua", ".r", ".sql", ".graphql", ".gql",
+        ".vue", ".svelte", ".astro", ".ipynb", ".tf", ".hcl", ".ini", ".cfg", ".conf", ".log",
+        ".diff", ".patch", ".srt", ".vtt", ".env", ".lock", ".properties", ".envrc",
+        ".dockerignore", ".eslintrc", ".prettierrc", ".editorconfig", ".flake8", ".pylintrc",
+        ".csv", ".tsv",
+    })
+    _TEXT_NAMES = frozenset({
+        "makefile", "dockerfile", "containerfile", "vagrantfile", "procfile", "gemfile",
+        "rakefile", ".env", ".gitignore", ".gitattributes", ".editorconfig", ".npmrc",
+        ".yarnrc", ".nvmrc", ".node-version", ".python-version", ".tool-versions", ".babelrc",
+        ".clang-format", ".clang-tidy", ".prettierrc", ".eslintrc", ".pylintrc", ".flake8",
+        ".gitkeep",
+    })
+
     @staticmethod
     def is_text_file(path: Path) -> bool:
         try:
@@ -1336,9 +1373,11 @@ class Workspace:
             mime = None
         if mime and mime.startswith("text/"):
             return True
-        if mime in {"application/json", "application/xml", "application/yaml", "application/x-yaml"}:
+        if mime in {"application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript", "application/x-sh", "application/x-shellscript"}:
             return True
-        if path.suffix.lower() in {".md", ".json", ".yaml", ".yml", ".py", ".ts", ".tsx", ".js", ".jsx", ".css", ".html", ".toml", ".txt", ".sh", ".lock"}:
+        if path.suffix.lower() in Workspace._TEXT_SUFFIXES:
+            return True
+        if path.name.lower() in Workspace._TEXT_NAMES:
             return True
         return False
 
@@ -1456,6 +1495,112 @@ class Workspace:
                 )
             ),
         }
+
+    # Max payload we are willing to base64-embed into a data: URL for the
+    # dashboard's media/PDF/Office preview. Bytes→base64 inflates ~1.37×; this
+    # keeps a single preview response comfortably bounded for a desktop app.
+    PREVIEW_BINARY_MAX_BYTES = 25 * 1024 * 1024
+
+    _OFFICE_MIMES = {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.oasis.opendocument.text",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.oasis.opendocument.presentation",
+        "application/rtf",
+        "application/vnd.apple.pages",
+        "application/vnd.apple.numbers",
+        "application/vnd.apple.keynote",
+    }
+    _OFFICE_SUFFIXES = frozenset({".doc", ".docx", ".xls", ".xlsx", ".xlsb", ".xlc", ".xla", ".xlam", ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".pages", ".numbers", ".key", ".wps"})
+    # Office formats the renderer can actually render inline (base64 payload).
+    _OFFICE_RENDERABLE_SUFFIXES = frozenset({".docx", ".xlsx", ".xls", ".xlsb", ".xlc"})
+    _DESIGN_SUFFIXES = frozenset({".psd", ".ai", ".eps", ".sketch", ".fig", ".xd", ".afdesign", ".afphoto", ".indd", ".blend", ".fbx", ".obj", ".stl", ".gltf", ".glb", ".usdz", ".dwg", ".dxf"})
+    _ARCHIVE_SUFFIXES = frozenset({".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".zst", ".z"})
+    _FONT_SUFFIXES = frozenset({".ttf", ".otf", ".woff", ".woff2", ".eot"})
+    _EXECUTABLE_SUFFIXES = frozenset({".exe", ".dll", ".dylib", ".so", ".msi", ".app", ".bin"})
+    _AUDIO_SUFFIXES = frozenset({".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".aiff", ".mid", ".midi"})
+    _VIDEO_SUFFIXES = frozenset({".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi", ".wmv", ".flv", ".ts", ".m2ts", ".ogv"})
+    _IMAGE_SUFFIXES = frozenset({".svg", ".webp", ".heic", ".heif", ".avif", ".ico", ".bmp", ".tif", ".tiff"})
+
+    @staticmethod
+    def _preview_kind(mime: str, suffix: str) -> str:
+        s = suffix.lower()
+        # Specific non-inline-renderable categories first: they must override the
+        # generic mime branches (e.g. PSD is image/*-mime but not <img>-renderable).
+        if s in Workspace._DESIGN_SUFFIXES or mime in {"image/vnd.adobe.photoshop", "application/postscript", "image/x-adobe-dng", "image/vnd.adobe.illustrator"}:
+            return "design"
+        if s in Workspace._ARCHIVE_SUFFIXES or mime in {"application/zip", "application/x-tar", "application/gzip", "application/x-7z-compressed", "application/x-rar-compressed", "application/x-bzip2", "application/x-xz"}:
+            return "archive"
+        if s in Workspace._FONT_SUFFIXES or mime.startswith("font/"):
+            return "font"
+        if s in Workspace._EXECUTABLE_SUFFIXES or mime in {"application/x-executable", "application/x-mach-binary", "application/vnd.microsoft.portable-executable", "application/x-dosexec"}:
+            return "executable"
+        if mime in Workspace._OFFICE_MIMES or s in Workspace._OFFICE_SUFFIXES:
+            return "office"
+        # Inline-renderable categories.
+        if mime.startswith("image/") or s in Workspace._IMAGE_SUFFIXES:
+            return "image"
+        if mime == "application/pdf" or s == ".pdf":
+            return "pdf"
+        if mime.startswith("audio/") or s in Workspace._AUDIO_SUFFIXES:
+            return "audio"
+        if mime.startswith("video/") or s in Workspace._VIDEO_SUFFIXES:
+            return "video"
+        if s in {".csv", ".tsv"} or mime in {"text/csv", "text/tab-separated-values"}:
+            return "table"
+        return "other"
+
+    def read_preview_payload(self, file_path: str, max_chars: int = 100_000) -> dict[str, Any]:
+        """Rich file preview for the dashboard: text/table content, or base64
+        data for image/PDF/audio/video and inline-renderable Office files, or a
+        non-previewable classification for design/archive/font/executable files.
+        Never streams archives or executables into the UI — those are offered
+        for external opening instead.
+        """
+        target = self.resolve_read_path(file_path)
+        if not target.is_file():
+            raise ValueError(f"Not a file: {file_path}")
+        stat = target.stat()
+        mime, _ = mimetypes.guess_type(str(target))
+        mime = mime or "application/octet-stream"
+        suffix = target.suffix.lower()
+        kind = self._preview_kind(mime, suffix)
+
+        preview = self.read_preview(file_path, max_chars=max_chars)
+        if not preview.get("binary"):
+            preview["kind"] = "table" if kind == "table" else "text"
+            preview["mime"] = mime
+            return preview
+
+        renderable = kind in {"image", "pdf", "audio", "video"} or (
+            kind == "office" and suffix in self._OFFICE_RENDERABLE_SUFFIXES
+        )
+        if renderable and stat.st_size <= self.PREVIEW_BINARY_MAX_BYTES:
+            try:
+                data = base64.b64encode(target.read_bytes()).decode("ascii")
+            except OSError as exc:
+                return {"kind": kind, "mime": mime, "size": stat.st_size, "error": str(exc)}
+            return {
+                "kind": kind,
+                "mime": mime,
+                "size": stat.st_size,
+                "data": data,
+                "truncated": stat.st_size > self.PREVIEW_BINARY_MAX_BYTES,
+            }
+
+        return {
+            "kind": kind,
+            "mime": mime,
+            "size": stat.st_size,
+            "previewable": False,
+            "too_large": renderable and stat.st_size > self.PREVIEW_BINARY_MAX_BYTES,
+        }
+
 
     def search_text_rg(
         self,

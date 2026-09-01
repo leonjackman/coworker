@@ -56,7 +56,7 @@ from coworker.projects import CHAT_MEMORY_DIR, CHAT_PROJECT_ID, ProjectStore
 from coworker.providers import ProviderManager
 from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
-from coworker.sessions import SessionStore
+from coworker.sessions import SessionStore, _now
 from coworker.goal_prompts import (
     is_degenerate_text,
     render_budget_limit,
@@ -1343,9 +1343,67 @@ class MemorySettingsUpdate(BaseModel):
     auto_extract: bool | None = None
 
 
+class SkillReviewSettingsUpdate(BaseModel):
+    """Request body for updating the auto-skills review settings (partial patch)."""
+    aggressiveness: str | None = None
+    approval_required: bool | None = None
+
+
+def read_user_skill_review_settings() -> dict:
+    """Read auto-skills review settings from .coworker_settings.json (defaults fallback)."""
+    from coworker.config import read_skill_review_settings
+
+    return read_skill_review_settings(settings.data_dir)
+
+
+def save_user_skill_review_settings(patch: dict) -> dict:
+    """Merge auto-skills review settings into .coworker_settings.json."""
+    from coworker.config import SKILL_REVIEW_AGGRESSIVENESS, default_skill_review_settings
+
+    existing = _load_user_settings_file()
+    current = existing.get("skill_review")
+    if not isinstance(current, dict):
+        current = default_skill_review_settings()
+    merged = dict(current)
+    if "aggressiveness" in patch and patch["aggressiveness"] in SKILL_REVIEW_AGGRESSIVENESS:
+        merged["aggressiveness"] = patch["aggressiveness"]
+    if "approval_required" in patch and isinstance(patch["approval_required"], bool):
+        merged["approval_required"] = patch["approval_required"]
+    existing["skill_review"] = merged
+    _save_user_settings_file(existing)
+    return merged
+
+
+@app.get("/api/skill-review/settings")
+async def get_skill_review_settings():
+    """Auto-skills review settings (the Settings page surface)."""
+    return read_user_skill_review_settings()
+
+
+@app.post("/api/skill-review/settings")
+async def save_skill_review_settings(request: SkillReviewSettingsUpdate):
+    """Persist auto-skills review settings and apply at runtime."""
+    patch = {}
+    if request.aggressiveness is not None:
+        patch["aggressiveness"] = request.aggressiveness
+    if request.approval_required is not None:
+        patch["approval_required"] = request.approval_required
+    try:
+        merged = save_user_skill_review_settings(patch)
+    except OSError as exc:  # noqa: BLE001 - settings persistence must not fail the request
+        logger.warning("Failed to persist skill-review settings: %s", exc)
+        return read_user_skill_review_settings()
+    return merged
+
+
 @app.get("/api/memory/discover")
-async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
-    """Memory library tree: system files + project views (BASE/PROJECT/agents)."""
+async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT, scope: str = "all"):
+    """Memory library tree: system files + project views (BASE/PROJECT/agents).
+
+    ``scope="project"`` restricts the result to the given project's own memory
+    (matched by ``memory_dir``), excluding system files and every other project
+    — used by the dashboard's project memory tab.
+    """
     project_dir = _project_memory_dir(project_id)
     if project_dir:
         _ensure_agent_skeleton(project_dir, agent)
@@ -1353,9 +1411,13 @@ async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
             _ensure_org(project_dir)
         except Exception:  # noqa: BLE001 - org scaffold must not break discovery
             pass
+    if scope == "project" and not project_dir:
+        raise HTTPException(status_code=404, detail=f"unknown project {project_id!r}")
     library = memory_manager.scanner.scan(include_missing=True)
     projects = []
     for view in library.projects:
+        if scope == "project" and view.name != project_dir:
+            continue
         mode = ORG_MODE_MULTI
         if org_store.exists(view.name):
             mode = org_store.load(view.name).mode
@@ -1364,7 +1426,7 @@ async def memory_discover(project_id: str = "", agent: str = DEFAULT_AGENT):
         projects.append(view)
     return {
         "root": str(library.root),
-        "system": [n.to_dict() for n in library.system],
+        "system": [] if scope == "project" else [n.to_dict() for n in library.system],
         "projects": [p.to_dict() for p in projects],
     }
 
@@ -2256,6 +2318,13 @@ async def chat_stream(request: ChatStreamRequest):
                     logger.warning("compaction failed for session %s: %s", session_id, notice)
                     event["compaction_notice"] = notice
                 terminal_sent = True
+                # Success → clear previous error
+                try:
+                    session = session_store.require(session_id)
+                    session.last_error = ""
+                    session_store.save(session)
+                except KeyError:
+                    pass
             elif etype == "error":
                 # The runtime yields an explicit error event BEFORE re-raising so
                 # the SSE layer can turn it into a proper terminal `error` event.
@@ -2532,6 +2601,14 @@ async def chat_stream(request: ChatStreamRequest):
                 # waiting，后者 error 帧即终态）。
                 if goal_stream_active and not interrupt_emitted and not error_emitted:
                     yield {"type": "goal_stream_end", "session_id": session_id}
+                # Natural success → clear error
+                if not error_emitted:
+                    try:
+                        session = session_store.require(session_id)
+                        session.last_error = ""
+                        session_store.save(session)
+                    except KeyError:
+                        pass
             finally:
                 # 生成器被取消（客户端断开 / Stop）：当前轮 snapshot 尚未 end 则兜底关闭。
                 if inflight_pre is not None and inflight_anchor is not None:
@@ -2688,6 +2765,15 @@ async def chat_stream(request: ChatStreamRequest):
                     raise
                 except Exception:  # noqa: BLE001 - best-effort cleanup
                     logger.warning("turn-end checkpoint delete failed for %s", session_id, exc_info=True)
+            # Persist error if the turn failed (no done event was emitted)
+            if not terminal_sent:
+                try:
+                    session = session_store.require(session_id)
+                    if not session.last_error:
+                        session.last_error = "stream terminated without done event"
+                    session_store.save(session)
+                except KeyError:
+                    pass
 
     return StreamingResponse(
         event_stream(),
@@ -3204,6 +3290,10 @@ async def delete_session(session_id: str):
     agent_registry.evict_runtime(session_id)
     agent_registry.change_store.delete_session(session_id)
     agent_registry.snapshot_manager.delete_session(session_id)
+    # Orphaned approvals would otherwise stay pending forever (active records
+    # are never pruned) and linger in the global to-do view with no resume
+    # target — purge them together with the session.
+    command_approval_store.purge_session(session_id)
     _cleanup_session_screenshots(session_id)
     return {"status": "ok"}
 
@@ -3239,6 +3329,27 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
         session = session_store.rename(session_id, request.title)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "session": session.public()}
+
+
+@app.post("/sessions/{session_id}/read")
+async def mark_session_read(session_id: str):
+    """Mark all messages in the session as read (set last_read_at to now).
+
+    Called by the frontend when the user opens a session or explicitly clears
+    unread state.  Idempotent.
+
+    Opening a session also counts as having seen its error state, so the
+    persisted `last_error` marker is cleared here as well — otherwise the error
+    badge would linger forever after the user has already viewed it.
+    """
+    try:
+        session = session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session.last_read_at = _now()
+    session.last_error = ""
+    session_store.save(session)
     return {"status": "ok", "session": session.public()}
 
 
@@ -4208,6 +4319,15 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, user_message.id, snapshot_workspace,
                 )
+            # Persist error if the turn failed (no done event was emitted)
+            if not terminal_sent and session_id:
+                try:
+                    session = session_store.require(session_id)
+                    if not session.last_error:
+                        session.last_error = "stream terminated without done event"
+                    session_store.save(session)
+                except KeyError:
+                    pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -4480,6 +4600,7 @@ async def delete_project(project_id: str):
         agent_registry.evict_runtime(session["id"])
         agent_registry.change_store.delete_session(session["id"])
         agent_registry.snapshot_manager.delete_session(session["id"])
+        command_approval_store.purge_session(session["id"])
         _cleanup_session_screenshots(session["id"])
     session_store.delete_by_project(project_id)
     if memory_dir:
@@ -4525,6 +4646,19 @@ async def workspace_file(path: str, project_id: str = ""):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+@app.get("/workspace/file/preview")
+async def workspace_file_preview(path: str, project_id: str = ""):
+    """Rich dashboard file preview: text content, or base64 image/PDF/audio/video
+    payload, or a non-previewable classification (office archives etc.)."""
+    try:
+        workspace = workspace_controller.workspace_for_project(project_id) if project_id else workspace_controller.default()
+        return {"status": "ok", "path": path, "preview": workspace.read_preview_payload(path)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 @app.get("/sessions/{session_id}/changes")
 async def session_changes(session_id: str):
     """All file changes made by the agent in this session, grouped by turn."""
@@ -4555,6 +4689,31 @@ async def workspace_branch(project_id: str = ""):
         result = workspace_git_branch(workspace.root)
         return {"status": "ok", **result}
     except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/projects/{project_id}/dashboard")
+async def project_dashboard(project_id: str):
+    """Aggregate read-only dashboard bundle for one project.
+
+    Phase 0 of the business-agent roadmap: makes the project's files, agents,
+    tools and capabilities visible so they can later become configurable.
+    """
+    from coworker.dashboard import build_dashboard_data
+
+    try:
+        return build_dashboard_data(
+            project_id=project_id,
+            workspace_controller=workspace_controller,
+            session_store=session_store,
+            org_store=org_store,
+            mcp_manager=mcp_manager,
+            skill_manager=skill_manager,
+            settings=settings,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -5007,6 +5166,13 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
                     )
             except KeyError:
                 pass
+            # Success → clear previous error
+            try:
+                session = session_store.require(session_id)
+                session.last_error = ""
+                session_store.save(session)
+            except KeyError:
+                pass
         for item in ordered:
             command_approval_store.mark_consumed(item.get("id", ""))
         # Resume reached a terminal `done`: the turn is over, so the disposable
@@ -5045,6 +5211,13 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
             resume_id,
             {"type": "error", "session_id": session_id, "error": str(exc)[:400], "resume_id": resume_id},
         )
+        # Persist error summary to session so it survives restart
+        try:
+            session = session_store.require(session_id)
+            session.last_error = str(exc)[:400]
+            session_store.save(session)
+        except KeyError:
+            pass
     finally:
         approval_event_bus.close(resume_id)
         # The resume is over: release the session so the next turn can start.
@@ -5892,6 +6065,60 @@ def install_skill_from_content(request: SkillInstallRequest):
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/skills/pending")
+def list_pending_skills():
+    """List draft skills awaiting approval (self-calibration review queue)."""
+    return {"status": "ok", "pending": skill_manager.pending()}
+
+
+class SkillPendingUpdateRequest(BaseModel):
+    """Request body for editing a pending draft before approval."""
+    content: str  # full proposed SKILL.md content
+
+
+def _pending_skill_404(name: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"no pending draft: {name}")
+
+
+@app.get("/skills/pending/{skill_name}")
+def get_pending_skill(skill_name: str):
+    """Full proposed SKILL.md of one pending draft (for review/edit)."""
+    body = skill_manager.read_pending(skill_name)
+    if body is None:
+        raise _pending_skill_404(skill_name)
+    return {"status": "ok", "name": skill_name, "content": body}
+
+
+@app.put("/skills/pending/{skill_name}")
+def update_pending_skill(skill_name: str, request: SkillPendingUpdateRequest):
+    """Edit a pending draft in place (edit-before-approve)."""
+    result = skill_manager.update_pending(skill_name, request.content)
+    if result.get("status") != "ok":
+        status_code = 404 if "no pending draft" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=status_code, detail=result.get("message", "update failed"))
+    return {"status": "ok", "name": skill_name}
+
+
+@app.post("/skills/pending/{skill_name}/approve")
+def approve_pending_skill(skill_name: str):
+    """Approve a draft: activate a new skill or apply a replacement."""
+    result = skill_manager.approve_pending(skill_name)
+    if result.get("status") != "ok":
+        status_code = 404 if "no pending draft" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=status_code, detail=result.get("message", "approval failed"))
+    return {"status": "ok", "name": skill_name, "approved": True}
+
+
+@app.post("/skills/pending/{skill_name}/reject")
+def reject_pending_skill(skill_name: str):
+    """Reject a draft (delete it from the queue)."""
+    result = skill_manager.reject_pending(skill_name)
+    if result.get("status") != "ok":
+        status_code = 404 if "no pending draft" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=status_code, detail=result.get("message", "rejection failed"))
+    return {"status": "ok", "name": skill_name, "rejected": True}
 
 
 @app.get("/skills/{skill_name}")

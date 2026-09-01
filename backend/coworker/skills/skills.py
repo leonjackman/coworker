@@ -45,6 +45,11 @@ _KNOWN_KEYS = frozenset(
         "prerequisites",
         "required_environment_variables",
         "setup",
+        "provenance",
+        "status",
+        "sources",
+        "created_at",
+        "bundle",
     }
 )
 
@@ -79,6 +84,12 @@ class SkillEntry:
     disable_model_invocation: bool = False
     enabled: bool = True
     commands: list[SkillCommand] = field(default_factory=list)
+    # ── self-calibration metadata ─────────────────────────────────────
+    provenance: str = "user"  # "user" | "market" | "agent"
+    status: str = "active"  # "active" | "draft" (draft = waiting for approval)
+    sources: list[str] = field(default_factory=list)  # evidence chain
+    created_at: str = ""
+    bundle: str = ""  # product grouping (e.g. "agent-learned", "custom", "market")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +102,11 @@ class SkillEntry:
             "disable_model_invocation": self.disable_model_invocation,
             "enabled": self.enabled,
             "commands": [c.to_dict() for c in self.commands],
+            "provenance": self.provenance,
+            "status": self.status,
+            "sources": list(self.sources),
+            "created_at": self.created_at,
+            "bundle": self.bundle,
         }
 
 
@@ -112,12 +128,55 @@ class SkillDiagnostic:
         }
 
 
+def _lenient_yaml_load(raw: str) -> dict[str, Any] | None:
+    """Load frontmatter YAML, tolerating unquoted values that contain a
+    colon+space (e.g. ``description: 加 front matter（project: coworker）``).
+
+    A plain-scalar value with ``: `` is invalid YAML, so agent-written
+    descriptions routinely break ``yaml.safe_load`` and the whole frontmatter
+    was discarded — surfacing as a misleading "description is required". This
+    retry quotes such scalar values on simple ``key: value`` lines before
+    re-parsing; complex blocks (``|``/``>``), lists and already-quoted values
+    are left untouched.
+    """
+    import json as _json
+
+    import yaml
+
+    try:
+        data = yaml.safe_load(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001 - fall through to the lenient retry
+        pass
+
+    lines = raw.splitlines()
+    fixed: list[str] = []
+    for line in lines:
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
+        if match and not line.startswith((" ", "-", "\t")):
+            key, value = match.group(1), match.group(2)
+            if (
+                value
+                and not value[0] in ('"', "'", "[", "{", "|", ">", "-", "&", "*", "!")
+                and (": " in value or " #" in value or value.endswith(":"))
+            ):
+                value = _json.dumps(value, ensure_ascii=False)
+            line = f"{key}: {value}"
+        fixed.append(line)
+    try:
+        data = yaml.safe_load("\n".join(fixed))
+    except Exception:  # noqa: BLE001 - unparseable frontmatter stays unparseable
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from markdown content.
 
     Returns ``(frontmatter, body)``; ``({}, content)`` when there is no valid
     frontmatter block. Malformed YAML is treated as "no frontmatter" so a
-    single broken skill never breaks the whole scan.
+    single broken skill never breaks the whole scan — but a lenient retry first
+    tolerates agent-written values that contain ``: ``.
     """
     if not content.startswith("---"):
         return {}, content
@@ -132,16 +191,93 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
         import yaml
     except ImportError:  # pragma: no cover - PyYAML is a project dependency
         return {}, body
-    try:
-        data = yaml.safe_load(raw)
-    except Exception:
-        return {}, body
+    data = _lenient_yaml_load(raw)
     return (data if isinstance(data, dict) else {}), body
 
 
 def _frontmatter_str(frontmatter: dict[str, Any], key: str) -> str:
     value = frontmatter.get(key)
     return value if isinstance(value, str) else ""
+
+
+def set_frontmatter_value(content: str, key: str, value: str) -> str:
+    """Set a scalar frontmatter key in a SKILL.md string, preserving formatting.
+
+    Replaces an existing ``key:`` line in place; injects one before the closing
+    ``---`` when absent; prepends a fresh frontmatter block when the file has
+    none. Values that YAML would coerce (ISO timestamps, numbers, booleans) are
+    quoted so they stay strings. Returns the (possibly unchanged) content.
+    """
+    import re as _re
+
+    if _re.search(r"[:#\[\]{},&*!|>'\"]", value) or _re.fullmatch(r"-?\d+(\.\d+)?", value) or value.lower() in {
+        "true",
+        "false",
+        "null",
+        "yes",
+        "no",
+        "on",
+        "off",
+    }:
+        value = f'"{value.replace(chr(34), chr(92) + chr(34))}"'
+    if not content.startswith("---"):
+        body = content.lstrip("\n")
+        return f"---\n{key}: {value}\n---\n\n{body}"
+    lines = content.split("\n")
+    close = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+    if close is None:
+        return content
+    replaced = False
+    out: list[str] = []
+    for i, line in enumerate(lines[:close]):
+        if i == 0:
+            out.append(line)
+            continue
+        stripped = line.strip()
+        if stripped.startswith(f"{key}:") or stripped.startswith(f"{key} :"):
+            indent = line[: len(line) - len(line.lstrip())]
+            out.append(f"{indent}{key}: {value}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        out.append(f"{key}: {value}")
+    out.extend(lines[close:])
+    return "\n".join(out)
+
+
+def set_frontmatter_list(content: str, key: str, items: list[str]) -> str:
+    """Set a list-valued frontmatter key (e.g. ``sources``) in a SKILL.md string.
+
+    Replaces an existing ``key:`` block (including its indented list items), or
+    injects one before the closing ``---``. Returns the (possibly unchanged)
+    content.
+    """
+    import json as _json
+
+    def _scalar(item: str) -> str:
+        if item.startswith(("'", '"')):
+            return item
+        return _json.dumps(item, ensure_ascii=False)
+
+    block_lines = [f"{key}:"] + [f"  - {_scalar(i)}" for i in items]
+    if not content.startswith("---"):
+        return f"---\n" + "\n".join(block_lines) + "\n---\n\n" + content.lstrip("\n")
+    lines = content.split("\n")
+    close = next((i for i in range(1, len(lines)) if lines[i] == "---"), None)
+    if close is None:
+        return content
+    key_idx = next(
+        (i for i in range(1, close) if lines[i].strip() == key or lines[i].strip().startswith(key + ":")),
+        None,
+    )
+    if key_idx is None:
+        lines[close:close] = block_lines
+        return "\n".join(lines)
+    end = key_idx + 1
+    while end < close and (lines[end].startswith(" ") or lines[end].startswith("\t")):
+        end += 1
+    return "\n".join(lines[:key_idx] + block_lines + lines[end:])
 
 
 def _parse_commands(frontmatter: dict[str, Any]) -> list[SkillCommand]:
@@ -249,6 +385,15 @@ def load_skill_from_file(
     version = version_raw or content_version(content)
     commands = _parse_commands(frontmatter)
 
+    provenance_raw = _frontmatter_str(frontmatter, "provenance").strip().lower()
+    provenance = provenance_raw if provenance_raw in {"user", "market", "agent"} else "user"
+    status_raw = _frontmatter_str(frontmatter, "status").strip().lower()
+    status = status_raw if status_raw in {"active", "draft"} else "active"
+    sources_raw = frontmatter.get("sources")
+    sources = [s for s in sources_raw if isinstance(s, str)] if isinstance(sources_raw, list) else []
+    created_at = _frontmatter_str(frontmatter, "created_at").strip()
+    bundle = _frontmatter_str(frontmatter, "bundle").strip()
+
     return (
         SkillEntry(
             name=name,
@@ -259,6 +404,11 @@ def load_skill_from_file(
             version=version,
             disable_model_invocation=disable_model_invocation,
             commands=commands,
+            provenance=provenance,
+            status=status,
+            sources=sources,
+            created_at=created_at,
+            bundle=bundle,
         ),
         diagnostics,
     )

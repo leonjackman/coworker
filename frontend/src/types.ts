@@ -3,7 +3,7 @@ import type { Language } from './lib/i18n';
 export type AgentMode = 'single';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
-export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org';
+export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org' | 'dashboard';
 
 export interface McpToolEntry {
   name: string;
@@ -412,7 +412,32 @@ export interface SessionSummary {
   message_count: number;
   todos?: Todo[];
   goal?: GoalState | null;
+  /** 未讀訊息數。後端由 last_read_at 水位線計算，非計數器。 */
+  unread_count?: number;
+  /** 最近一輪以錯誤終止時的摘要；null / 空 = 無錯誤。 */
+  last_error?: string | null;
 }
+
+/**
+ * 單一會話的狀態徽章聚合結果。
+ *
+ * 由 `useSessionBadges` 統一計算，取代過去散落各處的 `runningSessionIds`。
+ */
+export interface SessionBadges {
+  /** 進行中（前端訊息流即時狀態 ∪ 後端活躍會話輪詢）。 */
+  running: boolean;
+  /** 待審批筆數。0 = 無。 */
+  approvals: number;
+  /** 未讀訊息數。 */
+  unread: number;
+  /** 錯誤摘要。null = 無錯誤。 */
+  error: string | null;
+}
+
+/**
+ * sessionId → 徽章。三處會話列表（側欄 / 整頁 / Dashboard）共用同一份。
+ */
+export type SessionBadgeMap = Map<string, SessionBadges>;
 
 export type GoalStatus =
   | 'active'
@@ -536,12 +561,132 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
+export interface WorkspaceDirEntry {
+  name: string;
+  path: string;
+  type: 'dir' | 'file';
+  size?: number | null;
+}
+
+export interface WorkspaceTreeResponse {
+  status: string;
+  root: string;
+  tree: FileTreeNode;
+}
+
+export interface WorkspaceDirResponse {
+  status: string;
+  path: string;
+  entries: WorkspaceDirEntry[];
+}
+
+export interface WorkspaceFileResponse {
+  status: string;
+  path: string;
+  file: {
+    content?: string | null;
+    binary?: boolean;
+    size?: number;
+    truncated?: boolean;
+    total_lines?: number;
+    offset?: number;
+    next_offset?: number;
+    hint?: string;
+  };
+}
+
+export type WorkspaceFilePreviewKind = 'text' | 'table' | 'image' | 'pdf' | 'audio' | 'video' | 'office' | 'design' | 'archive' | 'font' | 'executable' | 'other';
+
+export interface WorkspaceFilePreview {
+  kind: WorkspaceFilePreviewKind;
+  mime: string;
+  size: number;
+  previewable?: boolean;
+  too_large?: boolean;
+  error?: string;
+  data?: string;
+  content?: string | null;
+  binary?: boolean;
+  truncated?: boolean;
+  total_lines?: number;
+  offset?: number;
+  next_offset?: number;
+  hint?: string;
+}
+
+export interface WorkspaceFilePreviewResponse {
+  status: string;
+  path: string;
+  preview: WorkspaceFilePreview;
+}
+
 export interface WorkspaceBranchResponse {
   status: string;
   is_repo: boolean;
   branch: string | null;
   workspace?: string;
 }
+
+/** One entry in the dashboard's static builtin tool catalog. */
+export interface DashboardBuiltinTool {
+  name: string;
+  description: string;
+  group: string;
+  access: 'read' | 'write' | 'exec' | 'ask';
+  mode?: ProjectMode;
+}
+
+export interface DashboardAgent {
+  id: string;
+  name: string;
+  role: string;
+  team: string;
+  status: string;
+  session_count: number;
+  is_default: boolean;
+}
+
+export interface DashboardCapabilities {
+  mode: ProjectMode;
+  memory_enabled: boolean;
+  web_enabled: boolean;
+  browser_enabled: boolean;
+}
+
+export interface DashboardGitStatus {
+  git: boolean;
+  is_repo?: boolean;
+  branch: string | null;
+  note?: string;
+  files?: Array<{ path: string; added: number; removed: number; binary: boolean }>;
+  untracked?: string[];
+  truncated_diff?: boolean;
+}
+
+export interface ProjectDashboardData {
+  status: string;
+  project: ProjectEntry;
+  git: DashboardGitStatus;
+  agents: DashboardAgent[];
+  capabilities: DashboardCapabilities;
+  tools: {
+    builtin: DashboardBuiltinTool[];
+    mcp_servers: McpServerEntry[];
+    skills: Array<{
+      name: string;
+      description: string;
+      enabled: boolean;
+      source?: string;
+      status?: string;
+      provenance?: string;
+      sources?: string[];
+      created_at?: string;
+    }>;
+  };
+  sessions: SessionSummary[];
+}
+
+export type ProjectDashboardResponse = ProjectDashboardData;
 
 export interface ToolAuditEvent {
   timestamp: string;
@@ -759,6 +904,34 @@ export interface SkillEntry {
   enabled: boolean;
   commands?: Array<{ name: string; description?: string }>;
   body?: string;
+  provenance?: string;
+  status?: string;
+  sources?: string[];
+  created_at?: string;
+  bundle?: string;
+}
+
+export interface PendingSkill {
+  name: string;
+  description: string;
+  version: string;
+  file_path: string;
+  provenance: string;
+  status: string;
+  sources: string[];
+  created_at: string;
+  bundle?: string;
+}
+
+export interface PendingSkillsResponse {
+  status: string;
+  pending: PendingSkill[];
+}
+
+export interface PendingSkillResponse {
+  status: string;
+  name: string;
+  content: string;
 }
 
 export interface SkillDiagnostic {
@@ -1027,6 +1200,18 @@ export interface MemoryImportApplyResponse {
 export interface MemorySettings {
   enabled: boolean;
   auto_extract: boolean;
+}
+
+export type SkillReviewAggressiveness = 'active' | 'cautious' | 'passive';
+
+export interface SkillReviewSettings {
+  aggressiveness: SkillReviewAggressiveness;
+  approval_required: boolean;
+}
+
+export interface SkillReviewSettingsPatch {
+  aggressiveness?: SkillReviewAggressiveness;
+  approval_required?: boolean;
 }
 
 export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'auto_extract'>>;

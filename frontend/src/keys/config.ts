@@ -39,7 +39,7 @@ export interface ShortcutDefinition {
  * - Cmd+Shift+E edit last user msg, Cmd+Shift+C copy last response
  * - Cmd+N   new chat, Cmd+Shift+N new project
  * - Esc     back to chat (single) / stop generation (double)
- * - Cmd+1..5 view switching (providers / mcp / skills / memory / org)
+ * - Cmd+1..3 view switching (providers / mcp / skills)
  * - Cmd+B   sidebar, Cmd+\ right panel, Cmd+J bottom panel, Cmd+, settings
  */
 export const SHORTCUT_REGISTRY: readonly ShortcutDefinition[] = [
@@ -135,10 +135,10 @@ export const SHORTCUT_REGISTRY: readonly ShortcutDefinition[] = [
     defaultBinding: { key: '3', mod: modKey() },
   },
   {
-    id: 'view-memory',
-    labelKey: 'shortcuts.view_memory',
-    descriptionKey: 'shortcuts.view_memory_desc',
-    defaultBinding: { key: '4', mod: modKey() },
+    id: 'open-dashboard',
+    labelKey: 'shortcuts.open_dashboard',
+    descriptionKey: 'shortcuts.open_dashboard_desc',
+    defaultBinding: { key: 'o', mod: modKey() },
   },
   {
     id: 'toggle-sidebar',

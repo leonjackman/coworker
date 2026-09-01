@@ -15,15 +15,20 @@ warn()  { echo -e "  ${YELLOW}⚠${NC} $1" 1>&2; }
 fail()  { echo -e "  ${RED}✗${NC} $1" 1>&2; }
 echo -e "${CYAN}=== Coworker Desktop ===${NC}\n"
 
+# ── shared dependency checks (venv + node_modules sync) ─────────────
+# shellcheck source=scripts/check-deps.sh
+source "$ROOT_DIR/scripts/check-deps.sh"
+
 echo "[0/6] Killing existing Coworker processes..."
 lsof -ti:9527 | xargs kill -9 2>/dev/null || true
 ok "Killed existing Coworker processes"
 
 echo "[1/6] Preparing Python backend..."
-ok "Python backend ready"
+ensure_python_venv "$ROOT_DIR/backend/venv" "$ROOT_DIR/backend/requirements.txt" || exit 1
 
 echo "[2/6] Preparing Node dependencies..."
-ok "Node dependencies ready"
+ensure_node_deps "$ROOT_DIR" "Root dependencies" || exit 1
+ensure_node_deps "$ROOT_DIR/frontend" "Frontend dependencies" || exit 1
 
 echo "[3/6] Building frontend..."
 (cd "$ROOT_DIR/frontend" && npm run build) && ok "Frontend built"
@@ -52,7 +57,7 @@ done
 # diagnosing tool-call / degradation issues without having to set an env var.
 export COWORKER_LLM_LOG="${COWORKER_LLM_LOG:-1}"
 
-"$ROOT_DIR/backend/venv/bin/python" -m uvicorn main:app --host 127.0.0.1 --port "$BACKEND_PORT" --app-dir "$ROOT_DIR/backend" &
+"$PYTHON_BIN" -m uvicorn main:app --host 127.0.0.1 --port "$BACKEND_PORT" --app-dir "$ROOT_DIR/backend" &
 BACKEND_PID="$!"
 DESKTOP_PID=""
 BACKEND_MONITOR_PID=""

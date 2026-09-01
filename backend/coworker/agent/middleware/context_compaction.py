@@ -292,6 +292,24 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         kept = head + kept_tail
         if len(kept) == len(messages):
             return None
+        # Root fix: the rolling trim keeps only head + recent tail, so a NORMAL
+        # user message sitting in the dropped middle is silently lost — leaving a
+        # request with zero user messages that strict providers (vLLM/Qwen)
+        # reject with "No user query found in messages". Never drop the most
+        # recent user message: re-attach it just before the assistant/tool frame
+        # that follows it (truncated if oversized so the budget isn't blown).
+        if not any(getattr(m, "type", "") == "human" for m in kept):
+            last_human = next((m for m in reversed(messages) if getattr(m, "type", "") == "human"), None)
+            if last_human is not None:
+                if _msg_tokens(last_human) > self.budget_tokens:
+                    last_human = self._truncate_message_to_tokens(last_human, self.budget_tokens)
+                insert_at = 0
+                for i, m in enumerate(kept_tail):
+                    if getattr(m, "type", "") in ("ai", "tool"):
+                        insert_at = i
+                        break
+                kept_tail.insert(insert_at, last_human)
+                kept = head + kept_tail
         # Increment the session-level compaction counter. The counter lives in
         # checkpointed state (not on this middleware, which is rebuilt every turn)
         # so it accumulates across turns — see B6.

@@ -213,12 +213,10 @@ def command_approval_middleware(
             "description": "Coworker wants to update its long-term memory for this project.",
             "when": _needs_sensitive_approval,
         },
-        "install_skill": {
-            "allowed_decisions": ["approve", "reject"],
-            "description": "Coworker wants to install a new skill. Installing persists across "
-            "sessions and injects the skill's instructions into future conversations.",
-            "when": _needs_sensitive_approval,
-        },
+        # Skill writes (install_skill / skill_manage) are NOT HITL-gated: they
+        # stage a DRAFT that waits in the review queue (per the auto-skills
+        # "require approval" setting). A second immediate card would double-gate
+        # the same write — the pending panel is the single approval surface.
         "ask_user": {
             "allowed_decisions": ["respond", "reject"],
             "description": "Coworker asks the user a question that needs an answer.",
@@ -400,4 +398,13 @@ def stream_event_from_interrupt(approval: dict[str, Any]) -> dict[str, Any]:
             "read_only": bool(mcp.get("read_only")),
             "destructive": annotations.get("destructive") is True,
         }
-    return {**base, "type": "approval_required", "kind": "command", "command": approval.get("command", []), "cwd": approval.get("cwd", "")}
+    return {
+        **base, "type": "approval_required", "kind": "command",
+        "command": approval.get("command", []),
+        "cwd": approval.get("cwd", ""),
+        # Non-command tools (write_file, memory, …) are classified as "command"
+        # with an empty argv — carry the tool identity so the UI can still show
+        # what the agent wants to do instead of a blank card.
+        "tool_name": str(context.get("tool_name") or ""),
+        "tool_args": _json_safe(context.get("action_args") or {}),
+    }

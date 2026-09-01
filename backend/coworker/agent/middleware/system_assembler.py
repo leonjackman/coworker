@@ -186,7 +186,9 @@ class SystemAssembler(AgentMiddleware):
         # 聊天项目：phase 片段退化为"语言跟随 + 聊天语气"，不注入编码执行契约。
         if self.chat_mode:
             phase_frag = (
-                "Reply in the same language as the user's message.\n"
+                "Reply in the same language as the user's message. "
+                "Also keep ALL intermediate narration and step-by-step commentary in that "
+                "same language — never switch to another language mid-turn.\n"
                 "这是一个轻松的聊天对话。保持自然随和，直接凭知识回答；"
                 "除非用户明确要求，否则不要修改文件、运行命令或调用工具。"
             )

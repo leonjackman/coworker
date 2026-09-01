@@ -1987,9 +1987,15 @@ ipcMain.handle('start-worker-stream', async (event, { requestId, worker_run_id }
 });
 
 
- ipcMain.handle('list-sessions', async () => {
-   return requestBackendOr('/sessions', { status: 'ok', sessions: [] });
- });
+ipcMain.handle('list-sessions', async () => {
+  return requestBackendOr('/sessions', { status: 'ok', sessions: [] });
+});
+
+ipcMain.handle('session-mark-read', async (event, sessionId) => {
+  // Mark a session's messages as read (also clears its error marker on the
+  // backend). Best-effort: unread is a soft state, never block the UI on it.
+  return requestBackendOr(`/sessions/${encodeURIComponent(sessionId)}/read`, { status: 'ok', session: null }, { method: 'POST' });
+});
 
  ipcMain.handle('list-active-sessions', async () => {
    const envelope = await requestBackendOr('/sessions/active', { session_ids: [] });
@@ -2178,6 +2184,31 @@ ipcMain.handle('get-workspace-branch', async (event, projectId) => {
   return requestBackend(`/workspace/branch${query ? `?${query}` : ''}`);
 });
 
+ipcMain.handle('get-project-dashboard', async (event, projectId) => {
+  return requestBackend(`/projects/${encodeURIComponent(projectId)}/dashboard`);
+});
+
+ipcMain.handle('get-workspace-tree', async (event, { projectId, path = '' } = {}) => {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (projectId) params.set('project_id', projectId);
+  return requestBackend(`/workspace/tree?${params.toString()}`);
+});
+
+ipcMain.handle('get-workspace-dir', async (event, { projectId, path = '' } = {}) => {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (projectId) params.set('project_id', projectId);
+  return requestBackend(`/workspace/dir?${params.toString()}`);
+});
+
+ipcMain.handle('get-workspace-file', async (event, { projectId, path = '' } = {}) => {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (projectId) params.set('project_id', projectId);
+  return requestBackend(`/workspace/file?${params.toString()}`);
+});
+
 ipcMain.handle('resolve-command-approval', async (event, payload) => {
   return requestBackend('/command-approvals/resolve', 'POST', {
     approval_id: payload?.approval_id || '',
@@ -2268,10 +2299,18 @@ ipcMain.handle('delete-skill', (event, name) =>
 );
 ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));
+ipcMain.handle('list-pending-skills', () => requestBackend('/skills/pending', 'GET'));
+ipcMain.handle('get-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}`, 'GET'));
+ipcMain.handle('update-pending-skill', (event, name, content) => requestBackend(`/skills/pending/${encodeURIComponent(name)}`, 'PUT', { content }));
+ipcMain.handle('approve-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}/approve`, 'POST', {}));
+ipcMain.handle('reject-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}/reject`, 'POST', {}));
 ipcMain.handle('get-memory-status', () => requestBackend('/api/memory/status', 'GET'));
-ipcMain.handle('discover-memory', (event, projectId = '') => {
-  const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-  return requestBackend(`/api/memory/discover${query}`, 'GET');
+ipcMain.handle('discover-memory', (event, { projectId = '', scope = 'all' } = {}) => {
+  const params = new URLSearchParams();
+  if (projectId) params.set('project_id', projectId);
+  if (scope && scope !== 'all') params.set('scope', scope);
+  const query = params.toString();
+  return requestBackend(`/api/memory/discover${query ? `?${query}` : ''}`, 'GET');
 });
 ipcMain.handle('get-memory-file', (event, rel = '') =>
   requestBackend(`/api/memory/file?rel=${encodeURIComponent(rel)}`, 'GET'),
@@ -2283,11 +2322,28 @@ ipcMain.handle('save-memory-file', (event, payload = {}) => requestBackend('/api
 ipcMain.handle('delete-memory-file', (event, payload = {}) => requestBackend('/api/memory/delete', 'POST', payload));
 ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings', 'GET'));
 ipcMain.handle('save-memory-settings', (event, payload = {}) => requestBackend('/api/memory/settings', 'POST', payload));
+ipcMain.handle('get-skill-review-settings', () => requestBackend('/api/skill-review/settings', 'GET'));
+ipcMain.handle('save-skill-review-settings', (event, payload = {}) => requestBackend('/api/skill-review/settings', 'POST', payload));
 ipcMain.handle('reveal-in-folder', async (event, filePath) => {
   if (typeof filePath === 'string' && filePath) {
     shell.showItemInFolder(filePath);
   }
   return { status: 'ok' };
+});
+
+ipcMain.handle('open-file-externally', async (event, filePath) => {
+  if (typeof filePath === 'string' && filePath) {
+    const error = await shell.openPath(filePath);
+    if (error) return { status: 'error', detail: error };
+  }
+  return { status: 'ok' };
+});
+
+ipcMain.handle('get-workspace-file-preview', async (event, { projectId, path = '' } = {}) => {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (projectId) params.set('project_id', projectId);
+  return requestBackend(`/workspace/file/preview?${params.toString()}`);
 });
 
 ipcMain.handle('search-memory', (event, query = '', limit = 50) => {

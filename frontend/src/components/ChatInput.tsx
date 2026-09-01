@@ -40,6 +40,23 @@ import { ContextMenu } from "./ui/context-menu";
 import { SidebarScrollbar } from "./ui/sidebar-scrollbar";
 import { TypeCapsule, TYPE_CAPSULE_LABELS, type SlashCommandType } from "./ui/type-capsule";
 
+/** 焦点不能被抢走的输入上下文：真正的文本框/可编辑区、下拉与选择器触发器、
+ *  以及已打开的下拉/对话框。在这些场景下自动回焦会让用户正在操作的控件失效。 */
+function isFocusGuardTarget(el: Element | null): boolean {
+  if (!el) return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select" || tag === "iframe") return true;
+  if ((el as HTMLElement).isContentEditable) return true;
+  if (el.closest('[role="textbox"], [role="combobox"], [role="searchbox"], [role="menu"], [role="listbox"], [role="dialog"]')) return true;
+  if (el.closest("[aria-haspopup]")) return true; // 下拉/选择器触发器自己持有焦点
+  return false;
+}
+
+/** 是否有已打开的下拉/对话框（打开中不该把焦点抢回输入框）。 */
+function hasOpenOverlay(): boolean {
+  return Boolean(document.querySelector('[role="menu"], [role="listbox"], [role="dialog"]'));
+}
+
 /** A committed command chip rendered inline at the start of the composer text. */
 export interface CommandChip {
   command: string;
@@ -268,6 +285,34 @@ export function ChatInput({
       attachFiles: () => fileInputRef.current?.click(),
     };
   }, [apiRef]);
+
+  // 输入框保持激活：挂载即聚焦；编辑器失焦后，只要焦点不在需要自己持焦的
+  // 控件（文本框/下拉/对话框）上，就自动把焦点收回输入框，让用户随时可以
+  // 打字、回车即发送，不必每次再点一次输入框。
+  useEffect(() => {
+    const editor = editorRef.current;
+    const tryRefocus = () => {
+      if (disabled) return;
+      if (hasOpenOverlay()) return;
+      const active = document.activeElement;
+      if (!isFocusGuardTarget(active)) editorRef.current?.focus();
+    };
+    if (editor && !disabled) editor.focus();
+    if (disabled) return;
+
+    const onFocusOut = (event: FocusEvent) => {
+      if (isFocusGuardTarget(event.relatedTarget as Element | null)) return;
+      // 等一帧再收焦点：避免与刚打开（pointerdown 后异步挂载）的 Radix 下拉抢焦点。
+      requestAnimationFrame(tryRefocus);
+    };
+    const onWindowFocus = () => requestAnimationFrame(tryRefocus);
+    editor?.addEventListener("focusout", onFocusOut);
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      editor?.removeEventListener("focusout", onFocusOut);
+      window.removeEventListener("focus", onWindowFocus);
+    };
+  }, [disabled]);
 
   const showAddError = (message: string) => {
     setAddError(message);

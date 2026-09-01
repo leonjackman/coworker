@@ -21,7 +21,12 @@ import type {
   McpTestRequest,
   McpTestResult,
   ProjectResponse,
+  ProjectDashboardResponse,
   ProjectsListResponse,
+  WorkspaceTreeResponse,
+  WorkspaceDirResponse,
+  WorkspaceFileResponse,
+  WorkspaceFilePreviewResponse,
   ProviderPayload,
   ProviderEntry,
   ProvidersListResponse,
@@ -40,6 +45,8 @@ import type {
   SkillDeleteResponse,
   SkillDetailResponse,
   SkillsListResponse,
+  PendingSkillsResponse,
+  PendingSkillResponse,
   SkillUpdateRequest,
   SkillValidateRequest,
   SkillValidateResponse,
@@ -60,6 +67,8 @@ import type {
   MemoryImportPreviewResponse,
   MemoryImportApplyResponse,
   MemorySettings,
+  SkillReviewSettings,
+  SkillReviewSettingsPatch,
   MemorySettingsPatch,
   WebSettings,
   WebConfigPatch,
@@ -122,6 +131,7 @@ export interface ChatService {
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;
   listActiveSessions: () => Promise<string[]>;
+  markSessionRead: (sessionId: string) => Promise<void>;
   createSession: (request: CreateSessionRequest) => Promise<SessionResponse>;
   deleteSession: (sessionId: string) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
@@ -148,6 +158,12 @@ export interface ChatService {
   getSessionChanges: (sessionId: string) => Promise<SessionChangesResponse>;
   getCurrentDiff: (options?: { projectId?: string; sessionId?: string }) => Promise<CurrentDiffResponse>;
   getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
+  getProjectDashboard: (projectId: string) => Promise<ProjectDashboardResponse>;
+  getWorkspaceTree: (projectId: string, path?: string) => Promise<WorkspaceTreeResponse>;
+  getWorkspaceDir: (projectId: string, path?: string) => Promise<WorkspaceDirResponse>;
+  getWorkspaceFile: (projectId: string, path: string) => Promise<WorkspaceFileResponse>;
+  getWorkspaceFilePreview: (projectId: string, path: string) => Promise<WorkspaceFilePreviewResponse>;
+  openFileExternally: (filePath: string) => Promise<{ status: string }>;
   redoMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
   beginEditMessage: (sessionId: string, messageId: string, revertCode: boolean) => Promise<EditBeginResponse>;
   cancelEditMessage: (sessionId: string, messageId: string) => Promise<RedoResponse>;
@@ -191,13 +207,18 @@ export interface ChatService {
   deleteSkill: (name: string) => Promise<SkillDeleteResponse>;
   scanSkills: () => Promise<SkillsListResponse>;
   validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
+  listPendingSkills: () => Promise<PendingSkillsResponse>;
+  getPendingSkill: (name: string) => Promise<PendingSkillResponse>;
+  updatePendingSkill: (name: string, content: string) => Promise<{ status: string }>;
+  approvePendingSkill: (name: string) => Promise<{ status: string }>;
+  rejectPendingSkill: (name: string) => Promise<{ status: string }>;
   listMarketSources: () => Promise<MarketSourceResponse>;
   listMarketCategories: (source: string) => Promise<MarketCategoriesResponse>;
   searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
   getMemoryStatus: () => Promise<MemoryStatusResponse>;
-  discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
+  discoverMemory: (projectId?: string, scope?: string) => Promise<MemoryDiscoverResponse>;
   getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
   resolveMemoryPath: (rel: string) => Promise<{ rel: string; path: string }>;
   saveMemoryFile: (rel: string, content: string) => Promise<MemoryFileSaveResponse>;
@@ -210,6 +231,8 @@ export interface ChatService {
   applyMemoryImport: (token: string, decisions: Record<string, string>) => Promise<MemoryImportApplyResponse>;
   getMemorySettings: () => Promise<MemorySettings>;
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
+  getSkillReviewSettings: () => Promise<SkillReviewSettings>;
+  saveSkillReviewSettings: (patch: SkillReviewSettingsPatch) => Promise<SkillReviewSettings>;
   getWebSettings: () => Promise<WebSettings>;
   saveWebSettings: (patch: WebConfigPatch) => Promise<WebSettings>;
   setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
@@ -300,6 +323,19 @@ class ElectronChatService implements ChatService {
   async listActiveSessions(): Promise<string[]> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listActiveSessions();
+  }
+
+  async markSessionRead(sessionId: string): Promise<void> {
+    if (window.electronAPI?.markSessionRead) {
+      await window.electronAPI.markSessionRead(sessionId);
+      return;
+    }
+    // Fallback for web builds without the IPC bridge: hit the backend directly.
+    const response = await fetch(`${BACKEND_URL}/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.detail || `Backend returned ${response.status}`);
+    }
   }
 
   async createSession(request: CreateSessionRequest): Promise<SessionResponse> {
@@ -484,6 +520,31 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.validateSkill(request);
   }
 
+  async listPendingSkills(): Promise<PendingSkillsResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.listPendingSkills();
+  }
+
+  async getPendingSkill(name: string): Promise<PendingSkillResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getPendingSkill(name);
+  }
+
+  async updatePendingSkill(name: string, content: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.updatePendingSkill(name, content);
+  }
+
+  async approvePendingSkill(name: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.approvePendingSkill(name);
+  }
+
+  async rejectPendingSkill(name: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.rejectPendingSkill(name);
+  }
+
   async listMarketSources(): Promise<MarketSourceResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.listMarketSources();
@@ -514,9 +575,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.getMemoryStatus();
   }
 
-  async discoverMemory(projectId?: string): Promise<MemoryDiscoverResponse> {
+  async discoverMemory(projectId?: string, scope = 'all'): Promise<MemoryDiscoverResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.discoverMemory(projectId);
+    return window.electronAPI.discoverMemory(projectId, scope);
   }
 
   async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
@@ -577,6 +638,16 @@ class ElectronChatService implements ChatService {
   async saveMemorySettings(settings: MemorySettingsPatch): Promise<MemorySettings> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.saveMemorySettings(settings);
+  }
+
+  async getSkillReviewSettings(): Promise<SkillReviewSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getSkillReviewSettings();
+  }
+
+  async saveSkillReviewSettings(patch: SkillReviewSettingsPatch): Promise<SkillReviewSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveSkillReviewSettings(patch);
   }
 
   async getWebSettings(): Promise<WebSettings> {
@@ -697,6 +768,36 @@ class ElectronChatService implements ChatService {
   async getWorkspaceBranch(projectId?: string): Promise<WorkspaceBranchResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.getWorkspaceBranch(projectId);
+  }
+
+  async getProjectDashboard(projectId: string): Promise<ProjectDashboardResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getProjectDashboard(projectId);
+  }
+
+  async getWorkspaceTree(projectId: string, path = ''): Promise<WorkspaceTreeResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceTree(projectId, path);
+  }
+
+  async getWorkspaceDir(projectId: string, path = ''): Promise<WorkspaceDirResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceDir(projectId, path);
+  }
+
+  async getWorkspaceFile(projectId: string, path: string): Promise<WorkspaceFileResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceFile(projectId, path);
+  }
+
+  async getWorkspaceFilePreview(projectId: string, path: string): Promise<WorkspaceFilePreviewResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkspaceFilePreview(projectId, path);
+  }
+
+  async openFileExternally(filePath: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.openFileExternally(filePath);
   }
 
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
@@ -1086,6 +1187,10 @@ class HttpChatService implements ChatService {
     return response.session_ids ?? [];
   }
 
+  async markSessionRead(sessionId: string): Promise<void> {
+    await this.request(`/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' });
+  }
+
   async interject(request: InterjectRequest): Promise<{ status: string; steer_id: string; session_id: string }> {
     return this.request<{ status: string; steer_id: string; session_id: string }>('/chat/interject', {
       method: 'POST',
@@ -1230,6 +1335,43 @@ class HttpChatService implements ChatService {
     if (projectId) params.set('project_id', projectId);
     const query = params.toString();
     return this.request<WorkspaceBranchResponse>(`/workspace/branch${query ? `?${query}` : ''}`);
+  }
+
+  async getProjectDashboard(projectId: string): Promise<ProjectDashboardResponse> {
+    return this.request<ProjectDashboardResponse>(`/projects/${encodeURIComponent(projectId)}/dashboard`);
+  }
+
+  async getWorkspaceTree(projectId: string, path = ''): Promise<WorkspaceTreeResponse> {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceTreeResponse>(`/workspace/tree?${params.toString()}`);
+  }
+
+  async getWorkspaceDir(projectId: string, path = ''): Promise<WorkspaceDirResponse> {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceDirResponse>(`/workspace/dir?${params.toString()}`);
+  }
+
+  async getWorkspaceFile(projectId: string, path: string): Promise<WorkspaceFileResponse> {
+    const params = new URLSearchParams();
+    params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceFileResponse>(`/workspace/file?${params.toString()}`);
+  }
+
+  async getWorkspaceFilePreview(projectId: string, path: string): Promise<WorkspaceFilePreviewResponse> {
+    const params = new URLSearchParams();
+    params.set('path', path);
+    params.set('project_id', projectId);
+    return this.request<WorkspaceFilePreviewResponse>(`/workspace/file/preview?${params.toString()}`);
+  }
+
+  async openFileExternally(filePath: string): Promise<{ status: string }> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.openFileExternally(filePath);
   }
 
   async redoMessage(sessionId: string, messageId: string): Promise<RedoResponse> {
@@ -1498,8 +1640,8 @@ class HttpChatService implements ChatService {
     return this.request<ProvidersListResponse>('/providers');
   }
 
-  async createProvider(request: ProviderPayload): Promise<void> {
-    await this.request('/providers', {
+  async createProvider(request: ProviderPayload): Promise<{ status: string; provider: ProviderEntry }> {
+    return await this.request<{ status: string; provider: ProviderEntry }>('/providers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -1691,6 +1833,34 @@ class HttpChatService implements ChatService {
     });
   }
 
+  async listPendingSkills(): Promise<PendingSkillsResponse> {
+    return this.request<PendingSkillsResponse>('/skills/pending');
+  }
+
+  async getPendingSkill(name: string): Promise<PendingSkillResponse> {
+    return this.request<PendingSkillResponse>(`/skills/pending/${encodeURIComponent(name)}`);
+  }
+
+  async updatePendingSkill(name: string, content: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/skills/pending/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async approvePendingSkill(name: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/skills/pending/${encodeURIComponent(name)}/approve`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectPendingSkill(name: string): Promise<{ status: string }> {
+    return this.request<{ status: string }>(`/skills/pending/${encodeURIComponent(name)}/reject`, {
+      method: 'POST',
+    });
+  }
+
   async listMarketSources(): Promise<MarketSourceResponse> {
     return this.request<MarketSourceResponse>('/skills/market');
   }
@@ -1725,9 +1895,12 @@ class HttpChatService implements ChatService {
     return this.request<MemoryStatusResponse>('/api/memory/status');
   }
 
-  async discoverMemory(projectId?: string): Promise<MemoryDiscoverResponse> {
-    const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-    return this.request<MemoryDiscoverResponse>(`/api/memory/discover${query}`);
+  async discoverMemory(projectId?: string, scope = 'all'): Promise<MemoryDiscoverResponse> {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project_id', projectId);
+    if (scope && scope !== 'all') params.set('scope', scope);
+    const query = params.toString();
+    return this.request<MemoryDiscoverResponse>(`/api/memory/discover${query ? `?${query}` : ''}`);
   }
 
   async getMemoryFile(rel: string): Promise<MemoryFileContentResponse> {
@@ -1804,6 +1977,18 @@ class HttpChatService implements ChatService {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
+    });
+  }
+
+  async getSkillReviewSettings(): Promise<SkillReviewSettings> {
+    return this.request<SkillReviewSettings>('/api/skill-review/settings');
+  }
+
+  async saveSkillReviewSettings(patch: SkillReviewSettingsPatch): Promise<SkillReviewSettings> {
+    return this.request<SkillReviewSettings>('/api/skill-review/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
     });
   }
 

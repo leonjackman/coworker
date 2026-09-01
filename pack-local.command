@@ -53,6 +53,10 @@ fail() { echo -e "  ${RED}✗${NC} $1" 1>&2; exit 1; }
 
 echo -e "${CYAN}=== CoWorker Local Package (mac --dir) ===${NC}\n"
 
+# ── shared dependency checks (venv + node_modules sync) ─────────────
+# shellcheck source=scripts/check-deps.sh
+source "$ROOT_DIR/scripts/check-deps.sh"
+
 if [[ "$CLEAN" == "1" ]]; then
   echo "[0/4] Cleaning release/ output..."
   rm -rf "$ROOT_DIR/release"
@@ -62,7 +66,8 @@ fi
 if [[ "$SKIP_FRONTEND" == "1" ]]; then
   echo "[1/4] Skipping frontend build (reusing frontend/dist)"
 else
-  echo "[1/4] Building frontend..."
+  echo "[1/4] Preparing + building frontend..."
+  ensure_node_deps "$ROOT_DIR/frontend" "Frontend dependencies" || exit 1
   (cd "$ROOT_DIR/frontend" && npm run build)
   ok "Frontend built"
 fi
@@ -71,7 +76,13 @@ if [[ "$SKIP_BACKEND" == "1" ]]; then
   echo "[2/4] Skipping backend build (reusing backend/dist)"
 else
    echo "[2/4] Building Python backend (PyInstaller)..."
-   [[ -x "$PYTHON_BIN" ]] || fail "Python venv not found at $PYTHON_BIN (run: cd backend && python3 -m venv venv)"
+   # Ensure the venv exists AND has requirements installed before freezing.
+   ensure_python_venv "$ROOT_DIR/backend/venv" "$ROOT_DIR/backend/requirements.txt" || exit 1
+   [[ -x "$PYTHON_BIN" ]] || fail "Python venv not found at $PYTHON_BIN"
+   if ! "$PYTHON_BIN" -c "import PyInstaller" >/dev/null 2>&1; then
+     warn "PyInstaller missing in venv — installing it"
+     "$PYTHON_BIN" -m pip install pyinstaller || fail "PyInstaller install failed"
+   fi
    (cd "$ROOT_DIR/backend" && rm -rf dist build && "$PYTHON_BIN" -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20)
    ok "Backend bundled"
 

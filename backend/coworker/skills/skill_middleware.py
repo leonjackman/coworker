@@ -145,7 +145,24 @@ def build_skill_section(
     section = format_skills_prompt_bounded(skills) if skills else ""
     if active:
         section = f"{section}\n\n{_format_active_skills(active)}".strip()
+    if section:
+        section = f"{section}\n\n{SELF_CALIBRATION_GUIDANCE}".strip()
     return section
+
+
+SELF_CALIBRATION_GUIDANCE = (
+    "## Capturing reusable procedures (skill_manage)\n"
+    "When you discover a repeatable multi-step procedure — especially when the "
+    "user corrects your approach and shows you the right way — proactively capture "
+    "it as a skill using the `skill_manage` tool (action=create for a new skill, "
+    "action=patch/edit to improve an existing one). Use the SKILL.md house format: "
+    "YAML frontmatter (name + description) and four body sections in order — "
+    "## When to Use, ## Procedure (numbered steps), ## Pitfalls, ## Verification. "
+    "Check <available_skills> first: if an existing skill already covers the "
+    "procedure, update it (same name) instead of creating a duplicate. Every write "
+    "is staged as a draft for the user's approval and only affects future "
+    "conversations once approved."
+)
 
 
 class SkillMiddleware(AgentMiddleware):

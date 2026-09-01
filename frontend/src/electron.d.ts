@@ -15,6 +15,7 @@ import type {
   McpTestRequest,
   McpTestResult,
   ProjectResponse,
+  ProjectDashboardResponse,
   ProjectsListResponse,
   ProviderPayload,
   ProvidersListResponse,
@@ -33,6 +34,8 @@ import type {
   SkillUpdateRequest,
   SkillValidateRequest,
   SkillValidateResponse,
+  PendingSkillsResponse,
+  PendingSkillResponse,
   StreamEvent,
   ToolAuditResponse,  MarketSourceResponse,
   MarketCategoriesResponse,
@@ -40,6 +43,10 @@ import type {
   MarketSkillsResponse,
   MarketInstallResponse,
   WorkspaceBranchResponse,
+  WorkspaceTreeResponse,
+  WorkspaceDirResponse,
+  WorkspaceFileResponse,
+  WorkspaceFilePreviewResponse,
   MemoryStatusResponse,
   MemoryDiscoverResponse,
   MemoryDeleteResponse,
@@ -53,6 +60,8 @@ import type {
   MemoryImportPreviewResponse,
   MemoryImportApplyResponse,
   MemorySettings,
+  SkillReviewSettings,
+  SkillReviewSettingsPatch,
   MemorySettingsPatch,
   BrowserCaptureResult,
   BrowserContextMenuPayload,
@@ -89,6 +98,7 @@ declare global {
       fetchProviderModels: (payload: { base_url: string; api_key: string; provider_type: string }) => Promise<{ status: string; models: string[]; error?: string }>;
       listSessions: () => Promise<SessionsListResponse>;
       listActiveSessions: () => Promise<string[]>;
+      markSessionRead: (sessionId: string) => Promise<{ status: string; session: SessionDetailResponse['session'] | null }>;
       createSession: (payload: CreateSessionRequest) => Promise<SessionResponse>;
       deleteSession: (sessionId: string) => Promise<{ status: string }>;
       renameSession: (sessionId: string, title: string) => Promise<SessionResponse>;
@@ -108,6 +118,12 @@ declare global {
       renameProject: (projectId: string, name: string) => Promise<ProjectResponse>;
       deleteProject: (projectId: string) => Promise<{ status: string }>;
       getWorkspaceBranch: (projectId?: string) => Promise<WorkspaceBranchResponse>;
+      getProjectDashboard: (projectId: string) => Promise<ProjectDashboardResponse>;
+      getWorkspaceTree: (projectId: string, path?: string) => Promise<WorkspaceTreeResponse>;
+      getWorkspaceDir: (projectId: string, path?: string) => Promise<WorkspaceDirResponse>;
+      getWorkspaceFile: (projectId: string, path: string) => Promise<WorkspaceFileResponse>;
+      getWorkspaceFilePreview: (projectId: string, path: string) => Promise<WorkspaceFilePreviewResponse>;
+      openFileExternally: (filePath: string) => Promise<{ status: string }>;
       listToolAudit: (limit?: number) => Promise<ToolAuditResponse>;
       listAgentTraces: (limit?: number) => Promise<AgentTraceResponse>;
       listCommandApprovals: () => Promise<CommandApprovalsResponse>;
@@ -144,13 +160,18 @@ declare global {
       deleteSkill: (name: string) => Promise<SkillDeleteResponse>;
       scanSkills: () => Promise<SkillsListResponse>;
       validateSkill: (request: SkillValidateRequest) => Promise<SkillValidateResponse>;
+      listPendingSkills: () => Promise<PendingSkillsResponse>;
+      getPendingSkill: (name: string) => Promise<PendingSkillResponse>;
+      updatePendingSkill: (name: string, content: string) => Promise<{ status: string }>;
+      approvePendingSkill: (name: string) => Promise<{ status: string }>;
+      rejectPendingSkill: (name: string) => Promise<{ status: string }>;
       listMarketSources: () => Promise<MarketSourceResponse>;
       listMarketCategories: (source: string) => Promise<MarketCategoriesResponse>;
       searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
       getMemoryStatus: () => Promise<MemoryStatusResponse>;
-      discoverMemory: (projectId?: string) => Promise<MemoryDiscoverResponse>;
+      discoverMemory: (projectId?: string, scope?: string) => Promise<MemoryDiscoverResponse>;
       getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
       resolveMemoryPath: (rel: string) => Promise<{ rel: string; path: string }>;
       saveMemoryFile: (payload: { rel: string; content: string }) => Promise<MemoryFileSaveResponse>;
@@ -163,6 +184,8 @@ declare global {
       applyMemoryImport: (payload: { token: string; decisions: Record<string, string> }) => Promise<MemoryImportApplyResponse>;
       getMemorySettings: () => Promise<MemorySettings>;
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
+      getSkillReviewSettings: () => Promise<SkillReviewSettings>;
+      saveSkillReviewSettings: (payload: SkillReviewSettingsPatch) => Promise<SkillReviewSettings>;
       getWebSettings: () => Promise<WebSettings>;
       saveWebSettings: (payload: WebConfigPatch) => Promise<WebSettings>;
       setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;

@@ -55,6 +55,7 @@ from .core import (
     ReadFileArgs,
     ReadSessionArgs,
     ReplaceInFileArgs,
+    SkillManageArgs,
     RunCommandArgs,
     CommandStatusArgs,
     SearchFilesArgs,
@@ -70,8 +71,9 @@ from .core import (
 )
 from .middleware import (
     ContextGuardMiddleware,
-    IdleLoopMiddleware,
     CoworkerSummarizationMiddleware,
+    EnsureUserMessageMiddleware,
+    IdleLoopMiddleware,
     NormalizeMessagesMiddleware,
     PhaseToolGateMiddleware,
     RepeatedToolCallMiddleware,
@@ -99,6 +101,7 @@ def build_workspace_tools(
     readonly: bool = False,
     web_tools: list | None = None,
     browser_tool: Any | None = None,
+    auto_apply_skills: bool = False,
     # WorkerAgent 集成（单 agent 模式）
     use_worker_enabled: bool = False,
     language: str = "zh",
@@ -252,23 +255,30 @@ def build_workspace_tools(
 
     @tool(args_schema=InstallSkillArgs)
     def install_skill(name: str, content: str, commands: list[dict[str, str]] | None = None) -> str:
-        """Install a NEW skill by writing its SKILL.md into the user skills directory.
+        """Install a NEW skill from chat (the file tools cannot write outside
+        the workspace sandbox). ``content`` must be the complete SKILL.md text
+        with YAML frontmatter (``name`` + ``description``).
 
-        Use ONLY this tool to add a brand-new skill from chat (the file tools
-        cannot write outside the workspace sandbox). ``content`` must be the
-        complete SKILL.md text with YAML frontmatter (``name`` + ``description``).
-        Optional ``commands`` write ``/<command>`` entries. On success the skill
-        becomes available immediately.
+        When the user requires approval for auto skills, this stages a DRAFT
+        that waits in the review queue; otherwise it takes effect immediately.
+        Either way the write goes through the same self-calibration path as
+        ``skill_manage`` — a brand-new agent-authored skill is never silently
+        committed past the user's approval preference.
         """
         try:
-            if skill_market_manager is None:
-                from ..skills.skill_market import SkillMarketManager
-
-                mkt = SkillMarketManager(_Path.home())
+            if skill_manager is None:
+                return _error_result(ValueError("skill system unavailable"), "install_skill")
+            if auto_apply_skills:
+                result = skill_manager.apply_agent_skill(
+                    "create", name, content,
+                    sources=[f"session:{session_id}"] if session_id else None,
+                )
             else:
-                mkt = skill_market_manager
-            result = mkt.install_from_content(name, content, commands=commands)
-            if result.get("status") == "ok" and skill_manager is not None:
+                result = skill_manager.stage_skill_draft(
+                    name, content,
+                    sources=[f"session:{session_id}"] if session_id else None,
+                )
+            if result.get("status") == "ok":
                 try:
                     skill_manager.refresh()
                 except Exception:  # refresh must not mask the install result
@@ -304,6 +314,57 @@ def build_workspace_tools(
             )
         except Exception as exc:
             return _error_result(exc, "load_skill")
+
+    @tool(args_schema=SkillManageArgs)
+    def skill_manage(
+        action: str,
+        name: str,
+        content: str | None = None,
+        old_string: str | None = None,
+        new_string: str | None = None,
+    ) -> str:
+        """Create, patch, edit, or delete a skill (procedural memory).
+
+        Use this when you discover a repeatable multi-step procedure worth
+        capturing — especially when the user corrects your approach. create
+        authors a NEW skill; patch and edit modify an existing one; delete
+        removes it. Every create/patch/edit write is STAGED as a draft for the
+        user's approval and never affects future conversations until approved.
+        """
+        try:
+            if skill_manager is None:
+                return _error_result(ValueError("skill system unavailable"), "skill_manage")
+            if auto_apply_skills and action in ("create", "patch", "edit"):
+                if action == "create":
+                    result = skill_manager.apply_agent_skill(
+                        "create", name, content or "", sources=[f"session:{session_id}"] if session_id else None
+                    )
+                elif action == "patch":
+                    current = skill_manager.get(name)
+                    base = current.file_path.read_text(encoding="utf-8", errors="replace") if current else ""
+                    if not old_string or old_string not in base:
+                        result = {"status": "error", "message": "old_string was not found in the skill body"}
+                    else:
+                        proposed = base.replace(old_string, new_string or "", 1)
+                        result = skill_manager.apply_agent_skill(
+                            "update", name, proposed, sources=[f"session:{session_id}"] if session_id else None
+                        )
+                else:  # edit
+                    result = skill_manager.apply_agent_skill(
+                        "update", name, content or "", sources=[f"session:{session_id}"] if session_id else None
+                    )
+            else:
+                result = skill_manager.skill_manage(
+                    action,
+                    name,
+                    content=content,
+                    old_string=old_string,
+                    new_string=new_string,
+                    sources=[f"session:{session_id}"] if session_id else None,
+                )
+            return json.dumps(result, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "skill_manage")
 
     @tool(args_schema=GitStatusArgs)
     def git_status() -> str:
@@ -589,7 +650,7 @@ def build_workspace_tools(
             return json.dumps({"goal": None}, ensure_ascii=False)
         return json.dumps(goal.to_dict(), ensure_ascii=False)
 
-    tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, git_status]
+    tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, skill_manage, git_status]
     if readonly:
         # Reviewer/auditor sub-agents get no workspace mutation tools.
         tools = [search_files, read_file, git_status]
@@ -724,6 +785,7 @@ def build_coworker_agent_graph(
     max_output_tokens: int = 0,
     calibration_key: str = "",
     chat_mode: bool = False,
+    session_store: Any | None = None,
 ) -> Any:
     """Compile the Coworker agent as a single ``create_agent`` graph.
 
@@ -877,6 +939,11 @@ def build_coworker_agent_graph(
         window_warning=context_window_warning,
     )
     middleware.append(context_guard)
+
+    # LAST guard at the model boundary: if a degenerate (sequential HITL)
+    # resume left the conversation empty, re-seed it from the session store so a
+    # strict provider (vLLM/Qwen) never receives `messages=[]` ("No user query").
+    middleware.append(EnsureUserMessageMiddleware(session_store=session_store))
 
     from .system_prompt import build_cw_chat_system_prompt, build_cw_system_prompt
 
