@@ -1098,5 +1098,9 @@
   "skills.save_draft": "Salvar rascunho",
   "skills.pending_review": "Revisar rascunho de habilidade",
   "dashboard.skills_pending": "{count} pendentes",
-  "dashboard.skills_pending_tip": "Habilidades geradas pelo agente aguardando sua aprovação"
+  "dashboard.skills_pending_tip": "Habilidades geradas pelo agente aguardando sua aprovação",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "não lidas"
 }

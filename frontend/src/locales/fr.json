@@ -1098,5 +1098,9 @@
   "skills.save_draft": "Enregistrer le brouillon",
   "skills.pending_review": "Examiner le brouillon de compétence",
   "dashboard.skills_pending": "{count} en attente",
-  "dashboard.skills_pending_tip": "Compétences générées par l’agent en attente de votre approbation"
+  "dashboard.skills_pending_tip": "Compétences générées par l’agent en attente de votre approbation",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "non lu"
 }

@@ -449,6 +449,26 @@ body.sidebar-resizing {
   flex: 0 0 auto;
 }
 
+/* 專案未讀角標（紅點 pill） */
+.sidebar-project__unread-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 4px;
+  margin-right: 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: var(--destructive);
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
 .sidebar-group__header {
   justify-content: space-between;
   gap: 6px;
@@ -2890,6 +2910,64 @@ body.bottom-panel-resizing {
   color: var(--ring);
   display: inline-flex;
   animation: spin 900ms linear infinite;
+}
+
+/* ── 會話狀態指示器（統一樣式） ─────────────────────────────── */
+.session-status {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+/* 待審批：warning 黃 */
+.session-status--approval {
+  color: var(--warning-foreground);
+  background: var(--warning);
+}
+
+/* 錯誤：danger 紅 */
+.session-status--error {
+  color: var(--danger-foreground);
+  background: var(--danger);
+}
+
+/* 進行中：info 藍（spinner 由子元件負責） */
+.session-status--running {
+  color: var(--info);
+}
+
+.session-status__spinner {
+  animation: spin 900ms linear infinite;
+}
+
+/* 未讀計數徽章（右側時間戳旁） */
+.sidebar-session__unread-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--danger-foreground);
+  background: var(--danger);
+  border-radius: 9px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* 專案會話列表中的狀態槽 */
+.project-session-list__item-content > .session-status {
+  margin-right: 8px;
 }
 
 /* removed: inline session time now lives inside the more-trigger button */
@@ -6122,6 +6200,25 @@ body.bottom-panel-resizing {
   font-weight: 500;
   margin-left: auto;
   white-space: nowrap;
+}
+
+.project-session-list__unread-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 6px;
+  margin-right: 4px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background: var(--destructive);
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 .project-session-list__item-more {

@@ -26,11 +26,12 @@ import { ChangesPanel } from './components/ChangesPanel';
 import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, tOrDefault, translateError, useLanguage } from './lib/i18n';
 import { useUpdateCenter } from './lib/useUpdateCenter';
+import { useSessionBadges } from './lib/useSessionBadges';
 import { displayProjectName } from './lib/projectName';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, CommandApproval, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SessionBadgeMap, SessionBadges, SkillDiagnostic, SkillEntry, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
@@ -1291,37 +1292,45 @@ function App() {
     }
   };
 
-  // 后端轮询到的活跃会话 id 集合（Phase 2 兜底：前端刷新/重启后不知道哪些
-  // 会话仍在后台运行）。只作为 runningSessionIds 的补充来源。
+  // 后端轮询到的活跃会话 id 集合（兜底：前端刷新/重启后不知道哪些会话仍在
+  // 后台运行）。只作为 running 徽章的补充来源。
   const [backendActiveSessionIds, setBackendActiveSessionIds] = useState<Set<string>>(new Set());
 
-  // 侧栏会话"运行中"指示器：来自前台消息流状态（实时）与后端轮询结果（兜底）
-  // 的并集。
-  const runningSessionIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const m of messages) {
-      if ((m.status === 'running' || m.status === 'waiting') && m.sessionId) ids.add(m.sessionId);
-    }
-    for (const id of backendActiveSessionIds) ids.add(id);
-    return ids;
-  }, [messages, backendActiveSessionIds]);
+  // sessionId → 该会话的待审批记录（status === 'pending'）。来自
+  // /command-approvals 的全域扫描（后端持久化在 command_approvals.json），
+  // 让背景会话的待审批在「开启该会话之前」就可见。
+  // 存完整记录而非笔数：开启会话时要拿它重建审批卡（需要 command / question /
+  // options 等字段），存笔数会逼我们再打一次 API。
+  const [pendingBySession, setPendingBySession] = useState<Map<string, CommandApproval[]>>(new Map());
 
-  // 轮询后端活跃会话（仅当前端判断可能遗漏时才持续；集合为空即停止以省资源）。
+  // 全域状态轮询：活跃会话 + 待审批。常驻运行，不再因集合为空而停止
+  // （否则背景会话的待审批永远等不到下一次刷新）。
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
-        const active = await chatService.listActiveSessions();
+        const [active, approvals] = await Promise.all([
+          chatService.listActiveSessions(),
+          chatService.listCommandApprovals(),
+        ]);
         if (cancelled) return;
         setBackendActiveSessionIds(new Set(active));
-        if (active.length > 0) {
-          timer = setTimeout(poll, 5000);
+        const bySession = new Map<string, CommandApproval[]>();
+        for (const approval of approvals.approvals) {
+          if (approval.status !== 'pending') continue;
+          const sessionId = approval.context?.session_id;
+          if (typeof sessionId !== 'string' || !sessionId) continue;
+          const list = bySession.get(sessionId);
+          if (list) list.push(approval);
+          else bySession.set(sessionId, [approval]);
         }
+        setPendingBySession(bySession);
       } catch {
-        if (!cancelled) {
-          timer = setTimeout(poll, 5000);
-        }
+        /* 静默失败：下一次轮询重试，不打断指示器既有状态 */
+      }
+      if (!cancelled) {
+        timer = setTimeout(poll, 5000);
       }
     };
     void poll();
@@ -1335,6 +1344,14 @@ function App() {
       if (timer) clearTimeout(timer);
     };
   }, [chatService]);
+
+  // 会话徽章聚合：四种状态的唯一真源，三处会话列表（侧栏/整页/Dashboard）共用。
+  const sessionBadges = useSessionBadges({
+    sessions,
+    messages,
+    backendActiveSessionIds,
+    pendingBySession,
+  });
 
   useEffect(() => {
     sessionIdRef.current = sessionId;
@@ -4233,7 +4250,7 @@ function App() {
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
           onOpenOrgSettings={openOrgSettings}
-          runningSessionIds={runningSessionIds}
+          sessionBadges={sessionBadges}
         />
         <section ref={workspaceFrameRef} className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
@@ -4265,7 +4282,7 @@ function App() {
                     <ProjectSessionList
                       project={activeProject}
                       sessions={activeProjectSessions}
-                      runningSessionIds={runningSessionIds}
+                      sessionBadges={sessionBadges}
                       onNewChat={startNewChat}
                       onOpenSession={openSession}
                       onDeleteSession={deleteSession}
@@ -4429,7 +4446,7 @@ function App() {
                   projectId={dashboardProjectId}
                   {...(dashboardProjectName ? { projectName: dashboardProjectName } : {})}
                   sessions={sessions}
-                  runningSessionIds={runningSessionIds}
+                  sessionBadges={sessionBadges}
                   onBack={() => setActiveView('chat')}
                   onViewChange={(view) => setActiveView(view)}
                   onNewChat={startNewChat}

@@ -2265,6 +2265,13 @@ async def chat_stream(request: ChatStreamRequest):
                     logger.warning("compaction failed for session %s: %s", session_id, notice)
                     event["compaction_notice"] = notice
                 terminal_sent = True
+                # Success → clear previous error
+                try:
+                    session = session_store.require(session_id)
+                    session.last_error = ""
+                    session_store.save(session)
+                except KeyError:
+                    pass
             elif etype == "error":
                 # The runtime yields an explicit error event BEFORE re-raising so
                 # the SSE layer can turn it into a proper terminal `error` event.
@@ -2541,6 +2548,14 @@ async def chat_stream(request: ChatStreamRequest):
                 # waiting，后者 error 帧即终态）。
                 if goal_stream_active and not interrupt_emitted and not error_emitted:
                     yield {"type": "goal_stream_end", "session_id": session_id}
+                # Natural success → clear error
+                if not error_emitted:
+                    try:
+                        session = session_store.require(session_id)
+                        session.last_error = ""
+                        session_store.save(session)
+                    except KeyError:
+                        pass
             finally:
                 # 生成器被取消（客户端断开 / Stop）：当前轮 snapshot 尚未 end 则兜底关闭。
                 if inflight_pre is not None and inflight_anchor is not None:
@@ -2697,6 +2712,15 @@ async def chat_stream(request: ChatStreamRequest):
                     raise
                 except Exception:  # noqa: BLE001 - best-effort cleanup
                     logger.warning("turn-end checkpoint delete failed for %s", session_id, exc_info=True)
+            # Persist error if the turn failed (no done event was emitted)
+            if not terminal_sent:
+                try:
+                    session = session_store.require(session_id)
+                    if not session.last_error:
+                        session.last_error = "stream terminated without done event"
+                    session_store.save(session)
+                except KeyError:
+                    pass
 
     return StreamingResponse(
         event_stream(),
@@ -3252,6 +3276,22 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
         session = session_store.rename(session_id, request.title)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "ok", "session": session.public()}
+
+
+@app.post("/sessions/{session_id}/read")
+async def mark_session_read(session_id: str):
+    """Mark all messages in the session as read (set last_read_at to now).
+
+    Called by the frontend when the user opens a session or explicitly clears
+    unread state.  Idempotent.
+    """
+    try:
+        session = session_store.require(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    session.last_read_at = _now()
+    session_store.save(session)
     return {"status": "ok", "session": session.public()}
 
 
@@ -4221,6 +4261,15 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, user_message.id, snapshot_workspace,
                 )
+            # Persist error if the turn failed (no done event was emitted)
+            if not terminal_sent and session_id:
+                try:
+                    session = session_store.require(session_id)
+                    if not session.last_error:
+                        session.last_error = "stream terminated without done event"
+                    session_store.save(session)
+                except KeyError:
+                    pass
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -5059,6 +5108,13 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
                     )
             except KeyError:
                 pass
+            # Success → clear previous error
+            try:
+                session = session_store.require(session_id)
+                session.last_error = ""
+                session_store.save(session)
+            except KeyError:
+                pass
         for item in ordered:
             command_approval_store.mark_consumed(item.get("id", ""))
         # Resume reached a terminal `done`: the turn is over, so the disposable
@@ -5097,6 +5153,13 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
             resume_id,
             {"type": "error", "session_id": session_id, "error": str(exc)[:400], "resume_id": resume_id},
         )
+        # Persist error summary to session so it survives restart
+        try:
+            session = session_store.require(session_id)
+            session.last_error = str(exc)[:400]
+            session_store.save(session)
+        except KeyError:
+            pass
     finally:
         approval_event_bus.close(resume_id)
         # The resume is over: release the session so the next turn can start.

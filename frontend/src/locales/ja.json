@@ -1098,5 +1098,9 @@
   "skills.save_draft": "下書きを保存",
   "skills.pending_review": "スキル草案を審査",
   "dashboard.skills_pending": "{count} 件審査待ち",
-  "dashboard.skills_pending_tip": "エージェントが生成したスキルが承認待ちです"
+  "dashboard.skills_pending_tip": "エージェントが生成したスキルが承認待ちです",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "未読"
 }

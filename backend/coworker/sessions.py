@@ -126,6 +126,10 @@ class Session:
     messages: list[SessionMessage] = field(default_factory=list)
     # Persistent session-scoped goal (唯一 goal 真源). None = no goal.
     goal: GoalState | None = None
+    # 未讀水位線：assistant 訊息的 created_at 大於此值的算未讀。預設空值＝全部已讀。
+    last_read_at: str = ""
+    # 最近一輪以錯誤終止時的摘要；空值 = 無錯誤。
+    last_error: str = ""
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Session":
@@ -154,12 +158,15 @@ class Session:
             context_summarized_fingerprints=[str(x) for x in payload.get("context_summarized_fingerprints", []) if isinstance(x, str)],
             messages=[SessionMessage(**item) for item in payload.get("messages", [])],
             goal=GoalState.from_dict(payload.get("goal")),
+            last_read_at=str(payload.get("last_read_at", "") or ""),
+            last_error=str(payload.get("last_error", "") or ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def public(self) -> dict[str, Any]:
+        unread_count = self.unread_count()
         return {
             "id": self.id,
             "title": self.title,
@@ -172,7 +179,23 @@ class Session:
             "todos": self.todos,
             "goal": self.goal.to_dict() if self.goal is not None else None,
             "message_count": len(self.messages),
+            "unread_count": unread_count,
+            "last_error": self.last_error if self.last_error else None,
         }
+
+    def unread_count(self) -> int:
+        """Count of unread assistant messages.
+
+        Messages with ``created_at > last_read_at`` are unread.  An empty
+        ``last_read_at`` means "all read" (legacy sessions).  String comparison
+        works because ``_now()`` produces fixed ``+00:00`` ISO 8601.
+        """
+        if not self.last_read_at:
+            return 0
+        return sum(
+            1 for m in self.messages
+            if m.role == "assistant" and m.created_at > self.last_read_at
+        )
 
     def full(self) -> dict[str, Any]:
         return {

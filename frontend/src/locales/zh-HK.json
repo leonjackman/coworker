@@ -1098,5 +1098,9 @@
   "skills.save_draft": "儲存草稿",
   "skills.pending_review": "審核技能草稿",
   "dashboard.skills_pending": "{count} 個待審核",
-  "dashboard.skills_pending_tip": "Agent 生成的技能，等待你的批准"
+  "dashboard.skills_pending_tip": "Agent 生成的技能，等待你的批准",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "未讀"
 }

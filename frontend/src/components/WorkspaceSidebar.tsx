@@ -1,6 +1,6 @@
 import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, LayoutDashboard, Loader2, MessageCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, Briefcase, Folders, FoldersIcon, CirclePile, FolderTree } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
-import type { AppView, OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
+import type { AppView, OrgRosterEntry, ProjectEntry, SessionBadgeMap, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
 import { displayProjectName } from '../lib/projectName';
 import { formatTimeAgo } from '../lib/utils';
@@ -10,6 +10,7 @@ import { Tooltip } from './ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { ContextMenu, type ContextMenuItem } from './ui/context-menu';
 import { SidebarScrollbar } from './ui/sidebar-scrollbar';
+import { SessionStatusBadge } from './SessionStatusBadge';
 import {
   DndContext,
   PointerSensor,
@@ -36,7 +37,7 @@ interface WorkspaceSidebarProps {
   activeView: AppView;
   activeSessionId?: string;
   activeProjectId?: string;
-  runningSessionIds?: Set<string>;
+  sessionBadges: SessionBadgeMap;
   collapsed: boolean;
   onResizeStart: () => void;
   onResizeEnd: () => void;
@@ -57,7 +58,7 @@ interface WorkspaceSidebarProps {
 interface SessionRowProps {
   session: SessionSummary;
   active: boolean;
-  running: boolean;
+  badges?: SessionBadgeMap;
   onOpen: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
 }
@@ -112,7 +113,7 @@ function orderProjects(projects: ProjectEntry[], preferred: string[]): ProjectEn
   return result.sort((a, b) => Number(b.is_chat) - Number(a.is_chat));
 }
 
-function SessionRow({ session, active, running, onOpen, onDelete }: SessionRowProps) {
+function SessionRow({ session, active, badges, onOpen, onDelete }: SessionRowProps) {
   const [copied, setCopied] = useState(false);
   const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -136,8 +137,11 @@ function SessionRow({ session, active, running, onOpen, onDelete }: SessionRowPr
     <>
     <div className={`sidebar-session ${active ? 'sidebar-session--active' : ''}`} onContextMenu={(e) => { e.preventDefault(); setSessionMenu({ x: e.clientX, y: e.clientY }); }}>
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
-        {running && <Loader2 size={13} className="sidebar-session__running-icon" aria-label="Running" />}
-        <span className="sidebar-session__title">{session.title}</span>      
+        {badges && <SessionStatusBadge badges={badges.get(session.id)} />}
+        <span className="sidebar-session__title">{session.title}</span>
+        {badges && (badges.get(session.id)?.unread ?? 0) > 0 && (
+          <span className="sidebar-session__unread-pill">{badges.get(session.id)?.unread}</span>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger className="sidebar-session__more-trigger" aria-label="Session actions">
             <span className="sidebar-session__more-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
@@ -176,7 +180,7 @@ interface ProjectRowProps {
   sessions: SessionSummary[];
   activeSessionId?: string;
   activeProjectId?: string;
-  runningSessionIds?: Set<string>;
+  sessionBadges: SessionBadgeMap;
   defaultExpanded?: boolean;
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenProject: (projectId: string) => void;
@@ -200,11 +204,11 @@ interface AgentGroupData {
 
 const AGENT_PAGE_SIZE = 10;
 
-function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNewChat, onOpenSession, onDeleteSession }: {
+function AgentGroup({ group, projectId, activeSessionId, sessionBadges, onNewChat, onOpenSession, onDeleteSession }: {
   group: AgentGroupData;
   projectId: string;
   activeSessionId?: string;
-  runningSessionIds?: Set<string>;
+  sessionBadges: SessionBadgeMap;
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
@@ -261,7 +265,7 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
                   key={session.id}
                   session={session}
                   active={session.id === activeSessionId}
-                  running={Boolean(runningSessionIds?.has(session.id))}
+                  badges={sessionBadges}
                   onOpen={onOpenSession}
                   onDelete={onDeleteSession}
                 />
@@ -296,7 +300,7 @@ function AgentGroup({ group, projectId, activeSessionId, runningSessionIds, onNe
   );
 }
 
-function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runningSessionIds, defaultExpanded, onNewChat, onOpenProject, onOpenDashboard, onSelectProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
+function ProjectRow({ project, sessions, activeSessionId, activeProjectId, sessionBadges, defaultExpanded, onNewChat, onOpenProject, onOpenDashboard, onSelectProject, onOpenSession, onDeleteSession, onRenameProject, onDeleteProject, onOpenOrgSettings }: ProjectRowProps) {
   const [expanded, setExpanded] = useState(defaultExpanded ?? false);
   const [projectMenu, setProjectMenu] = useState<{ x: number; y: number } | null>(null);
   const isChat = Boolean(project.is_chat);
@@ -313,6 +317,15 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
   };
   const roster = useMemo(() => project.roster ?? [], [project.roster]);
   const isSingle = project.mode === 'single';
+
+  // 匯總專案下所有會話的未讀數
+  const projectUnread = useMemo(() => {
+    let total = 0;
+    for (const session of sessions) {
+      total += sessionBadges.get(session.id)?.unread ?? 0;
+    }
+    return total;
+  }, [sessions, sessionBadges]);
 
   const groups = useMemo<AgentGroupData[]>(() => {
     if (isSingle) return [];
@@ -382,6 +395,11 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
       >
         <div className="sidebar-project__title" onClick={handleTitleClick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleTitleClick(); } }} role="button" tabIndex={0} style={{cursor:'pointer'}}>
           {isChat ? <MessageCircle size={16} /> : (expanded ? (isSingle ? <FolderOpen size={16} /> : <FolderTree size={16} />) : (isSingle ? <Folder size={16} /> : <FolderTree size={16} />))}
+          {projectUnread > 0 && (
+            <span className="sidebar-project__unread-badge" aria-label={`${projectUnread} unread`}>
+              {projectUnread > 99 ? '99+' : projectUnread}
+            </span>
+          )}
           <span>{displayProjectName(project)}</span>
           <span className="sidebar-project__chevron-icon" onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }} onPointerDown={(e) => e.stopPropagation()}>
             {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
@@ -441,7 +459,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
                         key={session.id}
                         session={session}
                         active={session.id === activeSessionId}
-                        running={Boolean(runningSessionIds?.has(session.id))}
+                        badges={sessionBadges}
                         onOpen={onOpenSession}
                         onDelete={onDeleteSession}
                       />
@@ -455,7 +473,7 @@ function ProjectRow({ project, sessions, activeSessionId, activeProjectId, runni
                     group={group}
                     projectId={project.id}
                     {...(activeSessionId ? { activeSessionId } : {})}
-                    {...(runningSessionIds ? { runningSessionIds } : {})}
+                    sessionBadges={sessionBadges}
                     onNewChat={onNewChat}
                     onOpenSession={onOpenSession}
                     onDeleteSession={onDeleteSession}
@@ -487,7 +505,7 @@ export function WorkspaceSidebar({
   activeView,
   activeSessionId,
   activeProjectId,
-  runningSessionIds,
+  sessionBadges,
   collapsed,
   onResizeStart,
   onResizeEnd,
@@ -654,7 +672,7 @@ export function WorkspaceSidebar({
                     sessions={sessions.filter((session) => session.project_id === project.id)}
                     {...(activeSessionId ? { activeSessionId } : {})}
                     {...(activeProjectId ? { activeProjectId } : {})}
-                    {...(runningSessionIds ? { runningSessionIds } : {})}
+                    sessionBadges={sessionBadges}
                     defaultExpanded={expandedProjectIds.has(project.id)}
                     onNewChat={onNewChat}
                     onOpenProject={onOpenProject}

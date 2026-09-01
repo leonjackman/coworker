@@ -412,7 +412,32 @@ export interface SessionSummary {
   message_count: number;
   todos?: Todo[];
   goal?: GoalState | null;
+  /** 未讀訊息數。後端由 last_read_at 水位線計算，非計數器。 */
+  unread_count?: number;
+  /** 最近一輪以錯誤終止時的摘要；null / 空 = 無錯誤。 */
+  last_error?: string | null;
 }
+
+/**
+ * 單一會話的狀態徽章聚合結果。
+ *
+ * 由 `useSessionBadges` 統一計算，取代過去散落各處的 `runningSessionIds`。
+ */
+export interface SessionBadges {
+  /** 進行中（前端訊息流即時狀態 ∪ 後端活躍會話輪詢）。 */
+  running: boolean;
+  /** 待審批筆數。0 = 無。 */
+  approvals: number;
+  /** 未讀訊息數。 */
+  unread: number;
+  /** 錯誤摘要。null = 無錯誤。 */
+  error: string | null;
+}
+
+/**
+ * sessionId → 徽章。三處會話列表（側欄 / 整頁 / Dashboard）共用同一份。
+ */
+export type SessionBadgeMap = Map<string, SessionBadges>;
 
 export type GoalStatus =
   | 'active'

@@ -19,7 +19,7 @@ interface ProjectDashboardProps {
   projectId: string;
   projectName?: string;
   sessions: SessionSummary[];
-  runningSessionIds?: Set<string>;
+  sessionBadges: Map<string, { running: boolean; approvals: number; unread: number; error: string | null }>;
   onBack: () => void;
   onViewChange: (view: 'mcp' | 'skills') => void;
   onNewChat: (projectId?: string, agentId?: string) => void;
@@ -32,7 +32,7 @@ export function ProjectDashboard({
   projectId,
   projectName,
   sessions,
-  runningSessionIds,
+  sessionBadges,
   onBack,
   onViewChange,
   onNewChat,
@@ -145,7 +145,7 @@ export function ProjectDashboard({
                 <DashboardSessions
                   data={data}
                   sessions={sessionsByProject}
-                  {...(runningSessionIds ? { runningSessionIds } : {})}
+                  sessionBadges={sessionBadges}
                   onNewChat={onNewChat}
                   onOpenSession={onOpenSession}
                   onDeleteSession={onDeleteSession}
@@ -164,7 +164,7 @@ export function ProjectDashboard({
 function DashboardSessions({
   data,
   sessions,
-  runningSessionIds,
+  sessionBadges,
   onNewChat,
   onOpenSession,
   onDeleteSession,
@@ -173,7 +173,7 @@ function DashboardSessions({
 }: {
   data: ProjectDashboardData;
   sessions: SessionSummary[];
-  runningSessionIds?: Set<string>;
+  sessionBadges: Map<string, { running: boolean; approvals: number; unread: number; error: string | null }>;
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
@@ -184,7 +184,7 @@ function DashboardSessions({
     <ProjectSessionList
       project={data.project}
       sessions={sessions}
-      {...(runningSessionIds ? { runningSessionIds } : {})}
+      sessionBadges={sessionBadges}
       onNewChat={onNewChat}
       onOpenSession={onOpenSession}
       onDeleteSession={onDeleteSession}

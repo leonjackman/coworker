@@ -1098,5 +1098,9 @@
   "skills.save_draft": "초안 저장",
   "skills.pending_review": "스킬 초안 검토",
   "dashboard.skills_pending": "{count}개 대기",
-  "dashboard.skills_pending_tip": "에이전트가 생성한 스킬이 승인을 기다립니다"
+  "dashboard.skills_pending_tip": "에이전트가 생성한 스킬이 승인을 기다립니다",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "안읽음"
 }

@@ -1098,5 +1098,9 @@
   "skills.save_draft": "Сохранить черновик",
   "skills.pending_review": "Проверить черновик навыка",
   "dashboard.skills_pending": "{count} ожидают",
-  "dashboard.skills_pending_tip": "Навыки, созданные агентом, ожидают вашего одобрения"
+  "dashboard.skills_pending_tip": "Навыки, созданные агентом, ожидают вашего одобрения",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "непрочитанные"
 }

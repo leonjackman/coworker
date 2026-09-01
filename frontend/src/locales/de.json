@@ -1098,5 +1098,9 @@
   "skills.save_draft": "Entwurf speichern",
   "skills.pending_review": "Skill-Entwurf prüfen",
   "dashboard.skills_pending": "{count} ausstehend",
-  "dashboard.skills_pending_tip": "Vom Agenten erstellte Skills, die auf Ihre Genehmigung warten"
+  "dashboard.skills_pending_tip": "Vom Agenten erstellte Skills, die auf Ihre Genehmigung warten",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "ungelesen"
 }

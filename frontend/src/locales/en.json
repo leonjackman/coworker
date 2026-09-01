@@ -1086,5 +1086,9 @@
   "skills.save_draft": "Save draft",
   "skills.pending_review": "Review skill draft",
   "dashboard.skills_pending": "{count} pending",
-  "dashboard.skills_pending_tip": "Agent-generated skills awaiting your approval"
+  "dashboard.skills_pending_tip": "Agent-generated skills awaiting your approval",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "unread"
 }

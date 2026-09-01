@@ -5,12 +5,13 @@ import { WorkspacePage } from './ui/workspace-page';
 import { t } from '../lib/i18n';
 import { displayProjectName } from '../lib/projectName';
 import { formatTimeAgo } from '../lib/utils';
-import type { OrgRosterEntry, ProjectEntry, SessionSummary } from '../types';
+import type { OrgRosterEntry, ProjectEntry, SessionBadgeMap, SessionSummary } from '../types';
+import { SessionStatusBadge } from './SessionStatusBadge';
 
 interface ProjectSessionListProps {
   project: ProjectEntry;
   sessions: SessionSummary[];
-  runningSessionIds?: Set<string>;
+  sessionBadges: SessionBadgeMap;
   onNewChat: (projectId?: string, agentId?: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDeleteSession: (sessionId: string) => void;
@@ -31,7 +32,7 @@ interface AgentGroupData {
   sessions: SessionSummary[];
 }
 
-export function ProjectSessionList({ project, sessions, runningSessionIds, onNewChat, onOpenSession, onDeleteSession, onOpenOrgSettings, hideHeading = false }: ProjectSessionListProps) {
+export function ProjectSessionList({ project, sessions, sessionBadges, onNewChat, onOpenSession, onDeleteSession, onOpenOrgSettings, hideHeading = false }: ProjectSessionListProps) {
   const [expandedAgentIds, setExpandedAgentIds] = useState<Set<string>>(() => new Set());
   const [expandedLists, setExpandedLists] = useState<Set<string>>(() => new Set());
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -136,9 +137,12 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
                       type="button"
                       onClick={() => onOpenSession(session.id)}
                     >
-                      {runningSessionIds?.has(session.id) && <Loader2 size={15} className="project-session-list__running-icon" aria-label="Running" />}
+                      <SessionStatusBadge badges={sessionBadges.get(session.id)} />
                       <MessageSquare size={15} className="project-session-list__item-icon" />
                       <span className="project-session-list__item-title">{session.title}</span>
+                      {(() => { const u = sessionBadges.get(session.id)?.unread ?? 0; return u > 0; })() && (
+                        <span className="project-session-list__unread-pill">{sessionBadges.get(session.id)?.unread}</span>
+                      )}
                       <span className="project-session-list__item-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
                     </button>
                     <DropdownMenu>
@@ -210,9 +214,12 @@ export function ProjectSessionList({ project, sessions, runningSessionIds, onNew
                               type="button"
                               onClick={() => onOpenSession(session.id)}
                             >
-                              {runningSessionIds?.has(session.id) && <Loader2 size={15} className="project-session-list__running-icon" aria-label="Running" />}
+                              <SessionStatusBadge badges={sessionBadges.get(session.id)} />
                               <MessageSquare size={15} className="project-session-list__item-icon" />
                               <span className="project-session-list__item-title">{session.title}</span>
+                              {(() => { const u = sessionBadges.get(session.id)?.unread ?? 0; return u > 0; })() && (
+                                <span className="project-session-list__unread-pill">{sessionBadges.get(session.id)?.unread}</span>
+                              )}
                               <span className="project-session-list__item-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
                             </button>
                             <DropdownMenu>

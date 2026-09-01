@@ -1098,5 +1098,9 @@
   "skills.save_draft": "Guardar borrador",
   "skills.pending_review": "Revisar borrador de habilidad",
   "dashboard.skills_pending": "{count} pendientes",
-  "dashboard.skills_pending_tip": "Habilidades generadas por el agente que esperan tu aprobación"
+  "dashboard.skills_pending_tip": "Habilidades generadas por el agente que esperan tu aprobación",
+  "session_status.running": "●",
+  "session_status.error": "Error",
+  "session_status.pending_approval": "{count} pending",
+  "sidebar.unread_count": "sin leer"
 }
