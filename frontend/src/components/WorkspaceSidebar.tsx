@@ -138,27 +138,27 @@ function SessionRow({ session, active, running, onOpen, onDelete }: SessionRowPr
       <button type="button" className="sidebar-session__inner" onClick={() => onOpen(session.id)}>
         {running && <Loader2 size={13} className="sidebar-session__running-icon" aria-label="Running" />}
         <span className="sidebar-session__title">{session.title}</span>      
+        <DropdownMenu>
+          <DropdownMenuTrigger className="sidebar-session__more-trigger" aria-label="Session actions">
+            <span className="sidebar-session__more-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
+            <MoreHorizontal size={15} className="sidebar-session__more-icon" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" alignOffset={-8}>
+            <DropdownMenuItem onClick={() => onOpen(session.id)}>
+              <FolderOpen size={14} />
+              {t('sidebar.session_open')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void handleCopyId()}>
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+              {copied ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id')}
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onClick={() => onDelete(session.id)}>
+              <Trash2 size={14} />
+              {t('common.delete')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </button>
-      <DropdownMenu>
-        <DropdownMenuTrigger className="sidebar-session__more-trigger" aria-label="Session actions">
-          <span className="sidebar-session__more-time">{formatTimeAgo(session.updated_at || session.created_at)}</span>
-          <MoreHorizontal size={15} className="sidebar-session__more-icon" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" alignOffset={-8}>
-          <DropdownMenuItem onClick={() => onOpen(session.id)}>
-            <FolderOpen size={14} />
-            {t('sidebar.session_open')}
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => void handleCopyId()}>
-            {copied ? <Check size={14} /> : <Copy size={14} />}
-            {copied ? t('sidebar.session_id_copied') : t('sidebar.session_copy_id')}
-          </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onClick={() => onDelete(session.id)}>
-            <Trash2 size={14} />
-            {t('common.delete')}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
     <ContextMenu
       open={sessionMenu !== null}

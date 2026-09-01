@@ -2901,7 +2901,7 @@ body.bottom-panel-resizing {
   gap: 6px;
   grid-auto-flow: column;
   width: auto;
-  min-width: 56px;
+  /* min-width: 56px; */
   justify-content: flex-end;
   border: 0;
   border-radius: 6px;
