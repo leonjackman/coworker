@@ -153,3 +153,7 @@
 ### 品質
 
 - 新增 MCP 審計修復方案文檔 `docs/task/mcp-audit-fix-plan.md`。
+
+## Unreleased
+
+（尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
