@@ -464,7 +464,15 @@ class ElectronChatService implements ChatService {
 
   async deleteMcp(serverId: string): Promise<void> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    await window.electronAPI.deleteMcp(serverId);
+    try {
+      await window.electronAPI.deleteMcp(serverId);
+    } catch (error) {
+      // Delete is idempotent: if the server is already gone, treat it as success.
+      const msg = error instanceof Error ? error.message : '';
+      if (!/not found/i.test(msg)) {
+        throw error;
+      }
+    }
   }
 
   async testMcp(request: McpTestRequest): Promise<McpTestResult> {
