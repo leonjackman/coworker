@@ -30,13 +30,175 @@ def _llm_stream_chunk_timeout() -> float:
     """Global timeout (seconds) for how long the LLM stream may pause between
     chunks.
 
-    LangChain's default is 120s; slow / concurrent local providers can exceed
-    that and get their reply truncated. Configurable via env; default 600s.
+    This is the "seems stuck like network congestion" knob: on a weak / lossy
+    link a connection can stay TCP-alive while no token arrives for a long
+    time. A huge value hides the stall behind an indefinite spinner; a modest
+    value matches opencode's fail-fast behaviour. Configurable via env;
+    default 120s.
     """
     try:
-        return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "600.0"))
+        return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "120.0"))
     except (TypeError, ValueError):
-        return 600.0
+        return 120.0
+
+
+# ---------------------------------------------------------------------------
+# LLM HTTP transport tuning (weak-network behaviour)
+# ---------------------------------------------------------------------------
+
+# httpx/openai keep the HTTP/1.1 pool's keep-alive for only 5s by default; a
+# tool-loop pause or long provider-thinking gap longer than that forces a fresh
+# TCP + TLS handshake on the NEXT model call. On a hotspot every handshake is
+# several RTTs (~1-1.5s), so raise the keep-alive expiry so one pooled
+# connection survives the whole session. Env: COWORKER_HTTP_KEEPALIVE_SECONDS.
+_DEFAULT_HTTP_KEEPALIVE_SECONDS = 60.0
+
+# connect timeout (seconds) for the provider link. openai's default is 5s,
+# which is tight on a lossy hotspot where SYN retransmits are normal. Loosened
+# so a slow-but-alive link is not misclassified as "provider unreachable"
+# (which then cascades into multi-layer retries). Env: COWORKER_HTTP_CONNECT_TIMEOUT_S.
+_DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS = 10.0
+
+# read timeout: safety net between bytes on the socket. Kept generous (SSE
+# keepalives reset it) — stall detection is handled by the stream_chunk_timeout
+# above, not by aborting the socket.
+_HTTP_READ_TIMEOUT_SECONDS = 600.0
+
+
+def _http_keepalive_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("COWORKER_HTTP_KEEPALIVE_SECONDS", str(_DEFAULT_HTTP_KEEPALIVE_SECONDS))))
+    except (TypeError, ValueError):
+        return _DEFAULT_HTTP_KEEPALIVE_SECONDS
+
+
+def _http_connect_timeout_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("COWORKER_HTTP_CONNECT_TIMEOUT_S", str(_DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS))))
+    except (TypeError, ValueError):
+        return _DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
+
+
+def _http2_available() -> bool:
+    """HTTP/2 is an opt-in transport; it needs the ``h2`` package (httpx[http2])."""
+    if os.environ.get("COWORKER_HTTP2", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return False
+    try:
+        import h2  # noqa: F401
+
+        return True
+    except Exception:  # noqa: BLE001 - h2 missing is the common case
+        return False
+
+
+def _http_proxy_visible() -> bool:
+    """Best-effort check for a REAL forward proxy (custom transports disable
+    httpx's proxy auto-detection, so we skip tuning and let langchain build its
+    default client whenever traffic may actually be routed via a proxy).
+
+    A lone ``NO_PROXY`` (very common) routes nothing and must not disable
+    tuning; langchain's own ``_proxy_env_detected`` treats the macOS
+    ``urllib.request.getproxies()`` ``{'no': ...}`` result as positive, which
+    would defeat the tuning on most dev machines. We only bail out for an
+    explicit ``*_PROXY`` env var or a system proxy that actually carries
+    traffic (http/https/socks keys in ``getproxies()``).
+    """
+    proxy_env = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+    if any(os.environ.get(name) for name in proxy_env):
+        return True
+    try:
+        import urllib.request
+
+        proxies = urllib.request.getproxies()
+    except Exception:  # noqa: BLE001 - best-effort
+        return False
+    for key, value in proxies.items():
+        if str(key).lower() != "no" and value:
+            return True
+    return False
+
+
+def _build_tuned_async_httpx_client(base_url: str | None, timeout: Any) -> Any:
+    """Return an httpx.AsyncClient tuned for weak / lossy provider links.
+
+    Differences vs langchain-openai's default builder (which HTTP/1.1 + 5s
+    keep-alive):
+
+    * HTTP/2 enabled when the ``h2`` package is installed and the endpoint is
+      HTTPS (multiplexes the tool loop's back-to-back model calls over one
+      connection; plaintext/ALPN-less servers transparently fall back to
+      HTTP/1.1).
+    * keep-alive pool expiry raised (default 5s -> 60s) so a thinking/tool gap
+      does not pay a fresh TCP+TLS handshake on the next call.
+    * connect timeout loosened (5s -> 10s) for lossy links.
+
+    The kernel TCP keep-alive / TCP_USER_TIMEOUT socket profile langchain
+    computes from its ``LANGCHAIN_OPENAI_TCP_*`` envs is preserved. When a proxy
+    env is visible we return langchain's own default client untouched so env /
+    system proxy auto-detection keeps working.
+
+    ``timeout`` mirrors langchain's ``_get_default_async_httpx_client``
+    signature; our tuned client sets an explicit non-default timeout so openai
+    honours it per request (openai ignores an httpx client whose timeout is the
+    5s httpx default).
+    """
+    try:
+        import httpx
+
+        from langchain_openai.chat_models import _client_utils as _cu
+    except Exception:  # noqa: BLE001 - never break LLM construction on tuning
+        return None
+
+    if _http_proxy_visible():
+        return _cu._get_default_async_httpx_client(base_url, timeout)
+
+    try:
+        socket_options = tuple(_cu._resolve_socket_options(None))
+    except Exception:  # noqa: BLE001 - best-effort
+        socket_options = ()
+
+    is_https = bool(str(base_url or "").strip().lower().startswith("https"))
+    http2 = bool(is_https and _http2_available())
+    keepalive = _http_keepalive_seconds()
+
+    # Nothing to tune (no socket profile, no http2, default keep-alive):
+    # keep langchain's own builder so behaviour is byte-identical to today.
+    if not socket_options and not http2 and keepalive <= 0:
+        return _cu._get_default_async_httpx_client(base_url, timeout)
+
+    limits = httpx.Limits(
+        max_connections=1000,
+        max_keepalive_connections=100,
+        keepalive_expiry=keepalive,
+    )
+    transport = httpx.AsyncHTTPTransport(
+        http1=True,
+        http2=http2,
+        socket_options=list(socket_options),
+        limits=limits,
+    )
+    base = (
+        (base_url or "").rstrip("/")
+        or os.environ.get("OPENAI_BASE_URL")
+        or "https://api.openai.com/v1"
+    )
+    client = httpx.AsyncClient(
+        base_url=base,
+        timeout=httpx.Timeout(
+            _HTTP_READ_TIMEOUT_SECONDS,
+            connect=_http_connect_timeout_seconds(),
+            write=_HTTP_READ_TIMEOUT_SECONDS,
+            pool=5.0,
+        ),
+        transport=transport,
+        follow_redirects=True,
+    )
+    # Marker so the request-logging wrapper can carry the tuned transport over.
+    try:
+        setattr(client, "_cw_tuned_transport", True)
+    except Exception:  # noqa: BLE001 - cosmetic
+        pass
+    return client
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +289,12 @@ class ReasonPreservingChatOpenAI:
             # resets (default max_retries=2 with exponential backoff); a local
             # provider blip no longer fails the whole turn.
             max_retries=2,
-            # Long-thinking / slow local providers (vLLM, Ollama) can pause
-            # between chunks for well over langchain's 120s default; a fired
-            # stream_chunk_timeout truncates the reply mid-generation. Use a
-            # generous, configurable timeout so concurrent or slow tasks are not
-            # killed just because the next token took a while.
+            # Stall bound between stream chunks (weak-network behaviour): if no
+            # token arrives for this long the generation is considered stalled
+            # (a connection can stay TCP-alive while nothing is produced — the
+            # "looks like network congestion" hang). 120s is long enough for a
+            # heavy prefill yet short enough to surface a dead link promptly;
+            # tune via COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S.
             stream_chunk_timeout=_llm_stream_chunk_timeout(),
             # OpenAI-compatible servers (vLLM, DeepSeek, Ollama, ...) only include
             # token usage in a streaming response when the request asks for it, and
@@ -155,7 +318,7 @@ class ReasonPreservingChatOpenAI:
             # Allow the model to emit multiple tool calls in one response — the
             # precondition for parallel use_worker / use_workers fan-out.
             kwargs["parallel_tool_calls"] = parallel_tool_calls
-        _inject_llm_request_logger(kwargs, data_dir)
+        _inject_http_transport(kwargs, data_dir)
         for k, v in overrides.items():
             kwargs[k] = v
         return ChatOpenAI(**kwargs)
@@ -189,31 +352,30 @@ def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str 
         parallel_tool_calls=True,
         repetition_penalty=repetition_penalty_for(model_name) if use_penalty else None,
     )
-    _inject_llm_request_logger(kwargs, data_dir)
+    _inject_http_transport(kwargs, data_dir)
     return kwargs
 
 
-def _inject_llm_request_logger(kwargs: dict[str, Any], data_dir: Any) -> None:
-    """Inject the request-logging async client into ``kwargs`` when enabled.
+def _inject_http_transport(kwargs: dict[str, Any], data_dir: Any) -> None:
+    """Inject a weak-network-tuned ``http_async_client`` into ChatOpenAI kwargs.
 
-    Builds the inner client through langchain's own default-builder so socket
-    options / timeouts / SSRF-safe transport are preserved; only the HTTP layer
-    is wrapped to capture the serialized request body.
+    Every streaming runtime (main agent, workers, delegation, skill review)
+    builds its ChatOpenAI through this module, so the tuned transport is applied
+    once per client. When ``COWORKER_LLM_LOG=1`` the tuned client is additionally
+    wrapped by the request logger (which now preserves the tuned transport).
     """
-    if os.environ.get("COWORKER_LLM_LOG", "0").strip().lower() in {"0", "false", "no", "off"}:
-        return
     if kwargs.get("http_async_client") is not None:
         # Already injected (e.g. provider_llm_kwargs → create double path);
         # avoid double-wrapping the httpx client.
         return
     try:
-        from langchain_openai.chat_models._client_utils import _get_default_async_httpx_client
-
         from ..llm_request_logger import wrap_async_client
 
         base_url = kwargs.get("base_url")
         timeout = kwargs.get("timeout") or kwargs.get("request_timeout")
-        inner = _get_default_async_httpx_client(base_url, timeout)
+        inner = _build_tuned_async_httpx_client(base_url, timeout)
+        if inner is None:
+            return
         kwargs["http_async_client"] = wrap_async_client(inner, data_dir)
-    except Exception:  # noqa: BLE001 - logging must never break LLM construction
+    except Exception:  # noqa: BLE001 - tuning must never break LLM construction
         kwargs.pop("http_async_client", None)

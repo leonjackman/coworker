@@ -432,6 +432,61 @@ def test_guard_clears_stale_tool_results():
     assert any(s.startswith("clear_tools") for s in guard.last_steps)
 
 
+def test_guard_s0_untouched_below_activation_ratio():
+    # P1: a small/medium request (well under half the window) is passed through
+    # byte-identical — proactive windowing must never touch ordinary requests.
+    guard = _guard(window=200_000, max_output=8192)
+    messages = [HumanMessage(content="start"), *_tool_msgs(8, size=9_000), HumanMessage(content="continue")]
+    request = FakeRequest(messages)
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        return "ok"
+
+    guard.wrap_model_call(request, handler)
+    assert len(seen) == 1
+    assert guard.last_steps == []
+    assert seen[0] is request  # untouched, same object
+
+
+def test_guard_s0_activates_on_large_under_budget_request():
+    guard = _guard(window=40_000, max_output=8192)
+    messages = [HumanMessage(content="start"), *_tool_msgs(8, size=9_000), HumanMessage(content="continue")]
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return "ok"
+
+    guard.wrap_model_call(FakeRequest(messages), handler)
+    assert len(seen) == 1
+    sent = seen[0]
+    assert any(s.startswith("window_tools") for s in guard.last_steps)
+    truncated = sum(
+        1
+        for m in sent.messages
+        if isinstance(m, ToolMessage) and "truncated by context guard" in str(getattr(m, "content", ""))
+    )
+    assert truncated == 4  # oldest 4 of 8 windowed; newest 4 stay whole
+    newest_content = str(sent.messages[-2].content)
+    assert len(newest_content) > 9_000  # the newest tool result survives intact
+
+
+def test_guard_s0_respects_kill_switch(monkeypatch):
+    monkeypatch.setenv("COWORKER_PROACTIVE_TOOL_TRIM", "0")
+    guard = _guard(window=40_000, max_output=8192)
+    messages = [HumanMessage(content="start"), *_tool_msgs(8, size=9_000), HumanMessage(content="continue")]
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return "ok"
+
+    guard.wrap_model_call(FakeRequest(messages), handler)
+    assert guard.last_steps == []
+
+
 @pytest.mark.asyncio
 async def test_guard_async_path():
     guard = _guard(window=30_000, max_output=8192)

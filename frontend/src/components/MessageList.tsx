@@ -181,6 +181,19 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
   const isDone = message.status === 'done';
   const { process: processParts, finalReply } = splitDoneParts(msgParts);
 
+  // P2: first-token / prefill feedback. While the bubble is running with NO
+  // content and NO parts yet (request dispatched, model prefill / weak-network
+  // wait before the first token), show an explicit "thinking" cue — the same
+  // immediate feedback opencode gives — instead of only the ticking seconds
+  // counter. Disappears the instant any delta/tool/reasoning/plan arrives.
+  const hasAnyLiveParts =
+    hasTextParts ||
+    planParts.length > 0 ||
+    reasoningParts.length > 0 ||
+    toolParts.length > 0 ||
+    agentParts.length > 0;
+  const showPrefillHint = isRunning && isRunningEmpty && !hasAnyLiveParts && !isWaiting;
+
   // Build the meta text (Plan/Build · autonomy · model · duration)
   const metaParts: string[] = [];
   if (message.work_mode) {
@@ -294,6 +307,13 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
           <div className="stream-waiting">
             <span className="stream-waiting__dot" aria-hidden="true" />
             <span className="stream-waiting__text">{message.content || t('chat.waiting_resolution')}</span>
+          </div>
+        ) : showPrefillHint ? (
+          // P2: model prefill / first-token wait (weak-network feedback) —
+          // mirrors opencode's immediate "thinking" cue while we wait.
+          <div className="stream-waiting">
+            <span className="stream-waiting__dot" aria-hidden="true" />
+            <span className="stream-waiting__text">{t('agent.thinking')}</span>
           </div>
         ) : null}
 

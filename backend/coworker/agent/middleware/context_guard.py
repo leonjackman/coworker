@@ -3,6 +3,7 @@
 Provides ``ContextGuardMiddleware`` and ``ContextOverflowError``.
 """
 
+import os
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -47,6 +48,10 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     all on request-local copies (checkpointed state and the UI transcript are
     untouched, same contract as ``ContextEditingMiddleware``):
 
+      S0 (P1, proactive, under-budget) once the request already fills half the
+         window, window STALE oversized tool results (codex TruncationPolicy) so
+         a long tool loop never re-uploads every giant old result on each model
+         call — the dominant cost on a weak / lossy link;
       S1 externalize binary blobs (base64/data-URL runs are corrupted-on-
          arrival text: pure token waste) and degrade stale image blocks;
       S2 clear old tool results (keep=3, then keep=1);
@@ -70,6 +75,20 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     TOOL_RESULT_KEEP_CHARS = 2_000
     # Stop reducing once comfortably under the limit (calibrated headroom).
     TARGET_RATIO = 0.95
+
+    # S0 (P1): proactive windowing of STALE tool results even while the request
+    # still fits (codex TruncationPolicy). A long tool loop re-sends the FULL
+    # history on every model call; on a weak link the repeated upload of every
+    # giant old result is the dominant cost. Once the request is already large,
+    # window the oversized results that are OLDER than the newest few — the ones
+    # the model is currently consuming stay whole. Env kill-switch:
+    # COWORKER_PROACTIVE_TOOL_TRIM=0.
+    PROACTIVE_TRIM_ENV = "COWORKER_PROACTIVE_TOOL_TRIM"
+    # Only trigger once the calibrated request already uses this fraction of the
+    # effective window (a small/medium request is byte-identical to before).
+    PROACTIVE_WINDOW_MIN_RATIO = 0.5
+    # Tool results newer than this many trailing ToolMessages stay whole.
+    PROACTIVE_KEEP_RECENT = 4
 
     def __init__(
         self,
@@ -266,6 +285,47 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             changed += 1
         return new_messages, changed
 
+    def _window_stale_tool_results(
+        self, messages: list[Any], measured: int, limit_tokens: int
+    ) -> tuple[list[Any], int]:
+        """S0 (P1): proactively window STALE oversized tool results while the
+        request still fits.
+
+        On a weak / lossy link, re-uploading the full text of every oversized
+        tool result from earlier in a long tool loop on EVERY model call is the
+        dominant request cost (the fixed system/tool schemas and the newest few
+        results are what the model actually needs right now). So once the
+        request already fills ``PROACTIVE_WINDOW_MIN_RATIO`` of the window, the
+        oversized results older than the newest ``PROACTIVE_KEEP_RECENT`` tool
+        messages are truncated to ``TOOL_RESULT_KEEP_CHARS`` — the same head-cut
+        S3 applies under overflow, only applied earlier so a long turn never
+        burns bandwidth re-sending megabytes of already-consumed output.
+
+        Small/medium requests (below the ratio) are returned byte-identical.
+        """
+        if os.environ.get(self.PROACTIVE_TRIM_ENV, "1").strip().lower() in {"0", "false", "no", "off"}:
+            return messages, 0
+        if measured < int(limit_tokens * self.PROACTIVE_WINDOW_MIN_RATIO):
+            return messages, 0
+        from langchain_core.messages import ToolMessage
+
+        tool_idx = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
+        if len(tool_idx) <= self.PROACTIVE_KEEP_RECENT:
+            return messages, 0
+        stale = set(tool_idx[: -self.PROACTIVE_KEEP_RECENT])
+        changed = 0
+        new_messages = list(messages)
+        for idx in stale:
+            content = getattr(new_messages[idx], "content", None)
+            if not isinstance(content, str) or len(content) <= self.TOOL_RESULT_KEEP_CHARS:
+                continue
+            new_messages[idx] = self._with_content(
+                new_messages[idx],
+                content[: self.TOOL_RESULT_KEEP_CHARS] + "\n…[truncated by context guard]",
+            )
+            changed += 1
+        return new_messages, changed
+
     def _drop_mcp_tools(self, tools: list[Any] | None, messages: list[Any] | None = None) -> tuple[list[Any] | None, int]:
         """S4: drop optional MCP tool schemas (they ride on EVERY request).
 
@@ -365,6 +425,14 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 raw_capped, _measured, _ = self._measure(request.override(messages=messages))
                 self.last_raw_estimate = raw_capped
                 return self._finalize(request, {"messages": messages}, measured)
+            # S0 (P1): on an already-large request, window stale oversized tool
+            # results even though it still fits — a long tool loop must not
+            # re-upload every giant old result in full on each model call (the
+            # dominant cost on a weak link). The newest results stay whole.
+            windowed, n = self._window_stale_tool_results(messages, measured, self.limit_tokens)
+            if n:
+                self.last_steps.append(f"window_tools:{n}")
+                return self._finalize(request, {"messages": windowed}, measured)
             return request
 
         logger.warning(

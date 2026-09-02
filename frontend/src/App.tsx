@@ -3550,27 +3550,42 @@ function App() {
       }
       setActiveProjectId(response.session.project_id || undefined);
       setSelectedProjectId(response.session.project_id || undefined);
-      // 归而非覆盖：保留本地 status === 'running' 的消息 — 包括从其它会话切走后
-      // 仍在后台续流的半截回复，以便切回时继续看到流式内容。
-      // 注意：后端仅在流终结时（done/error/断开）才持久化 assistant 消息，因此
-      // 切回时若目标会话仍在前台或后台流式中，loaded 不含该消息，running 会被保留；
-      // 若后端已完成并持久化（同 id），则用持久化版本（内容完整），这是正确收尾。
+      // 归而非覆盖：保留本地 status === 'running'/'waiting' 的消息 — 包括从其它会话
+      // 切走后仍在后台续流的半截回复，以便切回时继续看到流式内容。
+      // 注意：后端在「流终结时」持久化完整 assistant 消息，但也可能在工具边界用
+      // 相同 id 增量持久化半截（content 为空、parts 为当前进度）。因此切回时若目标
+      // 会话仍「有在飞的流」，绝不能把该半截记录当作 done 载入（会把 running 气泡
+      // 替换成已折叠的完成态）；流结束后同 id 的持久化版本（内容完整）才是正确收尾。
       setMessages((current) => {
-        // 归而非覆盖：只替换目标会话的消息，其余所有会话（含后台
-        // streaming 的）原样保留，避免切换会话时抹掉其他会话正在进行的流。
-        // 后端仅在流终结时才持久化 assistant 消息，切回时若目标会话仍
-        // 在流式中，loaded 不含该消息，running 会被保留；若后端已完成
-        // 并持久化（同 id），则用持久化版本（内容完整），这是正确收尾。
-        const loadedIds = new Set(loaded.map((m) => m.id));
-        // 所有非目标 session 的消息：ambient + 其他 session 的已发送
-        // + 其他 session 的 running（后台续流）
-        const others = current.filter((m) => !m.sessionId || m.sessionId !== sessionIdToOpen);
-        // 目标 session 的 running 消息：若 loaded 已覆盖则丢弃（后
-        // 端已完成），否则保留（后端未 commit，继续流式更新）
-        const thisRunning = current.filter(
-          (m) => m.sessionId === sessionIdToOpen && m.status === 'running' && !loadedIds.has(m.id),
+        // 目标会话是否仍有在飞的流（SSE controller 或 goal 续跑流）。
+        const inFlight = Boolean(
+          streamControllersRef.current[streamKey(sessionIdToOpen)] ||
+            goalStreamSessions.has(sessionIdToOpen),
         );
-        return [...loaded, ...others, ...thisRunning];
+        // 目标会话本地仍在进行的消息（running = 流式生成中 / waiting = 待审批）。
+        const live = current.filter(
+          (m) =>
+            m.sessionId === sessionIdToOpen &&
+            (m.status === 'running' || m.status === 'waiting'),
+        );
+        const liveIds = new Set(live.map((m) => m.id));
+        // 流仍在飞时：从 loaded 剔除与本地 live 同 id 的半截记录（保留本地 running 气泡
+        // 原地续流，避免被折叠成 done）；流已结束才可能被 loaded 完整版覆盖收尾。
+        const dedupLoaded = inFlight ? loaded.filter((m) => !liveIds.has(m.id)) : loaded;
+        const loadedIds = new Set(dedupLoaded.map((m) => m.id));
+        // 所有非目标 session 的消息：ambient + 其他 session 的已发送
+        // + 其他 session 的 running/waiting（后台续流）
+        const others = current.filter((m) => !m.sessionId || m.sessionId !== sessionIdToOpen);
+        // 目标 session 的本地 live 消息：
+        //  - 流仍在飞：无条件保留（loaded 半截记录已剔除同 id 项）
+        //  - 流已结束：保留 running 中「后端尚未 commit」的（loaded 不含）项，
+        //    若后端已完成并持久化（同 id）则用持久化版本收尾。
+        const thisLive = inFlight
+          ? live
+          : current.filter(
+              (m) => m.sessionId === sessionIdToOpen && m.status === 'running' && !loadedIds.has(m.id),
+            );
+        return [...dedupLoaded, ...others, ...thisLive];
       });
       setAttachments([]);
     } catch (error) {

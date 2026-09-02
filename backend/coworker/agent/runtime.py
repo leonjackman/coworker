@@ -116,25 +116,15 @@ logger = get_logger(__name__)
 # ``AgentRuntimeRegistry.evict_runtime``.
 RUNTIME_CACHE_MAX = 128
 
-# W4/N3: classified retry policy for the sampling loop. Overflow compacts and
-# retries once (unchanged); rate-limit / transient errors back off
-# exponentially and retry up to RETRY_RETRIES times; fatal errors raise
-# immediately. Retries only apply BEFORE anything was emitted.
-RETRY_RETRIES = 2
-RETRY_BACKOFF_BASE = 2.0
-
-
-def _classify_retry_error(exc: BaseException) -> str:
-    """Classify a provider error into ``overflow`` / ``rate_limit`` /
-    ``transient`` / ``fatal`` (N3: no one-size-fits-all max_retries)."""
-    if is_context_overflow_error(exc):
-        return "overflow"
-    msg = str(exc).lower()
-    if "429" in msg or "rate limit" in msg or "rate_limit" in msg or "too many requests" in msg:
-        return "rate_limit"
-    if any(k in msg for k in ("500", "502", "503", "504", "connection", "timeout", "temporarily", "overloaded", "try again")):
-        return "transient"
-    return "fatal"
+# W4/N3: retry policy for the sampling loop. Overflow / image-limit get ONE
+# compacted/trimmed retry (they are deterministic server rejections where a
+# smaller request genuinely fixes the request). Transient / rate-limit errors are
+# NOT retried here: the openai SDK + langchain ChatOpenAI (max_retries=2 with
+# exponential backoff) already retry those inside the client, and layering a
+# second app-level backoff loop on top is what made a single hotspot hiccup feel
+# like an endless "network congested" stall. Fatal errors raise immediately.
+# Retries only apply BEFORE anything was emitted.
+RETRY_RETRIES = 1
 
 
 async def _aclose_on_exit(agen: AsyncGenerator[Any, None]) -> AsyncGenerator[Any, None]:
@@ -690,10 +680,13 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             except Exception:  # noqa: BLE001 - a reset failure must never break a turn
                 logger.warning("per-turn graph reset failed for %s", session_id, exc_info=True)
 
-            # Overflow recovery / classified retry (W4/N3): run the stream, and if
-            # the provider rejects the request for being too long before anything
-            # was emitted, force a tighter budget (compact once); rate-limit /
-            # transient errors back off exponentially. Retries never re-emit.
+            # Overflow / image-limit recovery (W4/N3): run the stream, and if the
+            # provider rejects the request deterministically (context too long /
+            # too many images) before anything was emitted, compact / trim and
+            # retry ONCE with a smaller request. Transient / rate-limit errors are
+            # left to the client-level retries (openai SDK + ChatOpenAI
+            # max_retries=2) — a second app-level backoff here would turn a single
+            # weak-network hiccup into a long, silent stall. Retries never re-emit.
             for _attempt in range(RETRY_RETRIES + 1):
                 try:
                     async for stream_mode, chunk in _aclose_on_exit(graph.astream(inputs, config=config, stream_mode=["messages", "custom", "updates"])):
@@ -853,20 +846,6 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         logger.warning("image limit overflow; retrying once with a single image: %s", str(exc)[:200])
                         prepared_messages = prepare_agent_messages(messages, max_images=1)
                         inputs["messages"] = prepared_messages
-                        continue
-                    retry_kind = _classify_retry_error(exc)
-                    if (
-                        retry_kind in ("rate_limit", "transient")
-                        and _attempt < RETRY_RETRIES
-                        and not content_parts
-                        and not parts
-                    ):
-                        delay = RETRY_BACKOFF_BASE * (2 ** _attempt)
-                        logger.warning(
-                            "transient provider error (%s); backing off %.1fs and retrying attempt %d: %s",
-                            retry_kind, delay, _attempt + 1, str(exc)[:200],
-                        )
-                        await asyncio.sleep(delay)
                         continue
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
                     # Failed turn: still offer a skill-review pass so "hit errors

@@ -69,15 +69,20 @@ class _LoggingAsyncClient(httpx.AsyncClient):
 
     def __init__(self, inner: Any, log_path: Path, max_bytes: int, backup: int) -> None:
         # Inherit base_url/timeout from the inner client so URLs and timeouts
-        # match what langchain would have used; transport/limits are rebuilt
-        # with httpx defaults (the inner wrapper's are private internals).
+        # match what langchain would have used. When the inner client is one of
+        # CW's weak-network-tuned clients (http2 / raised keep-alive / socket
+        # profile), carry its transport over so the logged path exercises the
+        # SAME wire behaviour — a bare rebuild would silently drop the tuning.
         base_url = getattr(inner, "base_url", None)
         timeout = getattr(inner, "timeout", None)
+        transport = None
+        if bool(getattr(inner, "_cw_tuned_transport", False)):
+            transport = getattr(inner, "_transport", None)
         try:
-            super().__init__(
-                base_url=base_url,
-                timeout=timeout,
-            )
+            if transport is not None:
+                super().__init__(base_url=base_url, timeout=timeout, transport=transport)
+            else:
+                super().__init__(base_url=base_url, timeout=timeout)
         except Exception:  # noqa: BLE001 - fall back to fully default client
             super().__init__()
         self._log_path = log_path
