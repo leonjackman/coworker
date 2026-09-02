@@ -258,6 +258,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
       await load();
       onMcpChange?.();
       setDeleteConfirm(null);
+      setViewMode('list');
     } catch (error) {
       setMessage(translateError(error) || t('common.operation_failed'));
     } finally {
