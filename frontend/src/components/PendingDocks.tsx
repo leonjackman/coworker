@@ -13,13 +13,13 @@ interface PendingDocksProps {
 }
 
 /**
- * 将命令 argv 转成一句话「操作目标」，先于命令行展示，做到产品化表达。
- * 仅覆盖常见场景，未命中则回退到通用描述。文案为中文（命令本身语言无关）。
+ * Translate command argv into a human-readable "action target" shown before the
+ * command line. Covers common scenarios; falls back to a generic description.
  */
 function describeCommand(argv: string[] | undefined, _cwd?: string): string {
-  if (!argv || argv.length === 0) return '执行命令';
+  if (!argv || argv.length === 0) return t('chat.describe_run_command');
   const bin = argv[0];
-  if (!bin) return '执行命令';
+  if (!bin) return t('chat.describe_run_command');
   const rest = argv.slice(1);
   const isDev = rest.some((a) => a === '-D' || a === '--save-dev' || a === '--dev');
   const script = rest.find((a) => !a.startsWith('-') && a !== 'run' && a !== 'exec');
@@ -28,19 +28,19 @@ function describeCommand(argv: string[] | undefined, _cwd?: string): string {
     const sub = (rest[0] || '').toLowerCase();
     if (sub === 'install' || sub === 'i' || sub === 'add') {
       const names = rest.slice(1).filter((a) => !a.startsWith('-'));
-      if (names.length) return `安装依赖：${names.join('、')}${isDev ? '（开发依赖）' : ''}`;
-      return '安装项目依赖（按 package.json）';
+      if (names.length) return `${t('chat.describe_install_deps')}${names.join(', ')}${isDev ? ` ${t('chat.describe_dev_deps')}` : ''}`;
+      return t('chat.describe_install_project_deps');
     }
     if (sub === 'run' || sub === 'exec') {
-      if (script === 'build') return '构建项目（运行 build 脚本）';
-      if (script === 'dev' || script === 'start') return '启动开发服务器';
-      if (script === 'test') return '运行测试';
-      if (script) return `运行脚本：${script}`;
-      return '运行 package.json 脚本';
+      if (script === 'build') return t('chat.describe_build_project');
+      if (script === 'dev' || script === 'start') return t('chat.describe_start_dev_server');
+      if (script === 'test') return t('chat.describe_run_tests');
+      if (script) return `${t('chat.describe_run_script')}: ${script}`;
+      return t('chat.describe_run_package_script');
     }
-    if (sub === 'build') return '构建项目';
-    if (sub === 'test') return '运行测试';
-    return `执行 ${bin} 命令`;
+    if (sub === 'build') return t('chat.describe_build_project');
+    if (sub === 'test') return t('chat.describe_run_tests');
+    return `${t('chat.describe_run_cmd', { bin })}`;
   }
   if (bin === 'git') {
     const sub = (rest[0] || '').toLowerCase();
@@ -48,57 +48,73 @@ function describeCommand(argv: string[] | undefined, _cwd?: string): string {
       const mIdx = rest.findIndex((a) => a === '-m' || a === '--message');
       const raw = rest[mIdx + 1];
       const msg = raw ? raw.replace(/^["']|["']$/g, '') : '';
-      return msg ? `提交代码改动：${msg}` : '提交代码改动';
+      return msg ? `${t('chat.describe_commit_changes')}: ${msg}` : t('chat.describe_commit_changes');
     }
     if (sub === 'push') {
       const branch = rest.find((a) => !a.startsWith('-'));
-      return `推送分支${branch ? ` ${branch}` : ' 当前分支'}到远程`;
+      return branch ? `${t('chat.describe_push_branch')} ${branch} ${t('chat.describe_to_remote')}` : `${t('chat.describe_push_branch')} ${t('chat.describe_current_branch')} ${t('chat.describe_to_remote')}`;
     }
-    if (sub === 'pull') return '拉取并合并远程改动';
-    if (sub === 'clone') return '克隆仓库';
+    if (sub === 'pull') return t('chat.describe_pull_remote');
+    if (sub === 'clone') return t('chat.describe_clone_repo');
     if (sub === 'checkout' || sub === 'switch') {
       const hasNew = rest.includes('-b') || rest.includes('-c');
       const flag = rest.includes('-b') ? '-b' : rest.includes('-c') ? '-c' : '';
       const br = flag ? (rest[rest.indexOf(flag) + 1] ?? '') : (rest.find((a) => !a.startsWith('-') && a !== '-b' && a !== '-c') ?? '');
-      if (br) return hasNew ? `创建并切换到分支 ${br}` : `切换到分支 ${br}`;
-      return '切换分支';
+      if (br) return hasNew ? `${t('chat.describe_create_switch_branch')} ${br}` : `${t('chat.describe_switch_branch')} ${br}`;
+      return t('chat.describe_switch_branch');
     }
-    if (sub === 'merge') return `合并分支 ${rest.find((a) => !a.startsWith('-')) || ''}`.trim();
-    if (['status', 'diff', 'log', 'show'].includes(sub)) return `查看 git ${sub} 信息`;
-    return '执行 git 命令';
+    if (sub === 'merge') {
+      const branch = rest.find((a) => !a.startsWith('-'));
+      return branch ? `${t('chat.describe_merge_branch')} ${branch}` : t('chat.describe_merge_branch');
+    }
+    if (['status', 'diff', 'log', 'show'].includes(sub)) return `${t('chat.describe_view_git')} ${sub} ${t('chat.describe_info')}`;
+    return t('chat.describe_run_git_cmd');
   }
   if (bin === 'pip' || bin === 'pip3') {
     if ((rest[0] || '').toLowerCase() === 'install') {
       const names = rest.slice(1).filter((a) => !a.startsWith('-'));
-      return names.length ? `安装 Python 依赖：${names.join('、')}` : '安装 Python 依赖';
+      return names.length ? `${t('chat.describe_install_python_deps')}: ${names.join(', ')}` : t('chat.describe_install_python_deps');
     }
-    return '执行 pip 命令';
+    return t('chat.describe_run_pip_cmd');
   }
   if (bin === 'python' || bin === 'python3') {
-    if (rest[0] === '-m' && rest[1] === 'venv') return `创建 Python 虚拟环境 ${rest[2] || ''}`.trim();
+    if (rest[0] === '-m' && rest[1] === 'venv') {
+      const env = rest[2];
+      return env ? `${t('chat.describe_create_venv')} ${env}` : t('chat.describe_create_venv');
+    }
     const py = rest.find((a) => a.endsWith('.py'));
-    return py ? `运行 Python 脚本 ${py}` : '运行 Python 脚本';
+    return py ? `${t('chat.describe_run_python_script')} ${py}` : t('chat.describe_run_python_script');
   }
   if (bin === 'node') {
     const js = rest.find((a) => a.endsWith('.js') || a.endsWith('.mjs'));
-    return js ? `运行 Node 脚本 ${js}` : '运行 Node 脚本';
+    return js ? `${t('chat.describe_run_node_script')} ${js}` : t('chat.describe_run_node_script');
   }
-  if (bin === 'rm' || bin === 'del') return `删除文件/目录${rest.some((a) => a.includes('r')) ? '（递归）' : ''}`;
-  if (bin === 'mv') return '移动或重命名文件';
-  if (bin === 'cp' || bin === 'copy') return '复制文件';
-  if (bin === 'mkdir') return `创建目录 ${rest.find((a) => !a.startsWith('-')) || ''}`.trim();
-  if (bin === 'touch') return '创建空文件';
-  if (bin === 'curl' || bin === 'wget') return '下载文件';
-  if (bin === 'chmod') return '修改文件权限';
+  if (bin === 'rm' || bin === 'del') {
+    const recursive = rest.some((a) => a.includes('r'));
+    return recursive ? `${t('chat.describe_delete_file_dir')} ${t('chat.describe_recursive')}` : t('chat.describe_delete_file_dir');
+  }
+  if (bin === 'mv') return t('chat.describe_move_rename');
+  if (bin === 'cp' || bin === 'copy') return t('chat.describe_copy_file');
+  if (bin === 'mkdir') {
+    const dir = rest.find((a) => !a.startsWith('-'));
+    return dir ? `${t('chat.describe_create_dir')} ${dir}` : t('chat.describe_create_dir');
+  }
+  if (bin === 'touch') return t('chat.describe_create_empty_file');
+  if (bin === 'curl' || bin === 'wget') return t('chat.describe_download_file');
+  if (bin === 'chmod') return t('chat.describe_chmod');
   if (bin === 'docker') {
     const sub = (rest[0] || '').toLowerCase();
-    if (sub === 'compose') return rest[1] === 'up' ? '启动 Docker 服务' : rest[1] === 'build' ? '构建 Docker 镜像' : '执行 docker compose 命令';
-    if (sub === 'build') return '构建 Docker 镜像';
-    if (sub === 'run') return '运行 Docker 容器';
-    return '执行 docker 命令';
+    if (sub === 'compose') {
+      if (rest[1] === 'up') return t('chat.describe_start_docker');
+      if (rest[1] === 'build') return t('chat.describe_build_docker_image');
+      return t('chat.describe_run_docker_compose');
+    }
+    if (sub === 'build') return t('chat.describe_build_docker_image');
+    if (sub === 'run') return t('chat.describe_run_docker_container');
+    return t('chat.describe_run_docker_cmd');
   }
-  if (['ls', 'cat', 'grep', 'find', 'head', 'tail', 'echo', 'pwd'].includes(bin)) return `查看文件信息（${bin}）`;
-  return `执行命令：${bin}`;
+  if (['ls', 'cat', 'grep', 'find', 'head', 'tail', 'echo', 'pwd'].includes(bin)) return `${t('chat.describe_view_file_info')} (${bin})`;
+  return `${t('chat.describe_run_cmd', { bin })}`;
 }
 
 /**
@@ -107,15 +123,15 @@ function describeCommand(argv: string[] | undefined, _cwd?: string): string {
  * this the card would show nothing actionable. Falls back to the raw tool name.
  */
 function describeToolCall(name: string, args?: Record<string, unknown>): string {
-  if (!name) return '执行操作';
+  if (!name) return t('chat.describe_perform_action');
   const path = typeof args?.path === 'string' && args.path ? args.path : '';
   const label =
-    name === 'write_file' ? '写入文件'
-    : name === 'replace_in_file' || name === 'apply_text_edits' || name === 'edit_file' ? '修改文件'
-    : name === 'read_file' ? '读取文件'
-    : name === 'memory' || name === 'remember' ? '读写长期记忆'
-    : name === 'web_search' ? '网页搜索'
-    : name === 'fetch_web' ? '抓取网页内容'
+    name === 'write_file' ? t('chat.describe_write_file')
+    : name === 'replace_in_file' || name === 'apply_text_edits' || name === 'edit_file' ? t('chat.describe_edit_file')
+    : name === 'read_file' ? t('chat.describe_read_file')
+    : name === 'memory' || name === 'remember' ? t('chat.describe_long_term_memory')
+    : name === 'web_search' ? t('chat.describe_web_search')
+    : name === 'fetch_web' ? t('chat.describe_fetch_web')
     : name;
   return path ? `${label} ${path}` : label;
 }
