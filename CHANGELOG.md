@@ -154,6 +154,40 @@
 
 - 新增 MCP 審計修復方案文檔 `docs/task/mcp-audit-fix-plan.md`。
 
+## 0.6.2
+
+本版本聚焦於弱網路環境下的連線穩定性與效能：HTTP/2 多路複用、60 秒 keep-alive 長連接、MCP 協議分頁拉取全部工具、idempotent 工具自動重試；同時強化了上下文預算——主動裁剪陳舊的大工具結果，避免長工具迴圈重複上傳已消耗的 megabytes 級輸出。
+
+### 新增
+
+- **HTTP/2 傳輸調優**：`model_defaults` 新增 `_build_tuned_async_httpx_client`，當 `h2` 包可用且端點為 HTTPS 時啟用 HTTP/2 多路複用（同一 TCP 連接並行多個模型呼叫）；keep-alive 池過期從 5 秒提升至 60 秒，避免思考/工具間隙觸發重新 TCP+TLS 握手；connect timeout 從 5 秒放寬至 10 秒。
+- **弱網路預發提示**：訊息气泡在空狀態（尚未收到第一個 token）顯示「思考中」點陣提示，與 opencode 的即時反饋對齊。
+- **上下文 S0 主動裁剪**：`ContextGuardMiddleware` 新增 `_window_stale_tool_results`，當請求已佔用 50% 窗口時，主動裁剪超過 4 個最新工具消息之外的陳舊大工具結果（保留 `TOOL_RESULT_KEEP_CHARS` 字元），避免長工具迴圈每輪重複上傳已消耗的 megabytes 級輸出。
+- **會話切換防覆蓋**：切回會話時區分 in-flight 流與 loaded 半截記錄，避免 running 氣泡被已完成的半截記錄替換。
+- **MCP 模板新增**：Git 模板改用 `uvx` 替代 `npx`；新增 Fetch（網頁內容轉 Markdown）與 Time（時間/時區）模板；filesystem 模板自動填充當前用戶 home 目錄。
+- **MCP 品牌圖標**：模板圖標從內聯 SVG 改為 PNG 品牌圖（`assets/mcp-logo/`），單色圖標在暗色模式下自動反白。
+
+### 改動
+
+- **MCP 協議分頁**：`mcp_session` 改用 `_list_all_tools` 分頁拉取全部工具，替代單頁拉取；協議版本改用 `LATEST_PROTOCOL_VERSION` 替代硬編碼。
+- **MCP 重試安全**：新增 `_retry_safe` 方法，僅對 idempotent / read-only 工具自動重試（避免 idempotent 未聲明時重試已執行服務端操作的危險行為）；工具註解默認 `destructive=True`。
+- **MCP 禁用工具**：`_server_disabled_tools` 支持按服務禁用工具。
+- **MCP 探針回退修復**：需要認證的探針 loopback 不再帶入活會話，防止 double-close。
+- **LLM 流超時**：`stream_chunk_timeout` 默認從 600 秒降至 120 秒，匹配 opencode 的 fail-fast 行為。
+- **運行時重試收縮**：移除 app-level 重試（由 SDK `max_retries=2` 處理），`RETRY_RETRIES` 從 2 降至 1（僅 overflow/image-limit 重試）。
+- **MCP 面板**：表單驗證、刪除冪等、探針迴圈資源洩漏修復、連接超時任務清理、會話關閉順序修復。
+
+### 修復
+
+- **MCP OAuth CSRF 保護**：`LoopbackCallbackServer` 新增 CSRF state 驗證與 iss 校驗，支援並發 OAuth 流程。
+- **MCP 探針迴圈資源洩漏**：探針階段創建的 loopback 在所有錯誤路徑下正確關閉。
+- **MCP 連接超時任務清理**：`wait_for` 超時後正確取消並 await 被 shield 的連接任務。
+- **MCP 會話關閉順序**：stdio 傳輸的 owner 任務 shielded teardown 正確處理子進程清理。
+
+### 品質
+
+- 新增 `test_http_transport_tuning.py`、`test_mcp_protocol.py`：覆蓋 HTTP 傳輸調優與 MCP 協議分頁。
+
 ## Unreleased
 
 （尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
