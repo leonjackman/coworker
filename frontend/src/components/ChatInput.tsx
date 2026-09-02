@@ -40,16 +40,12 @@ import { ContextMenu } from "./ui/context-menu";
 import { SidebarScrollbar } from "./ui/sidebar-scrollbar";
 import { TypeCapsule, TYPE_CAPSULE_LABELS, type SlashCommandType } from "./ui/type-capsule";
 
-/** 焦点不能被抢走的输入上下文：真正的文本框/可编辑区、下拉与选择器触发器、
- *  以及已打开的下拉/对话框。在这些场景下自动回焦会让用户正在操作的控件失效。 */
-function isFocusGuardTarget(el: Element | null): boolean {
-  if (!el) return false;
-  const tag = el.tagName.toLowerCase();
-  if (tag === "input" || tag === "textarea" || tag === "select" || tag === "iframe") return true;
-  if ((el as HTMLElement).isContentEditable) return true;
-  if (el.closest('[role="textbox"], [role="combobox"], [role="searchbox"], [role="menu"], [role="listbox"], [role="dialog"]')) return true;
-  if (el.closest("[aria-haspopup]")) return true; // 下拉/选择器触发器自己持有焦点
-  return false;
+/** 焦点不能被抢走的输入上下文（opencode 的 isEditableTarget 语义）：真正的
+ *  文本框/可编辑区、按钮。事件落在这些元素上时按键属于"控件自身的键盘操作"，
+ *  不应被全局自动聚焦拦截。 */
+function isEditableTarget(el: Element | null | undefined): boolean {
+  if (!el || !(el instanceof HTMLElement)) return false;
+  return /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(el.tagName) || el.isContentEditable;
 }
 
 /** 是否有已打开的下拉/对话框（打开中不该把焦点抢回输入框）。 */
@@ -286,30 +282,71 @@ export function ChatInput({
     };
   }, [apiRef]);
 
-  // 输入框保持激活：挂载即聚焦；编辑器失焦后，只要焦点不在需要自己持焦的
-  // 控件（文本框/下拉/对话框）上，就自动把焦点收回输入框，让用户随时可以
-  // 打字、回车即发送，不必每次再点一次输入框。
+  // 输入框免点击输入（抄 opencode 的聚焦模型）：
+  // 挂载即聚焦；此后用户只要在任意位置键入可打印字符，就自动聚焦输入框，
+  // 让字符自然进入编辑器（不 preventDefault、不手动插字符）。
+  // 判定顺序照 opencode packages/app/src/pages/session.tsx handleKeyDown：
+  //  1. 有下拉/对话框打开 → 不抢
+  //  2. 焦点已在输入框：Escape 退出焦点（把方向键/滚轮还给页面）
+  //  3. 事件路径声明了 [data-prevent-autofocus]（如代码编辑器等特殊区域）→ 不抢
+  //  4. 事件目标本身是可编辑控件/按钮 → 不抢（控件自持键盘操作）
+  //  5. 当前焦点元素在受保护/可编辑控件内 → 不抢
+  //  6. 单可打印字符 && 非 Cmd/Ctrl → focus 输入框
+  // 鼠标选择/复制文字完全不触发（没有键盘输入信号），选区永不被清空。
   useEffect(() => {
     const editor = editorRef.current;
-    const tryRefocus = () => {
-      if (disabled) return;
-      if (hasOpenOverlay()) return;
-      const active = document.activeElement;
-      if (!isFocusGuardTarget(active)) editorRef.current?.focus();
-    };
     if (editor && !disabled) editor.focus();
     if (disabled) return;
 
-    const onFocusOut = (event: FocusEvent) => {
-      if (isFocusGuardTarget(event.relatedTarget as Element | null)) return;
-      // 等一帧再收焦点：避免与刚打开（pointerdown 后异步挂载）的 Radix 下拉抢焦点。
-      requestAnimationFrame(tryRefocus);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (disabled) return;
+      if (hasOpenOverlay()) return;
+      // 焦点已在输入框：Escape 移出焦点（把方向键/滚轮还给页面）；
+      // 其余键保持原位，输入框正常处理。
+      if (document.activeElement === editorRef.current) {
+        if (event.key === "Escape") editorRef.current?.blur();
+        return;
+      }
+      // 1. 事件路径上的 [data-prevent-autofocus] 区域（未来为代码编辑器/特殊面板
+      //    打上该属性即可禁止自动聚焦），与 opencode 同语义。
+      const path = event.composedPath();
+      const protectedPath = path.some(
+        (item) => item instanceof HTMLElement && item.closest("[data-prevent-autofocus]") !== null,
+      );
+      if (protectedPath) return;
+      // 2. 事件目标本身是输入控件/可编辑区/按钮。
+      const target = path.find((item): item is HTMLElement => item instanceof HTMLElement);
+      if (isEditableTarget(target)) return;
+      // 3. 当前焦点在受保护/可编辑控件内（composedPath 之外的焦点场景）。
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        if (isEditableTarget(active)) return;
+        if (active.closest("[data-prevent-autofocus]") !== null) return;
+      }
+      // 4. 快捷键组合（Cmd/Ctrl + 任意键）不拦截，交给应用快捷键/系统。
+      //    Alt 不排除：AltGr/⌥ 组合产生的可打印字符（如 é）也是有效输入。
+      if (event.metaKey || event.ctrlKey) return;
+      // 5. 仅单个可打印字符（方向键/功能键/Enter/Tab 等 key.length>1 自动排除）。
+      if (event.key.length !== 1 || event.key === "Unidentified") return;
+      if (event.isComposing) return;
+      // 只 focus，不 preventDefault：keydown 的默认字符插入会作用到新焦点元素。
+      // 注：不检查选区——用户选中文字后按普通字符键即"要打字"的明确信号
+      // （opencode 同语义）；复制/粘贴走 Cmd/Ctrl 组合，已被上一步排除，不受影响。
+      editorRef.current?.focus();
     };
-    const onWindowFocus = () => requestAnimationFrame(tryRefocus);
-    editor?.addEventListener("focusout", onFocusOut);
+
+    // 窗口切回时若没有活动选区，把焦点交还输入框，方便直接续打。
+    const onWindowFocus = () => {
+      if (disabled || hasOpenOverlay()) return;
+      if (isEditableTarget(document.activeElement)) return;
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      requestAnimationFrame(() => editorRef.current?.focus());
+    };
+    window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("focus", onWindowFocus);
     return () => {
-      editor?.removeEventListener("focusout", onFocusOut);
+      window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("focus", onWindowFocus);
     };
   }, [disabled]);
