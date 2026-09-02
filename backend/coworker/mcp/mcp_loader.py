@@ -43,9 +43,21 @@ _TRANSPORT_ALIASES: dict[str, str] = {
 
 
 def normalize_transport(value: str | None) -> str:
-    """Map a stored/user-supplied transport string to its canonical name."""
+    """Map a stored/user-supplied transport string to its canonical name.
+
+    Raises ValueError for unknown transports instead of silently defaulting
+    to stdio, which would mask configuration errors.
+    """
     key = (value or "").strip().lower()
-    return _TRANSPORT_ALIASES.get(key, TRANSPORT_STDIO)
+    canonical = _TRANSPORT_ALIASES.get(key)
+    if canonical:
+        return canonical
+    # Known canonical names that aren't in the alias map
+    if key in (TRANSPORT_STDIO, TRANSPORT_SSE, TRANSPORT_WEBSOCKET):
+        return key
+    raise ValueError(
+        f"Unknown transport '{value}'. Valid transports: {', '.join(sorted([TRANSPORT_STDIO, TRANSPORT_HTTP, TRANSPORT_SSE, TRANSPORT_WEBSOCKET]))}"
+    )
 
 
 def split_args(raw: str | None) -> list[str]:
@@ -113,8 +125,12 @@ def build_connection(server: dict[str, Any]) -> dict[str, Any]:
     if timeout:
         try:
             conn["timeout"] = float(timeout)
-        except (TypeError, ValueError):
-            pass
+            if conn["timeout"] <= 0:
+                raise ValueError("Timeout must be positive")
+            if conn["timeout"] > 3600:
+                raise ValueError("Timeout must not exceed 3600 seconds")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid timeout value '{timeout}': {exc}") from exc
     return conn
 
 

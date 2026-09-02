@@ -1,8 +1,8 @@
 import { ChevronDown, Database, FileText, Globe, GitBranch, Loader2, Network, Plus, Save, Search, Shield, Terminal, Trash2, Wrench, Code, Cloud, Settings2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { t, tOrDefault, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
-import type { McpServerEntry, McpTemplateEntry, McpToolEntry } from '../types';
+import type { McpServerEntry, McpServerCreateRequest, McpServerUpdateRequest, McpTemplateEntry, McpTestRequest, McpToolEntry } from '../types';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -224,7 +224,11 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     }
     if (form.timeout.trim()) {
       const seconds = Number(form.timeout);
-      if (Number.isFinite(seconds) && seconds > 0) payload.timeout = seconds;
+      if (Number.isFinite(seconds) && seconds > 0) {
+        payload.timeout = seconds;
+      } else {
+        setMessage(t('mcp.timeout_invalid'));
+      }
     }
     // Always send env/headers (even empty) so omitted keys are cleared, and a
     // SECRET_PLACEHOLDER value preserves the stored secret on the backend.
@@ -233,8 +237,8 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
 
     try {
       const saved = form.id
-        ? await chatService.updateMcp(form.id, payload as never)
-        : await chatService.createMcp(payload as never);
+        ? await chatService.updateMcp(form.id, payload as unknown as McpServerUpdateRequest)
+        : await chatService.createMcp(payload as unknown as McpServerCreateRequest);
       await load();
       onMcpChange?.();
       setViewMode('list');
@@ -320,7 +324,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
       return;
     }
     setCheckProgress({ done: 0, total: targets.length });
-    let done = 0;
+    const doneRef = useRef(0);
     try {
       await Promise.all(
         targets.map(async (server) => {
@@ -330,8 +334,8 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
           } catch {
             /* best-effort: keep the stale status */
           } finally {
-            done += 1;
-            setCheckProgress({ done, total: targets.length });
+            doneRef.current += 1;
+            setCheckProgress({ done: doneRef.current, total: targets.length });
           }
         }),
       );
@@ -391,7 +395,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
   }
 
   function isRemoteTransport(f: FormState) {
-    return f.transport === 'http' || f.transport === 'sse' || f.transport === 'websocket';
+    return f.transport === 'http' || f.transport === 'sse' || f.transport === 'streamable_http' || f.transport === 'websocket';
   }
 
   function startEdit(server: McpServerEntry) {
@@ -443,9 +447,9 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
       const env = pairsToMap(form.envPairs);
       const headers = pairsToMap(form.headersPairs);
       const timeout = form.timeout.trim() ? Number(form.timeout) : undefined;
-      const result = await chatService.testMcp({
+      const payload: McpTestRequest = {
         name: form.name,
-        transport: form.transport,
+        transport: form.transport as McpTestRequest['transport'],
         command: form.transport === 'stdio' ? form.command : undefined,
         args: form.transport === 'stdio' ? form.args : undefined,
         cwd: form.transport === 'stdio' ? form.cwd : undefined,
@@ -454,7 +458,8 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
         env,
         headers,
         server_id: form.id ?? undefined,
-      } as never);
+      };
+      const result = await chatService.testMcp(payload);
       setTestResult({
         ok: result.ok,
         latency_ms: result.latency_ms ?? 0,
@@ -777,7 +782,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
             <Button
               variant="secondary"
               onClick={handleTest}
-              disabled={testing || (form.transport === 'stdio' ? !form.command.trim() : isRemoteTransport(form) ? !form.url.trim() : false)}
+              disabled={testing || (form.transport === 'stdio' ? !form.command.trim() : !form.url.trim())}
               className="mcp-test-btn"
             >
               {testing ? (
@@ -832,6 +837,15 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
               </button>
               <button
                 type="button"
+                className={`mcp-transport-pill ${form.transport === 'streamable_http' ? 'mcp-transport-pill--active' : ''}`}
+                aria-pressed={form.transport === 'streamable_http'}
+                onClick={() => form.transport !== 'streamable_http' && setForm({ ...form, transport: 'streamable_http', url: '' })}
+                disabled={saving}
+              >
+                {t('mcp.transport_streamable_http')}
+              </button>
+              <button
+                type="button"
                 className={`mcp-transport-pill ${form.transport === 'sse' ? 'mcp-transport-pill--active' : ''}`}
                 aria-pressed={form.transport === 'sse'}
                 onClick={() => form.transport !== 'sse' && setForm({ ...form, transport: 'sse', url: '' })}
@@ -883,7 +897,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
             </div>
           )}
 
-          {(form.transport === 'http' || form.transport === 'sse' || form.transport === 'websocket') && (
+          {(form.transport === 'http' || form.transport === 'sse' || form.transport === 'streamable_http' || form.transport === 'websocket') && (
             <label className="field">
               <span>{t('mcp.url')}</span>
               <input

@@ -2269,19 +2269,31 @@ ipcMain.handle('discover-mcps', () => requestBackend('/mcp/discover', 'GET'));
 ipcMain.handle('create-mcp', (event, payload) => requestBackend('/mcp/servers', 'POST', payload));
 ipcMain.handle('update-mcp', (event, payload = {}) => {
   const { server_id: serverId, ...body } = payload;
-  return requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}`, 'PATCH', body);
+  if (!serverId || typeof serverId !== 'string' || serverId.trim() === '') {
+    return { status: 'error', error: 'server_id is required and must be a non-empty string' };
+  }
+  return requestBackend(`/mcp/servers/${encodeURIComponent(serverId)}`, 'PATCH', body);
 });
-ipcMain.handle('delete-mcp', (event, serverId) =>
-  requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}`, 'DELETE'),
-);
+ipcMain.handle('delete-mcp', (event, serverId) => {
+  if (!serverId || typeof serverId !== 'string' || serverId.trim() === '') {
+    return { status: 'error', error: 'server_id is required and must be a non-empty string' };
+  }
+  return requestBackend(`/mcp/servers/${encodeURIComponent(serverId)}`, 'DELETE');
+});
 ipcMain.handle('test-mcp', (event, payload) => requestBackend('/mcp/test', 'POST', payload));
-ipcMain.handle('check-mcp', (event, serverId) =>
-  requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}/check`, 'POST', {}),
-);
+ipcMain.handle('check-mcp', (event, serverId) => {
+  if (!serverId || typeof serverId !== 'string' || serverId.trim() === '') {
+    return { status: 'error', error: 'server_id is required and must be a non-empty string' };
+  }
+  return requestBackend(`/mcp/servers/${encodeURIComponent(serverId)}/check`, 'POST', {});
+});
 ipcMain.handle('check-all-mcps', () => requestBackend('/mcp/check-all', 'POST', {}));
-ipcMain.handle('reauthorize-mcp', (event, serverId) =>
-  requestBackend(`/mcp/servers/${encodeURIComponent(serverId || '')}/reauthorize`, 'POST', {}),
-);
+ipcMain.handle('reauthorize-mcp', (event, serverId) => {
+  if (!serverId || typeof serverId !== 'string' || serverId.trim() === '') {
+    return { status: 'error', error: 'server_id is required and must be a non-empty string' };
+  }
+  return requestBackend(`/mcp/servers/${encodeURIComponent(serverId)}/reauthorize`, 'POST', {});
+});
 ipcMain.handle('list-skills', (event, enabledOnly) =>
   requestBackend(`/skills${enabledOnly ? '?enabled_only=true' : ''}`, 'GET'),
 );

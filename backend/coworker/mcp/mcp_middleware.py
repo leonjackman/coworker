@@ -127,8 +127,11 @@ class McpToolMiddleware(AgentMiddleware):
     def _overrides(self, request: Any) -> dict[str, Any]:
         logger.info("MCP _overrides START request_id=%s", id(request))
         logger.info("MCP _overrides _connecting=%d _servers=%d", len(self.session_manager._connecting), len(self.session_manager._servers))
-        logger.info("MCP _overrides: calling ensure_connected")
-        self.session_manager.ensure_connected(enable_browser_flow=False)
+        # Note: ensure_connected is intentionally NOT called here.
+        # Sessions are pre-warmed at graph build time by the runtime,
+        # so tools are already available. This avoids blocking the event
+        # loop on every model call (the original code called
+        # ensure_connected synchronously which could block for seconds).
         self._refresh_tools()
         tools = self.tools
         if not tools:
@@ -183,10 +186,9 @@ class McpToolMiddleware(AgentMiddleware):
         name = _tool_name(request)
         if not name:
             return None
-        for tool in self.session_manager.all_tools():
-            if getattr(tool, "name", None) == name:
-                return tool
-        return None
+        # Use the session manager's tool index for O(1) lookup.
+        # The _all_tools_map attribute is set by _rebuild_tools in the session manager.
+        return getattr(self.session_manager, "_all_tools_map", {}).get(name)
 
     def _prepare(self, request: Any) -> tuple[Any, dict[str, Any] | None]:
         """Resolve an unregistered MCP tool and look up its policy.
@@ -310,7 +312,7 @@ class McpToolMiddleware(AgentMiddleware):
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         text = part.get("text") or ""
-                        scrubbed, n = scrub_text(text)
+                        scrubbed, _ = scrub_text(text)
                         if len(scrubbed) > budget:
                             scrubbed = scrubbed[:budget] + cls._RESULT_TRUNCATION_NOTE
                         budget = max(0, budget - len(scrubbed))

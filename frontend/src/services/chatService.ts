@@ -447,12 +447,18 @@ class ElectronChatService implements ChatService {
   async createMcp(request: McpServerCreateRequest): Promise<McpServerEntry> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.createMcp(request);
+    if (!response?.server) {
+      throw new Error('Failed to create MCP server');
+    }
     return response.server;
   }
 
   async updateMcp(serverId: string, request: McpServerUpdateRequest): Promise<McpServerEntry> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.updateMcp(serverId, request);
+    if (!response?.server) {
+      throw new Error('Failed to update MCP server');
+    }
     return response.server;
   }
 

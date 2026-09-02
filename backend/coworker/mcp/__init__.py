@@ -9,9 +9,28 @@ Layout:
 - :mod:`coworker.mcp.mcp_oauth` -- OAuth 2.1 + PKCE for remote servers
 - :mod:`coworker.mcp.mcp_discover` -- built-in server templates
 - :mod:`coworker.mcp.mcp_test` -- one-shot connection probe
+- :mod:`coworker.mcp.mcp_utils` -- shared utilities (error formatting)
 
 Note: this package is named ``mcp`` but must never shadow the third-party
 ``mcp`` SDK. Python 3 uses absolute imports by default, so ``from mcp.types
 import ...`` inside this package still resolves to the SDK; sibling modules
 must be imported relatively (``from .mcp_session import ...``).
 """
+
+__all__ = [
+    "McpManager",
+    "McpConfig",
+    "McpServerEntry",
+    "McpSessionManager",
+    "build_connection",
+    "normalize_transport",
+    "run_blocking",
+    "McpToolMiddleware",
+    "build_oauth_provider",
+    "LoopbackCallbackServer",
+    "FileTokenStorage",
+    "discover_templates",
+    "test_mcp_connection_sync",
+    "flatten_exceptions",
+    "friendly_error",
+]

@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import secrets
 import threading
 import time
 from datetime import timedelta
@@ -46,6 +47,7 @@ from .mcp_oauth import (
     LoopbackCallbackServer,
     build_oauth_provider,
 )
+from .mcp_utils import friendly_error
 
 from coworker.logger import get_logger
 logger = get_logger(__name__)
@@ -122,7 +124,7 @@ def _is_transport_error(exc: BaseException) -> bool:
 
     A false positive is harmless: the reconnect+retry path is idempotent.
     """
-    for leaf in _flatten_exceptions(exc):
+    for leaf in flatten_exceptions(exc):
         if isinstance(leaf, (ConnectionError, BrokenPipeError, EOFError, TimeoutError)):
             return True
         text = str(leaf).lower()
@@ -145,31 +147,8 @@ def _is_transport_error(exc: BaseException) -> bool:
     return False
 
 
-def _flatten_exceptions(exc: BaseException) -> list[BaseException]:
-    """Unwrap ``ExceptionGroup``/``BaseExceptionGroup`` into leaf exceptions.
-
-    The MCP SDK and anyio wrap transport errors (e.g. ``httpx.HTTPStatusError``
-    for a 401) inside exception groups, so classifying a failure by
-    ``str(exc)`` only sees the group summary. Recursing into the groups lets us
-    inspect the real leaf error.
-    """
-    leaves: list[BaseException] = []
-
-    def _walk(e: BaseException) -> None:
-        for leaf in getattr(e, "exceptions", ()) or ():
-            if getattr(leaf, "exceptions", None):
-                _walk(leaf)
-            else:
-                leaves.append(leaf)
-        if not getattr(e, "exceptions", ()):
-            leaves.append(e)
-
-    _walk(exc)
-    return leaves or [exc]
-
-
 def _classify_auth_error(exc: BaseException) -> bool:
-    for leaf in _flatten_exceptions(exc):
+    for leaf in flatten_exceptions(exc):
         text = str(leaf).lower()
         if any(m in text for m in ("401", "unauthorized", "authorization", "oauth", "www-authenticate", "403")):
             return True
@@ -549,11 +528,16 @@ class McpSessionManager:
             except (TimeoutError, asyncio.TimeoutError):
                 logger.warning("MCP connect to %s exceeded its budget; cooling down", server_id)
                 self._connect_failures[server_id] = time.monotonic()
-                # Stop the stranded connect task (it would otherwise linger
-                # forever on a server that opens but never speaks MCP). The
-                # owner's shielded teardown handles the transport cleanup.
+                # Shielded task is STILL RUNNING after wait_for timeout.
+                # Per Python asyncio docs: "Save a reference to tasks passed to
+                # shield(), to avoid a task disappearing mid-execution."
+                # We must manually cancel and await the shielded task.
                 if not task.done():
                     task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):
+                        pass
             finally:
                 self._connecting.pop(server_id, None)
 
@@ -581,28 +565,38 @@ class McpSessionManager:
         # The probe reuses the same OAuth wiring as the real connect so a stored
         # token is attached (an authorized server must not read as needs_auth).
         wired: tuple[dict[str, Any], LoopbackCallbackServer | None] | None = None
-        if not enable_browser_flow:
-            try:
-                probe_conn = forced_connection if forced_connection is not None else build_connection(server)
-                probe_conn, loopback = await self._wire_auth(
-                    server_id, server, probe_conn, enable_browser_flow=False
-                )
-                wired = (probe_conn, loopback)
-                probe = await self._probe_remote_auth(server, probe_conn)
-                if probe:
-                    if loopback is not None:
-                        await loopback.close()
-                    await asyncio.to_thread(
-                        self.mcp_manager.update_server_status,
-                        server_id,
-                        probe,
-                        "Authentication required",
-                        0,
-                        [],
+        loopback: LoopbackCallbackServer | None = None
+        try:
+            if not enable_browser_flow:
+                loopback = await self._start_loopback()
+                try:
+                    probe_conn = forced_connection if forced_connection is not None else build_connection(server)
+                    probe_conn, loopback = await self._wire_auth(
+                        server_id, server, probe_conn, enable_browser_flow=False
                     )
-                    return None
-            except BaseException:  # noqa: BLE001 - probe is best-effort
-                wired = None
+                    wired = (probe_conn, loopback)
+                    probe = await self._probe_remote_auth(server, probe_conn)
+                    if probe:
+                        loopback = None  # Ownership transferred to wired
+                        await self._close_quietly(loopback)
+                        await asyncio.to_thread(
+                            self.mcp_manager.update_server_status,
+                            server_id,
+                            probe,
+                            "Authentication required",
+                            0,
+                            [],
+                        )
+                        return None
+                except BaseException:  # noqa: BLE001 - probe is best-effort
+                    wired = None
+                    raise  # Re-raise to trigger finally cleanup
+        finally:
+            # CRITICAL: Always clean up loopback if not transferred to wired.
+            # The probe phase creates a loopback that must be closed on all error
+            # paths to prevent file descriptor leaks.
+            if loopback is not None and wired is None:
+                await self._close_quietly(loopback)
 
         try:
             rt = await self._connect_one(
@@ -746,6 +740,9 @@ class McpSessionManager:
             on paths where the current task may itself be under cancellation, so
             it must stay synchronous; ``_drain_owner_tasks`` collects the owner
             during shutdown.
+
+            For stdio transports, the owner task's shielded teardown handles
+            subprocess cleanup (close stdin -> wait -> SIGTERM -> SIGKILL).
             """
             stop.set()
             if loopback is not None:
@@ -843,6 +840,9 @@ class McpSessionManager:
 
         loopback = LoopbackCallbackServer()
         await loopback.start()
+        # Generate CSRF state and set expected values for validation
+        auth_state = secrets.token_urlsafe(32)
+        loopback.set_expected(auth_state, None)
         storage = FileTokenStorage(token_path)
         provider = build_oauth_provider(
             server["url"],
@@ -1065,6 +1065,9 @@ class McpSessionManager:
         connection = build_connection(server)
         loopback = LoopbackCallbackServer()
         await loopback.start()
+        # Generate state for CSRF protection and set expected values
+        auth_state = secrets.token_urlsafe(32)
+        loopback.set_expected(auth_state, None)
         try:
             storage = FileTokenStorage(self._oauth_dir / f"{server_id}.json")
             connection["auth"] = build_oauth_provider(

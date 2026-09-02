@@ -11,58 +11,10 @@ from .mcp_loader import (
     normalize_transport,
     run_blocking,
 )
+from .mcp_utils import friendly_error
 
 from coworker.logger import get_logger
 logger = get_logger(__name__)
-
-
-def _flatten_exceptions(exc: BaseException) -> list[BaseException]:
-    """Unwrap ``ExceptionGroup``/``BaseExceptionGroup`` into leaf exceptions."""
-    leaves: list[BaseException] = []
-
-    def _walk(e: BaseException) -> None:
-        for leaf in getattr(e, "exceptions", ()) or ():
-            if getattr(leaf, "exceptions", None):
-                _walk(leaf)
-            else:
-                leaves.append(leaf)
-        if not getattr(e, "exceptions", ()):
-            leaves.append(e)
-
-    _walk(exc)
-    return leaves or [exc]
-
-
-def _friendly_error(exc: BaseException, transport: str) -> str:
-    """Turn raw adapter/SDK exceptions into something a user can act on."""
-    leaves = _flatten_exceptions(exc)
-    if any(isinstance(leaf, TimeoutError) for leaf in leaves):
-        return "Connection timed out"
-    for leaf in leaves:
-        if isinstance(leaf, FileNotFoundError):
-            return f"Command not found: {leaf}"
-        response = getattr(leaf, "response", None)
-        if response is not None and getattr(response, "status_code", None):
-            if response.status_code == 401:
-                return f"Authentication required (401): {leaf}"
-            return f"HTTP {response.status_code}: {leaf}"
-
-    text = str(exc).strip() or exc.__class__.__name__
-    lowered = text.lower()
-    if isinstance(exc, FileNotFoundError) or "no such file or directory" in lowered:
-        return f"Command not found: {text}"
-    if "unauthorized" in lowered or "401" in lowered:
-        return f"Authentication required (401): {text}"
-    if "403" in lowered:
-        return f"Access denied (403): {text}"
-    if "404" in lowered:
-        return f"Endpoint not found (404) -- check the URL: {text}"
-    if transport == "sse" and "text/event-stream" in lowered:
-        return f"Server did not return an SSE stream -- try HTTP transport: {text}"
-
-    if len(text) > 300:
-        text = text[:297] + "..."
-    return text
 
 
 def test_mcp_connection_sync(
@@ -118,7 +70,7 @@ def test_mcp_connection_sync(
         return {
             "ok": False,
             "latency_ms": _elapsed(),
-            "error": _friendly_error(exc, canonical),
+            "error": friendly_error(exc, canonical),
             "tool_count": 0,
             "tools": [],
         }

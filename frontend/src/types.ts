@@ -4,6 +4,7 @@ export type AgentMode = 'single';
 export type WorkMode = 'plan' | 'build';
 export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
 export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org' | 'dashboard';
+export type Transport = 'stdio' | 'http' | 'sse' | 'streamable_http' | 'websocket';
 
 export interface McpToolEntry {
   name: string;
@@ -13,7 +14,7 @@ export interface McpToolEntry {
 export interface McpServerEntry {
   id: string;
   name: string;
-  transport: string;
+  transport: Transport;
   command: string;
   args: string;
   cwd: string;
@@ -49,7 +50,7 @@ export interface McpTemplateEntry {
 
 export interface McpServerCreateRequest {
   name: string;
-  transport: string;
+  transport: Transport;
   command?: string;
   args?: string;
   cwd?: string;
@@ -61,7 +62,7 @@ export interface McpServerCreateRequest {
 
 export interface McpServerUpdateRequest {
   name?: string;
-  transport?: string;
+  transport?: Transport;
   enabled?: boolean;
   command?: string;
   args?: string;
@@ -75,15 +76,16 @@ export interface McpServerUpdateRequest {
 }
 
 export interface McpTestRequest {
-  transport: string;
-  command?: string;
-  args?: string;
-  cwd?: string;
-  timeout?: number | null;
-  url?: string;
+  name?: string;
+  transport: Transport;
+  command?: string | undefined;
+  args?: string | undefined;
+  cwd?: string | undefined;
+  timeout?: number | null | undefined;
+  url?: string | undefined;
   env?: Record<string, string>;
   headers?: Record<string, string>;
-  server_id?: string;
+  server_id?: string | undefined;
 }
 
 export interface McpTestResult {

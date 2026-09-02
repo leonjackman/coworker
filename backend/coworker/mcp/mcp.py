@@ -302,6 +302,15 @@ class McpManager:
                 self._assert_unique_name(config, clean_name, server_id)
                 server.name = clean_name
 
+            # Collect new values first, then validate transport BEFORE applying.
+            # This prevents a transport change from being validated against
+            # stale fields (e.g. switching to stdio with an old URL as command).
+            new_transport = (transport if transport is not None else server.transport).strip().lower() if transport is not None else server.transport
+            new_command = (command if command is not None else server.command).strip() if command is not None else server.command
+            new_url = (url if url is not None else server.url).strip() if url is not None else server.url
+
+            self._validate_transport_fields(new_transport, new_command, new_url)
+
             if transport is not None:
                 clean_transport = transport.strip().lower()
                 if clean_transport not in VALID_TRANSPORTS:
@@ -321,8 +330,6 @@ class McpManager:
                     raise ValueError("Timeout must be a number of seconds")
             if url is not None:
                 server.url = url.strip()
-
-            self._validate_transport_fields(server.transport, server.command, server.url)
 
             if env is not None:
                 server.env = self._resolve_secrets(self._clean_map(env), server.env)
