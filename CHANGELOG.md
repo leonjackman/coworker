@@ -122,6 +122,34 @@
 
 - 新增 `test_dashboard.py`、`test_skill_self_authoring.py`、`test_message_processor.py`、`test_context_trim.py`：覆盖仪表盘数据装配、技能自创作草稿暂存与审批流转、空会话重放守卫、上下文裁剪。
 
-## Unreleased
+## 0.6.1
 
-（尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## 0.6.1`。）
+本版本聚焦於 MCP 面板與連線穩定性的全面加固：新增 Streamable HTTP 傳輸、CSRF 保護、並發 OAuth 支援，並重構了 MCP 模組的錯誤處理與工具索引。同時大幅改進了聊天輸入框的鍵盤體驗。
+
+### 新增
+
+- **Streamable HTTP 傳輸支援**：MCP 面板新增 `Streamable HTTP (remote)` 傳輸選項，並補上對應的 i18n 翻譯。
+- **MCP 工具描述命令（describeCommand）i18n**：為工具調用補齊 `describeCommand`、`describeToolCall` 等 40+ 條翻譯（git / pip / docker / 文件操作 / 網頁搜索等），覆蓋所有本地語言。
+- **MCP 工具索引 O(1) 查找**：`McpToolMiddleware` 改用 `_all_tools_map` 進行工具名稱查找，替代之前的線性遍歷。
+
+### 改動
+
+- **MCP 模組重構與工具抽離**：將 `mcp_session.py` 與 `mcp_test.py` 中重複的 `_flatten_exceptions` 與 `_friendly_error` 抽離為共享工具模組 `mcp_utils.py`，並納入 `__all__` 導出。
+- **MCP 傳輸校驗強化**：`normalize_transport` 不再對未知傳輸靜默回退為 stdio，改為拋出 `ValueError`；`build_connection` 對 timeout 增加正數與 3600 秒上限校驗。
+- **MCP 更新校驗順序調整**：`McpManager.update_server` 改為先收集新值再校驗傳輸，避免切換傳輸時舊字段干擾校驗。
+- **MCP 中間件避免阻塞**：移除 `_overrides` 中同步調用的 `ensure_connected`（圖編譯時已預熱會話），避免每次模型調用阻塞事件循環。
+- **聊天輸入框免點擊聚焦**：重寫 `ChatInput` 的聚焦策略，改為「掛載即聚焦 → 可打印字符自動聚焦 → Escape 移出焦點」，與 opencode 的聚焦模型對齊；支持 `[data-prevent-autofocus]` 區域跳過自動聚焦；鼠標選擇 / 複製文字不再觸發聚焦。
+- **MCP 面板表單驗證**：新增 timeout 無效時的錯誤提示；刪除服務後自動返回列表視圖。
+- **MCP 刪除冪等**：刪除不存在的 MCP 服務時忽略 404 錯誤。
+- **Electron 主進程更新**：同步 MCP 配置與工作區相關變更。
+
+### 修復
+
+- **MCP OAuth CSRF 保護**：`LoopbackCallbackServer` 新增 CSRF state 驗證（RFC 6749 Section 10.12）與 iss 校驗（RFC 9207），支援並發 OAuth 流程。
+- **MCP 探針迴圈資源洩漏**：探針階段创建的 loopback 在所有錯誤路徑下正確關閉，防止文件描述符洩漏。
+- **MCP 連接超時任務清理**：`wait_for` 超時後正確取消並 await 被 shield 的連接任務，避免任務懸掛。
+- **MCP 會話關閉順序**：stdio 傳輸的 owner 任務 shielded teardown 正確處理子進程清理（close stdin → wait → SIGTERM → SIGKILL）。
+
+### 品質
+
+- 新增 MCP 審計修復方案文檔 `docs/task/mcp-audit-fix-plan.md`。
