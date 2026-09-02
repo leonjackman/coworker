@@ -5,6 +5,9 @@ Only servers that run without extra credentials are listed, so a template can
 always be added and tested straight away.
 """
 
+import copy
+import os
+import shlex
 from typing import Any
 
 TEMPLATES: list[dict[str, Any]] = [
@@ -25,10 +28,10 @@ TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "git",
         "name": "Git",
-        "description": "Commit history, diffs, blame, branch management",
+        "description": "Read, search, and manipulate Git repositories (status, diffs, commits, branches)",
         "transport": "stdio",
-        "command": "npx",
-        "args": "-y @modelcontextprotocol/server-git",
+        "command": "uvx",
+        "args": "mcp-server-git",
         "url": "",
         "env": {},
         "headers": {},
@@ -63,6 +66,34 @@ TEMPLATES: list[dict[str, Any]] = [
         "homepage": "https://mcp.deepwiki.com",
         "color": "#F59E0B",
         "category": "data",
+    },
+    {
+        "id": "fetch",
+        "name": "Fetch",
+        "description": "Fetch web content and convert it to markdown",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": "mcp-server-fetch",
+        "url": "",
+        "env": {},
+        "headers": {},
+        "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+        "color": "#0EA5E9",
+        "category": "web",
+    },
+    {
+        "id": "time",
+        "name": "Time",
+        "description": "Current time and timezone conversion",
+        "transport": "stdio",
+        "command": "uvx",
+        "args": "mcp-server-time",
+        "url": "",
+        "env": {},
+        "headers": {},
+        "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
+        "color": "#6366F1",
+        "category": "productivity",
     },
     {
         "id": "sequential-thinking",
@@ -121,3 +152,18 @@ TEMPLATES: list[dict[str, Any]] = [
         "category": "code",
     },
 ]
+
+
+def resolve_templates() -> list[dict[str, Any]]:
+    """Return a per-request copy of TEMPLATES with runtime defaults applied.
+
+    The official Filesystem server refuses to start without at least one
+    allowed directory, so its quick-add args are filled with the current
+    user's home directory at serve time (kept out of the static table so the
+    path is always resolved on the machine that will actually run it).
+    """
+    payload: list[dict[str, Any]] = copy.deepcopy(TEMPLATES)
+    for entry in payload:
+        if entry.get("id") == "filesystem":
+            entry["args"] = f"-y @modelcontextprotocol/server-filesystem {shlex.quote(os.path.expanduser('~'))}"
+    return payload

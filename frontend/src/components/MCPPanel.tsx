@@ -8,6 +8,16 @@ import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Switch } from './ui/switch';
 import { WorkspacePage } from './ui/workspace-page';
+import gitLogo from '../../../assets/mcp-logo/git.png';
+import context7Logo from '../../../assets/mcp-logo/context7.png';
+import deepwikiLogo from '../../../assets/mcp-logo/deepwiki.png';
+import playwrightLogo from '../../../assets/mcp-logo/playwright.png';
+import filesystemLogo from '../../../assets/mcp-logo/filesystem.png';
+import sequentialThinkingLogo from '../../../assets/mcp-logo/sequential-thinking.png';
+import memoryServerLogo from '../../../assets/mcp-logo/memory-server.png';
+import everythingServerLogo from '../../../assets/mcp-logo/everything-server.png';
+import fetchLogo from '../../../assets/mcp-logo/fetch.png';
+import timeLogo from '../../../assets/mcp-logo/time.png';
 
 // Matches backend mcp.py SECRET_PLACEHOLDER. Carried back on save so stored
 // secrets survive an edit without the UI ever seeing the raw value.
@@ -34,63 +44,36 @@ function categoryLabel(value: string): string {
   return tOrDefault(`mcp.cat_${value}`, value);
 }
 
-// ── SVG icon map for MCP templates (real service logos) ──────────────────────
+// ── Logo map for MCP templates ─────────────────────────────────────────────
+// Files live under assets/mcp-logo/. `mono` logos are single-ink marks that
+// are inverted to white in dark mode (see the [data-theme="dark"] rule in
+// App.css). The modelcontextprotocol reference servers (filesystem,
+// sequential-thinking, memory-server, everything-server) ship their own
+// function glyphs here rather than a shared vendor mark, since the MCP org
+// publishes no per-server brand.
+type TemplateLogo = { src: string; mono?: boolean };
 
-interface TemplateIconDef {
-  svg: string;       // raw SVG markup for a ~24px colored logo
-  color: string;
-}
-
-const MCP_LOGOS: Record<string, TemplateIconDef> = {
-  filesystem: {
-    color: '#000000',
-    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>',
-  },
-  git: {
-    // GitHub Octocat logo (official brand)
-    color: '#1B1F23',
-    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.66-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>',
-  },
-  context7: {
-    // Upstash Context7 logo (shield icon)
-    color: '#7C3AED',
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
-  },
-  deepwiki: {
-    color: '#F59E0B',
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>',
-  },
-  'sequential-thinking': {
-    color: '#10B981',
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>',
-  },
-  'memory-server': {
-    color: '#3B82F6',
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
-  },
-  playwright: {
-    // Playwright logo (official brand - purple P)
-    color: '#EC433F',
-    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.162 15.835a2.404 2.404 0 0 0 1.747-.743l6.73-6.792a.676.676 0 0 0-.006-.964.693.693 0 0 0-.973.003L5.934 14.13a.686.686 0 0 0-.005.973c.267.272.722.269.99-.005zm4.87-4.923a2.404 2.404 0 0 0 1.747-.743l4.185-4.227a.676.676 0 0 0-.006-.964.693.693 0 0 0-.973.003L10.804 10.1c-.266.269-.264.705.005.973.269.269.723.266.99-.005zM12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z"/></svg>',
-  },
-  'everything-server': {
-    color: '#6366F1',
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6m11-7h-6m-6 0H1m15.364-6.364l-4.243 4.243m-3.942 0L4.636 5.636m12.728 12.728l-4.243-4.243m-3.942 0L4.636 18.364"/></svg>',
-  },
-  // fallback generic icon
-  default: {
-    color: '#8b949e',
-    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"/></svg>',
-  },
+const TEMPLATE_LOGOS: Record<string, TemplateLogo> = {
+  filesystem: { src: filesystemLogo, mono: true },
+  git: { src: gitLogo },
+  context7: { src: context7Logo },
+  deepwiki: { src: deepwikiLogo, mono: true },
+  'sequential-thinking': { src: sequentialThinkingLogo, mono: true },
+  'memory-server': { src: memoryServerLogo, mono: true },
+  playwright: { src: playwrightLogo },
+  'everything-server': { src: everythingServerLogo, mono: true },
+  fetch: { src: fetchLogo, mono: true },
+  time: { src: timeLogo, mono: true },
 };
 
 function renderLogo(template: McpTemplateEntry): React.ReactNode {
-  const def = MCP_LOGOS[template.id] ?? MCP_LOGOS.default;
+  const logo = TEMPLATE_LOGOS[template.id];
+  if (!logo) return null;
   return (
-    <span
-      className="mcp-template-logo"
-      style={{ color: def?.color ?? '#8b949e' }}
-      dangerouslySetInnerHTML={{ __html: def?.svg ?? '' }}
+    <img
+      className={`mcp-template-logo${logo.mono ? ' mcp-template-logo--mono' : ''}`}
+      src={logo.src}
+      alt=""
     />
   );
 }
@@ -724,7 +707,7 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
                 key={template.id}
                 onClick={() => startAdd(template)}
               >
-                <div className="mcp-catalog-card__icon" style={{ color: (MCP_LOGOS[template.id] ?? MCP_LOGOS.default)?.color ?? '#8b949e' }}>
+                <div className="mcp-catalog-card__icon">
                   {renderLogo(template)}
                 </div>
                 <div className="mcp-catalog-card__name">{templateName(template)}</div>

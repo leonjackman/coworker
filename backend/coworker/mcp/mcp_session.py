@@ -39,6 +39,8 @@ import httpx
 from langchain_core.tools import StructuredTool
 
 from langchain_mcp_adapters.sessions import create_session
+from langchain_mcp_adapters.tools import _list_all_tools
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 from .mcp import McpManager, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
 from .mcp_loader import build_connection
@@ -47,7 +49,7 @@ from .mcp_oauth import (
     LoopbackCallbackServer,
     build_oauth_provider,
 )
-from .mcp_utils import friendly_error
+from .mcp_utils import flatten_exceptions, friendly_error
 
 from coworker.logger import get_logger
 logger = get_logger(__name__)
@@ -77,9 +79,10 @@ def _slug(value: str) -> str:
 def _annotation_flags(mcp_tool: Any) -> dict[str, Any]:
     """Extract MCP ``ToolAnnotations`` into plain JSON-safe flags.
 
-    ``None`` means "the server did not declare it". Callers apply the spec
-    defaults themselves (``readOnlyHint=false`` / ``destructiveHint=true``) so
-    an undeclared tool is treated as potentially dangerous.
+    ``None`` means "the server did not declare it". The MCP spec defaults
+    (``readOnlyHint=false``, ``destructiveHint=true``) are applied here so an
+    undeclared tool is treated as potentially destructive -- which is what the
+    HITL approval gate and the audit trail rely on.
     """
     annotations = getattr(mcp_tool, "annotations", None)
 
@@ -91,8 +94,11 @@ def _annotation_flags(mcp_tool: Any) -> dict[str, Any]:
 
     title = getattr(annotations, "title", None) if annotations is not None else None
     return {
-        "read_only": flag("readOnlyHint"),
-        "destructive": flag("destructiveHint"),
+        # Spec default when undeclared: a tool is NOT read-only.
+        "read_only": bool(flag("readOnlyHint")),
+        # Spec default when undeclared: a tool MAY be destructive. Keep the
+        # raw value for the audit trail but treat a missing hint as destructive.
+        "destructive": True if flag("destructiveHint") is None else flag("destructiveHint"),
         "idempotent": flag("idempotentHint"),
         "open_world": flag("openWorldHint"),
         "title": str(title) if title else None,
@@ -310,6 +316,10 @@ class McpSessionManager:
         self._connect_failures: dict[str, float] = {}
         # exposed tool name -> policy record (see :meth:`tool_policy`)
         self._policies: dict[str, dict[str, Any]] = {}
+        # exposed tool name -> dispatch ``StructuredTool``. A flat index the
+        # ``mcp_middleware`` uses to resolve tools that connected after the agent
+        # graph was compiled (they are not bound to the ToolNode statically).
+        self._all_tools_map: dict[str, Any] = {}
         # bare tool name -> server ids that all advertise it
         self._conflicts: dict[str, list[str]] = {}
         self._trust_cache: dict[str, tuple[float, bool]] = {}
@@ -462,7 +472,7 @@ class McpSessionManager:
         except asyncio.CancelledError:
             logger.debug("MCP prewarm cancelled by shutdown")
         except BaseException as exc:  # noqa: BLE001
-            logger.warning("MCP prewarm failed: %s", _friendly_error(exc))
+            logger.warning("MCP prewarm failed: %s", friendly_error(exc))
         finally:
             self._prewarm_task = None
 
@@ -480,7 +490,7 @@ class McpSessionManager:
         except TimeoutError:
             logger.warning("MCP connect did not finish within the timeout")
         except BaseException as exc:  # noqa: BLE001 - a broken server must never break chat
-            logger.warning("MCP connect failed: %s", _friendly_error(exc))
+            logger.warning("MCP connect failed: %s", friendly_error(exc))
 
     _call_count: int = 0
 
@@ -568,7 +578,6 @@ class McpSessionManager:
         loopback: LoopbackCallbackServer | None = None
         try:
             if not enable_browser_flow:
-                loopback = await self._start_loopback()
                 try:
                     probe_conn = forced_connection if forced_connection is not None else build_connection(server)
                     probe_conn, loopback = await self._wire_auth(
@@ -577,8 +586,12 @@ class McpSessionManager:
                     wired = (probe_conn, loopback)
                     probe = await self._probe_remote_auth(server, probe_conn)
                     if probe:
-                        loopback = None  # Ownership transferred to wired
+                        # Auth required: this probe loopback is not carried into
+                        # a live session, so close it now and keep `wired` empty
+                        # so the finally block does not double-close.
                         await self._close_quietly(loopback)
+                        loopback = None
+                        wired = None
                         await asyncio.to_thread(
                             self.mcp_manager.update_server_status,
                             server_id,
@@ -604,9 +617,9 @@ class McpSessionManager:
             )
         except BaseException as exc:  # noqa: BLE001 - one bad server must not affect others
             if _classify_auth_error(exc):
-                status, error = STATUS_NEEDS_AUTH, _friendly_error(exc, server.get("transport", ""))
+                status, error = STATUS_NEEDS_AUTH, friendly_error(exc, server.get("transport", ""))
             else:
-                status, error = STATUS_ERROR, _friendly_error(exc, server.get("transport", ""))
+                status, error = STATUS_ERROR, friendly_error(exc, server.get("transport", ""))
             logger.info("MCP server %s not available: %s", server_id, error)
             self._connect_failures[server_id] = time.monotonic()
             await asyncio.to_thread(
@@ -675,14 +688,14 @@ class McpSessionManager:
             else:
                 headers.setdefault("Accept", "application/json, text/event-stream")
                 headers.setdefault("Content-Type", "application/json")
-                headers.setdefault("MCP-Protocol-Version", "2025-06-18")
+                headers.setdefault("MCP-Protocol-Version", LATEST_PROTOCOL_VERSION)
                 body = json.dumps(
                     {
                         "jsonrpc": "2.0",
                         "id": 1,
                         "method": "initialize",
                         "params": {
-                            "protocolVersion": "2025-06-18",
+                            "protocolVersion": LATEST_PROTOCOL_VERSION,
                             "capabilities": {},
                             "clientInfo": {"name": "coworker", "version": "1.0"},
                         },
@@ -767,8 +780,10 @@ class McpSessionManager:
             server_name = (
                 getattr(server_info, "name", "") or server.get("name", "") or server_id
             )
-            listed = await session.list_tools()
-            raw_tools = self._apply_policy(server, list(listed.tools or []))
+            # Paginate the full tool catalog (a server may advertise more tools
+            # than one page; see the MCP "Utilities/Pagination" spec).
+            all_tools = await _list_all_tools(session)
+            raw_tools = self._apply_policy(server, all_tools)
         except BaseException as exc:
             abandon()
             raise exc
@@ -884,6 +899,10 @@ class McpSessionManager:
         for rt in runtimes:
             before = tuple(getattr(t, "name", "") for t in rt.tools)
             built: list[Any] = []
+            # Server-declared disabled tools are persisted by EXPOSED name (the
+            # UI shows the namespaced name for conflicted servers), so the
+            # filter must run here -- after namespacing -- not on raw tools.
+            disabled = self._server_disabled_tools(rt.server_id)
             for mcp_tool in rt.raw_tools:
                 bare = str(getattr(mcp_tool, "name", "") or "")
                 if not bare:
@@ -895,6 +914,9 @@ class McpSessionManager:
                     exposed = bare
                 exposed = self._deduplicate(exposed, used)
                 used.add(exposed)
+
+                if bare in disabled or exposed in disabled:
+                    continue
 
                 flags = _annotation_flags(mcp_tool)
                 built.append(
@@ -915,6 +937,9 @@ class McpSessionManager:
 
         self._policies = policies
         self._conflicts = conflicts
+        # Rebuild the flat name -> tool index used by the middleware to resolve
+        # tools that appeared after graph compile (see ``__init__``).
+        self._all_tools_map = {t.name: t for rt in runtimes for t in rt.tools}
         self._pending_status_refresh |= changed
         if conflicts:
             logger.info(
@@ -1011,12 +1036,39 @@ class McpSessionManager:
         try:
             return await self._call_once(server_id, name, args)
         except McpSessionClosedError:
+            # Re-invoking after an ambiguous transport failure can duplicate an
+            # irreversible action (create/append/delete/send). Only auto-retry
+            # tools the server declared idempotent (or read-only); otherwise
+            # surface the transport error so the model/agent can decide.
+            if not self._retry_safe(name):
+                logger.warning(
+                    "MCP session for %s closed; NOT retrying non-idempotent tool %r",
+                    server_id,
+                    name,
+                )
+                raise
             logger.info("MCP session for %s closed; reconnecting and retrying %r", server_id, name)
             try:
                 await self._reconnect_async(server_id, enable_browser_flow=False)
             except Exception:  # noqa: BLE001 - reconnect failure surfaces on retry
                 logger.warning("MCP reconnect failed for %s", server_id)
             return await self._call_once(server_id, name, args)
+
+    def _retry_safe(self, exposed_name: str) -> bool:
+        """Whether re-invoking a tool after a lost response is side-effect safe.
+
+        Per the MCP spec a tool is only safe to retry when the server declared
+        ``idempotentHint`` (or it is read-only). An undeclared tool may have
+        already executed server-side while the response was lost, so retrying it
+        could double-run a destructive operation.
+        """
+        policy = self._policies.get(exposed_name)
+        if policy is None:
+            return False
+        if policy.get("read_only"):
+            return True
+        annotations = policy.get("annotations") or {}
+        return bool(annotations.get("idempotent"))
 
     async def _call_once(self, server_id: str, name: str, args: dict[str, Any]) -> Any:
         rt = self._servers.get(server_id)
@@ -1075,7 +1127,7 @@ class McpSessionManager:
             )
             rt = await self._connect_one(server, enable_browser_flow=True, forced_connection=connection)
         except Exception as exc:  # noqa: BLE001
-            error = _friendly_error(exc, server.get("transport", ""))
+            error = friendly_error(exc, server.get("transport", ""))
             needs_auth = _classify_auth_error(exc)
             await asyncio.to_thread(
                 self.mcp_manager.update_server_status, server_id, STATUS_NEEDS_AUTH if needs_auth else STATUS_ERROR, error, 0, []
@@ -1123,6 +1175,14 @@ class McpSessionManager:
 
     # ── helpers ──────────────────────────────────────────────────────────
 
+    def _server_disabled_tools(self, server_id: str) -> set[str]:
+        """The user-disabled tool names (exposed names) for one server."""
+        try:
+            raw = self.mcp_manager.get_server(server_id).get("disabled_tools") or []
+        except Exception:  # noqa: BLE001 - a missing config means "nothing disabled"
+            return set()
+        return {str(item).strip() for item in raw if str(item).strip()}
+
     @staticmethod
     def _apply_policy(server: dict[str, Any], tools: list[Any]) -> list[Any]:
         """Drop tools the user explicitly disabled.
@@ -1136,32 +1196,3 @@ class McpSessionManager:
         if not disabled:
             return tools
         return [t for t in tools if getattr(t, "name", None) not in disabled]
-
-
-def _friendly_error(exc: BaseException, transport: str = "") -> str:
-    """Turn raw adapter/SDK exceptions into something a user can act on."""
-    leaves = _flatten_exceptions(exc)
-    if any(isinstance(leaf, TimeoutError) for leaf in leaves):
-        return "Connection timed out"
-    # Prefer the most actionable leaf: a nested HTTPStatusError (e.g. 401/403).
-    for leaf in leaves:
-        if isinstance(leaf, FileNotFoundError):
-            return f"Command not found: {leaf}"
-        status_error = getattr(leaf, "response", None)
-        if status_error is not None and getattr(status_error, "status_code", None):
-            return f"Authentication required (401)" if status_error.status_code == 401 else f"HTTP {status_error.status_code}: {leaf}"
-    text = str(exc).strip() or exc.__class__.__name__
-    lowered = text.lower()
-    if "no such file or directory" in lowered:
-        return f"Command not found: {text}"
-    if "unauthorized" in lowered or "401" in lowered:
-        return f"Authentication required (401): {text}"
-    if "403" in lowered:
-        return f"Access denied (403): {text}"
-    if "404" in lowered:
-        return f"Endpoint not found (404) -- check the URL: {text}"
-    if transport == "sse" and "text/event-stream" in lowered:
-        return f"Server did not return an SSE stream -- try HTTP transport: {text}"
-    if len(text) > 300:
-        text = text[:297] + "..."
-    return text

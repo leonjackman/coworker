@@ -5412,7 +5412,7 @@ def _resolve_provider_secret(request: BaseModel) -> str:
 # ─────────────────────────── MCP ──────────────────────────
 
 from coworker.mcp.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
-from coworker.mcp.mcp_discover import TEMPLATES
+from coworker.mcp.mcp_discover import resolve_templates
 from coworker.mcp.mcp_test import test_mcp_connection_sync
 
 MCP_CHECK_TIMEOUT_SECONDS = 25.0
@@ -5523,7 +5523,7 @@ def delete_mcp_server(server_id: str):
 
 @app.get("/mcp/discover")
 def discover_mcp_templates():
-    return {"status": "ok", "servers": TEMPLATES}
+    return {"status": "ok", "servers": resolve_templates()}
 
 
 @app.post("/mcp/servers/{server_id}/check")

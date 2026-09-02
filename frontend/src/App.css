@@ -6880,18 +6880,23 @@ body.bottom-panel-resizing {
   justify-content: center;
 }
 
-/* Colored SVG logo inside template pills & catalog cards */
+/* Vendor PNG logo inside template pills & catalog cards */
 .mcp-template-logo {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 4px;
 }
-.mcp-template-logo svg {
-  width: 12px;
-  height: 12px;
+/* Single-ink brand marks (MCP, DeepWiki) are shipped black and inverted to
+   white on dark themes so they stay legible against the dark pill. */
+[data-theme="dark"] .mcp-template-logo--mono {
+  filter: invert(1);
+}
+.mcp-catalog-card__icon .mcp-template-logo {
+  width: 28px;
+  height: 28px;
 }
 
 /* List heading (aligned with provider-list-heading) */
