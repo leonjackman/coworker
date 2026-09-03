@@ -11,7 +11,7 @@ interface MarketSkillDetailModalProps {
   open: boolean;
   skill: MarketSkill | null;
   onClose: () => void;
-  onInstall?: (skill: MarketSkill) => void;
+  onInstall?: (skill: MarketSkill, owner?: string) => void;
   installed?: boolean | undefined;
   installing?: boolean;
 }
@@ -318,7 +318,7 @@ export function MarketSkillDetailModal({
           ) : (
             <Button
               variant="primary"
-              onClick={() => onInstall?.(skill)}
+              onClick={() => onInstall?.(skill, selectedOwner ?? undefined)}
               disabled={busy}
             >
               {busy ? (

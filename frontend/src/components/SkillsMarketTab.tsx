@@ -349,14 +349,20 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   const closeDetail = useCallback(() => setSelectedSkill(null), []);
 
   // ── Install ────────────────────────────────────────────────────────────────
+  // `ownerOverride` carries the author the user picked inside the detail modal
+  // (the market card may not know it for colliding ClawHub slugs).
   const handleInstall = useCallback(
-    async (skill: MarketSkill) => {
+    async (skill: MarketSkill, ownerOverride?: string) => {
       if (skill.installed || installedSlugs.includes(skill.slug)) return;
       const uid = skillUid(skill);
       setInstalling((prev) => new Set(prev).add(uid));
       try {
         // `owner` disambiguates colliding slugs; without it ClawHub answers 409.
-        const response = await chatService.installMarketSkill(skill.source, skill.slug, skill.owner ?? null);
+        const response = await chatService.installMarketSkill(
+          skill.source,
+          skill.slug,
+          ownerOverride || skill.owner || null,
+        );
         if (response.status === 'ok') {
           setInstallMessage({ text: response.message || t('skills.market_installed'), type: 'ok' });
           closeDetail();
