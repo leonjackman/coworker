@@ -702,15 +702,11 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
           {/* Service card grid */}
           <div className="mcp-catalog-grid">
             {catalogFiltered.map((template) => (
-              <div
-                className="mcp-catalog-card"
-                key={template.id}
-                onClick={() => startAdd(template)}
-              >
-                <div className="mcp-catalog-card__icon">
-                  {renderLogo(template)}
+              <div className="mcp-catalog-card" key={template.id} onClick={() => startAdd(template)}>
+                <div style={{ display: 'flex', alignItems: 'center' , gap: 8}}>
+                  <div className="mcp-catalog-card__icon">{renderLogo(template)}</div>
+                  <div className="mcp-catalog-card__name">{templateName(template)} </div>
                 </div>
-                <div className="mcp-catalog-card__name">{templateName(template)}</div>
                 <div className="mcp-catalog-card__desc">{templateDescription(template)}</div>
                 <div className="mcp-catalog-card__tags">
                   <Badge className="mcp-transport-badge">{template.transport}</Badge>
