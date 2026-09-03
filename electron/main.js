@@ -2422,9 +2422,9 @@ ipcMain.handle('list-hot-skills', (event, query) =>
   requestBackend(`/skills/market/hot?${marketQueryString(query)}`, 'GET'),
 );
 ipcMain.handle('install-market-skill', (event, source, slug, owner) =>
-  requestBackend('/skills/market/install', 'POST', { source, slug, owner: owner ?? null }),
+  requestBackend('/skills/market/install', 'POST', { source, slug, owner: owner ?? null }, 60000),
 );
 
 ipcMain.handle('get-market-skill-detail', (event, source, slug, owner) =>
-  requestBackend(`/skills/market/detail?source=${encodeURIComponent(source)}&slug=${encodeURIComponent(slug)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`, 'GET'),
+  requestBackend(`/skills/market/detail?source=${encodeURIComponent(source)}&slug=${encodeURIComponent(slug)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`, 'GET', undefined, 60000),
 );
