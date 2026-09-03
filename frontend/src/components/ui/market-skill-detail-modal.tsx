@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Check, Download, Loader2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Check, Download, Loader2, X, User } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
@@ -31,6 +31,9 @@ interface DetailData {
  * Detail modal for a market skill.
  * Fetches the full SKILL.md body on open via GET /skills/market/detail,
  * so the user can see what the skill actually does before installing.
+ *
+ * Handles ClawHub ambiguous-slug errors: when owner is missing and multiple
+ * candidates exist, shows a picker to let the user choose.
  */
 export function MarketSkillDetailModal({
   open,
@@ -43,24 +46,33 @@ export function MarketSkillDetailModal({
   const [detail, setDetail] = useState<DetailData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [ambiguous, setAmbiguous] = useState(false);
+  const [candidates, setCandidates] = useState<string[]>([]);
   const [commandsExpanded, setCommandsExpanded] = useState(false);
+  const [selectedOwner, setSelectedOwner] = useState<string | null>(null);
   const fetchDone = useRef(false);
 
-  const fetchDetail = useCallback(async () => {
+  const fetchDetail = useCallback(async (ownerOverride?: string) => {
     if (!skill) return;
     setDetailLoading(true);
     setDetailError(null);
+    setAmbiguous(false);
+    setCandidates([]);
     try {
       const response = await chatService.getMarketSkillDetail(
         skill.source,
         skill.slug,
-        skill.owner ?? null,
+        ownerOverride || skill.owner || null,
       );
       if (response.status === 'ok' && response.skill) {
         setDetail({
           body: response.skill.body || '',
           commands: (response.skill.commands ?? []) as ParsedCommand[],
         });
+      } else if (response.ambiguous && response.candidates) {
+        setAmbiguous(true);
+        setCandidates(response.candidates);
+        setDetailError(response.message || 'Ambiguous skill slug');
       } else {
         setDetailError(response.message || 'Failed to load skill details');
       }
@@ -76,6 +88,9 @@ export function MarketSkillDetailModal({
       setCommandsExpanded(false);
       setDetail(null);
       setDetailError(null);
+      setAmbiguous(false);
+      setCandidates([]);
+      setSelectedOwner(null);
       fetchDone.current = false;
       return;
     }
@@ -84,6 +99,11 @@ export function MarketSkillDetailModal({
     fetchDone.current = true;
     void fetchDetail();
   }, [open, skill, fetchDetail]);
+
+  const handleSelectOwner = useCallback(async (owner: string) => {
+    setSelectedOwner(owner);
+    await fetchDetail(owner);
+  }, [fetchDetail]);
 
   const handleClose = useCallback(() => {
     fetchDone.current = false;
@@ -176,6 +196,30 @@ export function MarketSkillDetailModal({
             )}
           </div>
 
+          {/* Ambiguous owner picker */}
+          {ambiguous && candidates.length > 0 && (
+            <div className="skill-detail__section">
+              <span className="skill-detail__label">{t('skills.market_ambiguous_owner')}</span>
+              <div className="skill-detail__owners">
+                {candidates.map((owner) => (
+                  <button
+                    key={owner}
+                    type="button"
+                    className={cn(
+                      'skill-detail__owner-btn',
+                      selectedOwner === owner && 'skill-detail__owner-btn--active',
+                    )}
+                    onClick={() => void handleSelectOwner(owner)}
+                    disabled={detailLoading}
+                  >
+                    <User size={14} />
+                    {owner}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Commands section */}
           {commands.length > 0 && (
             <div className="skill-detail__section">
@@ -218,7 +262,7 @@ export function MarketSkillDetailModal({
             </div>
           )}
 
-          {detailError && (
+          {detailError && !ambiguous && (
             <div className="skill-message skill-message--error">{detailError}</div>
           )}
         </div>

@@ -8859,6 +8859,46 @@ body.bottom-panel-resizing {
   color: var(--muted-foreground);
 }
 
+/* Ambiguous owner picker */
+.skill-detail__owners {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skill-detail__owner-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--muted);
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--foreground);
+  transition: background 160ms, border-color 160ms;
+  text-align: left;
+  width: 100%;
+}
+
+.skill-detail__owner-btn:hover {
+  background: var(--panel-hover);
+  border-color: var(--primary);
+}
+
+.skill-detail__owner-btn--active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.skill-detail__owner-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Full body preview */
 .skill-detail__pre-full {
   margin-top: 10px;

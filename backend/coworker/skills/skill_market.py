@@ -385,10 +385,25 @@ class SkillMarketManager:
 
         Returns the same normalised metadata as the listing plus ``body`` (full
         SKILL.md content) and parsed ``commands`` from frontmatter.
+
+        When ``owner`` is not provided and the upstream returns an ambiguous-slug
+        error (ClawHub), the response carries ``ambiguous: true`` plus a list of
+        candidate owner refs so the frontend can present a picker.
         """
         try:
             content, error = await self._fetch_skill_content(source, slug, owner)
             if error or not content:
+                # If ClawHub returned an ambiguous-slug error and no owner was
+                # provided, try to parse the candidate list and surface it.
+                if "ambiguous" in error.lower() and not owner and source == "clawhub":
+                    candidates = await self._parse_clawhub_candidates(slug)
+                    if candidates:
+                        return {
+                            "status": "error",
+                            "message": error,
+                            "ambiguous": True,
+                            "candidates": candidates,
+                        }
                 return {"status": "error", "message": error or "Failed to fetch skill content"}
 
             frontmatter, body = parse_frontmatter(content)
@@ -424,6 +439,34 @@ class SkillMarketManager:
             raise
         except Exception as exc:
             return {"status": "error", "message": str(exc)}
+
+    async def _parse_clawhub_candidates(self, slug: str) -> list[str] | None:
+        """Try to fetch the 409 conflict page and extract candidate refs."""
+        file_url = f"https://clawhub.ai/api/v1/skills/{_urlencode(slug)}/file"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    file_url,
+                    params={"path": "SKILL.md"},
+                    timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                ) as resp:
+                    if resp.status == 409:
+                        try:
+                            payload = await resp.json(content_type=None)
+                        except Exception:
+                            return None
+                        matches = payload.get("matches") if isinstance(payload, dict) else None
+                        if isinstance(matches, list):
+                            refs: list[str] = []
+                            for m in matches:
+                                if isinstance(m, dict):
+                                    ref = _str_or_none(m.get("ref")) or _str_or_none(m.get("ownerHandle"))
+                                    if ref:
+                                        refs.append(ref)
+                            return refs if refs else None
+        except Exception:
+            pass
+        return None
 
     def install_from_content(
         self,

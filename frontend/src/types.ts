@@ -1070,6 +1070,8 @@ export interface MarketSkillDetailResponse {
   status: string;
   skill: MarketSkillDetail | null;
   message?: string;
+  ambiguous?: boolean;
+  candidates?: string[];
 }
 
 export interface MarketSkillDetail extends MarketSkill {
