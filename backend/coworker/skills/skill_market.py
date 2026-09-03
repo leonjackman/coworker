@@ -33,6 +33,7 @@ import yaml
 
 from coworker.skills.skills import (
     MAX_DESCRIPTION_LENGTH,
+    MAX_NAME_LENGTH,
     _NAME_RE,
     load_skill_from_file,
     parse_frontmatter,
@@ -64,6 +65,24 @@ def _safe_install_dir(root: Path, label: str) -> Path:
     if candidate != root_resolved and not candidate.is_relative_to(root_resolved):
         raise ValueError(f"skill path escapes install root: {label!r}")
     return candidate
+
+
+# Local skill names must be lowercase alphanumeric with single hyphen
+# separators — but market SKILL.md `name` fields are often human-readable
+# titles ("Self-Improving + Proactive Agent"). Slugify before validating so a
+# perfectly good market skill never fails to install.
+
+
+def _local_slugify(raw: str) -> str:
+    """Turn an arbitrary market name into a valid local skill name.
+
+    Lowercases, collapses every run of characters outside ``[a-z0-9]`` into a
+    single hyphen, trims stray hyphens, and clips to the local length limit.
+    """
+    cleaned = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    cleaned = re.sub(r"-{2,}", "-", cleaned)
+    cleaned = cleaned[:MAX_NAME_LENGTH].rstrip("-")
+    return cleaned if cleaned and _NAME_RE.match(cleaned) else ""
 
 
 SKILLHUB_API = "https://api.skillhub.cn/api/skills"
@@ -334,11 +353,18 @@ class SkillMarketManager:
 
             frontmatter, _body = parse_frontmatter(content)
             fallback_name = slug.strip()
-            name: str = frontmatter.get("name") or fallback_name
-            if isinstance(name, str):
-                name = name.strip() or fallback_name
-            else:
-                name = fallback_name
+            raw_name: str = frontmatter.get("name") or fallback_name
+            if not isinstance(raw_name, str):
+                raw_name = fallback_name
+            raw_name = raw_name.strip() or fallback_name
+
+            # Market frontmatter `name` is frequently a human-readable title that
+            # violates the local lowercase-slug rule. Slugify it for the local
+            # identifier; if it changed, rewrite the frontmatter so the on-disk
+            # copy validates on every later scan too.
+            name = _local_slugify(raw_name) or _local_slugify(slug) or "skill"
+            if name != raw_name:
+                content = _inject_frontmatter_field(content, "name", name)
 
             problems = validate_name(name) + validate_description(
                 _str_or_none(frontmatter.get("description", "")) or ""
