@@ -188,6 +188,28 @@
 
 - 新增 `test_http_transport_tuning.py`、`test_mcp_protocol.py`：覆蓋 HTTP 傳輸調優與 MCP 協議分頁。
 
+## 0.6.3
+
+本版本引入 ClawHub 技能市場瀏覽與安裝能力：點擊卡片查看完整 SKILL.md 後再安裝，支援多作者技能歧義解析（自動匹配或手動選擇作者），並修復市場技能名稱不合法導致安裝失敗的問題。
+
+### 新增
+
+- **技能市場瀏覽**：設置頁新增「市場」面板，支持按熱門 / 趨勢 / 搜索瀏覽 ClawHub 技能；點擊卡片彈出詳情模態框，展示完整 SKILL.md 內容（含 frontmatter 與 body），確認後再安裝。
+- **歧義 slug 解析**：當 ClawHub 技能 slug 對應多個作者時，詳情接口返回 `409` 與候選列表；前端自動嘗試匹配點擊卡片的顯示名稱，若找到唯一匹配則自動選擇作者，否則展示作者選擇器供手動選擇。
+- **市場技能溯源標記**：安裝的技能在 frontmatter 中注入 `provenance: market` 字段，便於區分市場安裝與本地創建的技能。
+
+### 修復
+
+- **歧義 slug 404**：修復候選作者解析時使用完整引用（如 `@owner/skill`）導致 ClawHub 返回 404 的問題，改為使用純 owner handle（如 `owner`）。
+- **詳情模態框空白**：修復歧義解析卡死狀態（`autoResolving` 未清除）與全局 `fetchDone` 緩存導致切換技能卡片時顯示過期內容的問題，改為按 `source:slug:owner` 鍵控緩存。
+- **安裝作者錯失**：修復點擊安裝時使用卡片原始 owner（可能為空）而非詳情模態框中選擇的作者的問題。
+- **市場技能名稱安裝失敗**：修復部分 ClawHub 技能 frontmatter `name` 為人類可讀標題（如 `Self-Improving + Proactive Agent`）不滿足本地 `^[a-z0-9]+(-[a-z0-9]+)*$` 校驗導致安裝報錯的問題；安裝時自動將 name slugify 歸一化並回寫 frontmatter，確保後續掃描不再報錯。
+- **詳情請求超時**：將 Electron 後端請求超時從 10 秒提升至 60 秒，適應詳情流程中多個順序 ClawHub 請求與速率限制重試。
+
+### 改動
+
+- **i18n**：新增 `skills.market_ambiguous_owner` 與 `skills.market_body_empty` 翻譯鍵，覆蓋全部 11 種語言。
+
 ## Unreleased
 
 （尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
