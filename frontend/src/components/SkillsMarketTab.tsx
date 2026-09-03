@@ -4,6 +4,7 @@ import { Button } from './ui/button';
 import { GridCard } from './ui/grid-card';
 import { TagBar } from './ui/tag-bar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { MarketSkillDetailModal } from './ui/market-skill-detail-modal';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type {
@@ -199,6 +200,9 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
   const [installing, setInstalling] = useState<Set<string>>(new Set());
   const [installMessage, setInstallMessage] = useState<{ text: string; type: 'ok' | 'error' } | null>(null);
 
+  // Detail modal for market skills
+  const [selectedSkill, setSelectedSkill] = useState<MarketSkill | null>(null);
+
   const [feed, dispatch] = useReducer(feedReducer, INITIAL_FEED);
 
   // Latest feed snapshot for callbacks that must not re-bind on every render.
@@ -337,6 +341,13 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
     void runQuery(false);
   }, [runQuery]);
 
+  // ── Detail modal ───────────────────────────────────────────────────────────
+  const openDetail = useCallback((skill: MarketSkill) => {
+    setSelectedSkill(skill);
+  }, []);
+
+  const closeDetail = useCallback(() => setSelectedSkill(null), []);
+
   // ── Install ────────────────────────────────────────────────────────────────
   const handleInstall = useCallback(
     async (skill: MarketSkill) => {
@@ -348,6 +359,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         const response = await chatService.installMarketSkill(skill.source, skill.slug, skill.owner ?? null);
         if (response.status === 'ok') {
           setInstallMessage({ text: response.message || t('skills.market_installed'), type: 'ok' });
+          closeDetail();
           refresh();
           onSkillsChange?.();
         } else {
@@ -363,7 +375,7 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
         });
       }
     },
-    [installedSlugs, onSkillsChange, refresh],
+    [installedSlugs, onSkillsChange, refresh, closeDetail],
   );
 
   // ── Derived view state ─────────────────────────────────────────────────────
@@ -516,26 +528,13 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
                       <Check size={14} />
                     ) : busy ? (
                       <Loader2 size={14} className="animate-spin" />
-                    ) : (
-                      <Button
-                        variant="primary"
-                        size="icon-xs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleInstall(skill);
-                        }}
-                        aria-label={t('skills.market_install')}
-                        title={t('skills.market_install')}
-                      >
-                        <Plus size={14} />
-                      </Button>
-                    )
+                    ) : undefined
                   }
                   onClick={
                     installed
                       ? undefined
                       : () => {
-                          handleInstall(skill);
+                          openDetail(skill);
                         }
                   }
                 />
@@ -568,6 +567,16 @@ export function SkillsMarketTab({ onSkillsChange, installedSlugs = [] }: SkillsM
           </div>
         </>
       )}
+
+      {/* ── Market skill detail modal ── */}
+      <MarketSkillDetailModal
+        open={selectedSkill !== null}
+        skill={selectedSkill}
+        onClose={closeDetail}
+        onInstall={handleInstall}
+        installed={selectedSkill?.installed}
+        installing={selectedSkill ? installing.has(skillUid(selectedSkill)) : false}
+      />
     </div>
   );
 }
