@@ -1171,5 +1171,6 @@
   "skills.bundle_agent_learned": "Изучено агентом",
   "skills.bundle_custom": "Пользовательские",
   "skills.bundle_market": "Маркет",
-  "skills.market_ambiguous_owner": "Несколько авторов публикуют навык с этим именем. Выберите, какой просмотреть:"
+  "skills.market_ambiguous_owner": "Несколько авторов публикуют навык с этим именем. Выберите, какой просмотреть:",
+  "skills.market_body_empty": "Этот навык не имеет предварительного содержимого"
 }

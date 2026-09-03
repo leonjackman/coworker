@@ -1171,5 +1171,6 @@
   "skills.bundle_agent_learned": "Appris par l'agent",
   "skills.bundle_custom": "Personnalisé",
   "skills.bundle_market": "Marché",
-  "skills.market_ambiguous_owner": "Plusieurs auteurs publient un compétence portant ce nom. Choisissez laquelle afficher :"
+  "skills.market_ambiguous_owner": "Plusieurs auteurs publient un compétence portant ce nom. Choisissez laquelle afficher :",
+  "skills.market_body_empty": "Cette compétence n'a pas de contenu prévisualisable"
 }

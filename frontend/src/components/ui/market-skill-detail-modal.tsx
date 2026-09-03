@@ -47,12 +47,15 @@ export function MarketSkillDetailModal({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
-  const [autoResolving, setAutoResolving] = useState(false);
   const [candidates, setCandidates] = useState<MarketSkillCandidate[]>([]);
   const [commandsExpanded, setCommandsExpanded] = useState(false);
   const [selectedOwner, setSelectedOwner] = useState<string | null>(null);
-  const fetchDone = useRef(false);
+  // Key of the skill whose initial fetch has already fired for this modal
+  // lifecycle. Guards against double-fetch while still re-fetching when the
+  // opened skill switches without the modal closing.
+  const fetchedKey = useRef<string | null>(null);
   const autoTried = useRef<Set<string>>(new Set());
+  const skillKey = skill ? `${skill.source}:${skill.slug}:${skill.owner ?? ''}` : '';
 
   const fetchDetail = useCallback(async (ownerOverride?: string) => {
     if (!skill) return;
@@ -72,45 +75,41 @@ export function MarketSkillDetailModal({
           commands: (response.skill.commands ?? []) as ParsedCommand[],
         });
       } else if (response.ambiguous && response.candidates && response.candidates.length > 0) {
-        setAutoResolving(true);
+        // A ClawHub slug can collide across owners. When the card carries no
+        // owner, prefer the variant whose display name matches the card the
+        // user clicked (or the only variant); only genuinely ambiguous cases
+        // fall through to the author picker. The guard prevents retrying the
+        // same owner / looping if the resolved owner still 409s.
+        if (!ownerOverride) {
+          const clickedName = skill.name.trim().toLowerCase();
+          const exactMatches = response.candidates.filter(
+            (candidate) => candidate.name.trim().toLowerCase() === clickedName,
+          );
+          const target =
+            exactMatches.length === 1
+              ? exactMatches[0]
+              : exactMatches.length === 0 && response.candidates.length === 1
+                ? response.candidates[0]
+                : undefined;
+          if (target && target.owner !== skill.owner && !autoTried.current.has(target.owner)) {
+            autoTried.current.add(target.owner);
+            setSelectedOwner(target.owner);
+            await fetchDetail(target.owner);
+            return;
+          }
+        }
         setAmbiguous(true);
         setCandidates(response.candidates);
         setDetailError(response.message || 'Ambiguous skill slug');
       } else {
-        setAutoResolving(false);
         setDetailError(response.message || 'Failed to load skill details');
       }
     } catch {
-      setAutoResolving(false);
       setDetailError('Failed to load skill details');
     } finally {
       setDetailLoading(false);
     }
   }, [skill]);
-
-  // When a ClawHub slug collides across owners, auto-pick the variant whose
-  // display name matches the card the user clicked (or the only one). The
-  // author picker only appears when no reliable auto-match exists.
-  useEffect(() => {
-    if (!ambiguous || !skill || candidates.length === 0) return;
-    if (autoTried.current.has('__auto__')) return;
-    autoTried.current.add('__auto__');
-    const clickedName = skill.name.trim().toLowerCase();
-    const exactMatches = candidates.filter(
-      (candidate) => candidate.name.trim().toLowerCase() === clickedName,
-    );
-    const target =
-      exactMatches.length === 1
-        ? exactMatches[0]
-        : exactMatches.length === 0 && candidates.length === 1
-          ? candidates[0]
-          : undefined;
-    if (!target || target.owner === skill.owner) return;
-    setSelectedOwner(target.owner);
-    setAutoResolving(true);
-    void fetchDetail(target.owner);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ambiguous, candidates, skill, fetchDetail]);
 
   useEffect(() => {
     if (!open) {
@@ -118,18 +117,23 @@ export function MarketSkillDetailModal({
       setDetail(null);
       setDetailError(null);
       setAmbiguous(false);
-      setAutoResolving(false);
       setCandidates([]);
       setSelectedOwner(null);
-      fetchDone.current = false;
+      fetchedKey.current = null;
       autoTried.current = new Set();
       return;
     }
     if (!skill) return;
-    if (fetchDone.current) return;
-    fetchDone.current = true;
+    if (fetchedKey.current === skillKey) return;
+    fetchedKey.current = skillKey;
+    setDetail(null);
+    setDetailError(null);
+    setAmbiguous(false);
+    setCandidates([]);
+    setSelectedOwner(null);
+    autoTried.current = new Set();
     void fetchDetail();
-  }, [open, skill, fetchDetail]);
+  }, [open, skill, skillKey, fetchDetail]);
 
   const handleSelectOwner = useCallback(async (owner: string) => {
     setSelectedOwner(owner);
@@ -137,7 +141,7 @@ export function MarketSkillDetailModal({
   }, [fetchDetail]);
 
   const handleClose = useCallback(() => {
-    fetchDone.current = false;
+    fetchedKey.current = null;
     onClose();
   }, [onClose]);
 
@@ -228,7 +232,7 @@ export function MarketSkillDetailModal({
           </div>
 
           {/* Ambiguous owner picker */}
-          {ambiguous && !autoResolving && candidates.length > 0 && (
+          {ambiguous && candidates.length > 0 && (
             <div className="skill-detail__section">
               <span className="skill-detail__label">{t('skills.market_ambiguous_owner')}</span>
               <div className="skill-detail__owners">
@@ -282,12 +286,16 @@ export function MarketSkillDetailModal({
           )}
 
           {/* Body — always shown */}
-          {body && (
+          {body ? (
             <div className="skill-detail__section">
               <span className="skill-detail__label">{t('skills.body')}</span>
               <pre className="skill-detail__pre-full">{body}</pre>
             </div>
-          )}
+          ) : !detailLoading && !ambiguous && !detailError && detail ? (
+            <div className="skill-message skill-message--error">
+              {t('skills.market_body_empty')}
+            </div>
+          ) : null}
 
           {detailLoading && (
             <div className="skill-detail-loading">

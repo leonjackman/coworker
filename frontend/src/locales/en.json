@@ -1161,5 +1161,6 @@
   "skills.bundle_agent_learned": "Agent learned",
   "skills.bundle_custom": "Custom",
   "skills.bundle_market": "Market",
-  "skills.market_ambiguous_owner": "Multiple authors publish a skill with this name. Pick the one to view:"
+  "skills.market_ambiguous_owner": "Multiple authors publish a skill with this name. Pick the one to view:",
+  "skills.market_body_empty": "This skill has no previewable body content"
 }
