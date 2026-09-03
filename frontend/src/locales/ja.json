@@ -695,6 +695,8 @@
   "skills.diagnostics": "診断",
   "skills.diagnostics.empty": "診断なし",
   "skills.body": "本文プレビュー",
+  "skills.commands": "コマンド",
+  "skills.loading_detail": "詳細読み込み中…",
   "skills.location": "場所",
   "skills.version": "バージョン",
   "skills.loaded": "読み込み済み",

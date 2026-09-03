@@ -2424,3 +2424,7 @@ ipcMain.handle('list-hot-skills', (event, query) =>
 ipcMain.handle('install-market-skill', (event, source, slug, owner) =>
   requestBackend('/skills/market/install', 'POST', { source, slug, owner: owner ?? null }),
 );
+
+ipcMain.handle('get-market-skill-detail', (event, source, slug, owner) =>
+  requestBackend(`/skills/market/detail?source=${encodeURIComponent(source)}&slug=${encodeURIComponent(slug)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`, 'GET'),
+);

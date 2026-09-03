@@ -692,6 +692,8 @@
   "skills.diagnostics": "診斷",
   "skills.diagnostics.empty": "無診斷問題",
   "skills.body": "內容預覽",
+  "skills.commands": "命令",
+  "skills.loading_detail": "載入詳情中…",
   "skills.location": "位置",
   "skills.version": "版本",
   "skills.loaded": "已載入",

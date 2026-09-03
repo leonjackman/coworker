@@ -11,6 +11,7 @@ import type {
   MarketInstallResponse,
   MarketQuery,
   MarketSkill,
+  MarketSkillDetailResponse,
   MarketSource,
   MarketSourceResponse,
   MarketSkillsResponse,
@@ -217,6 +218,7 @@ export interface ChatService {
   searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
   installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
+  getMarketSkillDetail: (source: string, slug: string, owner?: string | null) => Promise<MarketSkillDetailResponse>;
   getMemoryStatus: () => Promise<MemoryStatusResponse>;
   discoverMemory: (projectId?: string, scope?: string) => Promise<MemoryDiscoverResponse>;
   getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;
@@ -582,6 +584,11 @@ class ElectronChatService implements ChatService {
   async installMarketSkill(source: string, slug: string, owner?: string | null): Promise<MarketInstallResponse> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.installMarketSkill(source, slug, owner ?? null);
+  }
+
+  async getMarketSkillDetail(source: string, slug: string, owner?: string | null): Promise<MarketSkillDetailResponse> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getMarketSkillDetail(source, slug, owner ?? null);
   }
 
   async getMemoryStatus(): Promise<MemoryStatusResponse> {
@@ -1903,6 +1910,12 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source, slug, owner: owner ?? null }),
     });
+  }
+
+  async getMarketSkillDetail(source: string, slug: string, owner?: string | null): Promise<MarketSkillDetailResponse> {
+    return this.request<MarketSkillDetailResponse>(
+      `/skills/market/detail?source=${encodeURIComponent(source)}&slug=${encodeURIComponent(slug)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`,
+    );
   }
 
   async getMemoryStatus(): Promise<MemoryStatusResponse> {

@@ -760,6 +760,8 @@
   "skills.diagnostics": "Diagnósticos",
   "skills.diagnostics.empty": "Sin diagnósticos",
   "skills.body": "Vista previa del cuerpo",
+  "skills.commands": "Comandos",
+  "skills.loading_detail": "Cargando detalles…",
   "skills.location": "Ubicación",
   "skills.version": "Versión",
   "skills.loaded": "Cargada",

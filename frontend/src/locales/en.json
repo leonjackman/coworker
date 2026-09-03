@@ -683,6 +683,8 @@
   "skills.diagnostics": "Diagnostics",
   "skills.diagnostics.empty": "No diagnostics",
   "skills.body": "Body preview",
+  "skills.commands": "Commands",
+  "skills.loading_detail": "Loading details…",
   "skills.location": "Location",
   "skills.version": "Version",
   "skills.loaded": "Loaded",

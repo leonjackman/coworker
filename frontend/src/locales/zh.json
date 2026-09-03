@@ -723,6 +723,8 @@
   "skills.diagnostics": "诊断",
   "skills.diagnostics.empty": "无诊断问题",
   "skills.body": "正文预览",
+  "skills.commands": "命令",
+  "skills.loading_detail": "加载详情中…",
   "skills.location": "位置",
   "skills.version": "版本",
   "skills.loaded": "已加载",

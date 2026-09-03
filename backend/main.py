@@ -6037,6 +6037,20 @@ async def list_hot_market_skills(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/skills/market/detail")
+async def get_market_skill_detail(
+    source: str,
+    slug: str,
+    owner: str | None = None,
+):
+    """Fetch full SKILL.md content for a market skill (by source + slug)."""
+    try:
+        result = await skill_market_manager.get_detail(source, slug, owner)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/skills/market/install")
 async def install_market_skill(request: MarketInstallRequest):
     """Install a skill from a market source."""

@@ -170,6 +170,7 @@ declare global {
       searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       listHotSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
       installMarketSkill: (source: string, slug: string, owner?: string | null) => Promise<MarketInstallResponse>;
+      getMarketSkillDetail: (source: string, slug: string, owner?: string | null) => Promise<MarketSkillDetailResponse>;
       getMemoryStatus: () => Promise<MemoryStatusResponse>;
       discoverMemory: (projectId?: string, scope?: string) => Promise<MemoryDiscoverResponse>;
       getMemoryFile: (rel: string) => Promise<MemoryFileContentResponse>;

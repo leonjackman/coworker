@@ -378,6 +378,53 @@ class SkillMarketManager:
         except Exception as exc:
             return {"status": "error", "message": str(exc)}
 
+    async def get_detail(
+        self, source: str, slug: str, owner: str | None = None
+    ) -> dict[str, Any]:
+        """Fetch the full SKILL.md content for a market skill (by source + slug).
+
+        Returns the same normalised metadata as the listing plus ``body`` (full
+        SKILL.md content) and parsed ``commands`` from frontmatter.
+        """
+        try:
+            content, error = await self._fetch_skill_content(source, slug, owner)
+            if error or not content:
+                return {"status": "error", "message": error or "Failed to fetch skill content"}
+
+            frontmatter, body = parse_frontmatter(content)
+            name = _str_or_none(frontmatter.get("name")) or slug
+            desc = _str_or_none(frontmatter.get("description")) or ""
+
+            meta: dict[str, Any] = {
+                "slug": slug,
+                "name": name,
+                "description": desc[:MAX_DESCRIPTION_LENGTH],
+                "source": source,
+                "owner": owner,
+                "version": _str_or_none(frontmatter.get("version")),
+            }
+
+            # Enrich with extra frontmatter fields the listing omits
+            for key in ("category", "icon_url", "verified", "score"):
+                val = frontmatter.get(key)
+                if val is not None:
+                    meta[key] = val
+
+            result: dict[str, Any] = {
+                "status": "ok",
+                "skill": {
+                    **meta,
+                    "body": body,
+                    "commands": frontmatter.get("commands"),
+                },
+            }
+            return result
+
+        except ValueError:
+            raise
+        except Exception as exc:
+            return {"status": "error", "message": str(exc)}
+
     def install_from_content(
         self,
         name: str,

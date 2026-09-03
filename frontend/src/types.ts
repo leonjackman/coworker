@@ -1065,6 +1065,18 @@ export interface MarketInstallResponse {
   message?: string;
 }
 
+/** Response from GET /skills/market/detail — same as MarketSkill but with body + commands. */
+export interface MarketSkillDetailResponse {
+  status: string;
+  skill: MarketSkillDetail | null;
+  message?: string;
+}
+
+export interface MarketSkillDetail extends MarketSkill {
+  body: string;
+  commands?: Array<{ name: string; description?: string; file?: string }>;
+}
+
 // -- Long-term memory (memory library tree) -------------------------------
 
 export type MemoryNodeKind = 'system' | 'base_file' | 'project_file' | 'agent_file' | 'session_file' | 'folder_file';

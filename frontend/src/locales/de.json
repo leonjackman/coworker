@@ -684,6 +684,8 @@
   "skills.diagnostics": "Diagnostics",
   "skills.diagnostics.empty": "Keine Dagnostics",
   "skills.body": "Inhaltesvorschau",
+  "skills.commands": "Befehle",
+  "skills.loading_detail": "Details werden geladen…",
   "skills.location": "Standort",
   "skills.version": "Version",
   "skills.loaded": "Geladen",
