@@ -350,8 +350,10 @@ class SkillMarketManager:
             install_dir.mkdir(parents=True, exist_ok=True)
             skill_file = install_dir / "SKILL.md"
 
-            # Step 3: write SKILL.md
-            skill_file.write_text(content, encoding="utf-8")
+            # Step 3: write SKILL.md — inject provenance so the UI can
+            # distinguish market-installed skills from user-created ones.
+            content_with_provenance = _inject_frontmatter_field(content, "provenance", "market")
+            skill_file.write_text(content_with_provenance, encoding="utf-8")
 
             # Step 4: validate the installed file end-to-end
             entry, diagnostics = load_skill_from_file(skill_file, "coworker-user")
@@ -1070,6 +1072,37 @@ def _clean_params(params: dict[str, Any] | None) -> dict[str, str] | None:
     if not params:
         return None
     return {k: str(v) for k, v in params.items() if v is not None and v != ""}
+
+
+def _inject_frontmatter_field(content: str, key: str, value: str) -> str:
+    """Inject or replace a frontmatter field in SKILL.md content.
+
+    If the content has a YAML frontmatter block (``---`` delimiters), the
+    field is inserted (or replaced) inside it.  If there is no frontmatter,
+    one is created at the top.
+    """
+    import re as _re
+
+    if content.startswith("---"):
+        end = content.find("\n---", 3)
+        if end == -1:
+            # Malformed — treat as no frontmatter
+            return _write_frontmatter(key, value, content)
+        raw = content[3:end]
+        body = content[end + 4:]
+        # Check if key already exists
+        pattern = _re.compile(rf"^({_re.escape(key)}):.*$", _re.MULTILINE)
+        if pattern.search(raw):
+            new_raw = pattern.sub(f"{key}: {value}", raw)
+        else:
+            new_raw = raw.rstrip() + f"\n{key}: {value}"
+        return f"---\n{new_raw}\n---\n{body}"
+    return _write_frontmatter(key, value, content)
+
+
+def _write_frontmatter(key: str, value: str, body: str) -> str:
+    """Write a fresh frontmatter block before *body*."""
+    return f"---\n{key}: {value}\n---\n{body}"
 
 
 def _clamp_limit(limit: int) -> int:

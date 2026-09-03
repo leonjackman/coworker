@@ -106,6 +106,7 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
   const bundleOf = useCallback((skill: SkillEntry): string => {
     if (skill.bundle) return skill.bundle;
     if (skill.provenance === 'agent') return 'agent-learned';
+    if (skill.provenance === 'market') return 'market';
     if (skill.source === 'market' || skill.source === 'coworker-user' || skill.source === 'coworker-project') return 'market';
     return 'custom';
   }, []);
