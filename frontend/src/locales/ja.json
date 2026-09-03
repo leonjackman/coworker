@@ -1172,5 +1172,6 @@
   "common.close": "閉じる",
   "skills.bundle_agent_learned": "エージェント学習",
   "skills.bundle_custom": "カスタム",
-  "skills.bundle_market": "マーケット"
+  "skills.bundle_market": "マーケット",
+  "skills.market_ambiguous_owner": "作者を選択してください："
 }

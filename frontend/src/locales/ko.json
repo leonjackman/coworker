@@ -1170,5 +1170,6 @@
   "common.close": "닫기",
   "skills.bundle_agent_learned": "에이전트 학습",
   "skills.bundle_custom": "사용자 지정",
-  "skills.bundle_market": "마켓"
+  "skills.bundle_market": "마켓",
+  "skills.market_ambiguous_owner": "저자를 선택하세요:"
 }

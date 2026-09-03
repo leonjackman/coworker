@@ -1170,5 +1170,6 @@
   "common.close": "關閉",
   "skills.bundle_agent_learned": "Agent 學習",
   "skills.bundle_custom": "自訂",
-  "skills.bundle_market": "技能市集"
+  "skills.bundle_market": "技能市集",
+  "skills.market_ambiguous_owner": "請選擇作者："
 }

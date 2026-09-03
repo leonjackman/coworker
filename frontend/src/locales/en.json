@@ -1160,5 +1160,6 @@
   "common.close": "Close",
   "skills.bundle_agent_learned": "Agent learned",
   "skills.bundle_custom": "Custom",
-  "skills.bundle_market": "Market"
+  "skills.bundle_market": "Market",
+  "skills.market_ambiguous_owner": "Please select an author:"
 }

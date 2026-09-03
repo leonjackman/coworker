@@ -1160,5 +1160,6 @@
   "common.close": "关闭",
   "skills.bundle_agent_learned": "Agent 学习",
   "skills.bundle_custom": "自定义",
-  "skills.bundle_market": "技能市场"
+  "skills.bundle_market": "技能市场",
+  "skills.market_ambiguous_owner": "请选择作者："
 }

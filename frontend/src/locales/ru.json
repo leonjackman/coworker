@@ -1170,5 +1170,6 @@
   "common.close": "Закрыть",
   "skills.bundle_agent_learned": "Изучено агентом",
   "skills.bundle_custom": "Пользовательские",
-  "skills.bundle_market": "Маркет"
+  "skills.bundle_market": "Маркет",
+  "skills.market_ambiguous_owner": "Выберите автора:"
 }
