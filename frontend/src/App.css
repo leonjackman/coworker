@@ -8899,6 +8899,28 @@ body.bottom-panel-resizing {
   cursor: not-allowed;
 }
 
+.skill-detail__owner-btn-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.skill-detail__owner-btn-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-detail__owner-btn-handle {
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Full body preview */
 .skill-detail__pre-full {
   margin-top: 10px;

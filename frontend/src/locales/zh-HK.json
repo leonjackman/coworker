@@ -1171,5 +1171,5 @@
   "skills.bundle_agent_learned": "Agent 學習",
   "skills.bundle_custom": "自訂",
   "skills.bundle_market": "技能市集",
-  "skills.market_ambiguous_owner": "請選擇作者："
+  "skills.market_ambiguous_owner": "此技能名稱有多個作者的版本，請選擇要檢視的技能："
 }

@@ -1071,7 +1071,16 @@ export interface MarketSkillDetailResponse {
   skill: MarketSkillDetail | null;
   message?: string;
   ambiguous?: boolean;
-  candidates?: string[];
+  /** Candidates sharing the same slug when the skill has no owner. */
+  candidates?: MarketSkillCandidate[];
+}
+
+export interface MarketSkillCandidate {
+  /** Plain owner handle (no `@` or `/slug` suffix) usable as the `owner` param. */
+  owner: string;
+  slug: string;
+  /** Human-readable display name of that owner's skill variant. */
+  name: string;
 }
 
 export interface MarketSkillDetail extends MarketSkill {

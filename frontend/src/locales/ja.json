@@ -1173,5 +1173,5 @@
   "skills.bundle_agent_learned": "エージェント学習",
   "skills.bundle_custom": "カスタム",
   "skills.bundle_market": "マーケット",
-  "skills.market_ambiguous_owner": "作者を選択してください："
+  "skills.market_ambiguous_owner": "このスキル名は複数の作者が公開しています。表示するものを選択："
 }

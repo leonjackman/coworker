@@ -390,7 +390,8 @@ class SkillMarketManager:
 
         When ``owner`` is not provided and the upstream returns an ambiguous-slug
         error (ClawHub), the response carries ``ambiguous: true`` plus a list of
-        candidate owner refs so the frontend can present a picker.
+        candidate dicts ``{"owner", "slug", "name"}`` so the frontend can present
+        a picker.
         """
         try:
             content, error = await self._fetch_skill_content(source, slug, owner)
@@ -398,7 +399,7 @@ class SkillMarketManager:
                 # If ClawHub returned an ambiguous-slug error and no owner was
                 # provided, try to parse the candidate list and surface it.
                 if "ambiguous" in error.lower() and not owner and source == "clawhub":
-                    candidates = await self._parse_clawhub_candidates(slug)
+                    candidates = await self._clawhub_candidates(slug)
                     if candidates:
                         return {
                             "status": "error",
@@ -442,8 +443,20 @@ class SkillMarketManager:
         except Exception as exc:
             return {"status": "error", "message": str(exc)}
 
-    async def _parse_clawhub_candidates(self, slug: str) -> list[str] | None:
-        """Try to fetch the 409 conflict page and extract candidate refs."""
+    async def _clawhub_candidates(self, slug: str) -> list[dict[str, str]] | None:
+        """Resolve every distinct ClawHub skill that shares ``slug``.
+
+        Returns ``[{"owner": handle, "slug": slug, "name": displayName}]``.
+        ``owner`` is the plain handle (no ``@``/``/slug`` suffix) so it can be
+        passed straight back to ClawHub's ``?owner=`` parameter.
+
+        The 409 conflict payload lists the ambiguous slugs but omits each
+        variant's human-readable display name, so the display names are enriched
+        from the search API (which does return them); any match the search
+        cannot see is still listed with the handle as its name.
+        """
+        # 1) Authoritative list of owners from the conflict payload.
+        owners: list[tuple[str, str]] = []  # (owner_handle, owner_slug)
         file_url = f"https://clawhub.ai/api/v1/skills/{_urlencode(slug)}/file"
         try:
             async with aiohttp.ClientSession() as session:
@@ -453,22 +466,68 @@ class SkillMarketManager:
                     timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
                 ) as resp:
                     if resp.status == 409:
-                        try:
-                            payload = await resp.json(content_type=None)
-                        except Exception:
-                            return None
+                        payload = await resp.json(content_type=None)
                         matches = payload.get("matches") if isinstance(payload, dict) else None
                         if isinstance(matches, list):
-                            refs: list[str] = []
                             for m in matches:
-                                if isinstance(m, dict):
-                                    ref = _str_or_none(m.get("ref")) or _str_or_none(m.get("ownerHandle"))
+                                if not isinstance(m, dict):
+                                    continue
+                                owner_handle = _str_or_none(m.get("ownerHandle"))
+                                owner_slug = _str_or_none(m.get("slug")) or slug
+                                if not owner_handle:
+                                    ref = _str_or_none(m.get("ref"))
                                     if ref:
-                                        refs.append(ref)
-                            return refs if refs else None
+                                        owner_handle = ref.lstrip("@").split("/")[0]
+                                if owner_handle:
+                                    owners.append((owner_handle, owner_slug))
         except Exception:
             pass
-        return None
+        if not owners:
+            return None
+
+        # 2) Enrich with display names from the search API when possible.
+        display_by_owner: dict[str, str] = {}
+        try:
+            search_data = await _get_json(
+                CLAWHUB_SEARCH, {"q": slug, "limit": 50}, retries=1
+            )
+            results = search_data.get("results") if isinstance(search_data, dict) else None
+            if isinstance(results, list):
+                for entry in results:
+                    if not isinstance(entry, dict):
+                        continue
+                    entry_slug = _str_or_none(entry.get("slug"))
+                    if entry_slug != slug:
+                        continue
+                    entry_owner_obj = entry.get("owner")
+                    entry_owner = (
+                        _str_or_none(entry_owner_obj.get("handle"))
+                        if isinstance(entry_owner_obj, dict)
+                        else _str_or_none(entry_owner_obj)
+                    )
+                    if not entry_owner:
+                        continue
+                    display_by_owner.setdefault(
+                        entry_owner, _str_or_none(entry.get("displayName")) or entry_owner
+                    )
+        except Exception:
+            pass
+
+        # 3) Dedupe owners (conflict list and search may overlap).
+        seen: set[str] = set()
+        result: list[dict[str, str]] = []
+        for owner_handle, owner_slug in owners:
+            if owner_handle in seen:
+                continue
+            seen.add(owner_handle)
+            result.append(
+                {
+                    "owner": owner_handle,
+                    "slug": owner_slug,
+                    "name": display_by_owner.get(owner_handle, owner_handle),
+                }
+            )
+        return result
 
     def install_from_content(
         self,

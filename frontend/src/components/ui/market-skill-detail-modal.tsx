@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { Button } from './button';
 import { t } from '../../lib/i18n';
 import { chatService } from '../../services/chatService';
-import type { MarketSkill } from '../../types';
+import type { MarketSkill, MarketSkillCandidate } from '../../types';
 
 interface MarketSkillDetailModalProps {
   open: boolean;
@@ -47,10 +47,12 @@ export function MarketSkillDetailModal({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
-  const [candidates, setCandidates] = useState<string[]>([]);
+  const [autoResolving, setAutoResolving] = useState(false);
+  const [candidates, setCandidates] = useState<MarketSkillCandidate[]>([]);
   const [commandsExpanded, setCommandsExpanded] = useState(false);
   const [selectedOwner, setSelectedOwner] = useState<string | null>(null);
   const fetchDone = useRef(false);
+  const autoTried = useRef<Set<string>>(new Set());
 
   const fetchDetail = useCallback(async (ownerOverride?: string) => {
     if (!skill) return;
@@ -69,19 +71,46 @@ export function MarketSkillDetailModal({
           body: response.skill.body || '',
           commands: (response.skill.commands ?? []) as ParsedCommand[],
         });
-      } else if (response.ambiguous && response.candidates) {
+      } else if (response.ambiguous && response.candidates && response.candidates.length > 0) {
+        setAutoResolving(true);
         setAmbiguous(true);
         setCandidates(response.candidates);
         setDetailError(response.message || 'Ambiguous skill slug');
       } else {
+        setAutoResolving(false);
         setDetailError(response.message || 'Failed to load skill details');
       }
     } catch {
+      setAutoResolving(false);
       setDetailError('Failed to load skill details');
     } finally {
       setDetailLoading(false);
     }
   }, [skill]);
+
+  // When a ClawHub slug collides across owners, auto-pick the variant whose
+  // display name matches the card the user clicked (or the only one). The
+  // author picker only appears when no reliable auto-match exists.
+  useEffect(() => {
+    if (!ambiguous || !skill || candidates.length === 0) return;
+    if (autoTried.current.has('__auto__')) return;
+    autoTried.current.add('__auto__');
+    const clickedName = skill.name.trim().toLowerCase();
+    const exactMatches = candidates.filter(
+      (candidate) => candidate.name.trim().toLowerCase() === clickedName,
+    );
+    const target =
+      exactMatches.length === 1
+        ? exactMatches[0]
+        : exactMatches.length === 0 && candidates.length === 1
+          ? candidates[0]
+          : undefined;
+    if (!target || target.owner === skill.owner) return;
+    setSelectedOwner(target.owner);
+    setAutoResolving(true);
+    void fetchDetail(target.owner);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ambiguous, candidates, skill, fetchDetail]);
 
   useEffect(() => {
     if (!open) {
@@ -89,9 +118,11 @@ export function MarketSkillDetailModal({
       setDetail(null);
       setDetailError(null);
       setAmbiguous(false);
+      setAutoResolving(false);
       setCandidates([]);
       setSelectedOwner(null);
       fetchDone.current = false;
+      autoTried.current = new Set();
       return;
     }
     if (!skill) return;
@@ -197,23 +228,26 @@ export function MarketSkillDetailModal({
           </div>
 
           {/* Ambiguous owner picker */}
-          {ambiguous && candidates.length > 0 && (
+          {ambiguous && !autoResolving && candidates.length > 0 && (
             <div className="skill-detail__section">
               <span className="skill-detail__label">{t('skills.market_ambiguous_owner')}</span>
               <div className="skill-detail__owners">
-                {candidates.map((owner) => (
+                {candidates.map((candidate) => (
                   <button
-                    key={owner}
+                    key={candidate.owner}
                     type="button"
                     className={cn(
                       'skill-detail__owner-btn',
-                      selectedOwner === owner && 'skill-detail__owner-btn--active',
+                      selectedOwner === candidate.owner && 'skill-detail__owner-btn--active',
                     )}
-                    onClick={() => void handleSelectOwner(owner)}
+                    onClick={() => void handleSelectOwner(candidate.owner)}
                     disabled={detailLoading}
                   >
                     <User size={14} />
-                    {owner}
+                    <span className="skill-detail__owner-btn-text">
+                      <span className="skill-detail__owner-btn-name">{candidate.name}</span>
+                      <span className="skill-detail__owner-btn-handle">@{candidate.owner}</span>
+                    </span>
                   </button>
                 ))}
               </div>

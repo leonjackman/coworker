@@ -1171,5 +1171,5 @@
   "skills.bundle_agent_learned": "Aprendido pelo agente",
   "skills.bundle_custom": "Personalizado",
   "skills.bundle_market": "Mercado",
-  "skills.market_ambiguous_owner": "Selecione um autor:"
+  "skills.market_ambiguous_owner": "Vários autores publicam uma habilidade com este nome. Escolha qual visualizar:"
 }
