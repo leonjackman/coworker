@@ -3,7 +3,7 @@ import { Command, HelpCircle, Plug } from 'lucide-react';
 import { Tooltip } from '@/components/ui/tooltip';
 import { CardSlot } from '@/components/ui/card-slot';
 import { t } from '@/lib/i18n';
-import type { ApprovalDecisionPayload, ApprovalOption, PendingRequest } from '@/types';
+import type { ApprovalDecisionPayload, PendingRequest } from '@/types';
 
 interface PendingDocksProps {
   requests: PendingRequest[];

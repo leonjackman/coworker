@@ -488,14 +488,6 @@ class Workspace:
         except (ValueError, OSError):
             return str(file_path).lstrip("./").replace("\\", "/")
 
-    def resolve_path(self, file_path: str) -> Path:
-        """DEPRECATED: Use resolve_read_path() for reads or resolve_write_path() for writes.
-        
-        Kept for backward compatibility — new code should use the specific methods.
-        This delegates to resolve_write_path().
-        """
-        return self.resolve_write_path(file_path)
-
     @staticmethod
     def _sha256(path: Path) -> str:
         digest = hashlib.sha256()

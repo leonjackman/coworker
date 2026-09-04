@@ -17,20 +17,5 @@ import ...`` inside this package still resolves to the SDK; sibling modules
 must be imported relatively (``from .mcp_session import ...``).
 """
 
-__all__ = [
-    "McpManager",
-    "McpConfig",
-    "McpServerEntry",
-    "McpSessionManager",
-    "build_connection",
-    "normalize_transport",
-    "run_blocking",
-    "McpToolMiddleware",
-    "build_oauth_provider",
-    "LoopbackCallbackServer",
-    "FileTokenStorage",
-    "discover_templates",
-    "test_mcp_connection_sync",
-    "flatten_exceptions",
-    "friendly_error",
-]
+# Note: All consumers import directly from submodules (e.g. from .mcp import McpManager)
+# rather than from the package level, so __all__ is not maintained.
