@@ -1200,11 +1200,15 @@ def format_user_message(
     references: list[dict[str, Any]] | None = None,
     max_attachment_bytes: int = 25 * 1024 * 1024,
     inline_attachments: bool = True,
+    vision: bool = True,
 ) -> str | list[dict[str, Any]]:
     """把用户文本、引用、附件拼成发给 LLM 的内容。
 
-    设计原则（产品决策）：**不网关、全部透传**——前端发来的所有附件都原样转发给
-    LLM，由模型自行决定是否受理；客户端如实呈现模型的回复即可。
+    设计原则（产品决策）：附件透传给 LLM，由模型自行决定是否受理；客户端如实呈现
+    模型的回复即可。**唯一的例外是按提供商的 ``vision`` 能力闸控图片附件**：提供者
+    勾选了「多模态（视觉）」时图片以 ``image_url`` 原生转发；未勾选（该模型不支持
+    视觉）时不把图片字节发给模型，改为文字说明，与浏览器截图「无视觉模型存盘回退」
+    的策略一致——否则一张图会撞上 API 的图片拒绝或让无视觉模型「幻觉式看图」。
 
     ``max_attachment_bytes`` 来自设置页的「文件体积上限」（前端换算成字节后随请求
     传入）。超过该体积的二进制附件不内联字节，仅在提示词中如实说明「未转发」，
@@ -1215,11 +1219,15 @@ def format_user_message(
     stripMedia/compaction 佔位符），避免「附件全文持久化 + 每轮重放重發」的永久
     成本。模型仍可要求用户重新附上，或用文件工具按需读取工作区内的文件。
 
+    ``vision``（提供商的视觉能力，热更新）：为 ``False`` 时，内联图片附件不进
+    ``image_url`` 块而是以文字注记替代；非图片附件不受影响。
+
     返回：
     - ``str``：无附件且无引用时，保持纯文本（向后兼容历史消息）。
     - ``list[dict]``（多模态）：含附件/引用时。文本进 ``text`` 块；图片进
-      ``image_url`` 块；其它二进制把 base64 data URL 一并带进 ``text`` 块，模型
-      自行决定是否解析。超体积的二进制不内联字节，仅在文本中如实说明。
+      ``image_url`` 块（``vision=True``）或以文字注记替代（``vision=False``）；
+      其它二进制把 base64 data URL 一并带进 ``text`` 块，模型自行决定是否解析。
+      超体积的二进制不内联字节，仅在文本中如实说明。
     """
     blocks: list[dict[str, Any]] = []
     if max_attachment_bytes is None:
@@ -1234,14 +1242,31 @@ def format_user_message(
         blocks.append({"type": "text", "text": "\n".join(ref_lines)})
 
     text = (message or "").strip()
+    image_attachments = [
+        attachment
+        for attachment in attachments or []
+        if str(attachment.get("type") or "").startswith("image/")
+    ]
+    gate_images = (not vision) and bool(image_attachments)
     if attachments:
         if inline_attachments:
-            header = (
-                "The user attached the following files; forward all of them to the model "
-                "and let it decide whether to use each:"
-                if not text
-                else "Attached files (all forwarded; the model decides whether to use each):"
-            )
+            if gate_images:
+                header = (
+                    "The user attached images, but this model is configured WITHOUT vision "
+                    "capability, so the images are NOT shown to you. Do NOT claim you can see "
+                    "them; tell the user to paste the relevant text (or rely on file tools) "
+                    "when you need their content:"
+                    if not text
+                    else "Images attached below are NOT shown to you (this model has no vision); "
+                    "other attached files are forwarded. Do NOT claim you can see the images:"
+                )
+            else:
+                header = (
+                    "The user attached the following files; forward all of them to the model "
+                    "and let it decide whether to use each:"
+                    if not text
+                    else "Attached files (all forwarded; the model decides whether to use each):"
+                )
         else:
             header = (
                 "Earlier attachments are referenced below; their full contents were "
@@ -1276,7 +1301,16 @@ def format_user_message(
         # 这里作为后端兜底，覆盖 web/直接 API 等不经过前端拦截的路径）。
         if isinstance(content, str) and content and not exceeds_limit:
             if kind.startswith("image/"):
-                blocks.append({"type": "image_url", "image_url": {"url": content}})
+                if vision:
+                    blocks.append({"type": "image_url", "image_url": {"url": content}})
+                else:
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"\n- {name} ({kind}, {size} bytes): image NOT forwarded — this provider "
+                            "is configured without vision capability.",
+                        }
+                    )
             else:
                 safe = content[:MAX_ATTACHMENT_CHARS]
                 truncated = bool(attachment.get("truncated")) or len(content) > MAX_ATTACHMENT_CHARS

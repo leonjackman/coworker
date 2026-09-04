@@ -327,7 +327,7 @@ workspace_controller = WorkspaceController(
 # model): every /chat/stream deletes the session's thread and rebuilds from the
 # session history, so there is no "dirty checkpoint from an aborted turn" to
 # guard against — see _guard_session_not_streaming / forget_runtime_checkpoint.
-agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store)
+agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store, provider_manager=provider_manager)
 
 # Persistent MCP sessions: start the background loop, pre-warm connections so
 # the first chat is instant, and tear sessions down on exit.
@@ -1295,11 +1295,13 @@ def runtime_config():
 @app.patch("/config", response_model=RuntimeConfigResponse)
 def update_runtime_config(request: RuntimeConfigUpdate):
     try:
-        return RuntimeConfigResponse(**config_controller.update_runtime_config(request.model_dump()))
+        result = RuntimeConfigResponse(**config_controller.update_runtime_config(request.model_dump()))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_cached_runtimes(default_runtimes=True)
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -2156,7 +2158,7 @@ async def chat_stream(request: ChatStreamRequest):
         user_message = None
         messages = history
     else:
-        user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes)}
+        user_message = {"role": "user", "content": format_user_message(request.message, request.attachments, references, max_attachment_bytes=max_attachment_bytes, vision=bool(getattr(runtime, "provider_vision", True)))}
         session_store.append_message(session_id, role="user", content=request.message, mode=request.mode, work_mode=work_mode, autonomy=autonomy, attachments=request.attachments, references=references, message_id=request.user_message_id or None)
         messages = history + [user_message]
     if request.user_message_id:
@@ -5288,6 +5290,26 @@ async def stream_worker_events(worker_run_id: str):
 def list_providers():
     return provider_manager.public_config()
 
+
+def _invalidate_cached_runtimes(provider_id: str | None = None, *, default_runtimes: bool = False) -> None:
+    """Best-effort eviction of cached session runtimes after provider writes.
+
+    Provider edits aren't part of the runtime-cache key, so without this an
+    existing session would keep chatting against the old provider snapshot
+    (base_url / api_key / model / max tokens). Eviction only drops the cached
+    compiled-graph entries; they rebuild from session history on the next turn.
+    """
+    try:
+        dropped = 0
+        if provider_id:
+            dropped += agent_registry.invalidate_runtimes_for_provider(provider_id)
+        if default_runtimes:
+            dropped += agent_registry.invalidate_default_runtimes()
+        if dropped:
+            logger.info("provider config changed: invalidated %d cached runtime(s)", dropped)
+    except Exception:  # noqa: BLE001 - never fail a config write over cache cleanup
+        logger.warning("failed to invalidate cached runtimes after provider config change", exc_info=True)
+
 @app.post("/providers")
 def create_provider(request: ProviderCreate):
     try:
@@ -5303,6 +5325,7 @@ def create_provider(request: ProviderCreate):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_cached_runtimes(provider["id"], default_runtimes=True)
     return {"status": "ok", "provider": provider}
 
 @app.put("/providers/default")
@@ -5314,6 +5337,7 @@ def set_default_provider(request: DefaultProviderPayload):
         })
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_cached_runtimes(default_runtimes=True)
     return {"status": "ok", "config": config}
 
 @app.put("/providers/{provider_id}")
@@ -5332,6 +5356,7 @@ def update_provider(provider_id: str, request: ProviderUpdate):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_cached_runtimes(provider["id"])
     return {"status": "ok", "provider": provider}
 
 @app.post("/providers/{provider_id}/discover-context")
@@ -5354,6 +5379,7 @@ def discover_provider_context(provider_id: str):
         provider_manager.update_provider(provider_id, context_window=window)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _invalidate_cached_runtimes(provider_id)
     return {"status": "ok", "provider": provider_manager.public_provider(provider_manager.require_provider(provider_manager.load(), provider_id))}
 
 @app.delete("/providers/{provider_id}")
@@ -5362,6 +5388,7 @@ def delete_provider(provider_id: str):
         provider_manager.delete_provider(provider_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _invalidate_cached_runtimes(provider_id, default_runtimes=True)
     return {"status": "ok"}
 
 @app.post("/providers/test")

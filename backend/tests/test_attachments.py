@@ -55,6 +55,22 @@ def test_inline_mode_images_keep_data_url():
     )
 
 
+def test_no_vision_gates_image_attachment():
+    """Non-vision providers must not receive image bytes: image_url blocks are
+    replaced by a text note, while non-image attachments still ride through."""
+    blocks = format_user_message("msg", IMAGE_ATT, vision=False)
+    assert isinstance(blocks, list)
+    assert not any(b.get("type") == "image_url" for b in blocks)
+    text = _flatten(blocks)
+    assert "data:" not in text
+    assert "NOT forwarded" in text
+    assert "without vision" in text or "no vision" in text
+    non_image = format_user_message("msg", TEXT_ATT, vision=False)
+    assert "hello world" in _flatten(non_image)
+    assert not isinstance(non_image, str)
+    assert any(b.get("type") == "text" for b in non_image)
+
+
 def test_no_attachments_unchanged():
     out = format_user_message("hi", None, inline_attachments=False)
     assert out == [{"type": "text", "text": "hi"}]

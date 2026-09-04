@@ -156,3 +156,61 @@ def test_workspace_controller_stable_per_path(tmp_path: Path):
     controller.evict_workspace(str(tmp_path))
     c = controller.create_workspace(str(tmp_path))
     assert c is not a
+
+
+# --- S3b: per-session runtime cache invalidation on provider config change -------
+
+
+class _FakeRuntime:
+    def __init__(self, provider_id: str):
+        self.provider_id = provider_id
+
+
+def _make_registry(cache: dict) -> object:
+    from coworker.agent.runtime import AgentRuntimeRegistry
+
+    reg = object.__new__(AgentRuntimeRegistry)
+    reg._runtime_cache = cache
+    return reg
+
+
+def _key(session: str, provider_id):
+    return (session, "single", provider_id, "m", None, None, "a", frozenset())
+
+
+def test_invalidate_runtimes_for_provider_matches_resolved_provider():
+    cache = {
+        _key("s1", "p1"): _FakeRuntime("p1"),
+        _key("s1", "p2"): _FakeRuntime("p2"),
+        # Requested provider_id was None (default-driven), but the runtime was
+        # actually built on the edited default provider -> must also be evicted.
+        _key("s2", None): _FakeRuntime("p1"),
+    }
+    reg = _make_registry(cache)
+    dropped = reg.invalidate_runtimes_for_provider("p1")
+    assert dropped == 2
+    assert list(reg._runtime_cache) == [_key("s1", "p2")]
+    assert reg.invalidate_runtimes_for_provider("nope") == 0
+
+
+def test_invalidate_default_runtimes_only_drops_none_keyed():
+    cache = {
+        _key("s1", "p1"): _FakeRuntime("p1"),
+        _key("s2", None): _FakeRuntime("p2"),
+        _key("s3", None): _FakeRuntime("p3"),
+    }
+    reg = _make_registry(cache)
+    dropped = reg.invalidate_default_runtimes()
+    assert dropped == 2
+    assert list(reg._runtime_cache) == [_key("s1", "p1")]
+    assert reg.invalidate_default_runtimes() == 0
+
+
+def test_evict_runtime_by_session_is_unchanged():
+    cache = {
+        _key("s1", "p1"): _FakeRuntime("p1"),
+        _key("s2", "p1"): _FakeRuntime("p1"),
+    }
+    reg = _make_registry(cache)
+    reg.evict_runtime("s1")
+    assert list(reg._runtime_cache) == [_key("s2", "p1")]

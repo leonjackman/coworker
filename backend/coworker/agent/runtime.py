@@ -1197,7 +1197,7 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
 
 class AgentRuntimeRegistry:
-    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None):
+    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, provider_manager: ProviderManager | None = None):
         self.settings = settings
         self.session_store = session_store
         self.skill_manager = skill_manager
@@ -1214,7 +1214,7 @@ class AgentRuntimeRegistry:
         self.trace_store = AgentTraceStore(settings.data_dir / AGENT_TRACE_FILENAME)
         self.change_store = ChangeStore(settings.data_dir)
         self.snapshot_manager = ProjectSnapshotManager(settings.data_dir)
-        self.provider_manager = ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
+        self.provider_manager = provider_manager or ProviderManager(settings.data_dir / "providers.json", settings.data_dir)
         self.mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
         self.mcp_session_manager = mcp_session_manager
         # Per-session JSON checkpoint files (single-writer model, cf. cline):
@@ -1331,6 +1331,38 @@ class AgentRuntimeRegistry:
             return
         for key in [k for k in self._runtime_cache if k[0] == session_id]:
             self._runtime_cache.pop(key, None)
+
+    def invalidate_runtimes_for_provider(self, provider_id: str) -> int:
+        """Drop cached runtimes whose resolved provider matches ``provider_id``.
+
+        Called after a provider is edited/deleted so the next turn in the same
+        session rebuilds its runtime from the fresh config. Matching against the
+        runtime's resolved ``provider_id`` (not the requested key element) also
+        covers sessions that run on the default provider.
+        """
+        dropped = 0
+        if not provider_id:
+            return dropped
+        for key in [
+            k
+            for k in self._runtime_cache
+            if getattr(self._runtime_cache[k], "provider_id", None) == provider_id
+        ]:
+            self._runtime_cache.pop(key, None)
+            dropped += 1
+        return dropped
+
+    def invalidate_default_runtimes(self) -> int:
+        """Drop cached runtimes built without an explicit provider/model.
+
+        Such entries key on ``provider_id=None`` and silently follow the stored
+        default, so a default-provider/model change must evict them.
+        """
+        dropped = 0
+        for key in [k for k in self._runtime_cache if k[2] is None]:
+            self._runtime_cache.pop(key, None)
+            dropped += 1
+        return dropped
 
     async def resume_interrupt(self, approval: dict[str, Any], decisions: list[dict[str, Any]]) -> AsyncGenerator[dict[str, Any], None]:
         """Resume an interrupted agent turn (HITL approval) using the stream runtime.
