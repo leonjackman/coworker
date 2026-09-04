@@ -753,6 +753,8 @@
   "skills.loading_more": "Laden…",
   "skills.loading": "Laden…",
   "nav.memory": "Speicher",
+  "nav.home": "Chat",
+  "nav.breadcrumbs_label": "Breadcrumb",
   "memory.eyebrow": "Langzeitgedächtnis",
   "memory.title": "Gedächtnis",
   "memory.description": "Persistente Notizen, an die der sich sich über Sitzungen hinweg erinnert: Projekttpräferenzen, Konventionen und Nutzerfakten. Änderungen hier werden in jeden Chat eingefügt.",

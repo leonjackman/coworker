@@ -6,6 +6,7 @@ import type { ProjectDashboardData, SessionSummary } from '../../types';
 import { Button } from '../ui/button';
 import { CategoryTabs } from '../ui/category-tabs';
 import { WorkspacePage } from '../ui/workspace-page';
+import { usePageNavPublish } from '../../nav/PageNav';
 import { ProjectSessionList } from '../ProjectSessionList';
 import { MemoryPanel } from '../MemoryPanel';
 import { DashboardAgents } from './DashboardAgents';
@@ -59,6 +60,13 @@ export function ProjectDashboard({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const publishNav = usePageNavPublish();
+  useEffect(() => {
+    publishNav({ viewLabel: projectName ? `${projectName} · ${t('dashboard.title')}` : t('dashboard.title') });
+    return () => publishNav(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishNav, projectName]);
 
   const title = useMemo(
     () => (projectName ? `${projectName} · ${t('dashboard.title')}` : t('dashboard.title')),

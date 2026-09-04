@@ -11746,3 +11746,54 @@ body.dashboard-files__dragging * {
   font-weight: 500;
   color: var(--muted-foreground, #888);
 }
+
+/* ── Breadcrumb navigation (对话 › view › leaf) ──────────────────────────── */
+.page-breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 10px 24px 0;
+  min-height: 26px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted-foreground, #888);
+  user-select: none;
+}
+
+.page-breadcrumbs__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.page-breadcrumbs__link {
+  border: none;
+  background: none;
+  padding: 1px 4px;
+  margin: 0 -4px;
+  border-radius: 5px;
+  font: inherit;
+  color: var(--muted-foreground, #888);
+  cursor: pointer;
+}
+
+.page-breadcrumbs__link:hover {
+  color: var(--foreground, #222);
+  background: var(--panel-border, rgba(0, 0, 0, 0.06));
+}
+
+.page-breadcrumbs__current {
+  color: var(--foreground, #222);
+  font-weight: 600;
+}
+
+.page-breadcrumbs__static {
+  color: var(--muted-foreground, #888);
+}
+
+.page-breadcrumbs__sep {
+  color: var(--muted-foreground, #888);
+  opacity: 0.6;
+  flex: none;
+}

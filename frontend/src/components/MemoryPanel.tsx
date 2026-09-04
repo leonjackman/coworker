@@ -38,6 +38,7 @@ import type {
 import { Button } from './ui/button';
 import { DetailModal } from './ui/detail-modal';
 import { WorkspacePage } from './ui/workspace-page';
+import { usePageNavPublish } from '../nav/PageNav';
 
 interface MemoryPanelProps {
   onClose?: () => void;
@@ -167,6 +168,24 @@ export function MemoryPanel({ onClose, projectId, scope = 'all', embedded = fals
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
   }, []);
+
+  const publishNav = usePageNavPublish();
+  useEffect(() => {
+    if (embedded) return;
+    if (editingRel) {
+      publishNav({
+        viewLabel: t('memory.title'),
+        leafLabel: t('memory.editor_title'),
+        onBackToRoot: () => setEditingRel(null),
+      });
+    } else {
+      publishNav({ viewLabel: t('memory.title') });
+    }
+    return () => {
+      if (!embedded) publishNav(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishNav, embedded, editingRel]);
 
   const toggle = (key: string) => {
     setCollapsed((prev) => ({ ...prev, [key]: !(prev[key] ?? true) }));

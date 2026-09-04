@@ -9,6 +9,7 @@ import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Switch } from './ui/switch';
 import { WorkspacePage } from './ui/workspace-page';
+import { usePageNavPublish } from '../nav/PageNav';
 
 type ViewMode = 'list' | 'form';
 
@@ -75,6 +76,17 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
   useEffect(() => {
     void getProviderTemplateOrder().then(order => setTemplateOrder(order));
   }, []);
+
+  const publishNav = usePageNavPublish();
+  useEffect(() => {
+    publishNav({
+      viewLabel: t('providers.title'),
+      leafLabel: viewMode === 'form' ? (form.id ? t('providers.edit_title') : t('providers.add_title')) : undefined,
+      onBackToRoot: viewMode === 'form' ? cancelForm : undefined,
+    });
+    return () => publishNav(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishNav, viewMode, form.id]);
 
   function selectTemplate(key: string) {
     const template = providerTemplate(key);

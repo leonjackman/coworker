@@ -563,6 +563,8 @@
   "skills.market_source_skillhub": "Tencent SkillHub",
   "skills.market_source_clawhub": "ClawHub",
   "nav.memory": "メモリ",
+  "nav.home": "チャット",
+  "nav.breadcrumbs_label": "パンくず",
   "mcp.heading": "MCPサーバー",
   "mcp.description": "AIアシスタントの機能を拡張するためのMCPサーバーを構成。各サーバーは自律的に制御できる一連のツールを提供します。",
   "mcp.add_server": "サーバーを追加",

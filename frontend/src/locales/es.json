@@ -830,6 +830,8 @@
   "skills.loading_more": "Cargando...",
   "skills.loading": "Cargando...",
   "nav.memory": "Memoria",
+  "nav.home": "Conversación",
+  "nav.breadcrumbs_label": "Migas de pan",
   "memory.eyebrow": "Memoria a largo plazo",
   "memory.title": "Memoria",
   "memory.description": "Notas persistentes que el agente recuerda entre sesiones: preferencias del proyecto, convenciones y datos del usuario. Las ediciones aquí se inyectan en cada chat.",

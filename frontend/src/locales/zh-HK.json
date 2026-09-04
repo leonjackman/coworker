@@ -586,6 +586,8 @@
   "update.close": "關閉",
   "update.version_unknown": "未知",
   "nav.memory": "記憶",
+  "nav.home": "對話",
+  "nav.breadcrumbs_label": "麵包屑",
   "memory.eyebrow": "長期記憶",
   "memory.title": "記憶",
   "memory.description": "Agent 喺唔同會話之間記住嘅持久筆記：專案偏好、慣例同使用者事實。喺呢度做嘅修改會注入到每次對話。",

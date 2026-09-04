@@ -418,6 +418,8 @@
   "message.redo": "되돌린 파일 변경 {count}개 복원",
   "nav.mcp": "MCP",
   "nav.memory": "메모리",
+  "nav.home": "대화",
+  "nav.breadcrumbs_label": "브레드크럼",
   "nav.providers": "공급자",
   "nav.settings": "설정",
   "nav.skills": "스킬",

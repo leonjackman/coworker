@@ -793,6 +793,8 @@
   "skills.loading_more": "加载中…",
   "skills.loading": "加载中…",
   "nav.memory": "记忆",
+  "nav.home": "对话",
+  "nav.breadcrumbs_label": "面包屑",
   "memory.eyebrow": "长期记忆",
   "memory.title": "记忆",
   "memory.description": "代理跨会话记住的持久信息：项目偏好、约定与用户事实。此处编辑的内容会注入每次对话。",

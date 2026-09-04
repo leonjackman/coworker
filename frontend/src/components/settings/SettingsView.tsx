@@ -9,6 +9,7 @@ import { chatService } from '../../services/chatService';
 import { SHORTCUT_REGISTRY } from '../../keys';
 import { Button } from '../ui/button';
 import { WorkspacePage } from '../ui/workspace-page';
+import { usePageNavPublish } from '../../nav/PageNav';
 import { SettingsList } from './SettingsList';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ToolAuditPanel } from './ToolAuditPanel';
@@ -68,6 +69,29 @@ export function SettingsView({
 }: SettingsViewProps) {
   const { enabled: soundEnabled, toggleEnabled: toggleSound } = useSound();
   const [webSettings, setWebSettings] = useState<WebSettings | null>(null);
+
+  const publishNav = usePageNavPublish();
+  useEffect(() => {
+    if (settingsPage === 'main') {
+      publishNav({ viewLabel: t('settings.title') });
+    } else {
+      const leaf =
+        settingsPage === 'theme'
+          ? t('settings.palette_group')
+          : settingsPage === 'audit'
+            ? t('settings.audit_group')
+            : settingsPage === 'web'
+              ? t('settings.web_title')
+              : t('shortcuts.page_title');
+      publishNav({
+        viewLabel: t('settings.title'),
+        leafLabel: leaf,
+        onBackToRoot: () => onSettingsPageChange('main'),
+      });
+    }
+    return () => publishNav(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishNav, settingsPage]);
 
   useEffect(() => {
     let mounted = true;

@@ -10,6 +10,7 @@ import { DetailModal } from './ui/detail-modal';
 import { SkillsMarketTab } from './SkillsMarketTab';
 import { SkillPendingPanel } from './settings/SkillPendingPanel';
 import { TagBar } from './ui/tag-bar';
+import { usePageNavPublish } from '../nav/PageNav';
 import type { SkillDiagnostic, SkillEntry } from '../types';
 
 interface SkillsPanelProps {
@@ -181,6 +182,26 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
       return next;
     });
   }, []);
+
+  const publishNav = usePageNavPublish();
+  useEffect(() => {
+    let leafLabel: string | undefined;
+    let onBackToRoot: (() => void) | undefined;
+    if (viewMode === 'add') {
+      leafLabel = t('skills.add_skill');
+      onBackToRoot = () => {
+        setViewMode('list');
+        setListTab('market');
+      };
+    } else if (listTab === 'installed') {
+      // 已安装 tab 视为技能页的子层：回退到市场（与 header 的“返回市场”一致）。
+      leafLabel = t('skills.installed');
+      onBackToRoot = () => setListTab('market');
+    }
+    publishNav({ viewLabel: t('skills.title'), leafLabel, onBackToRoot });
+    return () => publishNav(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishNav, viewMode, listTab]);
 
   const handleToggle = useCallback(
     async (skill: SkillEntry) => {

@@ -753,6 +753,8 @@
   "skills.loading_more": "Loading…",
   "skills.loading": "Loading…",
   "nav.memory": "Memory",
+  "nav.home": "Chat",
+  "nav.breadcrumbs_label": "Breadcrumb",
   "memory.eyebrow": "Long-term memory",
   "memory.title": "Memory",
   "memory.description": "Persistent notes the agent remembers across sessions: project preferences, conventions, and user facts. Edits here are injected into every chat.",

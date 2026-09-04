@@ -8,6 +8,7 @@ import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Switch } from './ui/switch';
 import { WorkspacePage } from './ui/workspace-page';
+import { usePageNavPublish } from '../nav/PageNav';
 import gitLogo from '../../../assets/mcp-logo/git.png';
 import context7Logo from '../../../assets/mcp-logo/context7.png';
 import deepwikiLogo from '../../../assets/mcp-logo/deepwiki.png';
@@ -158,6 +159,22 @@ function MCPPanel({ servers, templates, setServers, onMcpChange }: MCPPanelProps
     setMessage(null);
     setTestResult(null);
   }, [viewMode]);
+
+  const publishNav = usePageNavPublish();
+  useEffect(() => {
+    let leafLabel: string | undefined;
+    let onBackToRoot: (() => void) | undefined;
+    if (viewMode === 'catalog') {
+      leafLabel = t('mcp.catalog_title');
+      onBackToRoot = () => setViewMode('list');
+    } else if (viewMode === 'form') {
+      leafLabel = form.name.trim() || t('mcp.add_title');
+      onBackToRoot = cancelForm;
+    }
+    publishNav({ viewLabel: t('mcp.title'), leafLabel, onBackToRoot });
+    return () => publishNav(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [publishNav, viewMode, form.name]);
 
   async function load() {
     try {

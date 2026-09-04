@@ -18,6 +18,7 @@ import { NewChatHero } from './components/NewChatHero';
 import { SettingsView, type SettingsPage } from './components/settings/SettingsView';
 import { OrgSettingsPage } from './components/settings/OrgSettingsPage';
 import { ProjectDashboard } from './components/dashboard/ProjectDashboard';
+import { PageNavHost, PageCrumbsBar, type CrumbNav } from './nav/PageNav';
 import { WorkspaceTitlebar } from './components/WorkspaceTitlebar';
 import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
@@ -481,6 +482,18 @@ function hasOpenOverlay(): boolean {
   return Boolean(document.querySelector('[role="dialog"][aria-modal="true"], [role="menu"], [role="listbox"]'));
 }
 
+/**
+ * True when the Esc key originated inside an editable control (input/textarea/
+ * contenteditable). On non-chat pages a first Esc then only blurs the control
+ * so the inner field's own cancel logic isn't shadowed by page navigation.
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target === document.body) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+}
+
 // Map a raw `context_usage` event (snake_case) into the frontend ContextUsage
 // shape. Shared by the streaming event handler AND the session-open preview
 // fetch so both paths render an identical indicator.
@@ -624,6 +637,13 @@ function App() {
   const [webSetupHint, setWebSetupHint] = useState<'disabled' | 'no_key' | null>(null);
   const [webHintDismissed, setWebHintDismissed] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('main');
+  // Breadcrumb navigation for non-chat pages: hosts publish their location and
+  // Esc walks up one crumb at a time (leaf → root view → chat).
+  const [crumbNav, setCrumbNav] = useState<CrumbNav | null>(null);
+  const goHome = useCallback(() => {
+    setSettingsPage('main');
+    setActiveView('chat');
+  }, []);
   const [references, setReferences] = useState<SessionReference[]>([]);
   const [providers, setProviders] = useState<ProviderEntry[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
@@ -772,17 +792,20 @@ function App() {
       setActiveView('skills');
       return true;
     },
-    'view-chat': () => {
-      // Esc 语义：先关弹窗/菜单/抽屉，其次「返回上级」逐层退回，最后才到对话视图。
+    'view-chat': (event) => {
+      // Esc 语义：先关弹窗/菜单/抽屉，其次让输入框 blur（内层取消逻辑优先），
+      // 然后「返回上级」沿面包屑逐层退回（子页 → 根页），最后才到对话视图。
       if (hasOpenOverlay() || mobileSidebarOpen) return false;
-      if (activeView === 'settings' && settingsPage !== 'main') {
-        // 设置子页（快捷键/主题/网页/审计）→ 设置主页
-        setSettingsPage('main');
+      if (activeView !== 'chat' && isEditableTarget(event.target)) {
+        (event.target as HTMLElement).blur();
+        return true;
+      }
+      if (crumbNav?.leafLabel && crumbNav.onBackToRoot) {
+        crumbNav.onBackToRoot();
         return true;
       }
       if (activeView !== 'chat') {
-        setActiveView('chat');
-        setSettingsPage('main');
+        goHome();
         return true;
       }
       return false;
@@ -4343,6 +4366,7 @@ function App() {
   }, [refreshSkills]);
 
     return (
+    <PageNavHost publish={setCrumbNav}>
     <main
       className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''} ${isNarrowViewport ? 'app-shell--narrow' : ''} ${mobileSidebarOpen ? 'app-shell--drawer-open' : ''} ${sidebarResizing || bottomPanelResizing || inspectorResizing || changesPanelResizing ? 'app-shell--resizing' : ''}`}
       style={{ '--sidebar-width': `${sidebarWidth}px`, '--bottom-panel-height': `${bottomPanelHeight}px`, '--inspector-width': `${inspectorWidth}px`, '--changes-width': `${changesPanelWidth}px` } as CSSProperties}
@@ -4410,7 +4434,8 @@ function App() {
         />
         <section ref={workspaceFrameRef} className={`workspace-frame ${rightSidebarOpen ? 'workspace-frame--right-open' : ''} ${bottomPanelOpen ? 'workspace-frame--bottom-open' : ''}`}>
           <div className={`workspace-upper ${changesPanelOpen ? 'workspace-upper--changes-open' : ''}`}>
-            <section className={`workspace-shell workspace-shell--${activeView}`}>
+              <section className={`workspace-shell workspace-shell--${activeView}`}>
+              {activeView !== 'chat' && <PageCrumbsBar nav={crumbNav} onHome={goHome} />}
               {activeView === 'chat' ? (
                 <>
                   {showRuntimeNotice && (
@@ -4721,6 +4746,7 @@ function App() {
       />
       <UpdateToastCard center={updateCenter} onOpenSettings={() => setActiveView('settings')} />
     </main>
+    </PageNavHost>
   );
 }
 

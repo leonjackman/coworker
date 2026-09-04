@@ -753,6 +753,8 @@
   "skills.loading_more": "Carregando…",
   "skills.loading": "Carregando…",
   "nav.memory": "Memória",
+  "nav.home": "Conversa",
+  "nav.breadcrumbs_label": "Navegação",
   "memory.eyebrow": "Memória de longo prazo",
   "memory.title": "Memória",
   "memory.description": "Notas persistentes que o agente lembra entre sessões: preferências do projeto, convenções e fatos do usuário. As edições aqui são injetadas em todas as conversas.",

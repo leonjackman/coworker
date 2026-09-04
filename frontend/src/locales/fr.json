@@ -93,6 +93,8 @@
   "nav.mcp": "MCP",
   "nav.skills": "Compétences",
   "nav.memory": "Mémoire",
+  "nav.home": "Conversation",
+  "nav.breadcrumbs_label": "Fil d'Ariane",
   "workspace.unavailable": "Espace de travail indisponible",
   "workspace.files": "Fichiers",
   "chat.placeholder": "Envoyer un message à CoWorker",
