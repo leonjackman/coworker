@@ -1398,11 +1398,6 @@ ipcMain.handle('browser:capture-element', async (event, payload) => {
 });
 
 app.whenReady().then(async () => {
-  if (!IS_DEV) {
-    await startBundledBackend();
-    if (backendProcess === null && !IS_DEV) return;
-  }
-
   setupAutoUpdater();
   startAutoUpdateTimer();
 
@@ -1413,12 +1408,28 @@ app.whenReady().then(async () => {
   // Built-in browser: start the loopback bridge and register it with the
   // Python backend so the agent's browser tool can drive the embedded view.
   const bridge = startBrowserBridge();
-  registerBrowserBridge(bridge);
+
+  if (IS_DEV) {
+    // Dev: the launcher already waited for the backend before starting us.
+    registerBrowserBridge(bridge);
+  } else {
+    // Packaged: the PyInstaller backend takes several seconds to boot. Show the
+    // window immediately (the frontend renders its own "正在啟動 CoWorker…"
+    // connecting state and flips to ready once /config responds) and boot the
+    // backend concurrently underneath it — never block the window on the boot.
+    launchBundledBackendAndBridge(bridge);
+  }
 
   app.on('activate', () => {
     showMainWindow();
   });
 });
+
+async function launchBundledBackendAndBridge(bridge) {
+  await startBundledBackend();
+  if (backendProcess === null && !IS_DEV) return; // startBundledBackend showed the error and is quitting
+  registerBrowserBridge(bridge);
+}
 
 // Single-instance lock: double-launching the app (e.g. clicking the launcher
 // twice) would otherwise open two windows/renderers racing against one backend.

@@ -30,8 +30,31 @@ echo "[2/6] Preparing Node dependencies..."
 ensure_node_deps "$ROOT_DIR" "Root dependencies" || exit 1
 ensure_node_deps "$ROOT_DIR/frontend" "Frontend dependencies" || exit 1
 
-echo "[3/6] Building frontend..."
-(cd "$ROOT_DIR/frontend" && npm run build) && ok "Frontend built"
+# Rebuild the frontend only when its inputs changed since the last build —
+# `npm run build` on every launch is the slowest step of a dev restart.
+frontend_needs_build() {
+  [[ "${COWORKER_FORCE_BUILD:-0}" == "1" ]] && return 0
+  local entry="$ROOT_DIR/frontend/dist/index.html"
+  [[ -f "$entry" ]] || return 0
+  for src in \
+    "$ROOT_DIR/frontend/package.json" \
+    "$ROOT_DIR/frontend/package-lock.json" \
+    "$ROOT_DIR/frontend/vite.config.ts" \
+    "$ROOT_DIR/frontend/index.html"
+  do
+    [[ "$src" -nt "$entry" ]] && return 0
+  done
+  find "$ROOT_DIR/frontend/src" -type f -newer "$entry" -print -quit 2>/dev/null | grep -q . && return 0
+  return 1
+}
+
+if frontend_needs_build; then
+  echo "[3/6] Building frontend..."
+  (cd "$ROOT_DIR/frontend" && npm run build) && ok "Frontend built"
+else
+  echo "[3/6] Frontend up to date — skipping build (COWORKER_FORCE_BUILD=1 to rebuild)"
+  ok "Frontend ready"
+fi
 
 echo "[4/6] Starting backend..."
 # Kill any stale backend holding the port, then wait for the port to free up.

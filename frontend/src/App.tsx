@@ -1471,6 +1471,12 @@ function App() {
     let mounted = true;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
+    // Whether the backend was ever reached. Before the first success the app is
+    // still waiting for the local backend to boot (a cold start can take several
+    // seconds in the packaged build), so failures render the calm "connecting"
+    // state instead of a scary error. Only a backend that was already up and
+    // then dropped is treated as a real error.
+    let backendSeen = false;
 
     async function bootstrap() {
       applyTheme(themeSettings);
@@ -1480,6 +1486,7 @@ function App() {
       try {
         const config = await chatService.getRuntimeConfig();
         if (!mounted) return;
+        backendSeen = true;
         setRuntimeConfig(config);
         setSelectedModel(config.selected_provider_id);
         setRuntimeStatus('ready');
@@ -1525,10 +1532,19 @@ function App() {
       } catch (error) {
         console.error('Failed to load runtime config:', error);
         if (!mounted) return;
-        setRuntimeStatus('error');
-        setRuntimeError(translateError(error));
         attempt += 1;
-        const delay = Math.min(1500 * 2 ** (attempt - 1), 8000);
+        if (backendSeen || attempt >= 12) {
+          // Backend was up and dropped, or never came up after ~30s of retries:
+          // surface the guidance + auto-retry instead of spinning forever.
+          setRuntimeStatus('error');
+          setRuntimeError(translateError(error));
+        } else {
+          setRuntimeStatus('connecting');
+        }
+        // Fast, bounded retry while the backend boots (connection-refused fails
+        // are immediate, so a tight cadence flips the UI to ready ~as soon as
+        // the backend accepts traffic).
+        const delay = Math.min(700 * 2 ** Math.min(attempt - 1, 2), 3000);
         retryTimer = setTimeout(bootstrap, delay);
       }
     }
