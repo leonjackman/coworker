@@ -210,6 +210,41 @@
 
 - **i18n**：新增 `skills.market_ambiguous_owner` 與 `skills.market_body_empty` 翻譯鍵，覆蓋全部 11 種語言。
 
+## 0.6.4
+
+本版本引入非聊天頁面的麵包屑導航與分層返回，優化打包版啟動速度（視窗即開 + 後端並行），修復 provider 配置熱生效與非視覺模型的圖片附件處理；同時清理了長期積累的孤兒代碼與廢棄邏輯。
+
+### 新增
+
+- **麵包屑導航**：非聊天頁面（providers / mcp / skills / settings / memory / org / dashboard）頂部顯示麵包屑導航條（對話 > 視圖 > 子頁面）；`Esc` 逐層返回（子頁面 → 父頁面 → 對話），而非直接跳回對話；可編輯輸入框上的首次 `Esc` 僅失焦，不再遮蔽內部的取消處理。
+
+### 改進
+
+- **啟動速度優化**：打包版窗口不再等待後端啟動才顯示——窗口立即彈出（前端顯示「正在啟動 CoWorker…」等待），後端並行啟動完成後自動切換為就緒狀態；前端重試間隔從 1.5~8s 縮短至 0.7~3s，後端一就緒即翻轉；開發啟動器在前端 `dist` 未過期時跳過重複構建。
+- **Provider 配置熱生效**：新增 / 修改 / 刪除 provider 或切換默認 provider 後，自動失效對應會話的執行期快取，下一輪請求按新配置（base_url / api_key / model / max tokens / vision / context_window）重建；修復 provider 返回 dict 時誤用 `.id` 屬性導致的 500 錯誤。
+- **非視覺模型圖片附件保護**：`format_user_message` 新增 `vision` 參數——未啟用多模態的 provider 不再將圖片附件以 `image_url` 格式發送給模型，改為文字注記，杜絕無視覺能力的模型產生「幻覺看圖」；啟用多模態時維持原有全量透傳行為。
+
+### 修復
+
+- 修復首次連接失敗時前端顯示 `error` 狀態而非維持 `connecting` 的問題，~30s 無後端才轉為 error。
+
+### 清理
+
+- 移除從未被引用的孤兒代碼與廢棄模塊：
+  - `backend/coworker/memory/memory_middleware.py`（70 行，從未 import）
+  - `backend/repro_vllm_raw.py`（79 行調試腳本）
+  - `frontend/src/components/ui/message.tsx`（92 行 shadcn/ui 生成組件）
+  - `frontend/src/components/ui/side-drawer.tsx`（51 行未使用組件）
+  - `frontend/src/components/agent-ui/`（空目錄）
+  - `electron/main.js` 中 4 個死 IPC handler（`get-settings-log`、`set-log-level`、`read-log-file`、`truncate-log`）
+  - `backend/coworker/workspace.py` 中已標記 DEPRECATED 且無調用者的 `resolve_path()` 方法
+  - `backend/coworker/mcp/__init__.py` 中錯誤的 `__all__`（包含不存在的 `discover_templates`）
+  - 多個組件中未使用的導入（4 個 lucide-react 圖標、`MouseEvent`、`ApprovalOption`）
+
+### 品質
+
+- 新增 `test_attachments.py`、`test_runtime_cache.py`：覆蓋圖片附件處理與 runtime 緩存失效。
+
 ## Unreleased
 
 （尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
