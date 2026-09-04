@@ -44,6 +44,19 @@ interface SettingsViewProps {
 
 export type SettingsPage = 'main' | 'theme' | 'audit' | 'web' | 'shortcuts';
 
+/** Chip state for the Web settings list entry under the multi-provider model:
+ * keyless providers (DuckDuckGo / browser) count as configured once enabled. */
+function webCapabilityChip(web: WebSettings | null): { label: string; ok: boolean } {
+  if (web === null) return { label: '', ok: false };
+  if (!web.enabled) return { label: t('settings.web_disabled'), ok: false };
+  if (web.provider === 'tavily') {
+    return web.api_key_configured
+      ? { label: t('settings.web_configured'), ok: true }
+      : { label: t('settings.web_not_configured'), ok: false };
+  }
+  return { label: t('settings.web_configured'), ok: true };
+}
+
 export function SettingsView({
   themeSettings,
   autonomy,
@@ -143,7 +156,8 @@ export function SettingsView({
   if (settingsPage === 'web') {
     const current: WebSettings = webSettings ?? {
       enabled: false,
-      provider: 'tavily',
+      provider: 'duckduckgo',
+      browser_engine: 'bing',
       max_results: 8,
       search_depth: 'basic',
       fetch_enabled: true,
@@ -267,22 +281,17 @@ export function SettingsView({
             description: t('settings.web_group_desc'),
             items: [
               {
-                id: 'web_tavily',
+                id: 'web_search',
                 type: 'action',
                 label: t('settings.web_entry'),
                 description: t('settings.web_entry_desc'),
                 actionLabel: t('settings.web_open'),
-                meta: (
-                  <span className={`settings-chip${webSettings?.api_key_configured ? ' settings-chip--ok' : ''}`}>
-                    {webSettings === null
-                      ? ''
-                      : webSettings.enabled
-                        ? webSettings.api_key_configured
-                          ? t('settings.web_configured')
-                          : t('settings.web_not_configured')
-                        : t('settings.web_disabled')}
-                  </span>
-                ),
+                meta: (() => {
+                  const chip = webCapabilityChip(webSettings);
+                  return (
+                    <span className={`settings-chip${chip.ok ? ' settings-chip--ok' : ''}`}>{chip.label}</span>
+                  );
+                })(),
                 onAction: () => onSettingsPageChange('web'),
               },
             ],

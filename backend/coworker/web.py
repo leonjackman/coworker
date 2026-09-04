@@ -1,16 +1,19 @@
 """Web search & page-fetch tools for the coworker agent.
 
-Search is backed by the Tavily REST API (https://docs.tavily.com). The API key
-is stored in the OS secret store (see :mod:`coworker.secrets`) under service
-``coworker.web`` / account ``tavily``. Non-secret configuration (enabled /
-provider / max_results / search_depth / fetch_enabled) lives in
+Search is provided by :mod:`coworker.search` — a pluggable set of backends
+(Tavily / DuckDuckGo / the embedded browser) with a fixed fallback chain, so
+the agent no longer depends on a single provider. The default (DuckDuckGo)
+needs no API key. Non-secret configuration (enabled / provider / browser_engine
+/ max_results / search_depth / fetch_enabled) lives in
 ``.coworker_settings.json`` under a ``web`` block, mirroring the memory and
-retention settings blocks.
+retention settings blocks. A Tavily API key (when that provider is selected)
+is stored in the OS secret store under service ``coworker.web`` / account
+``tavily``.
 
-``web_search`` returns Tavily's already-cleaned results (title / url / content
-plus an optional synthesized answer). ``web_fetch`` is a self-contained HTTP
-fetch that converts HTML to Markdown and mirrors the anti-bot retry behaviour
-of opencode's ``webfetch`` tool.
+``web_search`` returns normalized results (title / url / content plus an
+optional synthesized answer from Tavily). ``web_fetch`` is a self-contained
+HTTP fetch that converts HTML to Markdown and mirrors the anti-bot retry
+behaviour of opencode's ``webfetch`` tool.
 """
 
 from __future__ import annotations
@@ -28,9 +31,25 @@ from coworker.logger import get_logger
 
 logger = get_logger(__name__)
 
-TAVILY_API_URL = "https://api.tavily.com/search"
-_SECRET_SERVICE = "coworker.web"
-_SECRET_ACCOUNT = "tavily"
+# Tavily helpers live in the search backend package but were historically
+# exposed from here; re-export for callers (main.py settings API, dashboard).
+from coworker.search.tavily_engine import (  # noqa: E402
+    delete_tavily_key,
+    get_tavily_key,
+    set_tavily_key,
+    tavily_key_configured,
+    tavily_search,
+)
+
+# Canonical provider / engine lists and defaults live in coworker.search; import
+# them (do not redefine) so the settings layer and the search backends agree.
+from coworker.search import (  # noqa: E402
+    BROWSER_ENGINES as ALLOWED_BROWSER_ENGINES,
+    DEFAULT_BROWSER_ENGINE,
+    DEFAULT_PROVIDER,
+    PROVIDERS as ALLOWED_PROVIDERS,
+    provider_capability,
+)
 
 _WEB_FETCH_MAX_BYTES = 5 * 1024 * 1024  # 5MB
 _WEB_FETCH_TIMEOUT_S = 30.0
@@ -54,21 +73,17 @@ _CHROME_UA = (
     "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 )
 
-_DEFAULT_WEB_CONFIG: dict[str, Any] = {
-    "enabled": False,
-    "provider": "tavily",
-    "max_results": 8,
-    "search_depth": "basic",
-    "fetch_enabled": True,
-}
-
-
 @dataclass(frozen=True)
 class WebConfig:
-    """Resolved (non-secret) web capability settings."""
+    """Resolved (non-secret) web capability settings.
+
+    Field defaults are the single source of truth for the ``web`` settings
+    block (``_DEFAULT_WEB_CONFIG`` is derived from here below).
+    """
 
     enabled: bool = False
-    provider: str = "tavily"
+    provider: str = DEFAULT_PROVIDER
+    browser_engine: str = DEFAULT_BROWSER_ENGINE
     max_results: int = 8
     search_depth: str = "basic"
     fetch_enabled: bool = True
@@ -77,9 +92,16 @@ class WebConfig:
     def from_dict(cls, data: Any) -> "WebConfig":
         if not isinstance(data, dict):
             return cls()
+        provider = str(data.get("provider", DEFAULT_PROVIDER))
+        if provider not in ALLOWED_PROVIDERS:
+            provider = DEFAULT_PROVIDER
+        browser_engine = str(data.get("browser_engine", DEFAULT_BROWSER_ENGINE))
+        if browser_engine not in ALLOWED_BROWSER_ENGINES:
+            browser_engine = DEFAULT_BROWSER_ENGINE
         return cls(
             enabled=bool(data.get("enabled", False)),
-            provider=str(data.get("provider", "tavily")),
+            provider=provider,
+            browser_engine=browser_engine,
             max_results=int(data.get("max_results", 8)),
             search_depth=str(data.get("search_depth", "basic")),
             fetch_enabled=bool(data.get("fetch_enabled", True)),
@@ -89,10 +111,16 @@ class WebConfig:
         return {
             "enabled": self.enabled,
             "provider": self.provider,
+            "browser_engine": self.browser_engine,
             "max_results": self.max_results,
             "search_depth": self.search_depth,
             "fetch_enabled": self.fetch_enabled,
         }
+
+
+#: Defaults for the stored ``web`` block, derived from :class:`WebConfig` so
+#: dataclass and settings-file defaults can never drift apart.
+_DEFAULT_WEB_CONFIG: dict[str, Any] = WebConfig().to_dict()
 
 
 def _settings_path(data_dir: Path | str) -> Path:
@@ -144,8 +172,10 @@ def write_web_block(data_dir: Path | str, patch: dict[str, Any]) -> dict[str, An
 
     if "enabled" in patch:
         merged["enabled"] = bool(patch["enabled"])
-    if "provider" in patch and isinstance(patch["provider"], str) and patch["provider"]:
+    if "provider" in patch and patch["provider"] in ALLOWED_PROVIDERS:
         merged["provider"] = patch["provider"]
+    if "browser_engine" in patch and patch["browser_engine"] in ALLOWED_BROWSER_ENGINES:
+        merged["browser_engine"] = patch["browser_engine"]
     if "max_results" in patch:
         try:
             merged["max_results"] = max(1, min(20, int(patch["max_results"])))
@@ -159,79 +189,6 @@ def write_web_block(data_dir: Path | str, patch: dict[str, Any]) -> dict[str, An
     data["web"] = merged
     _write_settings_file(data_dir, data)
     return merged
-
-
-# ── Tavily secret helpers (Keychain-first, 0600-file fallback) ─────────────
-
-def tavily_key_configured(data_dir: Path | str) -> bool:
-    from coworker.secrets import get_secret
-
-    return get_secret(Path(data_dir), _SECRET_SERVICE, _SECRET_ACCOUNT) is not None
-
-
-def get_tavily_key(data_dir: Path | str) -> str | None:
-    from coworker.secrets import get_secret
-
-    return get_secret(Path(data_dir), _SECRET_SERVICE, _SECRET_ACCOUNT)
-
-
-def set_tavily_key(data_dir: Path | str, api_key: str) -> None:
-    from coworker.secrets import set_secret
-
-    set_secret(Path(data_dir), _SECRET_SERVICE, _SECRET_ACCOUNT, api_key)
-
-
-def delete_tavily_key(data_dir: Path | str) -> None:
-    from coworker.secrets import delete_secret
-
-    delete_secret(Path(data_dir), _SECRET_SERVICE, _SECRET_ACCOUNT)
-
-
-# ── Tavily search ──────────────────────────────────────────────────────────
-
-def tavily_search(
-    query: str,
-    api_key: str,
-    *,
-    max_results: int = 8,
-    search_depth: str = "basic",
-) -> dict[str, Any]:
-    """Run one Tavily search. Never raises; returns an error-carrying dict."""
-    payload = {
-        "api_key": api_key,
-        "query": query,
-        "max_results": max(1, min(20, int(max_results))),
-        "search_depth": search_depth if search_depth in ("basic", "advanced") else "basic",
-        "include_answer": True,
-    }
-    try:
-        response = httpx.post(TAVILY_API_URL, json=payload, timeout=30.0)
-        response.raise_for_status()
-        data = response.json()
-    except httpx.HTTPStatusError as exc:
-        detail = ""
-        try:
-            body = exc.response.json()
-            detail = str(body.get("detail") or body.get("message") or "")
-        except Exception:  # noqa: BLE001
-            detail = exc.response.text[:200]
-        logger.warning("tavily search failed status=%s detail=%r", exc.response.status_code, detail)
-        return {"error": f"Tavily API error {exc.response.status_code}: {detail}", "answer": "", "results": []}
-    except (httpx.TimeoutException, httpx.RequestError) as exc:
-        logger.warning("tavily search request failed: %s", exc)
-        return {"error": f"Tavily request failed: {exc}", "answer": "", "results": []}
-
-    results = []
-    for item in data.get("results") or []:
-        results.append(
-            {
-                "title": str(item.get("title") or ""),
-                "url": str(item.get("url") or ""),
-                "content": str(item.get("content") or ""),
-                "score": item.get("score"),
-            }
-        )
-    return {"error": "", "answer": str(data.get("answer") or ""), "results": results}
 
 
 # ── Page fetch (web_fetch) ─────────────────────────────────────────────────
@@ -386,37 +343,50 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
     """Build ``web_search`` / ``web_fetch`` LangChain tools for the agent.
 
     Tools are only constructed when the caller passes a resolved config; the
-    agent wiring decides whether they are enabled / keyed at all. ``vision``
-    decides how fetched IMAGES are delivered: vision providers get a native
-    ``image_url`` block, text-only providers get the bytes saved to disk and a
-    path back — base64 never enters the context as text.
+    agent wiring decides whether they are enabled at all. ``api_key`` is kept
+    for signature compatibility but no longer consulted — the ``web_search``
+    tool resolves provider + key lazily on every call (via
+    :func:`coworker.search.run_web_search`), so settings changes take effect
+    without rebuilding the cached graph. ``vision`` decides how fetched IMAGES
+    are delivered: vision providers get a native ``image_url`` block, text-only
+    providers get the bytes saved to disk and a path back — base64 never enters
+    the context as text.
     """
     from langchain_core.tools import tool
 
     cfg = web_config or WebConfig()
-    key = api_key
 
     tools: list[Any] = []
 
     @tool(args_schema=WebSearchArgs)
     def web_search(query: str, max_results: int = 0, search_depth: str = "") -> str:
-        """Search the web for current or public information on a topic."""
-        if not key:
+        """Search the web for current or public information on a topic.
+
+        Uses the configured provider (Tavily / DuckDuckGo / embedded browser);
+        on failure it automatically falls back through the other free backends.
+        """
+        if data_dir is None:
             return json.dumps(
-                {
-                    "error": "Tavily API key is not configured. Tell the user they must configure it "
-                    "in Settings → Web (联网设置) → Tavily API Key before web search works.",
-                    "error_code": "tavily_key_missing",
-                    "answer": "",
-                    "results": [],
-                },
+                {"error": "Web search is not available (no data directory).", "error_code": "no_backend", "answer": "", "results": []},
                 ensure_ascii=False,
             )
-        result = tavily_search(
-            query,
-            key,
-            max_results=max_results or cfg.max_results,
-            search_depth=search_depth or cfg.search_depth,
+        # Re-read config on every call so provider / engine / key changes apply
+        # immediately, even while the compiled graph is cached.
+        live_cfg = load_web_config(data_dir)
+        if not live_cfg.enabled:
+            return json.dumps(
+                {"error": "Web access is disabled. Tell the user to enable 'web access' in Settings → Web (联网设置).", "answer": "", "results": []},
+                ensure_ascii=False,
+            )
+        from coworker.search import run_web_search
+
+        result = run_web_search(
+            live_cfg,
+            data_dir,
+            query=query,
+            max_results=max_results or live_cfg.max_results,
+            search_depth=search_depth or live_cfg.search_depth,
+            session_id=session_id,
         )
         return json.dumps(result, ensure_ascii=False)
 
@@ -465,46 +435,85 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
 def resolve_web_tools(data_dir: Path | str | None, *, vision: bool = False, session_id: str = "") -> list[Any]:
     """Web tools for a runtime/sub-agent when web is enabled, else ``[]``.
 
-    The key is optional: ``web_fetch`` works without it, and ``web_search``
-    reports the missing-key state to the model (which then prompts the user to
-    configure Tavily in Settings → Web). When web is disabled no tools are
-    mounted at all — the agent still learns the state from the capability line.
+    The configured provider (Tavily / DuckDuckGo / embedded browser) is
+    resolved lazily inside the tool on every call, so provider or key changes
+    take effect without rebuilding the cached agent graph. When web is disabled
+    no tools are mounted at all — the agent still learns the state from the
+    capability line.
     """
     if data_dir is None:
         return []
     config = load_web_config(data_dir)
     if not config.enabled:
         return []
-    return build_web_tools(config, get_tavily_key(data_dir), vision=vision, data_dir=data_dir, session_id=session_id)
+    return build_web_tools(config, None, vision=vision, data_dir=data_dir, session_id=session_id)
 
 
 def web_capability_status(data_dir: Path | str | None) -> str:
-    """Current web capability: ``'disabled'`` | ``'no_key'`` | ``'ok'``."""
+    """Current web capability: ``'disabled'`` | ``'ok'`` | ``'no_key'`` |
+    ``'browser_unavailable'``.
+
+    ``ok`` means the *configured* provider is ready. ``no_key`` applies only to
+    the Tavily provider (DuckDuckGo and the browser need no key);
+    ``browser_unavailable`` applies when the embedded browser provider is
+    selected but the desktop bridge is not registered. The per-provider
+    readiness rules live in :func:`coworker.search.provider_capability`.
+    """
     if data_dir is None:
         return "disabled"
     config = load_web_config(data_dir)
     if not config.enabled:
         return "disabled"
-    return "no_key" if not tavily_key_configured(data_dir) else "ok"
+    return provider_capability(config.provider, data_dir)
+
+
+def _web_provider_label(config: WebConfig) -> str:
+    if config.provider == "tavily":
+        return "Tavily (best quality)"
+    if config.provider == "browser":
+        return f"the embedded browser ({config.browser_engine})"
+    return "DuckDuckGo (free, no key)"
 
 
 def web_capability_line(data_dir: Path | str | None) -> str:
     """One-line capability summary injected into the agent's system prompt."""
     status = web_capability_status(data_dir)
-    if status == "ok":
+    if status == "disabled":
         return (
-            "Web access is ENABLED: use web_search for current/external information and "
-            "web_fetch to read full pages. Cite the sources you used."
+            "Web access is DISABLED — you have no web_search/web_fetch tools. If the task needs "
+            "current or external information, tell the user they must enable 'web access' in "
+            "Settings → Web (联网设置) first. Never fabricate URLs or claim you searched."
         )
+    config = load_web_config(data_dir) if data_dir is not None else WebConfig()
+    provider = _web_provider_label(config)
+    base = (
+        f"Web access is ENABLED (search provider: {provider}). Use web_search for current/external "
+        "information and web_fetch to read full pages. Cite the sources you used. "
+    )
+    if status == "ok":
+        if config.provider == "browser":
+            base += (
+                "The search runs live in the user's embedded browser. If a search is blocked or empty, "
+                "web_search automatically falls back to free DuckDuckGo results — the result JSON "
+                "includes provider_used/fell_back so you know which backend served it."
+            )
+        else:
+            base += (
+                "If the configured provider fails, web_search automatically falls back to another free "
+                "backend; the result JSON includes provider_used/fell_back so you know which served it."
+            )
+        return base
     if status == "no_key":
         return (
-            "Web access is ENABLED but the Tavily search key is not configured. web_fetch works "
-            "without a key; web_search will fail with a 'key not configured' error. If the task "
-            "needs live search results, tell the user to configure the Tavily API key in "
-            "Settings → Web (联网设置), then retry."
+            base
+            + "The Tavily key is not configured, so web_search uses the free DuckDuckGo fallback "
+            "(result quality is basic; there is no AI answer). web_fetch works fully. If the user wants "
+            "higher-quality results they can add a Tavily API key in Settings → Web (联网设置)."
         )
+    # browser_unavailable
     return (
-        "Web access is DISABLED — you have no web_search/web_fetch tools. If the task needs "
-        "current or external information, tell the user they must enable 'web access' in "
-        "Settings → Web (联网设置) first. Never fabricate URLs or claim you searched."
+        base
+        + "The embedded browser is not reachable (this desktop app's browser panel must be open), so "
+        "web_search currently uses the free DuckDuckGo fallback. If the user needs browser-driven "
+        "search, they should open the right-side Browser panel."
     )

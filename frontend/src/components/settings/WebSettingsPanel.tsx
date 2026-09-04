@@ -13,6 +13,20 @@ interface WebSettingsPanelProps {
 
 type TestState = 'idle' | 'testing' | WebTestResult;
 
+const PROVIDER_OPTIONS: Array<{ value: string; labelKey: string }> = [
+  { value: 'duckduckgo', labelKey: 'settings.web_provider_duckduckgo' },
+  { value: 'browser', labelKey: 'settings.web_provider_browser' },
+  { value: 'tavily', labelKey: 'settings.web_provider_tavily' },
+];
+
+const BROWSER_ENGINE_OPTIONS: Array<{ value: string; labelKey: string }> = [
+  { value: 'bing', labelKey: 'settings.web_browser_engine_bing' },
+  { value: 'google', labelKey: 'settings.web_browser_engine_google' },
+  { value: 'duckduckgo', labelKey: 'settings.web_browser_engine_duckduckgo' },
+  { value: 'baidu', labelKey: 'settings.web_browser_engine_baidu' },
+  { value: 'sogou', labelKey: 'settings.web_browser_engine_sogou' },
+];
+
 function WebRow({
   label,
   description,
@@ -107,8 +121,9 @@ export function WebSettingsPanel({ settings, onChange }: WebSettingsPanelProps) 
   async function testConnection() {
     setError('');
     setTestState('testing');
+    const key = settings.provider === 'tavily' ? keyInput.trim() || undefined : undefined;
     try {
-      const result = await chatService.testWebSearch('opencode web search', keyInput.trim() || undefined);
+      const result = await chatService.testWebSearch('daily news', key, settings.provider);
       setTestState(result);
     } catch (exc) {
       setTestState({ ok: false, message: exc instanceof Error ? exc.message : String(exc), results_count: 0 });
@@ -119,6 +134,9 @@ export function WebSettingsPanel({ settings, onChange }: WebSettingsPanelProps) 
     if (!Number.isFinite(raw)) return 1;
     return Math.max(1, Math.min(20, Math.round(raw)));
   };
+
+  const isTavily = settings.provider === 'tavily';
+  const isBrowser = settings.provider === 'browser';
 
   return (
     <div className="settings-card">
@@ -136,6 +154,7 @@ export function WebSettingsPanel({ settings, onChange }: WebSettingsPanelProps) 
       />
       <WebRow
         label={t('settings.web_provider')}
+        description={isTavily ? t('settings.web_tavily_note') : t('settings.web_free_note')}
         control={
           <select
             className="settings-select"
@@ -143,43 +162,77 @@ export function WebSettingsPanel({ settings, onChange }: WebSettingsPanelProps) 
             onChange={(e) => persist({ provider: e.target.value })}
             aria-label={t('settings.web_provider')}
           >
-            <option value="tavily">Tavily</option>
+            {PROVIDER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {t(opt.labelKey)}
+              </option>
+            ))}
           </select>
         }
       />
+      {isBrowser && (
+        <WebRow
+          label={t('settings.web_browser_engine')}
+          description={t('settings.web_browser_engine_desc')}
+          control={
+            <select
+              className="settings-select"
+              value={settings.browser_engine}
+              onChange={(e) => persist({ browser_engine: e.target.value })}
+              aria-label={t('settings.web_browser_engine')}
+            >
+              {BROWSER_ENGINE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {t(opt.labelKey)}
+                </option>
+              ))}
+            </select>
+          }
+        />
+      )}
+      {isTavily && (
+        <WebRow
+          label={t('settings.web_api_key')}
+          description={t('settings.web_api_key_desc')}
+          meta={<KeyStatusChip configured={settings.api_key_configured} />}
+          control={
+            <div className="settings-key-row">
+              <input
+                type="password"
+                className="settings-number-input__field settings-key-row__input"
+                value={keyInput}
+                placeholder="tvly-••••••••••••"
+                aria-label={t('settings.web_api_key')}
+                onChange={(e) => setKeyInput(e.target.value)}
+                onBlur={saveKey}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveKey();
+                }}
+              />
+              {keyFlash ? (
+                <span className="settings-key-row__flash">
+                  <Check size={13} /> {t('settings.web_key_saved')}
+                </span>
+              ) : null}
+              {settings.api_key_configured && (
+                <Button variant="ghost" size="sm" onClick={clearKey} disabled={saving}>
+                  <Trash2 size={13} />
+                  {t('settings.web_clear_key')}
+                </Button>
+              )}
+            </div>
+          }
+        />
+      )}
       <WebRow
-        label={t('settings.web_api_key')}
-        description={t('settings.web_api_key_desc')}
-        meta={<KeyStatusChip configured={settings.api_key_configured} />}
+        label={t('settings.web_test_row')}
+        description={isBrowser ? t('settings.web_test_browser_note') : ''}
         control={
           <div className="settings-key-row">
-            <input
-              type="password"
-              className="settings-number-input__field settings-key-row__input"
-              value={keyInput}
-              placeholder="tvly-••••••••••••"
-              aria-label={t('settings.web_api_key')}
-              onChange={(e) => setKeyInput(e.target.value)}
-              onBlur={saveKey}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') saveKey();
-              }}
-            />
-            {keyFlash ? (
-              <span className="settings-key-row__flash">
-                <Check size={13} /> {t('settings.web_key_saved')}
-              </span>
-            ) : null}
             <Button variant="secondary" size="sm" onClick={testConnection} disabled={testState === 'testing' || saving}>
               {testState === 'testing' ? <Loader2 size={13} className="spin" /> : <Wand2 size={13} />}
               {t('settings.web_test')}
             </Button>
-            {settings.api_key_configured && (
-              <Button variant="ghost" size="sm" onClick={clearKey} disabled={saving}>
-                <Trash2 size={13} />
-                {t('settings.web_clear_key')}
-              </Button>
-            )}
           </div>
         }
       />
@@ -215,20 +268,22 @@ export function WebSettingsPanel({ settings, onChange }: WebSettingsPanelProps) 
           </div>
         }
       />
-      <WebRow
-        label={t('settings.web_depth')}
-        control={
-          <select
-            className="settings-select"
-            value={settings.search_depth}
-            onChange={(e) => persist({ search_depth: e.target.value as 'basic' | 'advanced' })}
-            aria-label={t('settings.web_depth')}
-          >
-            <option value="basic">{t('settings.web_depth_basic')}</option>
-            <option value="advanced">{t('settings.web_depth_advanced')}</option>
-          </select>
-        }
-      />
+      {isTavily && (
+        <WebRow
+          label={t('settings.web_depth')}
+          control={
+            <select
+              className="settings-select"
+              value={settings.search_depth}
+              onChange={(e) => persist({ search_depth: e.target.value as 'basic' | 'advanced' })}
+              aria-label={t('settings.web_depth')}
+            >
+              <option value="basic">{t('settings.web_depth_basic')}</option>
+              <option value="advanced">{t('settings.web_depth_advanced')}</option>
+            </select>
+          }
+        />
+      )}
       <WebRow
         label={t('settings.web_fetch_enabled')}
         description={t('settings.web_fetch_enabled_desc')}

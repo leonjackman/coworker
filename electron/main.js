@@ -1693,7 +1693,7 @@ ipcMain.handle('get-web-settings', async () => {
   try {
     return await requestBackend('/api/web/config');
   } catch (e) {
-    return { enabled: false, provider: 'tavily', max_results: 8, search_depth: 'basic', fetch_enabled: true, api_key_configured: false, error: e.message };
+    return { enabled: false, provider: 'duckduckgo', browser_engine: 'bing', max_results: 8, search_depth: 'basic', fetch_enabled: true, api_key_configured: false, error: e.message };
   }
 });
 
@@ -1724,8 +1724,13 @@ ipcMain.handle('clear-web-tavily-key', async () => {
 ipcMain.handle('test-web-search', async (event, payload) => {
   const query = typeof payload === 'string' ? payload : (payload && payload.query);
   const apiKey = typeof payload === 'object' && payload ? payload.apiKey : undefined;
+  const provider = typeof payload === 'object' && payload ? payload.provider : undefined;
   try {
-    return await requestBackend('/api/web/test', 'POST', { query: String(query || 'opencode web search'), ...(apiKey ? { api_key: apiKey } : {}) });
+    const body = { query: String(query || 'daily news'), ...(apiKey ? { api_key: apiKey } : {}), ...(provider ? { provider } : {}) };
+    // Provider searches do blocking I/O and can take ~15-30s (DuckDuckGo
+    // throttling, Tavily, or a live embedded-browser search) — far beyond the
+    // default 10s requestBackend timeout, so pass a generous cap here.
+    return await requestBackend('/api/web/test', 'POST', body, 60000);
   } catch (e) {
     return { ok: false, message: e.message, results_count: 0 };
   }

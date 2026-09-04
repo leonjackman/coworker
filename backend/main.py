@@ -83,6 +83,7 @@ from coworker.org import (
 )
 from coworker.traces import AGENT_TRACE_FILENAME, MAX_TRACE_LINES
 from coworker.web import (
+    ALLOWED_PROVIDERS,
     delete_tavily_key,
     get_tavily_key,
     read_web_block,
@@ -3111,6 +3112,7 @@ async def set_settings(request: SettingsUpdate):
 class WebConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
     provider: Optional[str] = None
+    browser_engine: Optional[str] = None
     max_results: Optional[int] = None
     search_depth: Optional[str] = None
     fetch_enabled: Optional[bool] = None
@@ -3121,23 +3123,30 @@ class TavilyKeyUpdate(BaseModel):
 
 
 class WebTestRequest(BaseModel):
-    query: str = "opencode web search"
+    query: str = "daily news"
     max_results: Optional[int] = None
     api_key: Optional[str] = None
+    provider: Optional[str] = None
+
+
+def _web_config_payload(block: dict) -> dict:
+    """Serialize one merged ``web`` settings block (defaults already merged by
+    ``read_web_block``), shared by the GET/POST config endpoints."""
+    return {
+        "enabled": bool(block["enabled"]),
+        "provider": str(block["provider"]),
+        "browser_engine": str(block["browser_engine"]),
+        "max_results": int(block["max_results"]),
+        "search_depth": str(block["search_depth"]),
+        "fetch_enabled": bool(block["fetch_enabled"]),
+        "api_key_configured": tavily_key_configured(settings.data_dir),
+    }
 
 
 @app.get("/api/web/config")
 async def get_web_config():
     """Non-secret web capability settings + whether a search key is configured."""
-    block = read_web_block(settings.data_dir)
-    return {
-        "enabled": bool(block.get("enabled")),
-        "provider": str(block.get("provider") or "tavily"),
-        "max_results": int(block.get("max_results") or 8),
-        "search_depth": str(block.get("search_depth") or "basic"),
-        "fetch_enabled": bool(block.get("fetch_enabled")),
-        "api_key_configured": tavily_key_configured(settings.data_dir),
-    }
+    return _web_config_payload(read_web_block(settings.data_dir))
 
 
 @app.post("/api/web/config")
@@ -3145,7 +3154,7 @@ async def save_web_config(request: WebConfigUpdate):
     """Persist non-secret web settings to .coworker_settings.json (merge)."""
     patch = {
         k: getattr(request, k)
-        for k in ("enabled", "provider", "max_results", "search_depth", "fetch_enabled")
+        for k in ("enabled", "provider", "browser_engine", "max_results", "search_depth", "fetch_enabled")
         if getattr(request, k) is not None
     }
     if not patch:
@@ -3155,14 +3164,7 @@ async def save_web_config(request: WebConfigUpdate):
     except OSError as exc:  # noqa: BLE001 - settings persistence must not fail the request
         logger.warning("Failed to persist web settings: %s", exc)
         block = read_web_block(settings.data_dir)
-    return {
-        "enabled": bool(block.get("enabled")),
-        "provider": str(block.get("provider") or "tavily"),
-        "max_results": int(block.get("max_results") or 8),
-        "search_depth": str(block.get("search_depth") or "basic"),
-        "fetch_enabled": bool(block.get("fetch_enabled")),
-        "api_key_configured": tavily_key_configured(settings.data_dir),
-    }
+    return _web_config_payload(block)
 
 
 @app.post("/api/web/tavily/key")
@@ -3185,22 +3187,93 @@ async def clear_web_tavily_key():
     return {"status": "ok", "api_key_configured": False}
 
 
-@app.post("/api/web/test")
-async def test_web_search(request: WebTestRequest):
-    """Run a single search to verify a key works (pending key preferred)."""
-    api_key = (request.api_key or "").strip() or get_tavily_key(settings.data_dir)
-    if not api_key:
-        return {"ok": False, "message": "Tavily API key is not configured", "results_count": 0}
+#: Hard cap for a single settings "test connection" provider search so a stalled
+#: backend (e.g. DuckDuckGo throttling) fails fast instead of hanging the
+#: request. Electron allows 60s; this keeps the answer comfortably inside it.
+_SEARCH_TEST_DEADLINE_S = 45.0
+
+
+def _deadline_search(fn: Any) -> Any:
+    """Run a blocking provider search with a hard deadline in a worker thread."""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(fn)
+        try:
+            return future.result(timeout=_SEARCH_TEST_DEADLINE_S)
+        except FutureTimeoutError:
+            future.cancel()
+            raise TimeoutError(f"Search did not finish within {int(_SEARCH_TEST_DEADLINE_S)}s")
+
+
+def _test_provider_search(request: WebTestRequest) -> dict:
+    """Execute one provider test search and return the ``{ok,message,count}`` dict."""
     block = read_web_block(settings.data_dir)
-    result = tavily_search(
-        request.query,
-        api_key,
-        max_results=request.max_results or int(block.get("max_results") or 8),
-        search_depth=str(block.get("search_depth") or "basic"),
-    )
-    if result.get("error"):
-        return {"ok": False, "message": result["error"], "results_count": 0}
-    return {"ok": True, "message": "Search succeeded", "results_count": len(result.get("results") or [])}
+    query = (request.query or "daily news").strip() or "daily news"
+    max_results = request.max_results or int(block["max_results"])
+    provider = request.provider or str(block["provider"])
+    if provider not in ALLOWED_PROVIDERS:
+        provider = str(block["provider"])
+
+    if provider == "tavily":
+        api_key = (request.api_key or "").strip() or get_tavily_key(settings.data_dir)
+        if not api_key:
+            return {"ok": False, "message": "Tavily API key is not configured", "results_count": 0}
+        result = tavily_search(
+            query,
+            api_key,
+            max_results=max_results,
+            search_depth=str(block["search_depth"]),
+        )
+        if result.get("error"):
+            return {"ok": False, "message": result["error"], "results_count": 0}
+        return {"ok": True, "message": "Search succeeded", "results_count": len(result.get("results") or [])}
+
+    if provider == "browser":
+        from coworker.browser.bridge_client import browser_available
+        from coworker.search.browser_engine import BrowserSearchEngine
+
+        if not browser_available(settings.data_dir):
+            return {
+                "ok": False,
+                "message": "Embedded browser is not reachable — open the desktop app's Browser panel",
+                "results_count": 0,
+            }
+        engine = BrowserSearchEngine(
+            settings.data_dir,
+            engine=str(block["browser_engine"]),
+            session_id="settings-test",
+        )
+        result = engine.search(query, max_results=max_results)
+        if result.error:
+            return {"ok": False, "message": result.error, "results_count": 0}
+        return {"ok": True, "message": "Browser search succeeded", "results_count": len(result.results)}
+
+    from coworker.search.ddgs_engine import DuckDuckGoEngine
+
+    result = DuckDuckGoEngine().search(query, max_results=max_results)
+    if result.error:
+        return {"ok": False, "message": result.error, "results_count": 0}
+    return {"ok": True, "message": "DuckDuckGo search succeeded", "results_count": len(result.results)}
+
+
+@app.post("/api/web/test")
+def test_web_search(request: WebTestRequest):
+    """Run a single search through a provider to verify it works.
+
+    Synchronous (not ``async``) so FastAPI runs it in a worker thread: provider
+    searches do blocking network I/O (Tavily 30s / DuckDuckGo / embedded
+    browser up to ~20s) and must never stall the event loop. A per-search
+    deadline (:data:`_SEARCH_TEST_DEADLINE_S`) and a generous Electron timeout
+    keep the "Test connection" button responsive even when a backend stalls.
+
+    ``provider`` defaults to the active one; ``api_key`` is honored only for
+    the ``tavily`` provider (a pending key typed before saving).
+    """
+    try:
+        return _deadline_search(lambda: _test_provider_search(request))
+    except TimeoutError as exc:
+        return {"ok": False, "message": str(exc), "results_count": 0}
 
 
 class BrowserBridgeUpdate(BaseModel):

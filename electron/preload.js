@@ -170,7 +170,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveWebSettings: (payload) => ipcRenderer.invoke('save-web-settings', payload),
   setWebTavilyKey: (apiKey) => ipcRenderer.invoke('set-web-tavily-key', apiKey),
   clearWebTavilyKey: () => ipcRenderer.invoke('clear-web-tavily-key'),
-  testWebSearch: (query, apiKey) => ipcRenderer.invoke('test-web-search', { query: query || 'opencode web search', ...(apiKey ? { apiKey } : {}) }),
+  testWebSearch: (query, apiKey, provider) => ipcRenderer.invoke('test-web-search', { query: query || 'daily news', ...(apiKey ? { apiKey } : {}), ...(provider ? { provider } : {}) }),
   browserSetActiveTab: (webContentsId) => ipcRenderer.invoke('browser:set-active-tab', webContentsId),
   browserMenuAction: (action) => ipcRenderer.invoke('browser:menu-action', action),
   browserCaptureElement: (payload) => ipcRenderer.invoke('browser:capture-element', payload),

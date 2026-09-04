@@ -233,11 +233,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     def _web_tools_for(self, session_id: str) -> list[Any]:
         """Web search/fetch tools when enabled, else ``[]``.
 
-        The Tavily key is optional (``web_fetch`` is keyless; ``web_search``
-        reports the missing-key state to the model). Resolved lazily per turn
-        so settings / key changes are picked up on the next run without a
-        restart. A broken config disables web silently. ``vision`` decides how
-        fetched images are delivered; ``session_id`` scopes externalized bytes.
+        Search is multi-backend (Tavily / DuckDuckGo / embedded browser) with
+        an automatic fallback chain; the provider and any API key are resolved
+        lazily per call so settings / key changes are picked up on the next
+        turn without a restart. A broken config disables web silently.
+        ``vision`` decides how fetched images are delivered; ``session_id``
+        scopes externalized bytes.
         """
         try:
             from coworker.web import resolve_web_tools

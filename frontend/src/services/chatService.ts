@@ -239,7 +239,7 @@ export interface ChatService {
   saveWebSettings: (patch: WebConfigPatch) => Promise<WebSettings>;
   setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
   clearWebTavilyKey: () => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
-  testWebSearch: (query?: string, apiKey?: string) => Promise<WebTestResult>;
+  testWebSearch: (query?: string, apiKey?: string, provider?: string) => Promise<WebTestResult>;
   revealInFolder: (path: string) => Promise<{ status: string }>;
   getOrg: (projectId: string) => Promise<OrgSnapshot>;
   createOrgAgent: (request: OrgAgentPayload) => Promise<OrgSnapshot>;
@@ -691,9 +691,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.clearWebTavilyKey();
   }
 
-  async testWebSearch(query?: string, apiKey?: string): Promise<WebTestResult> {
+  async testWebSearch(query?: string, apiKey?: string, provider?: string): Promise<WebTestResult> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.testWebSearch(query, apiKey);
+    return window.electronAPI.testWebSearch(query, apiKey, provider);
   }
 
   async revealInFolder(path: string): Promise<{ status: string }> {
@@ -2045,11 +2045,15 @@ class HttpChatService implements ChatService {
     });
   }
 
-  async testWebSearch(query?: string, apiKey?: string): Promise<WebTestResult> {
+  async testWebSearch(query?: string, apiKey?: string, provider?: string): Promise<WebTestResult> {
     return this.request<WebTestResult>('/api/web/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: query || 'opencode web search', ...(apiKey ? { api_key: apiKey } : {}) }),
+      body: JSON.stringify({
+        query: query || 'daily news',
+        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(provider ? { provider } : {}),
+      }),
     });
   }
 

@@ -634,7 +634,7 @@ function App() {
   }, [workMode]);
   const [selectedModel, setSelectedModel] = useState('');
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  const [webSetupHint, setWebSetupHint] = useState<'disabled' | 'no_key' | null>(null);
+  const [webSetupHint, setWebSetupHint] = useState<'disabled' | 'no_key' | 'browser_unavailable' | null>(null);
   const [webHintDismissed, setWebHintDismissed] = useState(false);
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('main');
   // Breadcrumb navigation for non-chat pages: hosts publish their location and
@@ -1621,10 +1621,6 @@ function App() {
   const handleStreamWebEvents = (event: StreamEvent) => {
     if (event.type === 'web_setup_hint') {
       if (!webHintDismissed) setWebSetupHint(event.status);
-    } else if (event.type === 'tool_end' && event.name === 'web_search' && event.output?.includes('tavily_key_missing')) {
-      // Agent attempted a search while the key is missing — surface the hint
-      // even if a previous hint was dismissed.
-      setWebSetupHint('no_key');
     }
   };
 

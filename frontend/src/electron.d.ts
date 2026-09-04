@@ -191,7 +191,7 @@ declare global {
       saveWebSettings: (payload: WebConfigPatch) => Promise<WebSettings>;
       setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
       clearWebTavilyKey: () => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
-      testWebSearch: (query?: string, apiKey?: string) => Promise<WebTestResult>;
+      testWebSearch: (query?: string, apiKey?: string, provider?: string) => Promise<WebTestResult>;
       browserSetActiveTab: (webContentsId: number) => Promise<{ ok: boolean }>;
       browserMenuAction: (action: string) => Promise<{ ok: boolean; error?: string }>;
       browserCaptureElement: (payload: { x: number; y: number; scope?: 'element' | 'page' }) => Promise<BrowserCaptureResult>;

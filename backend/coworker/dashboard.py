@@ -164,9 +164,9 @@ def build_dashboard_data(
         browser_enabled = False
     web_enabled = False
     try:
-        from .web import tavily_key_configured
+        from .web import load_web_config
 
-        web_enabled = tavily_key_configured(settings.data_dir)
+        web_enabled = bool(load_web_config(settings.data_dir).enabled)
     except Exception:  # noqa: BLE001
         web_enabled = False
     capabilities = {
