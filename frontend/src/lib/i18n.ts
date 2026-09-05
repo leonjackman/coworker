@@ -1,10 +1,32 @@
-const STORAGE_KEY = 'coworker-language';
-import { createContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useState, useEffect } from 'react';
 
 export type Language = 'zh' | 'en' | 'zh-TW' | 'zh-HK' | 'ja' | 'ko' | 'fr' | 'de' | 'es' | 'pt-BR' | 'ru';
 
-let currentLanguage: Language = 'en';
-let dictionary: Record<string, string> = {};
+const STORAGE_KEY = 'coworker-language';
+const LANGUAGES = new Set<Language>(['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru']);
+
+// All locale dictionaries are bundled eagerly (import.meta.glob { eager: true })
+// so the UI is fully translated from the very first render. No runtime dynamic
+// import and no dependence on the backend — which in the packaged app is still
+// booting while the window is already visible.
+const dictionaries = import.meta.glob('../locales/*.json', { eager: true, import: 'default' }) as unknown as Record<
+  string,
+  Record<string, string>
+>;
+
+function readStoredLanguage(): Language {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY) as Language | null;
+    if (stored && LANGUAGES.has(stored)) return stored;
+  } catch {
+    // localStorage may be unavailable in restricted renderer contexts.
+  }
+  return 'en';
+}
+
+// Synchronous, available at module load → the first React render is translated.
+let currentLanguage: Language = readStoredLanguage();
+let dictionary: Record<string, string> = dictionaries[`../locales/${currentLanguage}.json`] ?? {};
 
 // React state for triggering re-renders on language change
 const languageListeners = new Set<() => void>();
@@ -31,30 +53,21 @@ export async function setLanguage(language: Language): Promise<void> {
   } catch {
     // localStorage may be unavailable in restricted renderer contexts.
   }
-  await loadDictionary();
+  loadDictionary();
   notifyLanguageChange();
 }
 
 export async function initLanguage(): Promise<Language> {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'zh' || stored === 'en' || stored === 'zh-TW' || stored === 'zh-HK' || stored === 'ja' || stored === 'ko' || stored === 'fr' || stored === 'de' || stored === 'es' || stored === 'pt-BR' || stored === 'ru') {
-      currentLanguage = stored;
-    }
-  } catch {
-    // Keep the default language when storage is unavailable.
-  }
-  await loadDictionary();
+  currentLanguage = readStoredLanguage();
+  loadDictionary();
+  // The dictionary is already applied at module load, but re-notify so any
+  // subscriber mounted before init resolves re-renders with the stored language.
+  notifyLanguageChange();
   return currentLanguage;
 }
 
-async function loadDictionary(): Promise<void> {
-  try {
-    const module = await import(`../locales/${currentLanguage}.json`);
-    dictionary = module.default || module;
-  } catch {
-    dictionary = {};
-  }
+function loadDictionary(): void {
+  dictionary = dictionaries[`../locales/${currentLanguage}.json`] ?? {};
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {
