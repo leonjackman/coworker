@@ -178,6 +178,26 @@ cd frontend && npm run dev
 NODE_ENV=development npx electron . --no-sandbox
 ```
 
+### Code Layout
+
+```
+backend/main.py                 # thin entry: composition root + re-exports + router wiring
+backend/coworker/api/*.py       # domain routers & helpers (state, streaming, chat, sessions,
+                                #   memory_org, settings, workspace, ops, approvals, providers,
+                                #   terminal, skills) — singletons live once in state.py
+backend/coworker/**             # domain logic (agent / memory / providers / skills / search …)
+frontend/src/App.tsx             # app shell (state + wiring) importing domain components
+frontend/src/App.css             # @import hub → frontend/src/styles/*.css (per-domain styles)
+frontend/src/components/**       # React feature components (sidebar / panels / modals …)
+frontend/src/lib/**              # shared front-end logic (messageParts / i18n / theme …)
+frontend/src/locales/*.json      # 11-language dictionaries (bundled statically at build)
+electron/main.js                 # desktop shell: window, backend boot, browser bridge
+```
+
+Startup: the window opens immediately and the UI is already fully localized;
+the bundled backend boots in parallel and is waited on for up to 1 minute before
+reporting an error.
+
 ---
 
 ## Chat Project (Built-in Casual Chat)
@@ -410,7 +430,7 @@ Controls:
 | **Agent** | LangChain 1.3 · LangGraph 1.2 · Multi-level review middlewares |
 | **Models** | OpenAI-compatible APIs · Ollama · custom base URLs |
 | **MCP** | MCP 1.29 · langchain-mcp-adapters 0.3 · Five transport protocols |
-| **Web Search** | Tavily API (configurable provider, search depth, result count) |
+| **Web Search** | Multi-backend pluggable search — DuckDuckGo (default, keyless) · Tavily (optional paid) · built-in browser (Bing / Google / DDG / Baidu / Sogou) with automatic fallback |
 | **Extensibility** | MCP servers · SKILL.md skills · SkillHub / ClawHub marketplaces |
 | **i18n** | en · zh · zh-TW · zh-HK · ja · ko · fr · de · es · pt-BR · ru |
 

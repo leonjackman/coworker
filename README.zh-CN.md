@@ -177,6 +177,24 @@ cd frontend && npm run dev
 NODE_ENV=development npx electron . --no-sandbox
 ```
 
+### 代码结构
+
+```
+backend/main.py                 # 薄入口：组合根 + re-export + 路由注册
+backend/coworker/api/*.py       # 领域路由与助手（state / streaming / chat / sessions /
+                                #   memory_org / settings / workspace / ops / approvals /
+                                #   providers / terminal / skills）——单例只存在于 state.py
+backend/coworker/**             # 领域逻辑（agent / memory / providers / skills / search …）
+frontend/src/App.tsx            # 应用外壳（状态与接线），组合领域组件
+frontend/src/App.css            # @import 枢纽 → frontend/src/styles/*.css（分域样式）
+frontend/src/components/**      # React 功能组件（侧栏 / 面板 / 弹窗 …）
+frontend/src/lib/**             # 前端共享逻辑（messageParts / i18n / theme …）
+frontend/src/locales/*.json     # 11 种语言字典（构建期静态并入 bundle）
+electron/main.js                # 桌面外壳：窗口、后端起 boot、浏览器 bridge
+```
+
+启动行为：窗口立即显示且介面已完整翻译（i18n 随前端一起就绪）；打包版后端起 boot 并行进行，最多等待 1 分钟才报错。
+
 ---
 
 ## 聊天项目（内置闲聊）
@@ -349,7 +367,7 @@ Agent 流式回覆期間，從佇列中任選一條消息點「插話」(↳)，
 | **Agent 运行时** | LangChain 1.3 · LangGraph 1.2 · 多级审查中间件 |
 | **模型支持** | OpenAI 兼容 API · Ollama · 自定义基础 URL |
 | **MCP** | MCP 1.29 · langchain-mcp-adapters 0.3 · 五种传输协议 |
-| **网页搜索** | Tavily API（可配置 provider、搜索深度、结果数量） |
+| **网页搜索** | 多后端可插拔搜索 — DuckDuckGo（默認、免 Key）· Tavily（可选付费）· 内置浏览器（Bing / Google / DDG / 百度 / 搜狗），失败自动回退 |
 | **技能扩展** | MCP 服务器 · SKILL.md 技能 · SkillHub / ClawHub 技能市场 |
 | **国际化** | en · zh · zh-TW · zh-HK · ja · ko · fr · de · es · pt-BR · ru |
 
