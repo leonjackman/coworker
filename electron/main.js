@@ -600,12 +600,7 @@ function createTray() {
 
   tray = new Tray(createTrayIcon());
   tray.setToolTip('CoWorker');
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Show CoWorker', click: showMainWindow },
-    { label: 'Hide Window', click: hideMainWindow },
-    { type: 'separator' },
-    { label: 'Quit CoWorker', click: quitApp },
-  ]));
+  refreshComputerTray();
   tray.on('click', showMainWindow);
 }
 
@@ -1216,6 +1211,12 @@ class BrowserController {
   }
 }
 
+// DesktopController powers the OS-level computer-use bridge (screen capture +
+// global input injection). It is required lazily so the heavy nut.js native
+// module only loads when the bridge is actually started.
+let computerController = null;
+const desktopControllerModule = () => require('./desktop-controller');
+
 // ── Loopback HTTP bridge (Python agent -> Electron main) ──────────────────
 // Binds 127.0.0.1 with a random port + bearer token. The token is registered
 // with the Python backend (POST /api/browser/bridge) at startup so only the
@@ -1333,6 +1334,179 @@ async function registerBrowserBridge(server) {
   }
 }
 
+// ── Computer-use bridge (Python agent -> Electron desktop control) ────────
+// A SEPARATE loopback server + token from the browser bridge: computer use can
+// click/type anywhere on the user's desktop, so it must never share a channel
+// with a lower-privilege surface. Registered with the backend at startup
+// (POST /api/computer/bridge). The controller is created lazily so the native
+// nut.js module only loads inside the desktop app.
+
+let computerBridgeServer = null;
+let computerBridgeToken = null;
+
+function ensureComputerController() {
+  if (!computerController) {
+    computerController = new (desktopControllerModule().DesktopController)();
+  }
+  return computerController;
+}
+
+// Best-effort bring-up: if the nut.js native module cannot load in this
+// environment (e.g. a platform without prebuilt binaries), computer use is
+// disabled cleanly instead of crashing the whole app.
+function setupComputerBridge() {
+  try {
+    ensureComputerController();
+    computerController.registerAutoPauseHandlers();
+    computerController.registerEmergencyHotkey();
+    const server = startComputerBridge();
+    refreshComputerTray();
+    return server;
+  } catch (e) {
+    console.warn('[computer] computer use disabled:', e.message);
+    try {
+      if (computerController) computerController = null;
+    } catch { /* ignore */ }
+    return null;
+  }
+}
+
+async function handleComputerBridgeRequest(method, url, payload) {
+  const controller = ensureComputerController();
+  const pathname = (url || '').split('?')[0];
+
+  if (method === 'GET' && pathname === '/state') {
+    return controller.state();
+  }
+  if (method !== 'POST') throw new Error('method_not_allowed');
+
+  switch (pathname) {
+    case '/displays':
+      return { ok: true, displays: controller.displays() };
+    case '/screenshot':
+      return controller.screenshot({
+        display: Number(payload.display) || 0,
+        maxWidth: Number(payload.max_width) || 1024,
+        quality: Number(payload.quality) || 60,
+      });
+    case '/act':
+      return controller.act(payload || {});
+    case '/permissions/request': {
+      const kind = payload && payload.kind ? String(payload.kind) : '';
+      return controller.requestAccess(kind);
+    }
+    case '/permissions/open-settings': {
+      const kind = payload && payload.kind ? String(payload.kind) : '';
+      return controller.openPermissionSettings(kind);
+    }
+    case '/pause': {
+      const paused = payload && payload.paused !== undefined ? !!payload.paused : true;
+      const reason = payload && payload.reason ? String(payload.reason) : 'user';
+      return paused ? controller.pause(reason) : controller.resume();
+    }
+    case '/abort':
+      return controller.abort();
+    default:
+      throw new Error('not_found');
+  }
+}
+
+function startComputerBridge() {
+  if (computerBridgeServer) return computerBridgeServer;
+  computerBridgeToken = crypto.randomBytes(32).toString('hex');
+
+  const server = http.createServer((req, res) => {
+    const respond = (status, body) => {
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    const auth = req.headers.authorization || '';
+    if (auth !== `Bearer ${computerBridgeToken}`) {
+      respond(401, { error: 'unauthorized' });
+      return;
+    }
+    let raw = '';
+    req.on('data', (chunk) => {
+      raw += chunk;
+    });
+    req.on('end', async () => {
+      let payload = {};
+      if (raw) {
+        try {
+          payload = JSON.parse(raw);
+        } catch (e) {
+          respond(400, { error: 'bad_json' });
+          return;
+        }
+      }
+      try {
+        const result = await handleComputerBridgeRequest(req.method, req.url || '/', payload);
+        respond(200, result);
+      } catch (e) {
+        const code = (e && e.code) || (e && e.message === 'method_not_allowed' && 'method_not_allowed') || 'computer_error';
+        respond(code === 'not_found' || code === 'method_not_allowed' ? 404 : 500, {
+          error: (e && e.message) || 'computer error',
+          error_code: code,
+          ...(e && e.reason ? { reason: e.reason } : {}),
+        });
+      }
+    });
+  });
+
+  server.on('error', (e) => {
+    console.error('[computer] bridge server error:', e.message);
+  });
+
+  server.listen(0, '127.0.0.1', () => {
+    console.log('[computer] bridge listening on 127.0.0.1:', server.address().port);
+  });
+
+  computerBridgeServer = server;
+  return server;
+}
+
+async function registerComputerBridge(server) {
+  try {
+    const port = server.address().port;
+    await requestBackend('/api/computer/bridge', 'POST', { port, token: computerBridgeToken }, 3000);
+    console.log('[computer] bridge registered with backend');
+  } catch (e) {
+    console.warn('[computer] bridge registration deferred:', e.message);
+    setTimeout(() => registerComputerBridge(server), 2000);
+  }
+}
+
+function toggleComputerPause() {
+  const controller = ensureComputerController();
+  const next = controller.paused ? controller.resume() : controller.pause('user');
+  refreshComputerTray();
+  return next;
+}
+
+function refreshComputerTray() {
+  if (!tray) return;
+  const menu = Menu.buildFromTemplate([
+    { label: 'Show CoWorker', click: showMainWindow },
+    { label: 'Hide Window', click: hideMainWindow },
+    { type: 'separator' },
+    {
+      label: computerController && computerController.paused
+        ? 'Resume Computer Use (⇧⌘⎋)'
+        : 'Pause Computer Use (⇧⌘⎋)',
+      enabled: !!computerController,
+      click: toggleComputerPause,
+    },
+    {
+      label: 'Emergency Stop Computer',
+      enabled: !!computerController,
+      click: () => { ensureComputerController().abort(); refreshComputerTray(); },
+    },
+    { type: 'separator' },
+    { label: 'Quit CoWorker', click: quitApp },
+  ]);
+  tray.setContextMenu(menu);
+}
+
 // Renderer tells main which <webview> tab is currently active so the agent
 // drives the visible tab (BrowserView calls webview.getWebContentsId()).
 ipcMain.handle('browser:set-active-tab', (event, webContentsId) => {
@@ -1411,15 +1585,19 @@ app.whenReady().then(async () => {
   // Python backend so the agent's browser tool can drive the embedded view.
   const bridge = startBrowserBridge();
 
+  // Computer use: separate loopback bridge for OS-level desktop control.
+  const cbridge = setupComputerBridge();
+
   if (IS_DEV) {
     // Dev: the launcher already waited for the backend before starting us.
     registerBrowserBridge(bridge);
+    if (cbridge) registerComputerBridge(cbridge);
   } else {
     // Packaged: the PyInstaller backend takes several seconds to boot. Show the
     // window immediately (the frontend renders its own "正在啟動 CoWorker…"
     // connecting state and flips to ready once /config responds) and boot the
     // backend concurrently underneath it — never block the window on the boot.
-    launchBundledBackendAndBridge(bridge);
+    launchBundledBackendAndBridge(bridge, cbridge);
   }
 
   app.on('activate', () => {
@@ -1427,10 +1605,11 @@ app.whenReady().then(async () => {
   });
 });
 
-async function launchBundledBackendAndBridge(bridge) {
+async function launchBundledBackendAndBridge(bridge, cbridge) {
   await startBundledBackend();
   if (backendProcess === null && !IS_DEV) return; // startBundledBackend showed the error and is quitting
   registerBrowserBridge(bridge);
+  if (cbridge) registerComputerBridge(cbridge);
 }
 
 // Single-instance lock: double-launching the app (e.g. clicking the launcher
@@ -1678,7 +1857,7 @@ ipcMain.handle('fetchSettings', async () => {
   try {
     return await requestBackend('/settings');
   } catch (e) {
-    return { max_attachment_mb: 25, revert_code: true, goal_enabled: true };
+    return { max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false };
   }
 });
 
@@ -1686,7 +1865,7 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   try {
     return await requestBackend('/settings', 'POST', payload);
   } catch (e) {
-    return { status: 'error', max_attachment_mb: 25, revert_code: true, goal_enabled: true, detail: e.message };
+    return { status: 'error', max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false, detail: e.message };
   }
 });
 

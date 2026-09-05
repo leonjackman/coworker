@@ -274,6 +274,8 @@
   "settings.revert_code": "Dateiänderungen beim Bearbeiten rückgängig machen",
   "settings.revert_code_desc": "Klicken auf Bearbeiten setzt sofort zurück; Abbrechen stellt die Dateien wieder her.",
   "settings.goal_enabled": "Zielmodus aktivieren",
+  "settings.computer_use_enabled": "Computer-Bedienung aktivieren",
+  "settings.computer_use_enabled_desc": "Dem Agenten erlauben, den echten Desktop zu sehen und zu bedienen (Screenshots, Klicks, Tippen). Standardmäßig aus; jede Aktion fragt unter der Standard-Berechtigung nach.",
   "settings.goal_enabled_desc": "Erlaubt /goal ein dauerhaftes Ziel zu setzen, auf das der Agent über mehrere Runden hinarbeitet.",
   "settings.attachment_group": "Anhänge",
   "settings.attachment_group_desc": "Steuerung der Grenzgröße für Anhänge, die mit einer Nachricht gesendet werden.",

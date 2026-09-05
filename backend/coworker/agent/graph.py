@@ -99,6 +99,7 @@ def build_workspace_tools(
     readonly: bool = False,
     web_tools: list | None = None,
     browser_tool: Any | None = None,
+    computer_tools: list | None = None,
     auto_apply_skills: bool = False,
     # WorkerAgent 集成（单 agent 模式）
     use_worker_enabled: bool = False,
@@ -637,6 +638,12 @@ def build_workspace_tools(
         # Embedded-browser tool (desktop only): drives the visible right-panel
         # browser. Mounted only when the Electron bridge is registered.
         tools.append(browser_tool)
+    if computer_tools:
+        # OS-level computer-use tools (desktop only): observe (read-only) + act
+        # (mutating). Resolved by the runtime only when the user enabled the
+        # feature AND the Electron computer bridge is registered. NEVER mirrored
+        # to worker/delegated sub-agents (see _CHILD_EXCLUDED_TOOLS).
+        tools.extend(computer_tools)
     if memory_store is not None and memory_rel:
         tools.append(memory_read)
         if not readonly:
@@ -757,6 +764,7 @@ def build_coworker_agent_graph(
     context_window_warning: str | None = None,
     web_capability: str = "",
     browser_capability: str = "",
+    computer_capability: str = "",
     max_output_tokens: int = 0,
     calibration_key: str = "",
     chat_mode: bool = False,
@@ -865,7 +873,7 @@ def build_coworker_agent_graph(
     from .middleware.system_assembler import SystemAssembler
 
     capabilities = "\n\n".join(
-        part for part in (_platform.platform_hint(), web_capability, browser_capability) if part
+        part for part in (_platform.platform_hint(), web_capability, browser_capability, computer_capability) if part
     )
     middleware.append(
         SystemAssembler(

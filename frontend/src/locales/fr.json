@@ -301,6 +301,8 @@
   "settings.revert_code": "Annuler les modifications lors de l'édition",
   "settings.revert_code_desc": "Cliquer sur modifier annule immédiatement ; annuler restaure les fichiers.",
   "settings.goal_enabled": "Activer le mode objectif",
+  "settings.computer_use_enabled": "Activer le contrôle de l'ordinateur",
+  "settings.computer_use_enabled_desc": "Autoriser l'agent à voir et piloter votre vrai bureau (captures, clics, saisie). Désactivé par défaut ; chaque action demande une approbation sous l'autorisation par défaut.",
   "settings.goal_enabled_desc": "Permet à /goal de créer un objectif persistant vers lequel l'agent travaille sur plusieurs tours.",
   "settings.attachment_group": "Pièces jointes",
   "settings.attachment_group_desc": "Contrôlez la limite de taille des pièces jointes envoyées avec un message.",

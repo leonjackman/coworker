@@ -152,6 +152,8 @@ function App() {
   const [revertCode, setRevertCode] = useState<boolean>(true);
   // goal 能力（多轮续跑）总开关：关闭后不能设定/续跑目标，续跑提示不再注入。
   const [goalEnabled, setGoalEnabled] = useState<boolean>(true);
+  // OS Computer Use 总开关（默認關閉）：控制 agent 操作真实桌面的能力。
+  const [computerUseEnabled, setComputerUseEnabled] = useState<boolean>(false);
   const [workMode, setWorkMode] = useState<WorkMode>(() => {
     const stored = localStorage.getItem('cw.workMode') as WorkMode | null;
     return stored === 'plan' || stored === 'build' ? stored : 'build';
@@ -1076,6 +1078,9 @@ function App() {
           }
           if (typeof settings.goal_enabled === 'boolean') {
             setGoalEnabled(settings.goal_enabled);
+          }
+          if (typeof settings.computer_use_enabled === 'boolean') {
+            setComputerUseEnabled(settings.computer_use_enabled);
           }
         } catch { /* ignore */ }
         try {
@@ -3861,6 +3866,11 @@ function App() {
     chatService.saveSettings({ goal_enabled: value }).catch(() => { /* ignore */ });
   };
 
+  const changeComputerUseEnabled = (value: boolean) => {
+    setComputerUseEnabled(value);
+    chatService.saveSettings({ computer_use_enabled: value }).catch(() => { /* ignore */ });
+  };
+
   const changeMemorySettings = (patch: MemorySettingsPatch) => {
     setMemorySettings((cur) => {
       const base: MemorySettings = cur ?? {
@@ -4226,6 +4236,8 @@ function App() {
                   onRevertCodeChange={changeRevertCode}
                   goalEnabled={goalEnabled}
                   onGoalEnabledChange={changeGoalEnabled}
+                  computerUseEnabled={computerUseEnabled}
+                  onComputerUseEnabledChange={changeComputerUseEnabled}
                   onThemeSettingsChange={changeThemeSettings}
                   onAutonomyChange={setAutonomy}
                   memorySettings={memorySettings}

@@ -170,6 +170,16 @@ def command_approval_middleware(
         state = req.state
         return not (normalize_phase(state.get("phase"), state.get("work_mode")) == "execute" and normalize_autonomy(state.get("autonomy")) == "autonomous")
 
+    def _needs_computer_approval(req: Any) -> bool:
+        state = req.state
+        if normalize_phase(state.get("phase"), state.get("work_mode")) != "execute":
+            return False
+        # OS computer use acts OUTSIDE the workspace on any app, so it follows
+        # the MCP destructive ladder: the default (guarded) permission asks per
+        # mutating action; full (autonomous) never asks. computer_observe is
+        # read-only and is never HITL-gated.
+        return normalize_autonomy(state.get("autonomy")) != "autonomous"
+
     write_configs: dict[str, Any] = {}
     for tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
         write_configs[tool_name] = {
@@ -196,6 +206,14 @@ def command_approval_middleware(
             "allowed_decisions": ["respond", "reject"],
             "description": "Coworker asks the user a question that needs an answer.",
             "when": _needs_ask_user,
+        },
+        # OS computer use (computer_act / the mutating `computer` tool): guarded
+        # asks per action because it controls the user's real desktop; the
+        # read-only `computer_observe` has no entry and never interrupts.
+        "computer": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to control your computer (click/type/key on the desktop).",
+            "when": _needs_computer_approval,
         },
     }
 

@@ -629,6 +629,8 @@
   "settings.revert_code": "편집 시 파일 변경 되돌리기",
   "settings.revert_code_desc": "편집을 클릭하면 즉시 되돌리고, 취소하면 파일을 복원합니다.",
   "settings.goal_enabled": "목표 모드 활성화",
+  "settings.computer_use_enabled": "컴퓨터 제어 활성화",
+  "settings.computer_use_enabled_desc": "실제 데스크톱을 보고 조작(스크린샷/클릭/입력)하도록 허용합니다. 기본적으로 꺼져 있으며 기본 권한에서는 작업마다 승인이 필요합니다.",
   "settings.goal_enabled_desc": "/goal로 지속적인 목표를 설정하여 에이전트가 여러 라운드에 걸쳐 자율적으로 진행하도록 합니다.",
   "settings.heading": "어플리케이션 설정",
   "settings.interface_group": "인터페이스",

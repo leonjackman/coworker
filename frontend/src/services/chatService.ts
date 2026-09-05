@@ -191,8 +191,8 @@ export interface ChatService {
     onEvent: StreamEventCallback,
     options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string; providerId?: string; model?: string },
   ) => Promise<void>;
-  fetchSettings: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }>;
-  saveSettings: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }>;
+  fetchSettings: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
+  saveSettings: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
   listMcps: () => Promise<McpServerListPayload>;
   discoverMcps: () => Promise<McpDiscoverPayload>;
   createMcp: (request: McpServerCreateRequest) => Promise<McpServerEntry>;
@@ -1003,14 +1003,14 @@ class ElectronChatService implements ChatService {
     }
   }
 
-  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }> {
+  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.fetchSettings?.() ?? { max_attachment_mb: 25, revert_code: true, goal_enabled: true };
+    return window.electronAPI.fetchSettings?.() ?? { max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false };
   }
 
-  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }> {
+  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', max_attachment_mb: 25, revert_code: true, goal_enabled: true };
+    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false };
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -1731,12 +1731,12 @@ class HttpChatService implements ChatService {
     return response.title;
   }
 
-  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }> {
-    return this.request<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }>('/settings');
+  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
+    return this.request<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>('/settings');
   }
 
-  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }> {
-    return this.request<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }>('/settings', {
+  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
+    return this.request<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>('/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),

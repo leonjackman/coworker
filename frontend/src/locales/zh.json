@@ -282,6 +282,8 @@
   "settings.revert_code": "编辑时回滚文件改动",
   "settings.revert_code_desc": "点击编辑即回滚，取消编辑自动恢复文件。",
   "settings.goal_enabled": "启用目标模式",
+  "settings.computer_use_enabled": "启用电脑操控",
+  "settings.computer_use_enabled_desc": "允许智能体查看并操作你的真实桌面（截图/点击/键入/拖拽）。默认关闭；默认权限下每次操作桌面仍需审批。",
   "settings.goal_enabled_desc": "允许 /goal 设定持久目标，Agent 会持续多轮自主推进直至达成。",
   "settings.attachment_group": "附件",
   "settings.attachment_group_desc": "控制附件随消息发送的体积上限。",

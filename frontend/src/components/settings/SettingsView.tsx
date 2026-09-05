@@ -27,6 +27,8 @@ interface SettingsViewProps {
   onRevertCodeChange: (value: boolean) => void;
   goalEnabled: boolean;
   onGoalEnabledChange: (value: boolean) => void;
+  computerUseEnabled: boolean;
+  onComputerUseEnabledChange: (value: boolean) => void;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAutonomyChange: (mode: Autonomy) => void;
   memorySettings: MemorySettings | null;
@@ -69,7 +71,8 @@ export function SettingsView({
   onRevertCodeChange,
   goalEnabled,
   onGoalEnabledChange,
-  onThemeSettingsChange,
+  computerUseEnabled,
+  onComputerUseEnabledChange,  onThemeSettingsChange,
   onAutonomyChange,
   memorySettings,
   onMemorySettingsChange,
@@ -277,6 +280,18 @@ export function SettingsView({
                   { value: 'false', label: t('memory.disabled') },
                 ],
                 onChange: (value) => onGoalEnabledChange(value === 'true'),
+              },
+              {
+                id: 'computer_use_enabled',
+                type: 'toggle',
+                label: t('settings.computer_use_enabled'),
+                description: t('settings.computer_use_enabled_desc'),
+                value: computerUseEnabled ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onComputerUseEnabledChange(value === 'true'),
               },
               {
                 id: 'audit',

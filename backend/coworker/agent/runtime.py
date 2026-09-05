@@ -295,6 +295,38 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             logger.warning("browser capability line unavailable", exc_info=True)
             return ""
 
+    def _computer_tools_for(self, session_id: str) -> list[Any]:
+        """OS-level computer-use tools (observe + act) when the master switch is
+        on AND the desktop bridge is up; else ``[]`` so the model never sees them.
+
+        Gated on the user-facing ``computer_use_enabled`` setting (default OFF) —
+        computer use can act outside the workspace on any app, so it is never
+        mounted unless the user explicitly enabled it. ``vision`` decides whether
+        screenshots ride as native image blocks or are externalized to disk.
+        """
+        try:
+            from coworker.computer.bridge_client import resolve_computer_tools
+
+            return resolve_computer_tools(
+                self.data_dir,
+                vision=bool(getattr(self, "provider_vision", False)),
+                session_id=session_id,
+            )
+        except Exception:  # noqa: BLE001 - a computer misconfiguration must never break a turn
+            logger.warning("computer tools disabled (config error)", exc_info=True)
+            return []
+
+    @property
+    def _computer_capability_line(self) -> str:
+        """Capability summary injected into the system prompt (4 states)."""
+        try:
+            from coworker.computer.bridge_client import computer_capability_line
+
+            return computer_capability_line(self.data_dir)
+        except Exception:  # noqa: BLE001
+            logger.warning("computer capability line unavailable", exc_info=True)
+            return ""
+
     def _nudge_memory(self, session_id: str) -> None:
         """Phase 2: one call per settled turn; never blocks or raises.
 
@@ -897,6 +929,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         """
         web_tools = self._web_tools_for(session_id)
         browser_tool = self._browser_tool_for(session_id)
+        computer_tools = self._computer_tools_for(session_id)
         # 聊天模式是增强项，探测失败（如缺 project_store 的裸实例）绝不能阻断建图。
         try:
             chat_mode = self._resolve_project_dir() == CHAT_MEMORY_DIR
@@ -910,6 +943,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             frozenset(self.referenced_sessions),
             tuple(sorted(getattr(t, "name", "") for t in web_tools)),
             bool(browser_tool),
+            tuple(sorted(getattr(t, "name", "") for t in computer_tools)),
         )
         cached = self._graph_cache.get(key)
         if cached is not None:
@@ -936,6 +970,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 caller_agent=self.agent,
                 web_tools=web_tools,
                 browser_tool=browser_tool,
+                computer_tools=computer_tools,
                 use_worker_enabled=True,
                 language=language,
                 max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,
@@ -973,6 +1008,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             context_window_warning=self.context_window_warning,
             web_capability=self._web_capability_line,
             browser_capability=self._browser_capability_line,
+            computer_capability=self._computer_capability_line,
             max_output_tokens=self.max_output_tokens,
             calibration_key=CalibrationStore.key_for(self.provider_id, self.model_name),
         )

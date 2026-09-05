@@ -282,6 +282,8 @@
   "settings.revert_code": "編集時にファイル変更を元に戻す",
   "settings.revert_code_desc": "編集をクリックすると即座に元に戻し、キャンセルするとファイルを復元します。",
   "settings.goal_enabled": "目標モードを有効化",
+  "settings.computer_use_enabled": "コンピュータ操作を有効化",
+  "settings.computer_use_enabled_desc": "実際のデスクトップの表示・操作（スクリーンショット、クリック、入力）を許可します。既定ではオフ。既定権限では操作のたびに承認が必要です。",
   "settings.goal_enabled_desc": "/goal で持続的な目標を設定し、エージェントが複数ラウンドにわたり自主的に取り組み続けられるようにします。",
   "settings.attachment_group": "添付ファイル",
   "settings.attachment_group_desc": "メッセージで送信する添付ファイルのサイズ制限を制御。",

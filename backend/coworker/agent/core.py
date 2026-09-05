@@ -663,15 +663,15 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 MAX_TOOL_DESCRIPTION_CHARS = 650
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser", "get_goal", "run_command_status"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser", "computer_observe", "get_goal", "run_command_status"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
-_EXEC_TOOLS = {"run_command", "install_skill", "skill_manage", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal"}
+_EXEC_TOOLS = {"run_command", "install_skill", "skill_manage", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal", "computer"}
 
-# 子代理（worker）工具集在构造期就排除的委派/spawn 工具。把这些工具塞给子代理，
+# 子代理（worker）工具集在構造期就排除的委派/spawn 工具。把这些工具塞给子代理，
 # 会允许 worker 无限嵌套 spawn 更多 worker/team（单 agent 模式没有 org.max_depth
 # 约束）。见 build_workspace_tools 中 UseWorkerTool 的 tools= 传参。
-_CHILD_EXCLUDED_TOOLS = {"use_worker", "use_workers", "delegate_task", "delegate_parallel", "create_team_member", "create_team"}
+_CHILD_EXCLUDED_TOOLS = {"use_worker", "use_workers", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "computer", "computer_observe"}
 
 
 

@@ -143,8 +143,8 @@ declare global {
         options?: { work_mode?: string; autonomy?: string; revert_code?: boolean; assistant_message_id?: string; provider_id?: string; model?: string },
         language?: string,
       ) => Promise<void>;
-      fetchSettings?: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }>;
-      saveSettings?: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean }>;
+      fetchSettings?: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
+      saveSettings?: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
       listMcps: () => Promise<McpServerListPayload>;
       discoverMcps: () => Promise<McpDiscoverPayload>;
       createMcp: (request: McpServerCreateRequest) => Promise<{ server: McpServerEntry }>;

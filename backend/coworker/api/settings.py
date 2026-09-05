@@ -19,6 +19,7 @@ from coworker.agent.core import (
     normalize_work_mode,
     _runtime_context_budget,
 )
+from coworker.computer_feature import computer_feature
 from coworker.goal_feature import goal_feature
 from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
 from coworker.web import (
@@ -129,6 +130,7 @@ class SettingsUpdate(BaseModel):
     max_attachment_mb: int = 25
     revert_code: Optional[bool] = None
     goal_enabled: Optional[bool] = None
+    computer_use_enabled: Optional[bool] = None
 class LogSettingsUpdate(BaseModel):
     log_level: str = "INFO"
 class LogConfigUpdate(BaseModel):
@@ -287,6 +289,7 @@ async def get_settings():
         "max_attachment_mb": read_user_max_attachment_mb(),
         "revert_code": read_user_revert_code(),
         "goal_enabled": goal_feature.is_enabled(),
+        "computer_use_enabled": computer_feature.is_enabled(),
     }
 @router.post("/settings")
 async def set_settings(request: SettingsUpdate):
@@ -300,6 +303,8 @@ async def set_settings(request: SettingsUpdate):
             existing["revert_code"] = bool(request.revert_code)
         if request.goal_enabled is not None:
             existing["goal_enabled"] = bool(request.goal_enabled)
+        if request.computer_use_enabled is not None:
+            existing["computer_use_enabled"] = bool(request.computer_use_enabled)
         _save_user_settings_file(existing)
     except Exception as exc:
         return {
@@ -307,6 +312,7 @@ async def set_settings(request: SettingsUpdate):
             "max_attachment_mb": max_attachment_mb,
             "revert_code": read_user_revert_code(),
             "goal_enabled": goal_feature.is_enabled(),
+            "computer_use_enabled": computer_feature.is_enabled(),
             "detail": str(exc),
         }
     return {
@@ -314,6 +320,7 @@ async def set_settings(request: SettingsUpdate):
         "max_attachment_mb": max_attachment_mb,
         "revert_code": read_user_revert_code(),
         "goal_enabled": goal_feature.is_enabled(),
+        "computer_use_enabled": computer_feature.is_enabled(),
     }
 class WebConfigUpdate(BaseModel):
     enabled: Optional[bool] = None
@@ -476,6 +483,25 @@ async def register_browser_bridge(request: BrowserBridgeUpdate):
     from coworker.browser.bridge_client import write_browser_bridge
 
     write_browser_bridge(settings.data_dir, request.port, request.token)
+    return {"ok": True}
+@router.get("/api/computer/bridge")
+async def get_computer_bridge():
+    """Bridge info Electron registered for OS-level computer use (may be absent)."""
+    from coworker.computer.bridge_client import read_computer_bridge
+
+    info = read_computer_bridge(settings.data_dir)
+    if info is None:
+        return {"registered": False}
+    return {"registered": True, "port": info.port, "token": info.token}
+@router.post("/api/computer/bridge")
+async def register_computer_bridge(request: BrowserBridgeUpdate):
+    """Electron main registers its computer-use loopback bridge here at startup.
+
+    Only the desktop app writes this; the bridge client only reads it back.
+    """
+    from coworker.computer.bridge_client import write_computer_bridge
+
+    write_computer_bridge(settings.data_dir, request.port, request.token)
     return {"ok": True}
 @router.get("/settings/retention")
 async def get_retention_settings():

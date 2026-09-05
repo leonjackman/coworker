@@ -274,6 +274,8 @@
   "settings.revert_code": "Reverter alterações de arquivo ao editar",
   "settings.revert_code_desc": "Clicar em editar reverte imediatamente; cancelar restaura os arquivos.",
   "settings.goal_enabled": "Habilitar modo de meta",
+  "settings.computer_use_enabled": "Ativar controle do computador",
+  "settings.computer_use_enabled_desc": "Permitir que o agente veja e opere sua área de trabalho real (capturas, cliques, digitação). Desativado por padrão; cada ação pede aprovação no modo padrão.",
   "settings.goal_enabled_desc": "Permite que /goal crie uma meta persistente para a qual o agente trabalha em várias rodadas.",
   "settings.attachment_group": "Anexos",
   "settings.attachment_group_desc": "Controle o limite de tamanho para anexos enviados com uma mensagem.",

@@ -9,6 +9,9 @@
     "assets/**/*",
     "frontend/dist/**/*"
   ],
+  "asarUnpack": [
+    "node_modules/@nut-tree-fork/**/*"
+  ],
   "extraResources": [
     {
       "from": "backend/dist",
