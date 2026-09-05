@@ -1,0 +1,948 @@
+/* ------------------------------------------------------------------ *
+ * Memory panel
+ * ------------------------------------------------------------------ */
+.memory-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+  padding: 24px 2px;
+}
+
+.memory-flash {
+  padding: 10px 14px;
+  border-radius: var(--radius-md, 10px);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.memory-flash--ok {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.memory-flash--error {
+  background: color-mix(in oklch, var(--destructive, #ef4444) 12%, transparent);
+  color: var(--destructive, #ef4444);
+}
+
+.memory-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius-md, 12px);
+  background: var(--panel);
+}
+
+.memory-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memory-stat__label {
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.memory-stat__value {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.memory-stat__value--ok {
+  color: var(--accent-hover);
+}
+
+.memory-status-row__actions {
+  margin-left: auto;
+}
+
+.memory-subheading {
+  margin-bottom: 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+  padding: 0 2px;
+}
+
+.memory-scopes {
+  display: grid;
+  gap: 14px;
+}
+
+.memory-scope-card {
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius-md, 12px);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.memory-scope-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--material-border);
+}
+
+.memory-scope-card__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.memory-scope-card__meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 560px;
+}
+
+.memory-entry-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.memory-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid color-mix(in oklch, var(--material-border) 55%, transparent);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.memory-entry:last-child {
+  border-bottom: none;
+}
+
+.memory-entry--empty {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.memory-entry__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-entry__remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.memory-entry__remove:hover {
+  background: color-mix(in oklch, var(--destructive, #ef4444) 12%, transparent);
+  color: var(--destructive, #ef4444);
+}
+
+.memory-add {
+  display: grid;
+  gap: 4px;
+}
+
+.memory-add__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius-md, 12px);
+  background: var(--panel);
+}
+
+.memory-add__scope {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.memory-tab-label {
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.memory-scope-tabs {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--material-control);
+}
+
+.memory-scope-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 0.82rem;
+  padding: 4px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.memory-scope-tab--active {
+  background: var(--panel-solid);
+  color: var(--foreground);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.memory-add__input {
+  display: flex;
+  flex: 1 1 320px;
+  gap: 10px;
+}
+
+.memory-add__field {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  font-size: 0.9rem;
+  border: 1px solid var(--material-border);
+  border-radius: 9px;
+  background: var(--material-control);
+  color: var(--foreground);
+  outline: none;
+}
+
+.memory-add__field:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 25%, transparent);
+}
+
+/* -- Memory library (file cards) ------------------------------------------ */
+
+.memory-library {
+  display: grid;
+  gap: 14px;
+}
+
+.memory-library__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.memory-library__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* -- Memory tree ---------------------------------------------------------- */
+
+.memory-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memory-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  display: grid;
+  gap: 1px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--popover, var(--background));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+}
+
+.memory-context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--foreground);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font, inherit);
+  text-align: left;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.memory-context-menu__item:hover {
+  color: var(--accent-hover, var(--foreground));
+  background: var(--material-control);
+}
+
+/* 通用右键菜单（ContextMenu 组件）：position 由组件内联 style 控制 */
+.context-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 168px;
+  max-width: 260px;
+  display: grid;
+  gap: 1px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--popover, var(--background));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+}
+
+.context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--foreground);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font, inherit);
+  text-align: left;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.context-menu__item:hover:not(:disabled) {
+  color: var(--accent-hover, var(--foreground));
+  background: var(--material-control);
+}
+
+.context-menu__item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.context-menu__item--danger {
+  color: var(--destructive);
+}
+
+.context-menu__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--muted-foreground);
+}
+
+.context-menu__item--danger .context-menu__icon {
+  color: inherit;
+}
+
+.context-menu__label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-menu__shortcut {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  padding-left: 12px;
+}
+
+.context-menu__divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
+.memory-tree__empty {
+  padding: 16px;
+  font-size: 0.88rem;
+  color: var(--muted-foreground);
+  font-style: italic;
+  border: 1px dashed var(--material-border);
+  border-radius: var(--radius-md, 12px);
+}
+
+.memory-tree__section {
+  display: flex;
+  flex-direction: column;
+}
+
+.memory-tree__children {
+  display: flex;
+  flex-direction: column;
+  margin-left: 16px;
+  padding-left: 6px;
+  border-left: 1px solid var(--material-border);
+}
+
+.memory-tree__placeholder {
+  padding: 6px 8px;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.memory-tree__node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.memory-tree__node--dir {
+  font-weight: 500;
+  font-size: 0.88rem;
+}
+
+.memory-tree__node--file {
+  font-size: 0.85rem;
+  color: var(--foreground);
+}
+
+.memory-tree__node--file:hover {
+  background: color-mix(in oklch, var(--material-border) 40%, transparent);
+}
+
+.memory-tree__icon {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.memory-tree__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-tree__rel {
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-tree__meta {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.memory-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+}
+
+.memory-tree__row:hover {
+  background: color-mix(in oklch, var(--material-border) 35%, transparent);
+}
+
+.memory-tree__row:hover .memory-tree__delete {
+  opacity: 1;
+}
+
+.memory-tree__delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-right: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.memory-tree__delete:hover {
+  background: color-mix(in oklch, var(--destructive) 15%, transparent);
+  color: var(--destructive);
+}
+
+.memory-tree__dir {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.memory-tree__dir .memory-tree__node--dir {
+  width: auto;
+  flex: 1;
+}
+
+.memory-tree__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  margin-right: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.memory-tree__dir:hover .memory-tree__add,
+.memory-tree__add:focus-visible {
+  opacity: 1;
+}
+
+.memory-tree__add:hover {
+  background: color-mix(in oklch, var(--material-border) 50%, transparent);
+  color: var(--foreground);
+}
+
+.memory-add {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-add__name {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.memory-add__content {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.memory-add__error {
+  margin-top: -6px;
+  font-size: 0.75rem;
+  color: var(--destructive);
+}
+
+.memory-add__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.memory-add__file-input {
+  display: none;
+}
+
+/* -- Memory search ------------------------------------------------------- */
+
+.memory-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  margin-bottom: 12px;
+  padding: 0 10px;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  background: var(--material-control);
+}
+
+.memory-search__icon {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.memory-search__field {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.memory-search__spin {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.memory-search__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.memory-search__clear:hover {
+  background: color-mix(in oklch, var(--material-border) 50%, transparent);
+  color: var(--foreground);
+}
+
+.memory-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.memory-search-result:hover {
+  background: color-mix(in oklch, var(--material-border) 35%, transparent);
+}
+
+.memory-search-result__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-search-result__icon {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+}
+
+.memory-search-result__name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-search-result__loc {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--muted-foreground);
+}
+
+.memory-search-result__count {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  background: color-mix(in oklch, var(--ring) 15%, transparent);
+  color: var(--muted-foreground);
+}
+
+.memory-search-result__snippet {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* -- Memory row action (rename) ------------------------------------------ */
+
+.memory-tree__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.memory-tree__row:hover .memory-tree__action,
+.memory-tree__action:focus-visible {
+  opacity: 1;
+}
+
+.memory-tree__action:hover {
+  background: color-mix(in oklch, var(--material-border) 50%, transparent);
+  color: var(--foreground);
+}
+
+/* -- Memory rename/move modal --------------------------------------------- */
+
+.memory-move {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-move__label {
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+}
+
+.memory-move__select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+/* -- Memory export modal -------------------------------------------------- */
+
+.memory-export {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-export__radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.memory-export__projects {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* -- Memory import conflicts ---------------------------------------------- */
+
+.memory-import-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.memory-import-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--material-border) 25%, transparent);
+}
+
+.memory-import-conflict__info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-import-conflict__rel {
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memory-import-conflict__badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  background: color-mix(in oklch, var(--destructive) 15%, transparent);
+  color: var(--destructive);
+}
+
+.memory-import-conflict__badge--new {
+  background: color-mix(in oklch, var(--ring) 15%, transparent);
+  color: var(--muted-foreground);
+}
+
+.memory-import-conflict .memory-move__select {
+  flex-shrink: 0;
+  width: auto;
+}
+
+
+/* -- Memory editor --------------------------------------------------------- */
+
+.memory-editor__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 0.8rem;
+  color: var(--muted-foreground);
+}
+
+.memory-editor__hint {
+  opacity: 0.75;
+}
+
+.memory-editor__field {
+  width: 100%;
+  min-height: 360px;
+  padding: 14px 16px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius-md, 12px);
+  background: var(--material-control);
+  color: var(--foreground);
+  outline: none;
+  resize: vertical;
+}
+
+.memory-editor__field:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 25%, transparent);
+}
+
+.memory-editor__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+
+.add-skill-page__form {
+  display: grid;
+  gap: 12px;
+  padding: 8px 2px;
+}
+
+.add-skill-page__field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.add-skill-page__field input,
+.add-skill-page__field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(120, 140, 180, 0.16));
+  background: var(--input-bg, transparent);
+  color: var(--foreground);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.add-skill-page__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.add-skill-page__msg {
+  font-size: 12px;
+}
+
+.add-skill-page__msg--ok {
+  color: var(--success-foreground, #22c55e);
+}
+
+.add-skill-page__msg--error {
+  color: var(--destructive, #ef4444);
+}
+
+.add-skill-page__spin {
+  animation: spin 1s linear infinite;
+  margin-right: 4px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.bottom-panel__logs {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  font-size: 12px;
+}

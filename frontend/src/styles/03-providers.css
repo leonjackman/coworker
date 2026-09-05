@@ -1,0 +1,512 @@
+/* 工作区被侧栏/右侧面板/Changes 挤窄时，composer 工具栏按容器宽度换行而非溢出
+   （以 .workspace-shell 的 inline-size 为基准，而不是整个窗口宽度） */
+@container (max-width: 620px) {
+  .composer__input-actions {
+    flex-wrap: wrap;
+  }
+
+  .composer__toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .composer__meta {
+    order: -1;
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    margin: 0;
+  }
+
+  .composer__select {
+    flex: 1 1 190px;
+  }
+
+  .composer__model-trigger {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+  }
+}
+
+.workspace-page {
+  min-height: 100%;
+  box-sizing: border-box;
+  width: min(1024px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 32px 32px 100px;
+  color: var(--foreground);
+}
+
+.workspace-page__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.workspace-page__content::after {
+  display: block;
+  height: 100px;
+  content: '';
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.panel-heading h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.panel-heading p {
+  margin: 8px 0 0;
+  max-width: 620px;
+  color: var(--muted-foreground);
+  line-height: 1.55;
+}
+
+.panel-heading__eyebrow {
+  margin: 0 0 9px !important;
+  color: var(--accent) !important;
+  font-size: 12px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.provider-form,
+.provider-card,
+.provider-empty {
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  background: var(--material-panel);
+  box-shadow: 0 1px 2px var(--material-shadow);
+  backdrop-filter: var(--material-blur);
+}
+
+.provider-form {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.field {
+  display: grid;
+  gap: 7px;
+}
+
+.field span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.field input,
+.field select {
+  height: 40px;
+  width: 100%;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  padding: 0 11px;
+  color: var(--foreground);
+  background: var(--material-control);
+  outline: none;
+}
+
+.field input:focus,
+.field select:focus {
+  border-color: var(--ring);
+}
+
+.provider-vision-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-vision-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ring);
+}
+
+.provider-message {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.provider-empty {
+  padding: 24px;
+  color: var(--muted-foreground);
+}
+
+.provider-empty p {
+  margin: 0 0 6px;
+  color: var(--foreground);
+}
+
+.provider-list-heading h2,
+.provider-form-card h2 {
+  margin: 0;
+  color: var(--foreground);
+}
+
+.provider-quick-card p {
+  margin: 6px 0 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.provider-form-card,
+.provider-quick-card,
+.provider-default-card,
+.provider-delete-confirm {
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  background: var(--material-panel);
+  box-shadow: 0 1px 2px var(--material-shadow);
+  backdrop-filter: var(--material-blur);
+}
+
+.provider-form-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 20px;
+}
+
+.provider-form-card__icon {
+  margin-top: 2px;
+  color: var(--muted-foreground);
+}
+
+.provider-form-card__body {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.provider-form-card small,
+.field small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.provider-template-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.provider-template-pill {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  background: var(--material-control);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.provider-template-pill:hover {
+  color: var(--foreground);
+  background: var(--panel-hover);
+}
+
+.provider-template-pill--active {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--material-border));
+  color: var(--accent-foreground);
+  background: var(--accent);
+}
+
+.provider-template-pill--dashed {
+  border-style: dashed;
+  border-color: var(--material-border);
+  background: transparent;
+}
+
+.provider-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.provider-test-row,
+.provider-form-footer,
+.provider-form-footer__actions,
+.provider-default-card,
+.provider-list-heading,
+.provider-card__top,
+.provider-card__identity,
+.provider-card__controls,
+.provider-card__meta,
+.provider-card__model,
+.provider-inline-delete,
+.provider-delete-confirm,
+.provider-delete-confirm > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.provider-form-footer {
+  justify-content: space-between;
+  border-top: 1px solid var(--material-border);
+  padding-top: 12px;
+}
+
+.provider-form-footer__actions,
+.provider-delete-confirm > div {
+  margin-left: auto;
+}
+
+.provider-danger-button,
+.provider-menu__danger {
+  color: #c95343 !important;
+}
+
+.provider-test-result {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.provider-test-result--ok {
+  color: #2fa06d;
+}
+
+.provider-test-result--error {
+  color: #c95343;
+}
+
+.provider-card__warning,
+.provider-ctx-error {
+  color: var(--warning, #d99100);
+}
+
+.provider-card__warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.provider-ctx-error {
+  display: block;
+}
+
+.provider-delete-confirm {
+  justify-content: space-between;
+  border-color: rgba(201, 83, 67, 0.48);
+  padding: 12px;
+}
+
+.provider-delete-confirm p,
+.provider-inline-delete p {
+  margin: 0;
+  color: #c95343;
+  font-size: 12px;
+}
+
+.provider-delete-confirm__button {
+  background: #c95343 !important;
+  color: #fff !important;
+}
+
+.provider-quick-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+}
+
+.provider-quick-card strong {
+  font-size: 14px;
+}
+
+.provider-quick-card .provider-template-row {
+  margin-top: 12px;
+}
+
+.provider-list-heading {
+  justify-content: space-between;
+}
+
+.provider-list-heading h2 {
+  font-size: 14px;
+}
+
+.provider-default-card {
+  min-height: 44px;
+  color: var(--muted-foreground);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--material-border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--material-panel));
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.provider-default-card svg {
+  color: var(--accent);
+}
+
+.provider-card--mir {
+  display: grid;
+  gap: 12px;
+  border-radius: 8px;
+  padding: 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.provider-card--mir-hover:hover {
+  border-color: color-mix(in srgb, var(--ring) 42%, var(--material-border));
+  box-shadow: 0 2px 8px -2px var(--material-shadow);
+  background: color-mix(in srgb, var(--panel-hover, var(--material-panel)) 40%, var(--material-panel));
+}
+
+.provider-card--disabled {
+  opacity: 0.62;
+}
+
+/* Default provider card — accent border + subtle tint */
+.provider-card--is-default {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--material-border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--material-panel));
+  box-shadow: 0 1px 2px var(--material-shadow), 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.provider-card--is-default.provider-card--mir-hover:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--material-border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--material-panel));
+}
+
+.provider-card__top {
+  justify-content: space-between;
+}
+
+.provider-card__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.provider-card__identity > svg,
+.provider-card__identity img {
+  flex: 0 0 auto;
+}
+
+.provider-card__identity strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.provider-card__subtitle {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.provider-card-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.provider-card-model-badge {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+/* Edit button on row 2 of list card */
+.provider-card-edit-btn {
+  background: none;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: all 200ms;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.provider-card-edit-btn:hover {
+  color: var(--foreground);
+  border-color: var(--muted-border);
+  background: var(--panel-hover);
+}
+
+.provider-default-badge {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--material-border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--material-panel));
+}
+
+.provider-menu__content {
+  min-width: 160px;
+  border: 1px solid var(--material-border);
+  background: var(--material-panel-solid);
+  box-shadow: 0 4px 12px -2px var(--material-shadow);
+  backdrop-filter: var(--material-blur);
+}
+
+.provider-inline-delete {
+  justify-content: space-between;
+  border-top: 1px solid rgba(201, 83, 67, 0.34);
+  padding-top: 10px;
+}
+
+.provider-inline-delete > div {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Provider list container ── */
+.provider-list {
+  display: grid;
+  gap: 10px;
+}
+
+/* ── Default provider banner (inline) ── */
+.provider-default-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--material-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--material-border));
+  color: var(--muted-foreground);
+  font-size: 13px;
+  margin-bottom: 4px;
+}

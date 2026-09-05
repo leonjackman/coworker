@@ -1,0 +1,1235 @@
+@keyframes stream-waiting-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+.stream-role {
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.stream-role__time {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  opacity: 0.75;
+}
+
+.assistant-meta {
+  margin-bottom: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.assistant-meta--running {
+  color: var(--accent);
+  font-weight: 600;
+}
+.assistant-meta__status {
+  color: var(--warning, #d99100);
+  font-weight: 600;
+}
+
+.stream-error {
+  color: #c95343;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.stream-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.stream-retry-btn:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.stream-retry-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.stream-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.stream-thinking__spinner {
+  animation: stream-spin 900ms linear infinite;
+}
+
+@keyframes stream-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.message-chip {
+  min-height: 26px;
+  max-width: 100%;
+  border: 1px solid var(--material-border);
+  border-radius: 999px;
+  padding: 0 8px;
+  color: var(--muted-foreground);
+  background: var(--material-control);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.message-chip--attachment {
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+}
+
+/* Markdown */
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--foreground);
+  word-break: break-word;
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p {
+  margin: 8px 0;
+  overflow-wrap: break-word;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 18px 0 8px;
+  line-height: 1.3;
+  font-weight: 700;
+}
+
+.markdown-body h1 {
+  font-size: 20px;
+}
+
+.markdown-body h2 {
+  font-size: 18px;
+}
+
+.markdown-body h3 {
+  font-size: 16px;
+}
+
+.markdown-body h4 {
+  font-size: 14px;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.markdown-body li {
+  margin: 4px 0;
+}
+
+.markdown-body blockquote {
+  margin: 10px 0;
+  padding: 2px 14px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--material-border));
+  color: var(--muted-foreground);
+}
+
+.markdown-body table {
+  width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--material-border);
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: var(--material-control);
+  font-weight: 700;
+}
+
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Safety net: any <pre> inside markdown must wrap and stay within bounds so a
+   long line can never push past the page edge. */
+.markdown-body pre {
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.markdown-body hr {
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--material-border);
+}
+
+:root {
+  --code-surface: #f6f8fa;
+  --code-surface-header: #eaeef2;
+  --code-border: #d0d7de;
+  --code-header-fg: #57606a;
+  --code-copy-fg: #57606a;
+  --code-copy-fg-hover: #1f2328;
+  --code-fallback-fg: #1f2328;
+}
+
+.dark {
+  --code-surface: #0d1117;
+  --code-surface-header: #161b22;
+  --code-border: #30363d;
+  --code-header-fg: #8b949e;
+  --code-copy-fg: #8b949e;
+  --code-copy-fg-hover: #e6edf3;
+  --code-fallback-fg: #e6edf3;
+}
+
+.markdown-inline-code {
+  color: var(--accent);
+  /* border: 1px solid var(--material-border); */
+  /* border-radius: 4px; */
+  /* padding: 1px 5px; */
+  /* background: var(--material-control); */
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 0.88em;
+  font-weight: 600;
+  /* overflow-wrap: break-word; */
+  /* word-break: break-word; */
+}
+
+.markdown-code {
+  margin: 10px 0;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--code-surface);
+  min-width: 0;
+}
+
+.markdown-code__header {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--code-border);
+  background: var(--code-surface-header);
+}
+
+.markdown-code__lang {
+  color: var(--code-header-fg);
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 12px;
+}
+
+.markdown-code__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: var(--code-copy-fg);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.markdown-code__copy:hover {
+  color: var(--code-copy-fg-hover);
+  background: var(--material-control);
+}
+
+.markdown-code__body {
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.markdown-code__body pre {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.markdown-code__body pre code {
+  display: block;
+}
+
+.markdown-code__fallback {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  color: var(--code-fallback-fg);
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.markdown-code__body .shiki {
+  background: transparent !important;
+}
+
+/* Keep shiki syntax-highlight colors in sync with the app theme.
+   shiki dual-theme emits the default (light) color inline and exposes the
+   dark color via the `--shiki-dark` CSS variable, so we only need to flip to
+   it when the dark theme is active. */
+.dark .markdown-code__body .shiki,
+.dark .markdown-code__body .shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+/* File tree */
+.sidebar-session {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.sidebar-session__inner {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.sidebar-session__inner:hover {
+  color: var(--foreground);
+}
+
+.sidebar-session--active .sidebar-session__inner {
+  color: var(--accent-foreground);
+  font-weight: 650;
+}
+
+.sidebar-session--active:hover {
+  background: color-mix(in srgb, var(--accent) 80%, var(--sidebar) 20%);
+}
+
+.sidebar-session--active:hover .sidebar-session__more-trigger {
+  color: var(--accent);
+}
+
+/* Active session children must stay readable on the solid accent fill. */
+.sidebar-session--active .sidebar-session__time {
+  color: var(--accent-foreground);
+  opacity: 0.78;
+}
+
+.sidebar-session--active .sidebar-session__running-icon {
+  color: var(--accent-foreground);
+  opacity: 0.9;
+}
+
+.sidebar-session--active .sidebar-session__more-trigger {
+  color: var(--accent-foreground);
+}
+
+.sidebar-session--active .sidebar-session__more-trigger:hover {
+  background: color-mix(in srgb, var(--accent-foreground) 16%, transparent);
+}
+
+.sidebar-session__title {
+  flex: 1;
+}
+
+.sidebar-session__running-icon {
+  flex: 0 0 auto;
+  color: var(--ring);
+  display: inline-flex;
+  animation: spin 900ms linear infinite;
+}
+
+/* ── 會話狀態指示器（統一樣式） ─────────────────────────────── */
+.session-status {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+/* 待審批：warning 黃 */
+.session-status--approval {
+  color: var(--warning-foreground);
+  background: var(--warning);
+}
+
+/* 錯誤：danger 紅 */
+.session-status--error {
+  color: var(--danger-foreground);
+  background: var(--danger);
+}
+
+/* 進行中：info 藍（spinner 由子元件負責） */
+.session-status--running {
+  color: var(--info);
+}
+
+.session-status__spinner {
+  animation: spin 900ms linear infinite;
+}
+
+/* 未讀：danger 紅點（最弱狀態，優先度最低） */
+.session-status--unread {
+  color: var(--danger);
+}
+
+.session-status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+/* 專案會話列表中的狀態槽 */
+.project-session-list__item-content > .session-status {
+  margin-right: 8px;
+}
+
+/* removed: inline session time now lives inside the more-trigger button */
+
+.sidebar-session__more-trigger {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  grid-auto-flow: column;
+  width: auto;
+  /* min-width: 56px; */
+  justify-content: flex-end;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.sidebar-session__more-trigger > .sidebar-session__more-time {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sidebar-session__more-trigger > .sidebar-session__more-icon {
+  display: none;
+}
+
+.sidebar-session:hover .sidebar-session__more-trigger > .sidebar-session__more-time {
+  display: none;
+}
+
+.sidebar-session:hover .sidebar-session__more-trigger > .sidebar-session__more-icon {
+  display: inline-flex;
+}
+
+.sidebar-session__more-trigger:hover {
+  color: var(--foreground);
+  background: var(--material-control);
+}
+
+/* composer 与底部审批/问答卡片共用宽度 */
+:root {
+  --bottom-card-width: min(1024px, calc(100% - 48px));
+}
+
+.composer {
+  position: relative;
+  box-sizing: border-box;
+  width: var(--bottom-card-width);
+  min-width: 0;
+  margin: 0 auto 20px;
+}
+
+.workspace-composer-slot {
+  grid-row: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 0;
+  max-height: 100%;
+  overflow: visible;
+  scrollbar-gutter: stable;
+}
+
+
+/* 底部卡片共用外壳（composer / 提问 / 回答 / 批准共用）：
+   高度由内部容器撑起，内部容器顶满 slot 宽度 */
+.card-slot {
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--material-border);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--material-panel) 55%, transparent), color-mix(in oklab, var(--material-panel-solid) 45%, transparent)),
+    var(--material-panel);
+  box-shadow: 0 10px 34px -8px var(--material-shadow);
+  backdrop-filter: var(--material-blur);
+  overflow: hidden;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.card-slot:hover {
+  border-color: color-mix(in oklab, var(--ring) 45%, var(--material-border));
+}
+
+.card-slot:focus-within {
+  border-color: color-mix(in oklab, var(--ring) 55%, var(--material-border));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 22%, transparent), 0 10px 34px -8px var(--material-shadow);
+}
+
+.composer__card {
+  padding: 8px 10px 10px;
+  position: relative;
+}
+
+/* 输入框常驻聚焦：取消 composer 的 focus-within 高亮，避免始终亮着的描边/光晕 */
+.composer__card:focus-within {
+  border-color: var(--material-border);
+  box-shadow: 0 10px 34px -8px var(--material-shadow);
+}
+
+.composer__card--drag-active {
+  outline: 2px dashed var(--accent, #3b82f6);
+  outline-offset: -6px;
+}
+
+/* 拖拽上传时的浮层提示 */
+.composer__drop-overlay {
+  position: absolute;
+  inset: 6px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent, #3b82f6) 10%, var(--material-control, #fff));
+  border: 2px dashed var(--accent, #3b82f6);
+  pointer-events: none;
+}
+
+.composer__drop-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent, #3b82f6);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.composer__input-box {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 新对话草稿态：composer 顶部 workspace 选择行 */
+.composer__context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 8px 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--material-border);
+}
+
+.composer__ws-chip {
+  flex: 0 0 auto;
+  max-width: 320px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 999px;
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--material-control) 55%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.composer__ws-chip:hover {
+  border-color: color-mix(in oklab, var(--foreground) 22%, var(--material-border));
+  background: var(--panel-hover);
+}
+
+.composer__ws-chip--empty {
+  border-style: dashed;
+  color: var(--muted-foreground);
+}
+
+.composer__ws-chip--empty:hover {
+  color: var(--foreground);
+}
+
+.composer__ws-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--accent-foreground, #fff);
+  background: var(--accent);
+}
+
+.composer__ws-chip--empty .composer__ws-icon {
+  color: var(--muted-foreground);
+  background: var(--material-control);
+}
+
+.composer__ws-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__ws-chevron {
+  color: var(--muted-foreground);
+}
+
+.composer__ws-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.composer__ws-menu {
+  width: 320px;
+  max-width: min(320px, 90vw);
+}
+
+.composer__ws-item {
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+}
+
+.composer__agent-item--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.composer__ws-item-text {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.composer__ws-item-name {
+  overflow: hidden;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__ws-item-path {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__ws-item-check {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.composer__select {
+  min-width: 0;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--material-border);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--material-control) 55%, transparent);
+}
+
+.composer__select span {
+  font-size: 11px;
+  font-weight: 760;
+  letter-spacing: 0.02em;
+}
+
+.composer__model-trigger {
+  min-width: 112px;
+  max-width: 230px;
+  border: 0;
+  padding: 0;
+  color: var(--foreground);
+  font-weight: 650;
+  background: transparent;
+  box-shadow: none;
+}
+
+.composer__warning-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 12px 8px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warning, #d99100) 45%, var(--material-border));
+  border-radius: 8px;
+  color: var(--warning, #d99100);
+  background: color-mix(in srgb, var(--warning, #d99100) 10%, var(--background));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.composer__warning-banner svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+
+.composer__references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 8px;
+}
+
+.reference-chip {
+  max-width: 240px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid var(--accent, #5b8def);
+  border-radius: 999px;
+  color: var(--foreground);
+  background: var(--material-control);
+  font-size: 12px;
+}
+
+.reference-chip__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reference-chip__id {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+}
+
+/* 子命令：命令名（等宽）与下方的包名小标签 */
+.slash-menu__cmd {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 650;
+}
+/* 命令类型胶囊标签：尺寸/字体（颜色由 TypeCapsule 组件内定义） */
+.slash-menu__type {
+  min-width: 38px;
+  height: 17px;
+  padding: 0 7px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+}
+.slash-menu__pkg {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent, #6366f1);
+  background: color-mix(in oklab, var(--accent, #6366f1) 14%, transparent);
+  vertical-align: middle;
+}
+
+.reference-chip button {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.reference-chip button:hover {
+  color: var(--foreground);
+  background: var(--panel-hover);
+}
+
+.user-bubble-references {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.user-bubble-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.user-bubble-attachments .attachment-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+.user-bubble-attachments .attachment-chip__size {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.attachment-chip--warn {
+  border-color: var(--warning, #d99100);
+  color: var(--warning, #d99100);
+}
+
+.attachment-chip--error {
+  border-color: var(--danger, #dc2626);
+  color: var(--danger, #dc2626);
+}
+
+.attachment-chip {
+  max-width: 260px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 999px;
+  color: var(--foreground);
+  background: var(--material-control);
+  font-size: 12px;
+}
+
+.attachment-chip--uploading {
+  opacity: 0.7;
+}
+
+.attachment-chip__spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--muted-foreground);
+  border-top-color: transparent;
+  animation: attachment-chip-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes attachment-chip-spin {
+  to { transform: rotate(360deg); }
+}
+
+.attachment-chip__error {
+  color: var(--danger, #dc2626);
+  font-size: 11px;
+}
+
+.attachment-chip button {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.attachment-chip button:hover {
+  color: var(--foreground);
+  background: var(--panel-hover);
+}
+
+.composer__add-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--danger, #dc2626);
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: var(--danger, #dc2626);
+  font-size: 12px;
+}
+
+.composer__add-error button {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.composer__editor {
+  min-height: 54px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 5px 10px 5px;
+  color: var(--foreground);
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  caret-color: var(--foreground);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.composer__editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted, #888);
+  pointer-events: none;
+}
+
+/* 命令 chip：contentEditable=false 的真实 inline 元素，位于文字流开头。
+ * 配色由内部 TypeCapsule span 提供，这里只负责布局与交互。 */
+.composer__command-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 3px;
+  vertical-align: baseline;
+  cursor: pointer;
+  user-select: none;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.composer__command-chip__label {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-weight: 500;
+}
+
+.composer__command-chip__x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.composer__command-chip__x:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.composer__command-chip[contenteditable="false"] {
+  user-select: none;
+}
+
+.slash-menu {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% - 12px);
+  z-index: 100;
+  border: 1px solid var(--material-border);
+  border-radius: 12px;
+  background: var(--material-panel-solid);
+  box-shadow: 0 16px 34px -12px var(--material-shadow);
+  backdrop-filter: var(--material-blur);
+  transform-origin: bottom center;
+  animation: slashPullUp .17s ease both;
+  max-height: calc(60vh - 100px);
+  overflow-y: auto;
+}
+
+@keyframes slashPullUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.slash-menu button {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 9px;
+  color: var(--foreground);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.slash-menu-content {
+  display: grid;
+  gap: 3px;
+  padding: 6px;
+}
+
+.slash-menu button:hover,
+.slash-menu button.slash-menu__item--active {
+  background: var(--panel-hover);
+}
+
+.slash-menu button.slash-menu__item--active {
+  background: color-mix(in srgb, var(--ring) 18%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--ring) 40%, transparent);
+}
+
+.slash-menu small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0;
+}
+
+.composer__input-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px 2px;
+}
+
+.composer__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer__tools [data-slot='button'] {
+  width: 34px;
+  height: 34px;
+  color: var(--muted-foreground);
+}
+
+.composer__tools [data-slot='button']:hover {
+  color: var(--foreground);
+}
+
+.composer__meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  margin: 0;
+}
+
+.composer-toggle-button {
+  min-width: 0;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 1;
+  border: 1px solid var(--material-border);
+  border-radius: 999px;
+  padding: 0 9px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--material-control) 50%, transparent);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 640;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+
+.composer-toggle-button:hover {
+  border-color: color-mix(in oklab, var(--ring) 52%, var(--material-border));
+  color: var(--foreground);
+  background: var(--panel-hover);
+}
+
+/* read-only git branch status chip — display only, not editable */
+.composer__branch {
+  min-width: 0;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex-shrink: 1;
+  border: 1px solid color-mix(in oklab, #3b6d11 32%, var(--material-border));
+  border-radius: 999px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, #3b6d11 16%, transparent);
+  cursor: default;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 640;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__branch svg {
+  color: #7bb33f;
+  flex: 0 0 auto;
+}
+
+.composer__branch--muted svg {
+  color: var(--muted-foreground);
+}
+
+.composer__file-input {
+  display: none;
+}
+
+.composer__send-button {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  padding: 0;
+}
+
+.composer__send-button--stop {
+  color: var(--foreground);
+}
