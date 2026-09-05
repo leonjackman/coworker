@@ -631,13 +631,17 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
                 await asyncio.to_thread(
                     agent_registry.snapshot_manager.end_turn, session_id, user_message.id, snapshot_workspace,
                 )
-            # Persist error if the turn failed (no done event was emitted)
+            # Persist error if the turn failed (no done event was emitted).
+            # NOTE: don't rebind `session` here — it is a closure over the outer
+            # route frame (used below for `session.agent_id` / `session.project_id`);
+            # assigning it in this generator body makes `session` a local and
+            # raises UnboundLocalError on first read.
             if not terminal_sent and session_id:
                 try:
-                    session = session_store.require(session_id)
-                    if not session.last_error:
-                        session.last_error = "stream terminated without done event"
-                    session_store.save(session)
+                    latest = session_store.require(session_id)
+                    if not latest.last_error:
+                        latest.last_error = "stream terminated without done event"
+                    session_store.save(latest)
                 except KeyError:
                     pass
 
