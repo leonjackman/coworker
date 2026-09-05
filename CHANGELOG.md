@@ -245,6 +245,34 @@
 
 - 新增 `test_attachments.py`、`test_runtime_cache.py`：覆蓋圖片附件處理與 runtime 緩存失效。
 
+## 0.6.5
+
+本版本把網路搜索從「單一依賴 Tavily 收費服務」改造成多後端可插拔的內化能力：默認免費的 DuckDuckGo、可選付費的 Tavily、以及直接驅動內建瀏覽器的搜索（Bing / Google / DuckDuckGo / 百度 / 搜狗），並帶固定回退鏈，擺脫對單一供應商的依賴。瀏覽器搜索在沒有標籤時會自動開臨時標籤、搜索完自動關閉自己開的標籤，也允許在對話中臨時指定某次搜索的後端。
+
+### 新增
+
+- **多後端搜索框架**：新增 `coworker/search` 包——Tavily / DuckDuckGo / 內建瀏覽器三個可插拔引擎 + 固定回退鏈（tavily > duckduckgo > browser）；任何後端失敗自動降到下一個可用後端，結果附 `provider_used` / `fell_back` 標明實際使用來源。
+- **默認免費搜索（DuckDuckGo）**：開啟 Web 訪問不再要求 API Key；默認 provider 改為免 Key 的 DuckDuckGo（`ddgs`），開箱即用；Tavily 保留為可選付費高品質後端——僅在配置 Key 時才被嘗試，永不隱式產生付費調用。
+- **內建瀏覽器搜索**：用桌面端內建瀏覽器直接打開真實搜索引擎檢索（Google / Bing / DuckDuckGo / 百度 / 搜狗，默認 Bing），JS 兩段式結果提取 + 反爬 / CAPTCHA 探測 + 進程級鎖防止並發互踩。
+- **對話內指定搜索方式**：`web_search` 新增 `provider` 參數——用戶說「用內建瀏覽器搜 / 用 DuckDuckGo 查」即可對該次搜索指定後端；後端不可用時自動回退並說明，無需改全局設置。
+- **搜索用臨時標籤**：瀏覽器搜索在沒有瀏覽器標籤時自動開新標籤（並展開右側面板，用戶可見實時檢索），搜索結束自動關閉本次自己開的標籤、不動用戶既有標籤；設置面板的連接測試走同一機制且不劫持用戶當前頁面。
+
+### 改動
+
+- **設置面板**：Web 設置 provider 下拉改為 Tavily API / 內建瀏覽器搜索 / DuckDuckGo 三選項；選「內建瀏覽器搜索」時顯示搜索引擎二級下拉（Google / Bing / DuckDuckGo / 百度 / 搜狗）；僅 Tavily 顯示 API Key 與 search_depth；「連接測試」按當前 provider 實測；入口文案 11 種語言中性化（不再叫 Tavily Web Search）。
+- **能力注入 4 態**：系統提示依 disabled / ok / no_key / browser_unavailable 動態說明搜索狀態與回退行為；`web_search` 每次調用即時重讀設置與 Key，切換 provider 無需重啟或重建圖。
+- **設置持久化與接口**：`.coworker_settings.json` web 塊新增 `browser_engine`；config / test API 統一序列化與白名單驗證，provider / 引擎默認值收斂為單一來源。
+
+### 修復
+
+- **`/api/web/test` 超時**：根治 `Backend request timed out`——測試端點由 `async def` 改同步線程池執行並加 45s 硬截止，Electron 請求超時 10s → 60s。
+- **瀏覽器搜索無標籤**：`browser_not_attached` 不再原樣透出——等待 1.5s 重試一次（給自動開標籤留出掛載時間），並輸出可執行的中文提示。
+- **結果頁提取過早**：SERP 已載入但結果節點尚未渲染（隱藏面板會節流 JS）時，按 1.0s / 1.6s 多次重新提取後才判定 blocked；兜底跳過引擎自身導航連結，避免把站內導航當搜索結果。
+
+### 品質
+
+- 新增無網路單測覆蓋：引擎結果歸一化、回退鏈順序與 `fell_back` 語義、provider 覆蓋路由與鏈順序、config 收斂、capability 4 態、瀏覽器 attach / 渲染重試（30+ 項）。後端全量測試 365 passed、前端 tsc 乾淨。
+
 ## Unreleased
 
 （尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
