@@ -1093,9 +1093,9 @@ function App() {
         console.error('Failed to load runtime config:', error);
         if (!mounted) return;
         attempt += 1;
-        if (backendSeen || attempt >= 12) {
-          // Backend was up and dropped, or never came up after ~30s of retries:
-          // surface the guidance + auto-retry instead of spinning forever.
+        if (backendSeen || attempt >= 23) {
+          // Backend was up and dropped, or never came up after ~1 minute of
+          // retries: surface the guidance + auto-retry instead of spinning forever.
           setRuntimeStatus('error');
           setRuntimeError(translateError(error));
         } else {

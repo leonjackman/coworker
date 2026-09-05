@@ -447,8 +447,10 @@ async function startBundledBackend() {
     }
   });
 
-  // Wait for backend to be ready
-  for (let attempt = 0; attempt < 60; attempt++) {
+  // Wait for backend to be ready. 120 × 500ms ≈ 1 minute: on cold/first run the
+  // bundled (PyInstaller) backend can take much longer than the old 30s on slow
+  // disks / antivirus scans, so give it a full minute before giving up.
+  for (let attempt = 0; attempt < 120; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, 500));
     try {
       await requestBackend('/health', 'GET', null, 1000);
@@ -459,8 +461,8 @@ async function startBundledBackend() {
     }
   }
 
-  console.error('Backend failed to start within 30 seconds');
-  dialog.showErrorBox('Backend Error', 'Backend failed to start within 30 seconds.');
+  console.error('Backend failed to start within 1 minute');
+  dialog.showErrorBox('Backend Error', 'Backend failed to start within 1 minute.');
   app.quit();
 }
 
