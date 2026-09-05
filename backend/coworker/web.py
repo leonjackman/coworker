@@ -332,6 +332,14 @@ class WebSearchArgs(BaseModel):
     query: str = Field(min_length=1, description="The search query to look up on the web.")
     max_results: int = Field(default=0, ge=0, le=20, description="Maximum number of results (0 = use configured default, 1–20).")
     search_depth: str = Field(default="", description="'basic' for fast results or 'advanced' for deep research (empty = configured default).")
+    provider: str = Field(
+        default="",
+        description=(
+            "Backend to use for THIS search only: 'tavily' | 'duckduckgo' | 'browser'. "
+            "Empty = the user's configured default in Settings → Web. Honor an explicit user "
+            "request such as 'search in the built-in browser' by passing 'browser'."
+        ),
+    )
 
 
 class WebFetchArgs(BaseModel):
@@ -359,11 +367,13 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
     tools: list[Any] = []
 
     @tool(args_schema=WebSearchArgs)
-    def web_search(query: str, max_results: int = 0, search_depth: str = "") -> str:
+    def web_search(query: str, max_results: int = 0, search_depth: str = "", provider: str = "") -> str:
         """Search the web for current or public information on a topic.
 
         Uses the configured provider (Tavily / DuckDuckGo / embedded browser);
         on failure it automatically falls back through the other free backends.
+        ``provider`` pins this single search to a backend (e.g. 'browser' when
+        the user asks to search in the built-in browser).
         """
         if data_dir is None:
             return json.dumps(
@@ -387,6 +397,7 @@ def build_web_tools(web_config: WebConfig | None = None, api_key: str | None = N
             max_results=max_results or live_cfg.max_results,
             search_depth=search_depth or live_cfg.search_depth,
             session_id=session_id,
+            provider=provider,
         )
         return json.dumps(result, ensure_ascii=False)
 
@@ -489,6 +500,8 @@ def web_capability_line(data_dir: Path | str | None) -> str:
     base = (
         f"Web access is ENABLED (search provider: {provider}). Use web_search for current/external "
         "information and web_fetch to read full pages. Cite the sources you used. "
+        "If the user asks for a specific way to search (e.g. 'use the built-in browser', "
+        "'use DuckDuckGo'), pass that backend via web_search's provider argument. "
     )
     if status == "ok":
         if config.provider == "browser":

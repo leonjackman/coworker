@@ -45,6 +45,16 @@ _MAX_RESULTS_PAGE = 10
 #: Time to let a just-navigated page finish lazy rendering before extraction.
 _SETTLE_SECONDS = 1.2
 
+#: On the first ``browser_not_attached`` we wait once and retry: the desktop UI
+#: auto-opens a browser tab on demand, which takes a moment to mount its guest.
+_ATTACH_RETRY_SECONDS = 1.5
+
+#: Extra waits (seconds) between re-extractions when a SERP has loaded but the
+#: result nodes are not present yet. Engines render results lazily, and a hidden
+#: (collapsed) browser panel throttles JS — a single immediate extract can come
+#: back empty. We try a few times with growing delays before calling it blocked.
+_RENDER_RETRY_SECONDS = (1.0, 1.6)
+
 #: Serialize bridge-backed searches (one shared webview for all sessions).
 _LOCK_TIMEOUT_SECONDS = 25.0
 _search_lock = threading.Lock()
@@ -80,10 +90,11 @@ def _build_extract_js(containers: str, title_sel: str, snippet_sel: str) -> str:
     push(t ? t.innerText : a.innerText, anchor.href || a.href, sn ? sn.innerText : '');
   });
   if (out.items.length < 3) {
+    const sameHost = (u) => { try { return new URL(u).hostname === location.hostname; } catch (e) { return true; } };
     document.querySelectorAll('a[href^="http"]').forEach((a) => {
       if (seen.has(a.href)) return;
       const t = clean(a.innerText);
-      if (t.length < 12) return;
+      if (t.length < 12 || sameHost(a.href)) return;
       const box = a.closest('li, p, div');
       push(t, a.href, box ? box.innerText : '');
     });
@@ -215,15 +226,26 @@ class BrowserSearchEngine:
     def _search_locked(self, client: BridgeClient, spec: dict[str, str], query: str, max_results: int) -> SearchResultSet:
         url = spec["url"].format(q=quote(query), n=max(1, min(_MAX_RESULTS_PAGE, int(max_results or 8))))
         nav = client.navigate(url)
+        # The desktop UI auto-opens a browser tab when a search needs one; give
+        # that mount a moment to attach, then retry once before surfacing an error.
+        if nav.get("error_code") == "browser_not_attached":
+            time.sleep(_ATTACH_RETRY_SECONDS)
+            nav = client.navigate(url)
         if nav.get("error_code"):
-            return SearchResultSet(error=f"Browser search failed: {nav.get('error')}", provider=self.name)
+            return SearchResultSet(error=self._friendly_error(nav), provider=self.name)
         page_title = str(nav.get("title") or "")
         time.sleep(_SETTLE_SECONDS)
 
-        raw = client.evaluate(_build_extract_js(spec["containers"], spec["title"], spec["snippet"]))
-        if raw.get("error_code"):
-            return SearchResultSet(error=f"Browser search failed: {raw.get('error')}", provider=self.name)
-        results = _extract(raw)
+        results: list[SearchResult] | None = None
+        for attempt in range(len(_RENDER_RETRY_SECONDS) + 1):
+            raw = client.evaluate(_build_extract_js(spec["containers"], spec["title"], spec["snippet"]))
+            if raw.get("error_code"):
+                return SearchResultSet(error=self._friendly_error(raw), provider=self.name)
+            results = _extract(raw)
+            if results:
+                break
+            if attempt < len(_RENDER_RETRY_SECONDS):
+                time.sleep(_RENDER_RETRY_SECONDS[attempt])
         if results:
             return SearchResultSet(results=results[: max(1, min(_MAX_RESULTS_PAGE, int(max_results or 8)))], provider=self.name)
 
@@ -231,6 +253,28 @@ class BrowserSearchEngine:
         return SearchResultSet(
             error=f"Browser search via {self.engine} returned no results"
             + (f" (page: {hint!r})" if hint else "")
-            + "; the page may be blocked by CAPTCHA/anti-bot",
+            + "; the page may still be rendering or blocked by CAPTCHA/anti-bot",
             provider=self.name,
         )
+
+    @staticmethod
+    def _friendly_error(result: dict[str, Any]) -> str:
+        """Translate raw bridge failures into actionable messages.
+
+        ``browser_not_attached`` is the common trap: the bridge (Electron) is up
+        and registered, but no browser tab/<webview> is mounted — the user has
+        the desktop app open without the right-side Browser panel visible.
+        """
+        code = result.get("error_code")
+        raw = str(result.get("error") or "browser failure")
+        if code == "browser_not_attached":
+            return (
+                "Browser search failed: no browser tab is open. Open the right-side Browser "
+                "panel (or switch to an existing browser tab) in the desktop app, then retry."
+            )
+        if code in ("browser_unreachable", "browser_unavailable"):
+            return (
+                "Browser search failed: the embedded browser is not reachable. Make sure the "
+                "desktop app is running and the right-side Browser panel is open."
+            )
+        return f"Browser search failed: {raw}"

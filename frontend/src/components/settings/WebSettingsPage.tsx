@@ -9,9 +9,17 @@ interface WebSettingsPageProps {
   settings: WebSettings;
   onChange: (next: WebSettings) => void;
   onBack: () => void;
+  onSearchBrowserOpen?: (() => void) | undefined;
+  onSearchBrowserClose?: (() => void) | undefined;
 }
 
-export function WebSettingsPage({ settings, onChange, onBack }: WebSettingsPageProps) {
+export function WebSettingsPage({
+  settings,
+  onChange,
+  onBack,
+  onSearchBrowserOpen,
+  onSearchBrowserClose,
+}: WebSettingsPageProps) {
   return (
     <WorkspacePage
       eyebrow={t('settings.title')}
@@ -24,7 +32,12 @@ export function WebSettingsPage({ settings, onChange, onBack }: WebSettingsPageP
         </Button>
       )}
     >
-      <WebSettingsPanel settings={settings} onChange={onChange} />
+      <WebSettingsPanel
+        settings={settings}
+        onChange={onChange}
+        onSearchBrowserOpen={onSearchBrowserOpen}
+        onSearchBrowserClose={onSearchBrowserClose}
+      />
     </WorkspacePage>
   );
 }

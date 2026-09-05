@@ -40,6 +40,9 @@ interface SettingsViewProps {
   settingsPage: SettingsPage;
   onSettingsPageChange: (page: SettingsPage) => void;
   onOpenMemory?: () => void;
+  /** Open/close a temporary embedded-browser tab around a browser search test. */
+  onSearchBrowserOpen?: () => void;
+  onSearchBrowserClose?: () => void;
 }
 
 export type SettingsPage = 'main' | 'theme' | 'audit' | 'web' | 'shortcuts';
@@ -79,6 +82,8 @@ export function SettingsView({
   settingsPage,
   onSettingsPageChange,
   onOpenMemory,
+  onSearchBrowserOpen,
+  onSearchBrowserClose,
 }: SettingsViewProps) {
   const { enabled: soundEnabled, toggleEnabled: toggleSound } = useSound();
   const [webSettings, setWebSettings] = useState<WebSettings | null>(null);
@@ -163,7 +168,15 @@ export function SettingsView({
       fetch_enabled: true,
       api_key_configured: false,
     };
-    return <WebSettingsPage settings={current} onChange={setWebSettings} onBack={() => onSettingsPageChange('main')} />;
+    return (
+      <WebSettingsPage
+        settings={current}
+        onChange={setWebSettings}
+        onBack={() => onSettingsPageChange('main')}
+        onSearchBrowserOpen={onSearchBrowserOpen}
+        onSearchBrowserClose={onSearchBrowserClose}
+      />
+    );
   }
 
   if (settingsPage === 'shortcuts') {

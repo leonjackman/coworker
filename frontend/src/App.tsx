@@ -571,6 +571,18 @@ function App() {
   const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(() => [{ id: 'browser-1', kind: 'browser' }]);
   const [activeRightTabId, setActiveRightTabId] = useState<string>('browser-1');
   const browserHandlesRef = useRef<Map<string, BrowserViewHandle>>(new Map());
+  // Synchronous mirror of `rightTabs` so tab helpers can read the current list
+  // without state-async races (used by the search-tab open/close helpers).
+  const rightTabsRef = useRef<RightPanelTab[]>(rightTabs);
+  // Tabs auto-created for a single browser-backed web_search / settings probe,
+  // keyed by the owning event id so they can be closed when it finishes.
+  const ephemeralSearchTabsRef = useRef<Map<string, string[]>>(new Map());
+  // Keys whose async provider check is still in flight when tool_end arrives —
+  // prevents opening a tab for a search that already finished.
+  const pendingWebSearchTabsRef = useRef<Set<string>>(new Set());
+  // Small TTL cache of the configured web-search provider (avoid an IPC per
+  // web_search event while still tracking setting changes within seconds).
+  const webProviderRef = useRef<{ at: number; provider: string }>({ at: 0, provider: '' });
   const [browserAgentActive, setBrowserAgentActive] = useState(false);
   const [browserAgentClick, setBrowserAgentClick] = useState<{ x: number; y: number; key: number } | null>(null);
   const [bottomPanelOpen, setBottomPanelOpen] = useState(false);
@@ -1989,6 +2001,17 @@ function App() {
             url = undefined;
           }
           ensureBrowserTab(url);
+        } else if (event.name === 'web_search') {
+          // Browser-backed web_search: open a tab on demand (configured browser
+          // provider OR a per-search "use the built-in browser" override).
+          let requestedProvider = '';
+          try {
+            const args = JSON.parse(event.input || '{}') as { provider?: unknown };
+            requestedProvider = typeof args?.provider === 'string' ? args.provider : '';
+          } catch {
+            requestedProvider = '';
+          }
+          ensureWebSearchBrowser(event.id, requestedProvider);
         }
         commit(localParts);
       } else if (event.type === 'tool_delta') {
@@ -1999,6 +2022,7 @@ function App() {
         // 装完即见：agent 安装技能后立刻刷新技能列表，侧栏无需手动刷新。
         const finishedTool = localParts.find((p): p is Extract<MessagePart, { type: 'tool' }> => p.type === 'tool' && p.id === event.id);
         if (finishedTool?.name === 'install_skill') void refreshSkills();
+        if (finishedTool?.name === 'web_search') closeSearchBrowserTabs(`ws-${event.id}`);
         commit(localParts);
       } else if (event.type === 'plan_start' || event.type === 'plan_delta' || event.type === 'plan_end') {
         localParts = applyStreamEventToParts(localParts, event);
@@ -4138,6 +4162,88 @@ function App() {
     tryNav();
   };
 
+  // Keep the ref mirror of the tabs in sync for the sync tab helpers below.
+  useEffect(() => {
+    rightTabsRef.current = rightTabs;
+  }, [rightTabs]);
+
+  // Whether the configured web-search provider drives the embedded browser.
+  const readWebSearchProvider = useCallback(async (): Promise<string> => {
+    const cached = webProviderRef.current;
+    if (cached.provider && Date.now() - cached.at < 5000) return cached.provider;
+    try {
+      const settings = await chatService.getWebSettings();
+      const provider = settings?.provider || '';
+      webProviderRef.current = { at: Date.now(), provider };
+      return provider;
+    } catch {
+      return cached.provider || '';
+    }
+  }, []);
+
+  // Open a browser tab for a browser-backed search, tracking the tab ONLY when
+  // we create it (an existing tab — e.g. the persistent default — is reused and
+  // never closed by us unless `forceNew`, which settings probes use so a test
+  // never hijacks the user's current page). Returns '' when nothing was created.
+  const openSearchBrowserTab = useCallback((key: string, url?: string, forceNew = false): string => {
+    const tabs = rightTabsRef.current;
+    const existing = tabs.find((tab) => tab.kind === 'browser');
+    if (existing && !forceNew) {
+      setActiveRightTabId(existing.id);
+      if (url) navigateBrowserTab(existing.id, url);
+      return '';
+    }
+    const id = `browser-search-${key}-${Date.now()}`;
+    const owned = ephemeralSearchTabsRef.current.get(key) ?? [];
+    owned.push(id);
+    ephemeralSearchTabsRef.current.set(key, owned);
+    // Show the panel so the webview actually paints (a hidden webview throttles
+    // rendering) and the user watches the live search.
+    setRightSidebarOpen(true);
+    setActiveRightTabId(id);
+    setRightTabs((prev) => (url ? [...prev, { id, kind: 'browser', data: { url } }] : [...prev, { id, kind: 'browser' }]));
+    if (url) navigateBrowserTab(id, url);
+    return id;
+  }, []);
+
+  // Close every tab auto-created under `key` (no-op when nothing was created).
+  const closeSearchBrowserTabs = useCallback((key: string) => {
+    pendingWebSearchTabsRef.current.delete(key);
+    const owned = ephemeralSearchTabsRef.current.get(key);
+    if (!owned || owned.length === 0) return;
+    ephemeralSearchTabsRef.current.delete(key);
+    for (const id of owned) {
+      browserHandlesRef.current.delete(id);
+      setRightTabs((prev) => prev.filter((tab) => tab.id !== id));
+      setActiveRightTabId((current) => (current === id ? rightTabsRef.current.find((tab) => tab.id !== id)?.id ?? '' : current));
+    }
+    if (owned.length) {
+      // If we just removed the last tab, collapse the panel like closeRightTab.
+      setRightTabs((prev) => {
+        if (prev.length === 0) setRightSidebarOpen(false);
+        return prev;
+      });
+    }
+  }, []);
+
+  // Ensure a browser tab is present when a browser-backed web_search begins:
+  // it auto-opens only when needed, and is auto-closed by tool_end afterwards.
+  const ensureWebSearchBrowser = useCallback(
+    (eventId: string, requested = '') => {
+      const key = `ws-${eventId}`;
+      pendingWebSearchTabsRef.current.add(key);
+      void readWebSearchProvider().then((provider) => {
+        if (!pendingWebSearchTabsRef.current.has(key)) return; // tool already ended
+        pendingWebSearchTabsRef.current.delete(key);
+        // Browser needed when this call explicitly asked for it, or when the
+        // configured provider drives the embedded browser.
+        const needsBrowser = requested === 'browser' || (requested === '' && provider === 'browser');
+        if (needsBrowser) openSearchBrowserTab(key);
+      });
+    },
+    [openSearchBrowserTab, readWebSearchProvider],
+  );
+
   // Ensure a browser tab exists (kept alive even while the right panel is
   // collapsed). When a URL is given, navigate that tab to it. Does NOT auto-open
   // the panel — the titlebar indicator lights instead; the user opens the panel
@@ -4679,6 +4785,8 @@ function App() {
                     setSettingsPage('main');
                     setActiveView('memory');
                   }}
+                  onSearchBrowserOpen={() => openSearchBrowserTab('settings-probe', undefined, true)}
+                  onSearchBrowserClose={() => closeSearchBrowserTabs('settings-probe')}
                 />
               )}
             </section>

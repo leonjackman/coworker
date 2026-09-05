@@ -9,6 +9,9 @@ import { Switch } from '../ui/switch';
 interface WebSettingsPanelProps {
   settings: WebSettings;
   onChange: (next: WebSettings) => void;
+  /** Open/close a temporary embedded-browser tab around a browser search test. */
+  onSearchBrowserOpen?: (() => void) | undefined;
+  onSearchBrowserClose?: (() => void) | undefined;
 }
 
 type TestState = 'idle' | 'testing' | WebTestResult;
@@ -58,7 +61,7 @@ function KeyStatusChip({ configured }: { configured: boolean }) {
   );
 }
 
-export function WebSettingsPanel({ settings, onChange }: WebSettingsPanelProps) {
+export function WebSettingsPanel({ settings, onChange, onSearchBrowserOpen, onSearchBrowserClose }: WebSettingsPanelProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [keyInput, setKeyInput] = useState('');
@@ -122,11 +125,18 @@ export function WebSettingsPanel({ settings, onChange }: WebSettingsPanelProps) 
     setError('');
     setTestState('testing');
     const key = settings.provider === 'tavily' ? keyInput.trim() || undefined : undefined;
+    // Browser-backed test: ask the app to open a temporary browser tab so the
+    // bridge has a live webview to drive; it is closed again afterwards.
+    const needsProbe = settings.provider === 'browser';
+    if (needsProbe && onSearchBrowserOpen) onSearchBrowserOpen();
     try {
+      if (needsProbe) await new Promise((resolve) => setTimeout(resolve, 400));
       const result = await chatService.testWebSearch('daily news', key, settings.provider);
       setTestState(result);
     } catch (exc) {
       setTestState({ ok: false, message: exc instanceof Error ? exc.message : String(exc), results_count: 0 });
+    } finally {
+      if (needsProbe && onSearchBrowserClose) onSearchBrowserClose();
     }
   }
 

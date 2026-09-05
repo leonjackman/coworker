@@ -72,19 +72,23 @@ def _make_engine(provider: str, cfg: Any, data_dir: Any, session_id: str) -> Sea
     )
 
 
-def build_chain(cfg: Any, data_dir: Any, *, session_id: str = "") -> list[SearchEngine]:
+def build_chain(cfg: Any, data_dir: Any, *, session_id: str = "", provider_override: str = "") -> list[SearchEngine]:
     """Ordered engine list for one ``web_search`` call.
 
-    Head is the configured provider; the rest follow :data:`PROVIDERS`
-    (tavily > duckduckgo > browser) with unready backends dropped — Tavily only
-    when a key exists, Browser only when the desktop bridge is up. DuckDuckGo
-    is always ready and so always ends the chain, guaranteeing a fallback for
-    the other two.
+    ``provider_override`` lets a single search pin a backend (e.g. a user asks
+    "search in the built-in browser"); an empty/invalid override falls back to
+    the configured provider. Head is that selected provider; the rest follow
+    :data:`PROVIDERS` (tavily > duckduckgo > browser) with unready backends
+    dropped — Tavily only when a key exists, Browser only when the desktop
+    bridge is up. DuckDuckGo is always ready and so always ends the chain,
+    guaranteeing a fallback for the other two.
     """
-    selected = getattr(cfg, "provider", None)
-    if selected not in PROVIDERS:
-        selected = DEFAULT_PROVIDER
-    order = [selected] + [p for p in PROVIDERS if p != selected]
+    requested = provider_override or getattr(cfg, "provider", None)
+    if requested not in PROVIDERS:
+        requested = getattr(cfg, "provider", None)
+    if requested not in PROVIDERS:
+        requested = DEFAULT_PROVIDER
+    order = [requested] + [p for p in PROVIDERS if p != requested]
 
     engines: list[SearchEngine] = []
     for provider in order:
@@ -102,15 +106,18 @@ def run_web_search(
     max_results: int,
     search_depth: str = "",
     session_id: str = "",
+    provider: str = "",
 ) -> dict[str, Any]:
     """Execute one web search through the provider chain. Never raises.
 
     Returns a dict shaped exactly like the legacy Tavily payload, plus two
     transparency fields so the agent (and user) know which backend served the
     results: ``provider`` (the configured selection) and ``provider_used`` /
-    ``fell_back`` when the chain degraded.
+    ``fell_back`` when the chain degraded. ``provider`` (optional) pins this
+    single search to a specific backend, overriding the configured default.
     """
-    chain = build_chain(cfg, data_dir, session_id=session_id)
+    chain = build_chain(cfg, data_dir, session_id=session_id, provider_override=provider)
+    requested = provider or getattr(cfg, "provider", "")
     if not chain:
         return {
             "error": "No web-search backend is available. Enable web access in Settings → Web "
@@ -118,7 +125,7 @@ def run_web_search(
             "error_code": "no_backend",
             "answer": "",
             "results": [],
-            "provider": getattr(cfg, "provider", ""),
+            "provider": requested,
             "provider_used": "",
             "fell_back": False,
         }
@@ -138,9 +145,9 @@ def run_web_search(
             "error": "",
             "answer": result.answer,
             "results": [r.to_dict() for r in result.results],
-            "provider": getattr(cfg, "provider", ""),
+            "provider": requested,
             "provider_used": result.provider or engine.name,
-            "fell_back": (engine.name != getattr(cfg, "provider", "")),
+            "fell_back": (engine.name != requested),
         }
 
     return {
@@ -148,7 +155,7 @@ def run_web_search(
         "error_code": "all_backends_failed",
         "answer": "",
         "results": [],
-        "provider": getattr(cfg, "provider", ""),
+        "provider": requested,
         "provider_used": "",
         "fell_back": True,
     }

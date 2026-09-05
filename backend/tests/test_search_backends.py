@@ -179,6 +179,81 @@ def test_browser_extract_blocked_empty():
     assert browser_engine._extract({"error": "bridge down"}) is None
 
 
+def test_browser_friendly_error_messages():
+    friendly = browser_engine.BrowserSearchEngine._friendly_error
+    assert "no browser tab is open" in friendly({"error_code": "browser_not_attached", "error": "browser_not_attached"})
+    assert "not reachable" in friendly({"error_code": "browser_unreachable", "error": "bridge unreachable: x"})
+    assert "some error" in friendly({"error_code": "captcha", "error": "some error"})
+
+
+def test_browser_search_retries_evaluate_until_results(monkeypatch):
+    monkeypatch.setattr(browser_engine, "_RENDER_RETRY_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr(browser_engine, "_SETTLE_SECONDS", 0.0)
+
+    class _DelayedBridge:
+        def __init__(self):
+            self.evals = 0
+
+        def navigate(self, url):
+            return {"url": url, "title": "daily news - 搜索", "loading": False}
+
+        def evaluate(self, expression):
+            self.evals += 1
+            if self.evals < 3:
+                return {"result": json.dumps({"blocked": True, "items": []})}
+            return {"result": json.dumps({"blocked": False, "items": [{"title": "A", "url": "https://a.com", "snippet": "s"}]})}
+
+    engine = browser_engine.BrowserSearchEngine(data_dir="data", engine="bing")
+    rs = engine._search_locked(_DelayedBridge(), browser_engine.ENGINE_SPECS["bing"], "daily news", 5)
+    assert rs.error == ""
+    assert len(rs.results) == 1
+
+
+def test_browser_search_gives_up_after_retries(monkeypatch):
+    monkeypatch.setattr(browser_engine, "_RENDER_RETRY_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr(browser_engine, "_SETTLE_SECONDS", 0.0)
+    bridge = _FakeBridge()
+    bridge.evaluate = lambda expression: {"result": json.dumps({"blocked": True, "items": []})}
+    engine = browser_engine.BrowserSearchEngine(data_dir="data", engine="bing")
+    rs = engine._search_locked(bridge, browser_engine.ENGINE_SPECS["bing"], "q", 5)
+    assert "returned no results" in rs.error
+    assert rs.results == []
+
+
+class _FakeBridge:
+    def __init__(self, nav_error_code=None):
+        self.nav_error_code = nav_error_code
+
+    def navigate(self, url):
+        if self.nav_error_code:
+            return {"error_code": self.nav_error_code, "error": self.nav_error_code}
+        return {"url": url, "title": "", "loading": False}
+
+    def evaluate(self, expression):
+        return {"error_code": "boom", "error": "boom"}
+
+
+def test_browser_search_not_attached_retries_once_then_actionable(monkeypatch):
+    monkeypatch.setattr(browser_engine, "_ATTACH_RETRY_SECONDS", 0)
+    calls = {"n": 0}
+
+    class _CountingBridge:
+        def navigate(self, url):
+            calls["n"] += 1
+            return {"error_code": "browser_not_attached", "error": "browser_not_attached"}
+
+    engine = browser_engine.BrowserSearchEngine(data_dir="data", engine="bing")
+    rs = engine._search_locked(_CountingBridge(), browser_engine.ENGINE_SPECS["bing"], "q", 5)
+    assert "no browser tab is open" in rs.error
+    assert calls["n"] == 2  # first attempt + one retry after the auto-open delay
+
+
+def test_browser_search_bridge_down_maps_to_actionable_error():
+    engine = browser_engine.BrowserSearchEngine(data_dir="data", engine="google")
+    rs = engine._search_locked(_FakeBridge(nav_error_code="browser_unreachable"), browser_engine.ENGINE_SPECS["google"], "q", 5)
+    assert "not reachable" in rs.error
+
+
 # ── Chain construction ─────────────────────────────────────────────────────
 
 def test_chain_default_is_duckduckgo_only(monkeypatch):
@@ -210,6 +285,43 @@ def test_chain_browser_never_pulls_tavily_without_key(monkeypatch):
     assert chain[0].engine == "bing"
 
 
+def test_chain_provider_override_pins_backend(monkeypatch):
+    from coworker.search import build_chain
+
+    monkeypatch.setattr(tavily_engine, "get_tavily_key", lambda d: None)
+    monkeypatch.setattr("coworker.browser.bridge_client.browser_available", lambda d: True)
+    # Configured default is duckduckgo, but this one search asks for the browser.
+    cfg = WebConfig(enabled=True, provider="duckduckgo")
+    chain = build_chain(cfg, "data", provider_override="browser")
+    assert [e.name for e in chain] == ["browser", "duckduckgo"]
+    # An invalid override silently falls back to the configured default
+    # (duckduckgo head, with browser still available as a later fallback).
+    chain2 = build_chain(cfg, "data", provider_override="yahoo")
+    assert [e.name for e in chain2] == ["duckduckgo", "browser"]
+
+
+def test_run_search_respects_provider_override(monkeypatch):
+    from coworker.search import run_web_search
+
+    captured = {}
+    _patch_chain(
+        monkeypatch,
+        [_FakeEngine("duckduckgo", error=True), _FakeEngine("browser")],
+    )
+    # Patch again to capture the override that run_web_search forwards.
+    def capturing_chain(cfg, data_dir, *, session_id="", provider_override=""):
+        captured["override"] = provider_override
+        return [_FakeEngine("duckduckgo", error=True), _FakeEngine("browser")]
+
+    monkeypatch.setattr("coworker.search.build_chain", capturing_chain)
+    cfg = WebConfig(enabled=True, provider="duckduckgo")
+    out = run_web_search(cfg, None, query="q", max_results=5, provider="browser")
+    assert captured["override"] == "browser"
+    assert out["provider"] == "browser"
+    assert out["provider_used"] == "browser"
+    assert out["fell_back"] is False
+
+
 # ── run_web_search dispatch & fallback ─────────────────────────────────────
 
 class _FakeEngine:
@@ -228,7 +340,10 @@ class _FakeEngine:
 
 
 def _patch_chain(monkeypatch, engines):
-    monkeypatch.setattr("coworker.search.build_chain", lambda cfg, data_dir, *, session_id="": engines)
+    monkeypatch.setattr(
+        "coworker.search.build_chain",
+        lambda cfg, data_dir, *, session_id="", provider_override="": engines,
+    )
 
 
 def test_run_search_returns_first_success(monkeypatch):
@@ -266,23 +381,26 @@ def test_run_search_no_chain(monkeypatch):
 
 def test_web_search_tool_shapes_output(tmp_path, monkeypatch):
     data_dir = _enabled_dir(tmp_path, provider="duckduckgo")
+    captured = {}
 
-    def fake_run(cfg, d, *, query, max_results, search_depth="", session_id=""):
+    def fake_run(cfg, d, *, query, max_results, search_depth="", session_id="", provider=""):
+        captured["provider"] = provider
         return {
             "error": "",
             "answer": "",
             "results": [{"title": "X", "url": "https://x.com", "content": "x"}],
-            "provider": "duckduckgo",
-            "provider_used": "duckduckgo",
+            "provider": provider or "duckduckgo",
+            "provider_used": provider or "duckduckgo",
             "fell_back": False,
         }
 
     monkeypatch.setattr("coworker.search.run_web_search", fake_run)
     tools = web_mod.build_web_tools(None, None, data_dir=str(data_dir))
-    payload = tools[0].invoke({"query": "hello", "max_results": 3})
+    payload = tools[0].invoke({"query": "hello", "max_results": 3, "provider": "browser"})
     data = json.loads(payload)
     assert data["results"][0]["title"] == "X"
-    assert data["provider_used"] == "duckduckgo"
+    assert captured["provider"] == "browser"
+    assert data["provider_used"] == "browser"
 
 
 def test_web_fetch_tool_present_only_when_enabled(tmp_path):
