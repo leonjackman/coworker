@@ -16,6 +16,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main as _main_module  # noqa: E402
 from coworker.goal_feature import GoalFeature  # noqa: E402
 
+# After the monolith split, /goal routes live in coworker.api.sessions, the
+# settings endpoints in coworker.api.settings and the streaming helpers
+# (_session_goal) in coworker.api.streaming. Each of them reads module-level
+# globals, so the fixture must patch those namespaces — patching `main.*` only
+# rebinds the re-export and no longer reaches the route code.
+from coworker.api import sessions as _sessions_mod  # noqa: E402
+from coworker.api import settings as _settings_mod  # noqa: E402
+from coworker.api import streaming as _streaming_mod  # noqa: E402
+
 
 class _FakeSessionStore:
     """Minimal session store so /goal/set passes _require_goal and we can
@@ -32,11 +41,19 @@ class _FakeSessionStore:
 def feature(tmp_path, monkeypatch):
     settings_file = str(tmp_path / ".coworker_settings.json")
     feat = GoalFeature(settings_file, default_enabled=True)
+    # Route modules read the module-level `goal_feature` singleton and the
+    # module-level SETTING_FILE constant; rebind all of them to the temp one.
+    for mod in (_sessions_mod, _settings_mod, _streaming_mod):
+        monkeypatch.setattr(mod, "goal_feature", feat)
+    monkeypatch.setattr(_settings_mod, "SETTING_FILE", settings_file)
     monkeypatch.setattr(_main_module, "goal_feature", feat)
-    # /settings GET/POST persist to the module-level SETTING_FILE constant —
-    # point it at the same temp file so the round-trip is observable.
     monkeypatch.setattr(_main_module, "SETTING_FILE", settings_file)
     return feat
+
+
+def _patch_session_store(monkeypatch, store):
+    for mod in (_main_module, _sessions_mod, _streaming_mod):
+        monkeypatch.setattr(mod, "session_store", store)
 
 
 def test_defaults_to_enabled(tmp_path):
@@ -66,22 +83,17 @@ def test_env_bypass_wins_over_persisted(tmp_path, monkeypatch):
     assert feat.is_enabled() is True
 
 
-def test_goal_set_rejected_when_disabled(feature):
+def test_goal_set_rejected_when_disabled(feature, monkeypatch):
     feature.set_enabled(False)
-    original = _main_module.session_store
-    _main_module.session_store = _FakeSessionStore()
-    try:
-        with TestClient(_main_module.app) as client:
-            resp = client.post("/goal/set", json={"session_id": "s1", "objective": "do the thing"})
-            assert resp.status_code == 403
-            assert "disabled" in resp.json()["detail"]
-    finally:
-        _main_module.session_store = original
+    _patch_session_store(monkeypatch, _FakeSessionStore())
+    with TestClient(_main_module.app) as client:
+        resp = client.post("/goal/set", json={"session_id": "s1", "objective": "do the thing"})
+        assert resp.status_code == 403
+        assert "disabled" in resp.json()["detail"]
 
 
 def test_goal_set_ok_when_enabled(feature, monkeypatch):
     feature.set_enabled(True)
-    original = _main_module.session_store
     calls = []
     store = _FakeSessionStore()
 
@@ -90,14 +102,11 @@ def test_goal_set_ok_when_enabled(feature, monkeypatch):
         return type("G", (), {"to_dict": lambda self: {"objective": objective, "status": "active"}})()
 
     store.set_goal = set_goal
-    _main_module.session_store = store
-    try:
-        with TestClient(_main_module.app) as client:
-            resp = client.post("/goal/set", json={"session_id": "s1", "objective": "do the thing"})
-            assert resp.status_code == 200
-            assert calls == ["do the thing"]
-    finally:
-        _main_module.session_store = original
+    _patch_session_store(monkeypatch, store)
+    with TestClient(_main_module.app) as client:
+        resp = client.post("/goal/set", json={"session_id": "s1", "objective": "do the thing"})
+        assert resp.status_code == 200
+        assert calls == ["do the thing"]
 
 
 def test_settings_round_trip_goal_enabled(feature, tmp_path):
@@ -124,7 +133,7 @@ def test_session_goal_bypasses_persisted_goal_when_disabled(feature, monkeypatch
         def get_goal(self, session_id):
             return _FakeGoal()
 
-    monkeypatch.setattr(_main_module, "session_store", _Store())
+    _patch_session_store(monkeypatch, _Store())
 
     feature.set_enabled(False)
     assert _main_module._session_goal("s1") is None
