@@ -25,7 +25,11 @@ Language = Literal[
 ]
 WorkMode = Literal["plan", "build"]
 Phase = Literal["discuss", "execute"]
-Autonomy = Literal["supervised", "guarded", "autonomous"]
+# Two-level permission model (产品文案「默認權限/完整權限」):
+#   guarded    → default permission: free inside workspace, ask at the boundary
+#   autonomous → full permission: never ask (Codex bypassPermissions)
+# The legacy "supervised" level was retired and folds into ``guarded``.
+Autonomy = Literal["guarded", "autonomous"]
 
 # Every value the `Language` Literal can take. Used by `normalize_language`
 # to accept the full set instead of collapsing everything to zh/en.

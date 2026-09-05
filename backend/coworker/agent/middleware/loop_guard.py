@@ -359,8 +359,9 @@ class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             autonomy = normalize_autonomy(state.get("autonomy"))            # W3: do NOT strip ALL tools (irreversible — a legitimately repeated
             # task could no longer call anything). Instead, block ONLY the repeated
             # tool (opencode doom-loop: permission-gated, the model can continue
-            # with a different approach or ask the user). In guarded/supervised the
-            # model is directed to `ask_user`; autonomous must self-correct.
+            # with a different approach or ask the user). Under the default
+            # (guarded) permission the model is directed to `ask_user`;
+            # autonomous must self-correct.
             if tool_count >= self.stop_after and autonomy != "autonomous":
                 guidance = (
                     "You have repeated the same action too many times. Use the `ask_user` "

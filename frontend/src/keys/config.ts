@@ -35,7 +35,7 @@ export interface ShortcutDefinition {
  * Defaults follow mainstream agent app habits (Cursor / VS Code / ChatGPT):
  * - Cmd+.   toggle plan/build (same as opencode)
  * - Cmd+Enter interject, Esc+Esc stop, Cmd+Shift+R regenerate
- * - Cmd+L   focus composer, Cmd+Shift+U attach, Cmd+/ cycle autonomy
+ * - Cmd+L   focus composer, Cmd+Shift+U attach, Cmd+/ toggle permission
  * - Cmd+Shift+E edit last user msg, Cmd+Shift+C copy last response
  * - Cmd+N   new chat, Cmd+Shift+N new project
  * - Esc     back to chat (single) / stop generation (double)

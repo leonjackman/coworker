@@ -173,7 +173,7 @@ async def resolve_command_approval(request: CommandApprovalResolve):
             status = "approved"
         elif decision_type == "approve":
             # For plan approvals the decision also carries the chosen execution
-            # autonomy (supervised / guarded / autonomous) that routes the
+            # permission (guarded 默認權限 / autonomous 完整權限) that routes the
             # follow-up execution posture.
             from coworker.agent.core import normalize_autonomy
 

@@ -24,7 +24,7 @@
 | 重試 | 指數退避 + fallback | `SessionRetry.policy`（分類） | stall 1 次 + overflow 1 次 |
 | 記憶 | citation on-demand | 不注入核心迴圈 | 每 model call 注入 ~4000 chars |
 | 工具清單 | 就是 schema，不在 prompt 重複 | 就是 schema，不在 prompt 重複 | schema + system prompt 工具目錄 雙份 |
-| 權限 | approval policy + sandbox | 預設 ask，ruleset | guarded 對工作區內自動放行 |
+| 權限 | approval policy + sandbox | 預設 ask，ruleset | 默認權限(guarded) 工作區內自動放行；完整權限(autonomous) 不問 |
 
 ---
 

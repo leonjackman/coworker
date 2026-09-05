@@ -417,7 +417,7 @@ def build_workspace_tools(
         ``scope="agent"`` (default) writes to your agent ``BASE/`` (MEMORY.md or
         a topic file via ``name``); ``scope="system"`` writes only to system
         files (MEMORY.md / USER.md / AGENT.md via ``name``). Writes pause for
-        approval when supervised.
+        approval under the default (guarded) permission.
         """
         try:
             if memory_store is None or not memory_rel:
@@ -771,8 +771,9 @@ def build_coworker_agent_graph(
     * ``TodoListMiddleware`` (always mounted) exposes ``write_todos`` in every
       mode so the agent can break its task into a visible checklist that the UI
       renders as the TodoBlock card.
-    * ``HumanInTheLoopMiddleware`` (always mounted) interrupts commands/writes
-      only in ``execute`` + ``supervised``, and ``ask_user`` regardless.
+    * ``HumanInTheLoopMiddleware`` (always mounted) interrupts writes at the
+      workspace boundary under the default (guarded) permission and
+      ``ask_user`` regardless; full (autonomous) never interrupts.
     """
     from langchain.agents import create_agent
     from langchain.agents.middleware.todo import TodoListMiddleware

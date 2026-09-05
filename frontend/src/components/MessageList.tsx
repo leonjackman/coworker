@@ -1,6 +1,7 @@
 import { Bot, ChevronDown, Hammer, ListChecks, Paperclip, Shield, ShieldCheck } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { t } from '../lib/i18n';
+import { normalizeAutonomy } from '../lib/utils';
 import type { ChatMessage, MessagePart, PartFileChange, PartAgent } from '../types';
 import { ScrollArea } from './ui/scroll-area';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from './ui/collapsible';
@@ -200,7 +201,7 @@ function AssistantMessage({ message, onRegenerate, actionsDisabled = false, onSu
     metaParts.push(message.work_mode === 'plan' ? 'Plan' : 'Build');
   }
   if (message.autonomy) {
-    metaParts.push(t(`chat.autonomy_${message.autonomy}`));
+    metaParts.push(t(`chat.autonomy_${normalizeAutonomy(message.autonomy)}`));
   }
   if (message.model) {
     metaParts.push(message.provider ? `${message.provider} · ${message.model}` : message.model);

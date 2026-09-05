@@ -1,6 +1,7 @@
 
 import { applyDelegateEventToParts, applyStreamEventToParts, createMessage, createStreamThrottle, findCommittedAssistantMessage, mapContextUsage, mergeLiveAgentTranscript, mergeMessageParts, normalizeParts, pendingRequestFromEvent, settleRunningTools, upsertToolPart } from './lib/messageParts';
 import { hasOpenOverlay, isEditableTarget } from './lib/dom';
+import { normalizeAutonomy } from './lib/utils';
 import { currentSessionTitle } from './lib/sessionTitle';
 import { encodeSkillMarker, parseSkillMarker } from './lib/commandMarkers';
 import { restorePendingApprovalsForSession } from './lib/pendingApprovals';
@@ -123,8 +124,8 @@ function App() {
   const [changesPanelWidth, setChangesPanelWidth] = useState(380);
   const [changesPanelResizing, setChangesPanelResizing] = useState(false);
   const [autonomy, setAutonomy] = useState<Autonomy>(() => {
-    const stored = localStorage.getItem('cw.autonomy') as Autonomy | null;
-    return stored === 'supervised' || stored === 'guarded' || stored === 'autonomous' ? stored : 'guarded';
+    const stored = localStorage.getItem('cw.autonomy');
+    return normalizeAutonomy(stored);
   });
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
   const [skillReviewSettings, setSkillReviewSettings] = useState<SkillReviewSettings | null>(null);
@@ -360,7 +361,7 @@ function App() {
       return false;
     },
     'toggle-autonomy': () => {
-      setAutonomy((prev) => (prev === 'supervised' ? 'guarded' : prev === 'guarded' ? 'autonomous' : 'supervised'));
+      setAutonomy((prev) => (prev === 'guarded' ? 'autonomous' : 'guarded'));
       return true;
     },
   });
@@ -3018,7 +3019,7 @@ function App() {
           // make them bleed into every other session's view).
           sessionId: sessionIdToOpen,
           ...(record.work_mode ? { work_mode: record.work_mode as WorkMode } : {}),
-          ...(record.autonomy ? { autonomy: record.autonomy as Autonomy } : {}),
+          ...(record.autonomy ? { autonomy: normalizeAutonomy(record.autonomy) } : {}),
           ...(record.provider ? { provider: record.provider } : {}),
           ...(record.model ? { model: record.model } : {}),
           ...(record.attachments?.length ? { attachments: record.attachments } : {}),

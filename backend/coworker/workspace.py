@@ -101,12 +101,6 @@ class ExternalWriteError(PathBoundaryError):
         super().__init__(path, "external_write")
 
 
-# Read-only commands are resolved per platform (supervised mode auto-approves
-# these without an approval prompt). Windows uses the native PowerShell/cmd
-# read-only vocabulary; macOS/Linux use the Unix tools.
-READ_ONLY_COMMANDS = _platform.read_only_commands()
-
-
 def fingerprint_path_for(data_dir: Path, workspace_root: Path) -> Path:
     """Stable per-workspace path for the persisted staleness fingerprints.
 

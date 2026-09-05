@@ -2,7 +2,9 @@ import type { Language } from './lib/i18n';
 
 export type AgentMode = 'single';
 export type WorkMode = 'plan' | 'build';
-export type Autonomy = 'supervised' | 'guarded' | 'autonomous';
+// Two-level permission (默認權限 / 完整權限): guarded = default permission,
+// autonomous = full permission. Legacy "supervised" folds into guarded.
+export type Autonomy = 'guarded' | 'autonomous';
 export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org' | 'dashboard';
 export type Transport = 'stdio' | 'http' | 'sse' | 'streamable_http' | 'websocket';
 

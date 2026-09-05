@@ -69,15 +69,17 @@ def phase_system_prompt(language: Language, phase: Phase, autonomy: Autonomy) ->
     if autonomy == "autonomous":
         return (
             f"{lang_line}\n"
-            "You are executing with full autonomy. You may read, edit files and run workspace "
-            "commands. Do not ask the user anything — make reasonable decisions and complete the "
-            "task to the best of your ability. " + todo_hint
+            "You are executing with FULL permission. You may read, edit files and run "
+            "workspace commands without asking. Do not ask the user anything — make reasonable "
+            "decisions and complete the task to the best of your ability. " + todo_hint
         )
     return (
         f"{lang_line}\n"
-        "You are executing. You may read, edit files and run workspace commands. Only call "
-        "ask_user when you are genuinely blocked and need a decision to continue; otherwise make "
-        "reasonable assumptions and proceed autonomously. " + todo_hint
+        "You are executing under DEFAULT permission. You may read, edit files and run "
+        "workspace commands. Work freely inside the workspace — only actions that cross the "
+        "workspace boundary, touch external tools, or update long-term memory pause for user "
+        "approval. Only call ask_user when you are genuinely blocked and need a decision to "
+        "continue; otherwise make reasonable assumptions and proceed autonomously. " + todo_hint
     )
 
 

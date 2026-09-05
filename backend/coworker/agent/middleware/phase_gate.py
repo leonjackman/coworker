@@ -69,6 +69,8 @@ class PhaseToolGateMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             allowed |= {"use_worker"}
         else:
             allowed |= _CHANGE_TOOL_NAMES | _EXEC_TOOLS
+            # Full permission (autonomous) drops ask_user; the default (guarded)
+            # keeps it so the agent can ask when genuinely blocked.
             if autonomy != "autonomous":
                 allowed |= {"ask_user"}
             if self.mcp_tool_names_provider is not None:

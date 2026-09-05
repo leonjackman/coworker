@@ -856,7 +856,7 @@ export function ChatInput({
     }
   }
 
-  const nextAutonomy: Autonomy = autonomy === "supervised" ? "guarded" : autonomy === "guarded" ? "autonomous" : "supervised";
+  const nextAutonomy: Autonomy = autonomy === "guarded" ? "autonomous" : "guarded";
 
   return (
     <footer className="composer">

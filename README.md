@@ -46,7 +46,7 @@
 | 📦 **Skills** | SKILL.md-based skills with marketplace browsing, one-click install (SkillHub · ClawHub), and in-chat install via the agent — plus **self-authoring**: the agent captures repeatable procedures as draft skills that wait in a review queue for your approval |
 | 🌐 **Web Search & Fetch** | Web search powered by [Tavily](https://tavily.com) (`web_search`) and web page fetching (`web_fetch`), with configurable search depth, result count, Cloudflare retry, and secure keychain storage for your API key |
 | 🖥️ **Built-in Browser** | Embedded Chromium view the agent can drive — navigate, click, type, scroll, screenshot, evaluate JS, and read DOM; right-click to capture elements or the whole page into your chat |
-| 🔒 **Human-In-The-Loop** | Approves commands, file writes, and MCP tools before they run — with supervised / guarded / autonomous levels |
+| 🔒 **Human-In-The-Loop** | Approves boundary-crossing file writes, memory updates, and MCP tools before they run — with 默認權限 (default) / 完整權限 (full) permission levels |
 | 📓 **Change Tracking** | Every file change logged with before/after diffs; edit / regenerate / revert restores the state before changes |
 | 🖥️ **Integrated Terminal** | Interactive PTY shell in the bottom panel, plus a live tool-audit feed |
 | 🔎 **Audit & Traces** | Tool-audit log and agent traces with export, clear, and retention caps |
@@ -261,7 +261,7 @@ memory/
   Extra files and session notes are read on demand with the `memory_read` tool.
 - **Manual write** — the agent uses the `memory` tool to write durable facts to
   its own `BASE/MEMORY.md` (or a topic file / `SESSIONS/<date>.md`), deduplicated
-  and approval-gated in supervised mode.
+  and approval-gated under the default permission.
 - **Auto-extract (dream)** — every N turns (controlled by `COWORKER_MEMORY_NUDGE_INTERVAL`, default 10), a background
   pass reviews the recent transcript with an LLM and:
   1. extracts durable facts and consolidates them into the agent's `MEMORY.md`;

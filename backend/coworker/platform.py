@@ -286,32 +286,6 @@ WINDOWS_COMMANDS = frozenset({
     "cmd", "pwsh",
 })
 
-#: Read-only commands auto-approved in supervised mode (Unix).
-READ_ONLY_UNIX_COMMANDS = frozenset({
-    "cat", "date", "df", "du", "echo", "file", "find", "grep", "head", "id",
-    "less", "ls", "more", "pwd", "rg", "stat", "tail", "uname", "wc", "whoami",
-    "sort", "uniq", "cut", "tr", "awk", "egrep", "fgrep", "diff", "which",
-    "whereis", "man", "whatis", "apropos", "basename", "dirname", "realpath",
-    "readlink", "ps", "uptime", "free", "hostname", "groups", "who", "w",
-    "last", "env", "printenv", "md5", "cksum", "sum", "strings", "hexdump",
-    "od", "xxd", "base64", "nm", "objdump", "readelf", "ldd", "md5sum",
-    "sha256sum", "shasum", "ping", "dig", "nslookup", "host", "netstat", "ss",
-    "ip", "ifconfig", "arp", "python3", "lsblk", "lscpu", "lspci", "lsusb",
-    "lsof", "sysctl", "journalctl", "dmesg", "ss", "sar", "iostat", "vmstat",
-    "ps", "df", "du", "tree", "git", "git-lfs", "jq", "yq", "sqlite3",
-})
-
-#: Read-only commands auto-approved in supervised mode (Windows).
-READ_ONLY_WINDOWS_COMMANDS = frozenset({
-    "date", "dir", "echo", "findstr", "get-childitem", "get-content", "hostname",
-    "select-string", "systeminfo", "tasklist", "time", "type", "ver", "where",
-    "get-command", "get-process", "get-service", "get-item", "get-itemproperty",
-    "test-path", "get-date", "resolve-path", "split-path", "join-path",
-    "get-location", "get-member", "get-history", "get-alias", "ping", "ipconfig",
-    "netstat", "tracert", "nslookup", "test-netconnection", "resolve-dnsname",
-    "driverquery", "fc", "tree", "nbtstat", "getmac", "arp", "route",
-})
-
 
 def allowed_commands(platform: str | None = None) -> frozenset[str]:
     """Command names the ``run_command`` tool may execute on this platform."""
@@ -319,14 +293,6 @@ def allowed_commands(platform: str | None = None) -> frozenset[str]:
     if tag == "win32":
         return COMMON_COMMANDS | WINDOWS_COMMANDS
     return COMMON_COMMANDS | UNIX_COMMANDS
-
-
-def read_only_commands(platform: str | None = None) -> frozenset[str]:
-    """Read-only commands auto-approved in supervised mode on this platform."""
-    tag = platform_tag(platform)
-    if tag == "win32":
-        return READ_ONLY_WINDOWS_COMMANDS
-    return READ_ONLY_UNIX_COMMANDS
 
 
 # ---------------------------------------------------------------------------
@@ -444,8 +410,6 @@ __all__ = [
     "COMMON_COMMANDS",
     "UNIX_COMMANDS",
     "WINDOWS_COMMANDS",
-    "READ_ONLY_UNIX_COMMANDS",
-    "READ_ONLY_WINDOWS_COMMANDS",
     "allowed_commands",
     "command_hint",
     "default_shell",
@@ -455,6 +419,5 @@ __all__ = [
     "is_windows",
     "platform_hint",
     "platform_tag",
-    "read_only_commands",
     "resolve_command_name",
 ]

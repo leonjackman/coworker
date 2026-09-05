@@ -6,7 +6,6 @@ modifications, MCP tool calls, and user questions based on phase and autonomy.
 
 import json
 from collections.abc import Callable, Iterable
-from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware.types import Runtime
@@ -14,7 +13,7 @@ from langchain_core.messages import HumanMessage
 
 from ...logger import get_logger
 from ...steer import steer_inbox
-from ...workspace import CommandApprovalStore, READ_ONLY_COMMANDS
+from ...workspace import CommandApprovalStore
 from .base import _json_safe, _mcp_context
 from ..core import (
     AskUserOption,
@@ -99,9 +98,10 @@ def command_approval_middleware(
     """Always-mounted HITL middleware; approval decisions live in ``when``
     predicates that read phase/autonomy from agent state.
 
-    * ``run_command`` / write tools: interrupt only in ``execute`` phase with
-      ``supervised`` autonomy. ``guarded`` runs allowlisted commands inside the
-      workspace automatically (Codex ``on-request``); ``autonomous`` never asks.
+    * write tools: interrupt in ``execute`` phase only at the workspace boundary
+      under the default ``guarded`` permission (Codex ``on-request``);
+      ``autonomous`` (完整權限) never asks. ``run_command`` is not HITL-gated —
+      allowlisted in-workspace commands run under both levels.
     * ``ask_user``: always interrupts — the tool is only reachable when the
       phase gate exposes it, so this is decoupled from the permission switch
       (fixes D3: full access no longer kills the question capability).
@@ -112,7 +112,6 @@ def command_approval_middleware(
       =============  ==========  ==================  ================
       autonomy       read-only   write / undeclared  destructive
       =============  ==========  ==================  ================
-      supervised     auto        ask                 ask
       guarded        auto        auto                ask
       autonomous     auto        auto                auto
       =============  ==========  ==================  ================
@@ -124,41 +123,17 @@ def command_approval_middleware(
     workspace_root = workspace.root if workspace is not None else None
     from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
 
-    def _is_read_only_command(command_list: list[str]) -> bool:
-        if not command_list:
-            return False
-        return Path(command_list[0]).name in READ_ONLY_COMMANDS
-
-    def _needs_command_approval(req: Any) -> bool:
-        state = req.state
-        phase = normalize_phase(state.get("phase"), state.get("work_mode"))
-        if phase != "execute":
-            return False
-        autonomy = normalize_autonomy(state.get("autonomy"))
-        if autonomy in ("guarded", "autonomous"):
-            return False
-        # read-only commands in supervised → direct pass (ls, cat, head, etc.)
-        tool_input = req.tool_call.get("args", {}) if isinstance(req.tool_call, dict) else {}
-        command_val = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-        if isinstance(command_val, list):
-            _parts = command_val if command_val else []
-        elif isinstance(command_val, str):
-            _parts = command_val.split() if command_val else []
-        else:
-            _parts = []
-        return not _is_read_only_command(_parts)
-
     def _needs_write_approval(req: Any) -> bool:
         state = req.state
         phase = normalize_phase(state.get("phase"), state.get("work_mode"))
         if phase != "execute":
             return False
+        # default (guarded): ask only when the write target leaves the workspace
+        # boundary; full (autonomous): never ask.
         autonomy = normalize_autonomy(state.get("autonomy"))
         if autonomy == "autonomous":
             return False
-        if autonomy == "supervised":
-            return True
-        if autonomy == "guarded" and workspace_root is not None:
+        if workspace_root is not None:
             tool_args = req.tool_call.get("args", {}) if isinstance(req.tool_call, dict) else {}
             file_path = str(tool_args.get("file_path", "") or "") if isinstance(tool_args, dict) else ""
             return file_path and _is_external_path_candidate(file_path, workspace_root)
@@ -185,9 +160,10 @@ def command_approval_middleware(
     def _needs_sensitive_approval(req: Any) -> bool:
         state = req.state
         autonomy = normalize_autonomy(state.get("autonomy"))
-        # memory + install_skill: HITL for supervised + guarded, direct pass for
-        # autonomous. No phase gate here: memory may be written from any phase
-        # (planning included); install_skill stays execute-only via the phase gate.
+        # memory + install_skill: HITL under the default (guarded) permission,
+        # direct pass under full (autonomous). No phase gate here: memory may be
+        # written from any phase (planning included); install_skill stays
+        # execute-only via the phase gate.
         return autonomy != "autonomous"
 
     def _needs_ask_user(req: Any) -> bool:
@@ -203,11 +179,10 @@ def command_approval_middleware(
         }
 
     static_configs: dict[str, Any] = {**write_configs,
-        "run_command": {
-            "allowed_decisions": ["approve", "reject"],
-            "description": "Coworker needs approval before running this workspace command.",
-            "when": _needs_command_approval,
-        },
+        # run_command is NOT HITL-gated in the two-level model: the default
+        # (guarded) permission auto-runs allowlisted in-workspace commands and
+        # the fixed ALLOWED_COMMANDS allowlist rejects the rest — the retired
+        # per-action "supervised" approval was its only interrupt path.
         "memory": {
             "allowed_decisions": ["approve", "reject"],
             "description": "Coworker wants to update its long-term memory for this project.",

@@ -12,10 +12,9 @@ from coworker.platform import (
     force_platform,
     platform_hint,
     platform_tag,
-    read_only_commands,
     resolve_command_name,
 )
-from coworker.workspace import ALLOWED_COMMANDS, READ_ONLY_COMMANDS
+from coworker.workspace import ALLOWED_COMMANDS
 
 
 @pytest.fixture(autouse=True)
@@ -60,25 +59,6 @@ class TestAllowedCommands:
 
     def test_workspace_allowlist_matches_platform(self):
         assert ALLOWED_COMMANDS == allowed_commands()
-
-
-class TestReadOnlyCommands:
-    def test_unix_readonly(self):
-        ro = read_only_commands("darwin")
-        assert "ls" in ro and "cat" in ro and "rg" in ro
-        assert "dir" not in ro
-
-    def test_windows_readonly(self):
-        ro = read_only_commands("win32")
-        assert "dir" in ro and "type" in ro and "findstr" in ro
-        assert "ls" not in ro and "sed" not in ro
-
-    def test_workspace_readonly_matches_platform(self):
-        assert READ_ONLY_COMMANDS == read_only_commands()
-
-    def test_readonly_subsets_allowed(self):
-        for tag in ("darwin", "win32", "linux"):
-            assert read_only_commands(tag) <= allowed_commands(tag)
 
 
 class TestResolveCommandName:

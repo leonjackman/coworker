@@ -1,4 +1,4 @@
-import { Languages, Moon, Monitor, ShieldCheck, Sun, UserCheck, Zap } from 'lucide-react';
+import { Languages, Moon, Monitor, ShieldCheck, Sun, Zap } from 'lucide-react';
 import { t } from '../../lib/i18n';
 import type { Autonomy } from '../../types';
 import type { Language } from '../../lib/i18n';
@@ -7,7 +7,6 @@ import type { SettingsToggleOption } from './SettingsList';
 
 export function autonomyOptions(): SettingsToggleOption<Autonomy>[] {
   return [
-    { value: 'supervised', label: <><UserCheck size={14} />{t('chat.autonomy_supervised')}</>, title: t('chat.autonomy_supervised_tip') },
     { value: 'guarded', label: <><ShieldCheck size={14} />{t('chat.autonomy_guarded')}</>, title: t('chat.autonomy_guarded_tip') },
     { value: 'autonomous', label: <><Zap size={14} />{t('chat.autonomy_autonomous')}</>, title: t('chat.autonomy_autonomous_tip') },
   ];

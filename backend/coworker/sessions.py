@@ -158,6 +158,13 @@ class Session:
             # Legacy sessions stored access_mode ("default"/"full").
             legacy = str(payload.get("access_mode", "default") or "default")
             autonomy = "autonomous" if legacy == "full" else "guarded"
+        else:
+            # Single fold rule lives in normalize_autonomy: the retired
+            # "supervised" level (and any unknown value) folds into the default
+            # (guarded) permission; only "autonomous" survives.
+            from .agent.core import normalize_autonomy
+
+            autonomy = normalize_autonomy(str(autonomy))
         raw_messages = payload.get("messages", [])
         messages = [
             msg

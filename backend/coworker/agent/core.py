@@ -536,8 +536,10 @@ def normalize_work_mode(work_mode: str | None) -> WorkMode:
 
 
 def normalize_autonomy(autonomy: str | None) -> Autonomy:
-    if autonomy in ("supervised", "guarded", "autonomous"):
+    if autonomy == "autonomous":
         return autonomy
+    # Legacy sessions may still carry the retired "supervised" level; it folds
+    # into the default (guarded) permission.
     return "guarded"
 
 

@@ -1,9 +1,20 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
 import { t } from "./i18n"
+import type { Autonomy } from "../types"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+/**
+ * Single source of truth for the two-level permission model (默認權限 / 完整權限).
+ * Any raw autonomy value entering the frontend (localStorage, persisted session
+ * records, legacy transcripts) collapses onto the two valid levels: the retired
+ * "supervised" level folds into the default (guarded) permission.
+ */
+export function normalizeAutonomy(value: string | null | undefined): Autonomy {
+  return value === 'autonomous' ? 'autonomous' : 'guarded';
 }
 
 export function formatTimeAgo(updatedAt: string): string {
