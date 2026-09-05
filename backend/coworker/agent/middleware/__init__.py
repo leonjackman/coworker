@@ -29,6 +29,12 @@ from .context_compaction import CoworkerSummarizationMiddleware, _summarizer_can
 # Context guard (final line of defense)
 from .context_guard import ContextGuardMiddleware, ContextOverflowError
 
+# CJK-counted per-call context editing (replaces langchain approximate counting)
+from .context_editing import CoworkerContextEditingMiddleware
+
+# Recovery-aware tool-result clearing + tail-preserving truncation
+from .tool_truncation import RecoveryToolClearEdit, recovery_placeholder, truncate_tool_content
+
 # Loop protection
 from .loop_guard import (
     IdleLoopMiddleware,
@@ -83,6 +89,12 @@ __all__ = [
     # Guard
     "ContextGuardMiddleware",
     "ContextOverflowError",
+    # Context editing
+    "CoworkerContextEditingMiddleware",
+    # Tool-result clearing / truncation
+    "RecoveryToolClearEdit",
+    "recovery_placeholder",
+    "truncate_tool_content",
     # Loop
     "IdleLoopMiddleware",
     "RepeatedToolCallMiddleware",

@@ -21,6 +21,10 @@ from typing import Any
 AGENT_CORE_NAMES = ("SOUL.md", "AGENT.md", "MEMORY.md")
 # First line of each Markdown block is kept, clipped to this width.
 PREVIEW_LINE_CHARS = 160
+# Max lines of each block rendered into the resident preview. A block with more
+# lines shows a "more lines exist" marker so the model never mistakes the
+# preview for the full fact (memory_read loads the complete file on demand).
+PREVIEW_BLOCK_LINES = 3
 
 
 def _priority(node: Any) -> int:
@@ -79,13 +83,18 @@ def format_memory_index(
     used = 0
     truncated = False
     for node in ordered:
-        header = _file_header(node)
-        lines.append(header)
         content = (node.content or "").strip()
+        blocks = tuple(getattr(node, "blocks", None) or ())
+        if not blocks and content:
+            from .memory_file import split_blocks
+
+            blocks = tuple(split_blocks(content))
+        header = _file_header(node, blocks=len(blocks), lines=_block_line_count(blocks))
+        lines.append(header)
         if not content:
             lines.append("    (empty)")
             continue
-        preview_lines, cost, clipped = _render_preview(node, budget - used, est)
+        preview_lines, cost, clipped = _render_preview(node, blocks, budget - used, est)
         if cost > 0:
             lines.extend(preview_lines)
             used += cost
@@ -101,19 +110,28 @@ def format_memory_index(
     return "\n".join(lines)
 
 
+def _block_line_count(blocks: tuple[str, ...]) -> int:
+    return sum(len(b.splitlines()) for b in blocks if b and b.strip())
+
+
 def _render_preview(
     node: Any,
+    blocks: tuple[str, ...],
     remaining_tokens: int,
     est: Any,
 ) -> tuple[list[str], int, bool]:
-    """Render the one-line-per-block preview for one node.
+    """Render the token-budgeted preview for one node.
 
-    Returns ``(lines, tokens_used, clipped)``. ``clipped`` is True when the
-    preview had to be cut to fit ``remaining_tokens``.
+    Renders up to ``PREVIEW_BLOCK_LINES`` lines of EVERY block that fits (not
+    just the first line). When a block has more lines than shown, a marker
+    records the hidden count so the model knows the preview is partial and can
+    fetch the full file with ``memory_read``. ``clipped`` is True only when the
+    token budget forced content to be cut.
     """
-    content = (node.content or "").strip()
-    blocks = tuple(getattr(node, "blocks", None) or ())
     if not blocks:
+        content = (node.content or "").strip()
+        if not content:
+            return [], 0, False
         from .memory_file import split_blocks
 
         blocks = tuple(split_blocks(content))
@@ -123,18 +141,56 @@ def _render_preview(
     for block in blocks:
         if not block or not block.strip():
             continue
-        first = block.strip().splitlines()[0]
-        line = first[:PREVIEW_LINE_CHARS]
-        cost = est(line)
-        if used + cost > remaining_tokens:
+        raw_lines = block.strip().splitlines()
+        if not raw_lines:
+            continue
+        shown = 0
+        stopped = False
+        for raw in raw_lines[:PREVIEW_BLOCK_LINES]:
+            line = raw[:PREVIEW_LINE_CHARS]
+            cost = est(line)
+            if used + cost > remaining_tokens:
+                clipped = True
+                stopped = True
+                break
+            lines.append(f"    {_escape(line)}")
+            used += cost
+            shown += 1
+        hidden = len(raw_lines) - shown
+        if stopped:
+            # Token budget ran out mid-block: signal any unshown remainder.
+            if shown > 0 and hidden > 0:
+                marker = _hidden_marker(hidden)
+                cost = est(marker)
+                if used + cost <= remaining_tokens:
+                    lines.append(f"    {_escape(marker)}")
+                    used += cost
+            break
+        if hidden > 0:
+            # Block has more lines than the bounded preview shows: say so, then
+            # CONTINUE rendering later blocks (a big first block must not starve
+            # the rest of the file).
+            marker = _hidden_marker(hidden)
+            cost = est(marker)
+            if used + cost > remaining_tokens:
+                clipped = True
+                break
+            lines.append(f"    {_escape(marker)}")
+            used += cost
+        if used >= remaining_tokens:
             clipped = True
             break
-        lines.append(f"    {_escape(line)}")
-        used += cost
     if not lines:
         # Nothing fit, but we still want the model to know this file has facts.
         clipped = True
     return lines, used, clipped
+
+
+def _hidden_marker(hidden: int) -> str:
+    return (
+        f"…(block has {hidden} more line{'s' if hidden != 1 else ''}; "
+        "use memory_read for the full content)"
+    )
 
 
 def format_memory_prompt(nodes: list[Any], char_limit: int) -> str:
@@ -148,12 +204,17 @@ def format_memory_prompt(nodes: list[Any], char_limit: int) -> str:
     return format_memory_index(nodes, token_budget=budget)
 
 
-def _file_header(node: Any) -> str:
+def _file_header(node: Any, *, blocks: int = 0, lines: int = 0) -> str:
     source = _node_source(node)
     rel = getattr(node, "rel", "") or ""
+    stats = ""
+    if blocks > 0:
+        stats += f' blocks="{blocks}"'
+    if lines > 0:
+        stats += f' lines="{lines}"'
     return (
         f'  <file kind="{_escape(node.kind)}" name="{_escape(node.name)}" '
-        f'rel="{_escape(rel)}" source="{_escape(source)}">'
+        f'rel="{_escape(rel)}"{stats} source="{_escape(source)}">'
     )
 
 

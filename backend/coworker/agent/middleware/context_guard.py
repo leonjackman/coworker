@@ -71,8 +71,6 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     # Image blocks kept intact during S1 degradation (the most recent ones are
     # the only ones still relevant to the model's current decision).
     KEEP_RECENT_IMAGES = 2
-    # S3 truncation target per old tool result (opencode TOOL_OUTPUT_MAX_CHARS).
-    TOOL_RESULT_KEEP_CHARS = 2_000
     # Stop reducing once comfortably under the limit (calibrated headroom).
     TARGET_RATIO = 0.95
 
@@ -243,14 +241,18 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         return new_messages, changed
 
     def _clear_tool_results(self, messages: list[Any], keep: int) -> list[Any]:
-        """S2: forced ClearToolUsesEdit pass (trigger=0 ⇒ always applies)."""
-        try:
-            from langchain.agents.middleware import ClearToolUsesEdit
+        """S2: forced RecoveryToolClearEdit pass (trigger=0 ⇒ always applies).
 
-            edit = ClearToolUsesEdit(
+        Cleared results carry RECOVERY placeholders (persisted-output path for
+        run_command, re-read hint for read_file) instead of a bare ``[cleared]``
+        so the model always knows what was dropped and how to get it back.
+        """
+        try:
+            from .tool_truncation import RecoveryToolClearEdit
+
+            edit = RecoveryToolClearEdit(
                 trigger=0,
                 keep=keep,
-                placeholder="[cleared]",
                 exclude_tools=("write_todos", "memory", "memory_read", "ask_user"),
             )
             working = [m.model_copy() if hasattr(m, "model_copy") else m for m in messages]
@@ -268,7 +270,13 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         return sum(message_media_count(m) for m in messages)
 
     def _truncate_old_tool_results(self, messages: list[Any]) -> tuple[list[Any], int]:
-        """S3: truncate oversized tool results, oldest first."""
+        """S3: elide oversized tool results, oldest first (field-aware).
+
+        Uses :func:`truncate_tool_content` so read_file ``next_offset``/``hint``
+        and run_command's persisted-output path (both live at the payload's
+        END) survive the cut — a pure head-cut destroyed those pointers.
+        """
+        from .tool_truncation import TOOL_TRUNCATION_BUDGET_CHARS, truncate_tool_content
         from langchain_core.messages import ToolMessage
 
         changed = 0
@@ -277,12 +285,12 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             if not isinstance(msg, ToolMessage):
                 continue
             content = getattr(msg, "content", None)
-            if not isinstance(content, str) or len(content) <= self.TOOL_RESULT_KEEP_CHARS:
+            if not isinstance(content, str) or len(content) <= TOOL_TRUNCATION_BUDGET_CHARS:
                 continue
-            new_messages[idx] = self._with_content(
-                msg, content[: self.TOOL_RESULT_KEEP_CHARS] + "\n…[truncated by context guard]"
-            )
-            changed += 1
+            elided = truncate_tool_content(content, TOOL_TRUNCATION_BUDGET_CHARS)
+            if elided != content:
+                new_messages[idx] = self._with_content(msg, elided)
+                changed += 1
         return new_messages, changed
 
     def _window_stale_tool_results(
@@ -297,9 +305,11 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         results are what the model actually needs right now). So once the
         request already fills ``PROACTIVE_WINDOW_MIN_RATIO`` of the window, the
         oversized results older than the newest ``PROACTIVE_KEEP_RECENT`` tool
-        messages are truncated to ``TOOL_RESULT_KEEP_CHARS`` — the same head-cut
-        S3 applies under overflow, only applied earlier so a long turn never
-        burns bandwidth re-sending megabytes of already-consumed output.
+        messages are elided to ``TOOL_TRUNCATION_BUDGET_CHARS`` — the same field-aware,
+        tail-preserving elision S3 applies under overflow, only applied earlier
+        so a long turn never burns bandwidth re-sending megabytes of
+        already-consumed output AND never loses the JSON tail pointers
+        (``next_offset`` / persisted-output path).
 
         Small/medium requests (below the ratio) are returned byte-identical.
         """
@@ -307,6 +317,7 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
             return messages, 0
         if measured < int(limit_tokens * self.PROACTIVE_WINDOW_MIN_RATIO):
             return messages, 0
+        from .tool_truncation import TOOL_TRUNCATION_BUDGET_CHARS, truncate_tool_content
         from langchain_core.messages import ToolMessage
 
         tool_idx = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
@@ -317,13 +328,12 @@ class ContextGuardMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         new_messages = list(messages)
         for idx in stale:
             content = getattr(new_messages[idx], "content", None)
-            if not isinstance(content, str) or len(content) <= self.TOOL_RESULT_KEEP_CHARS:
+            if not isinstance(content, str) or len(content) <= TOOL_TRUNCATION_BUDGET_CHARS:
                 continue
-            new_messages[idx] = self._with_content(
-                new_messages[idx],
-                content[: self.TOOL_RESULT_KEEP_CHARS] + "\n…[truncated by context guard]",
-            )
-            changed += 1
+            elided = truncate_tool_content(content, TOOL_TRUNCATION_BUDGET_CHARS)
+            if elided != content:
+                new_messages[idx] = self._with_content(new_messages[idx], elided)
+                changed += 1
         return new_messages, changed
 
     def _drop_mcp_tools(self, tools: list[Any] | None, messages: list[Any] | None = None) -> tuple[list[Any] | None, int]:

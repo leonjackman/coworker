@@ -243,19 +243,48 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         )
 
     def _trim(self, state: CoworkerAgentState) -> Any:
-        from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
+        """Emergency fallback when summarization is unavailable or failed.
 
+        Cheap layer FIRST: prune stale tool results with the recovery-aware
+        edit (``tool_edit``) so oversized command/read blobs are cleared before
+        ANY conversational message is dropped — the agent's decisions and the
+        user's recent intent survive the summarizer being down. Only when
+        pruning alone does not fit does the oldest-first tail drop
+        (``_trim_tail``) engage. Mirrors the prune-before-summarize ordering of
+        ``_select_compact_plan`` (Anthropic micro-compact semantics).
+        """
         messages = state.get("messages", [])
         if not messages:
             return None
         total = sum(_msg_tokens(m) for m in messages)
         if total <= self.budget_tokens:
             return None
-        # Keep the first message (system prompt) and then the most recent tail
-        # (oldest-first drop). Oversized user/system content is truncated instead
-        # of dropped so the model still sees the user's current input; oversized
-        # tool/AI messages are dropped (cannot be truncated without breaking
-        # tool-call pairing).
+        if self.tool_edit is not None:
+            pruned = self._pruned_messages(messages)
+            if pruned is not messages and pruned:
+                if sum(_msg_tokens(m) for m in pruned) <= self.budget_tokens:
+                    return self._remove_update(pruned)
+                return self._trim_tail(pruned)
+        return self._trim_tail(messages)
+
+    @staticmethod
+    def _remove_update(messages: list[Any]) -> dict[str, Any]:
+        """Build the RemoveMessage-all update for a trimmed message list."""
+        from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
+
+        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *messages], "context_compact_count": 1}
+
+    def _trim_tail(self, messages: list[Any]) -> dict[str, Any] | None:
+        """Oldest-first tail trim on a message list (keeps head + recent tail).
+
+        Keep the first message (system prompt) and then the most recent tail
+        (oldest-first drop). Oversized user/system content is truncated instead
+        of dropped so the model still sees the user's current input; oversized
+        tool/AI messages are dropped (cannot be truncated without breaking
+        tool-call pairing).
+        """
+        if not messages:
+            return None
         head: list[Any] = []
         budget = self.budget_tokens
         for msg in messages[:1]:
@@ -313,7 +342,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
         # Increment the session-level compaction counter. The counter lives in
         # checkpointed state (not on this middleware, which is rebuilt every turn)
         # so it accumulates across turns — see B6.
-        return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *kept], "context_compact_count": 1}
+        return self._remove_update(kept)
 
     def _select_compact_plan(self, messages: list[Any]) -> tuple[str, Any, Any] | None:
         """Choose a compaction action: prune tool results, or summarize a segment.
@@ -375,9 +404,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             return None
         kind, a, b = plan
         if kind == "prune":
-            from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
-
-            return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
+            return self._remove_update(a)
         summary = self._create_summary(a, previous_summary=self.last_summary)
         compacted = self._finish_compact(a, b, summary)
         if compacted is not None:
@@ -400,9 +427,7 @@ class CoworkerSummarizationMiddleware(SummarizationMiddleware):
             return None
         kind, a, b = plan
         if kind == "prune":
-            from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage
-
-            return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *a], "context_compact_count": 1}
+            return self._remove_update(a)
         summary = await self._acreate_summary(a, previous_summary=self.last_summary)
         compacted = self._finish_compact(a, b, summary)
         if compacted is not None:

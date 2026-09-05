@@ -38,7 +38,13 @@ from ..workspace import DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_TIMEOUT_SEC
 
 
 MAX_ATTACHMENT_CHARS = 120_000
-MAX_REFERENCE_SESSION_CHARS = 60_000
+# Per-call char budget for a referenced-session page (read_session). Each page
+# is bounded so a whole referenced transcript is reachable via offset paging —
+# the OLD single 60k head-cap silently dropped the session's TAIL (newest
+# decisions) and had no way to page further back.
+MAX_REFERENCE_SESSION_PAGE_CHARS = 20_000
+# Default page size (messages) per read_session call.
+DEFAULT_REFERENCE_PAGE_SIZE = 20
 
 # O1: tool outputs are persisted in FULL up to this fuse (truncation to the
 # model happens at replay time via ``truncate_to_token_budget``). Real outputs
@@ -399,7 +405,105 @@ class AskUserArgs(BaseModel):
 
 class ReadSessionArgs(BaseModel):
     session_id: str = Field(description="The id of a session the user explicitly referenced in this conversation (pasted session id).")
-    max_messages: int = Field(default=0, ge=0, le=50, description="Optional cap on how many recent messages to read (0 = no cap).")
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="Skip this many messages from the END of the session before reading. offset=0 returns the MOST RECENT page; use the returned next_offset/hint to page back through older messages until next_offset=0 (full transcript reachable).",
+    )
+    page_size: int = Field(
+        default=DEFAULT_REFERENCE_PAGE_SIZE,
+        ge=1,
+        le=100,
+        description="Max messages per page (also bounded by a per-call char budget).",
+    )
+
+
+def build_referenced_session_page(
+    session: Any,
+    *,
+    offset: int = 0,
+    page_size: int = DEFAULT_REFERENCE_PAGE_SIZE,
+    max_chars: int = MAX_REFERENCE_SESSION_PAGE_CHARS,
+) -> dict[str, Any]:
+    """Build ONE readable page of a referenced session, newest-first.
+
+    Paging anchors at the END of the transcript (offset counts messages back
+    from the most recent) so the first page carries the newest decisions —
+    the part a follow-up agent usually needs — and ``next_offset`` lets it walk
+    back through older history until the WHOLE session is reachable. This
+    replaces the old head-cap behaviour (kept only the oldest ~60k chars and
+    silently dropped the tail with no way to page).
+    """
+    raw: list[dict[str, Any]] = []
+    for message in getattr(session, "messages", None) or []:
+        role = getattr(message, "role", "") or ""
+        content = getattr(message, "content", "") or ""
+        if role not in {"user", "assistant"} or not content:
+            continue
+        if role == "user":
+            content = format_user_message(
+                content,
+                getattr(message, "attachments", None),
+                getattr(message, "references", None),
+            )
+        raw.append({"role": role, "content": content})
+
+    total = len(raw)
+    page_size = max(1, min(int(page_size or DEFAULT_REFERENCE_PAGE_SIZE), 200))
+    offset = max(0, int(offset or 0))
+    newest = total - 1 - offset  # index of the newest message this page may return
+
+    hint_no_more = f"(No earlier messages; you have read the whole session of {total}.)"
+    if newest < 0 or not raw:
+        return {
+            "session_id": getattr(session, "id", ""),
+            "title": getattr(session, "title", "") or "",
+            "total_messages": total,
+            "message_count": 0,
+            "messages": [],
+            "total_chars": 0,
+            "offset": offset,
+            "truncated": False,
+            "next_offset": 0,
+            "hint": hint_no_more if raw else "(Empty session.)",
+        }
+
+    collected: list[dict[str, Any]] = []
+    used = 0
+    idx = newest
+    while idx >= 0 and len(collected) < page_size:
+        cost = _content_chars(raw[idx]["content"])
+        if collected and used + cost > max_chars:
+            break
+        collected.append(raw[idx])
+        used += cost
+        idx -= 1
+    collected.reverse()  # keep chronological order within the page
+
+    earlier_remain = idx >= 0
+    next_offset = (total - 1 - idx) if earlier_remain else 0
+    returned_first = idx + 1
+    returned_last = newest
+    if earlier_remain:
+        hint = (
+            f"(Returned messages {returned_first + 1}..{returned_last + 1} of {total}. "
+            f"Call read_session with offset={next_offset} to read the next-earlier page; "
+            f"use offset=0 for the most recent page.)"
+        )
+    else:
+        hint = hint_no_more
+    return {
+        "session_id": getattr(session, "id", ""),
+        "title": getattr(session, "title", "") or "",
+        "total_messages": total,
+        "message_count": len(collected),
+        "messages": collected,
+        "total_chars": used,
+        "offset": offset,
+        "truncated": earlier_remain,
+        "next_offset": next_offset,
+        "hint": hint,
+    }
 
 
 class AgentStreamRuntime(ABC):

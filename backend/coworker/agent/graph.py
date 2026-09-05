@@ -15,8 +15,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from langchain.agents.middleware import ClearToolUsesEdit, ContextEditingMiddleware
-
 from ..changes import ChangeStore
 from ..goal_feature import goal_feature
 from ..logger import get_logger
@@ -34,7 +32,6 @@ from ..workspace import (
 from .core import (
     Autonomy,
     Language,
-    MAX_REFERENCE_SESSION_CHARS,
     WorkMode,
     AskUserArgs,
     AskUserOption,
@@ -63,11 +60,10 @@ from .core import (
     WriteFileArgs,
     _CHILD_EXCLUDED_TOOLS,
     _WRITE_ARG_PATH_KEYS,
-    _content_chars,
     _looks_like_raw_paste,
     _resolve_memory_target,
+    build_referenced_session_page,
     context_budget_tokens,
-    format_user_message,
 )
 from .middleware import (
     ContextGuardMiddleware,
@@ -83,6 +79,8 @@ from .middleware import (
     _summarizer_candidates,
     command_approval_middleware,
 )
+from .middleware.context_editing import CoworkerContextEditingMiddleware
+from .middleware.tool_truncation import RecoveryToolClearEdit
 logger = get_logger(__name__)
 
 
@@ -495,8 +493,10 @@ def build_workspace_tools(
     allowed_references = referenced_sessions or set()
 
     @tool(args_schema=ReadSessionArgs)
-    def read_session(session_id: str, max_messages: int = 0) -> str:
-        """Read a conversation session that the user explicitly referenced in this chat (they pasted its session id). Use it to recall prior decisions, code, or context from another session. Only sessions the user pasted into this conversation can be read; anything else is rejected."""
+    def read_session(session_id: str, offset: int = 0, page_size: int = 20) -> str:
+        """Read a conversation session that the user explicitly referenced in this chat (they pasted its session id). Use it to recall prior decisions, code, or context from another session. Only sessions the user pasted into this conversation can be read; anything else is rejected.
+
+        Reading is PAGED newest-first: offset=0 returns the most recent messages; the result carries next_offset and a hint — keep calling with that offset to page back through OLDER messages until next_offset=0, at which point you have read the whole session. """
         if session_store is None:
             return json.dumps({"error": "unavailable", "message": "Session reading is not available in this runtime."}, ensure_ascii=False)
         if session_id not in allowed_references:
@@ -510,36 +510,11 @@ def build_workspace_tools(
             return _error_result(exc, "read_session")
         if session is None:
             return json.dumps({"error": "not_found", "message": f"Session {session_id} does not exist."}, ensure_ascii=False)
-        messages: list[dict[str, Any]] = []
-        for message in session.messages:
-            if message.role not in {"user", "assistant"} or not message.content:
-                continue
-            if message.role == "user":
-                content = format_user_message(message.content, message.attachments, message.references)
-            else:
-                content = message.content
-            messages.append({"role": message.role, "content": content})
-        if max_messages > 0:
-            messages = messages[-max_messages:]
-        capped: list[dict[str, Any]] = []
-        total = 0
-        truncated = False
-        for message in messages:
-            total += _content_chars(message["content"])
-            if total > MAX_REFERENCE_SESSION_CHARS:
-                truncated = True
-                break
-            capped.append(message)
-        return json.dumps(
-            {
-                "session_id": session.id,
-                "title": session.title,
-                "message_count": len(session.messages),
-                "messages": capped,
-                "truncated": truncated,
-            },
-            ensure_ascii=False,
-        )
+        try:
+            page = build_referenced_session_page(session, offset=offset or 0, page_size=page_size or 20)
+        except Exception as exc:
+            return _error_result(exc, "read_session")
+        return json.dumps(page, ensure_ascii=False)
 
     @tool(args_schema=DelegateTaskArgs)
     def delegate_task(agent: str, task: str, context: str = "") -> str:
@@ -843,10 +818,9 @@ def build_coworker_agent_graph(
     # instance also feeds the summarization middleware's prune-aware trigger.
     # Trigger lives on the EFFECTIVE budget ((window − max_output) × safety),
     # so the reservation can never be double-spent.
-    tool_edit = ClearToolUsesEdit(
+    tool_edit = RecoveryToolClearEdit(
         trigger=int(context_budget_tokens(context_window_tokens or 128_000, effective_max_output) * 0.75),
         keep=3,
-        placeholder="[cleared]",
         exclude_tools=("write_todos", "memory", "memory_read", "ask_user"),
     )
     context_middleware = CoworkerSummarizationMiddleware(
@@ -872,7 +846,7 @@ def build_coworker_agent_graph(
         # breaks its work into a `write_todos` checklist and keeps it updated as
         # it completes each step. Read-only-safe (writes graph state only).
         TodoListMiddleware(),
-        ContextEditingMiddleware(edits=[tool_edit]),
+        CoworkerContextEditingMiddleware(edits=[tool_edit]),
     ]
     middleware.extend(command_approval_middleware(approval_store, mcp_middleware.tool_policy, workspace=workspace))
 

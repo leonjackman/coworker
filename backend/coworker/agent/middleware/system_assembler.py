@@ -54,6 +54,49 @@ logger = get_logger(__name__)
 # practice (typical compose ≈ 4-6k tokens), purely a safety net.
 SYSTEM_FIXED_BUDGET_TOKENS = 16_000
 
+# User-facing labels + recovery tool per droppable fragment (used when the
+# budget guard has to omit a fragment so the model knows what is missing).
+_FRAGMENT_DROP_LABELS: dict[str, tuple[str, str | None, str]] = {
+    "skills": ("技能目录", "load_skill", "skills catalog"),
+    "memory": ("长期记忆索引", "memory_read", "memory index"),
+    "workspace": ("工作区上下文", "list_directory/read_file", "workspace context"),
+    "mcp": ("MCP 服务归属", None, "MCP attribution"),
+    "capabilities": ("能力说明", None, "capabilities"),
+}
+
+
+def _fragment_drop_notice(language: str, names: list[str]) -> str:
+    """Notice appended to the composed prompt when fragments were budget-dropped.
+
+    Codex-style: dropping context is never SILENT — the model is told exactly
+    which fragments were omitted and how to fetch what it needs (memory_read /
+    load_skill / workspace tools). behaviour and phase are never dropped.
+    """
+    if not names:
+        return ""
+    if language == "zh":
+        items = []
+        for name in names:
+            zh, tool, _en = _FRAGMENT_DROP_LABELS.get(name, (name, None, name))
+            hint = f"（可用 {tool} 按需获取）" if tool else ""
+            items.append(f"{zh}{hint}")
+        return (
+            "[上下文提示：为控制固定系统提示预算，本次请求未注入以下片段："
+            + "、".join(items)
+            + "。核心行为指令与阶段契约始终保留。]"
+        )
+    items = []
+    for name in names:
+        _zh, tool, en = _FRAGMENT_DROP_LABELS.get(name, (name, None, name))
+        hint = f" (fetch via {tool})" if tool else ""
+        items.append(f"{en}{hint}")
+    return (
+        "[context notice: the following fragments were omitted to stay within the "
+        "fixed system-prompt budget: "
+        + ", ".join(items)
+        + ". The behaviour core and phase contract are always retained.]"
+    )
+
 
 def _system_text(msg: Any) -> str:
     """Extract the text of a system message, tolerating list content.
@@ -219,16 +262,24 @@ class SystemAssembler(AgentMiddleware):
 
         fragments.sort(key=lambda f: f[0], reverse=True)
         content, budget_ok = self._compose(fragments)
+        dropped: list[str] = []
         if not budget_ok:
             # V5: drop lowest-priority non-core fragments (skills, then memory,
             # workspace, ...) so the fixed overhead can never stack into a bomb.
+            # The dropped names are surfaced to the MODEL (never silent loss) so
+            # it knows which context was omitted and how to fetch it on demand.
             droppable = [f[1] for f in sorted(fragments, key=lambda f: f[0]) if f[1] not in ("behaviour", "phase")]
             for name in droppable:
                 fragments = [f for f in fragments if f[1] != name]
                 content, budget_ok = self._compose(fragments)
+                dropped.append(name)
+                logger.warning("SystemAssembler budget guard dropped fragment: %s", name)
                 if budget_ok:
-                    logger.warning("SystemAssembler budget guard dropped fragment: %s", name)
                     break
+        if dropped:
+            notice = _fragment_drop_notice(language, dropped)
+            if notice:
+                content = f"{content}\n\n{notice}"
         return {"system_message": SystemMessage(content)}
 
     def _compose(self, fragments: list[tuple[int, str, str]]) -> tuple[str, bool]:

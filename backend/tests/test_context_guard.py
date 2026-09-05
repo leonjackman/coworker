@@ -427,7 +427,12 @@ def test_guard_clears_stale_tool_results():
 
     guard.wrap_model_call(FakeRequest(messages), handler)
     assert len(seen) == 1
-    cleared = sum(1 for m in seen[0].messages if getattr(m, "content", "") == "[cleared]")
+    cleared = sum(
+        1
+        for m in seen[0].messages
+        if isinstance(getattr(m, "content", None), str)
+        and str(m.content).startswith("[tool result cleared")
+    )
     assert cleared > 0
     assert any(s.startswith("clear_tools") for s in guard.last_steps)
 
@@ -466,7 +471,7 @@ def test_guard_s0_activates_on_large_under_budget_request():
     truncated = sum(
         1
         for m in sent.messages
-        if isinstance(m, ToolMessage) and "truncated by context guard" in str(getattr(m, "content", ""))
+        if isinstance(m, ToolMessage) and "chars omitted" in str(getattr(m, "content", ""))
     )
     assert truncated == 4  # oldest 4 of 8 windowed; newest 4 stay whole
     newest_content = str(sent.messages[-2].content)
