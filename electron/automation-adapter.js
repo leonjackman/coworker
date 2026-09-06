@@ -11,25 +11,110 @@
 
 'use strict';
 
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 // Boot the helper until it answers a ping, so the bridge never races it.
 const BOOT_TIMEOUT_MS = 8000;
 
+// Candidate helper locations for each launch mode:
+//   dev            electron/cw-automa/build/cw-automa   (auto-compiled if missing)
+//   packaged       <app Resources>/cw-automa/cw-automa  (extraResources copies
+//                  the whole electron/cw-automa/build dir INTO "<Resources>/cw-automa",
+//                  so the binary is at "<Resources>/cw-automa/cw-automa")
+// GitHub Actions packaged uses the same bundle layout as the local packaged build.
+function candidateBinaryPaths() {
+  const { app } = require('electron');
+  const isPackaged = !!(app && app.isPackaged);
+  const candidates = [];
+  if (process.platform === 'darwin' && isPackaged && process.resourcesPath) {
+    const rp = process.resourcesPath;
+    // extraResources copies electron/cw-automa/build INTO "<Resources>/cw-automa",
+    // so the executable lives at "<Resources>/cw-automa/cw-automa" (outside the
+    // asar — files inside app.asar cannot be spawned).
+    candidates.push(path.join(rp, 'cw-automa', 'cw-automa'));
+    candidates.push(path.join(rp, 'cw-automa'));
+    candidates.push(path.join(rp, 'bin', 'cw-automa'));
+  }
+  if (!isPackaged) {
+    candidates.push(path.join(__dirname, 'cw-automa', 'build', 'cw-automa'));
+  }
+  // Never try a path inside the asar: spawning an asar-embedded binary fails.
+  return candidates.filter((p) => !String(p).includes('app.asar'));
+}
+
+// Pick the first candidate that actually exists as a file.
+function resolveBinaryPath() {
+  for (const p of candidateBinaryPaths()) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    } catch (e) { /* keep looking */ }
+  }
+  return null;
+}
+
+// Compile the Swift helper from source (dev only). Returns true on success.
+function buildHelper(sourceBinaryPath) {
+  try {
+    const main = path.join(__dirname, 'cw-automa', 'main.swift');
+    if (!fs.existsSync(main)) return false;
+    fs.mkdirSync(path.dirname(sourceBinaryPath), { recursive: true });
+    execFileSync('swiftc', ['-O', '-o', sourceBinaryPath, main], { timeout: 120000 });
+    return fs.existsSync(sourceBinaryPath);
+  } catch (e) {
+    try { console.warn('[automa] swiftc build failed:', (e && e.message) || e); } catch (err) { /* ignore */ }
+    return false;
+  }
+}
+
 class AutomationAdapter {
   constructor(options = {}) {
-    this.binaryPath = options.binaryPath || defaultBinaryPath();
     this._proc = null;
     this._seq = 0;
     this._pending = new Map();
     this._buffer = '';
     this.ready = false;
     this._bootWaiters = [];
+    this.sourceBinaryPath = path.join(__dirname, 'cw-automa', 'build', 'cw-automa');
+    // Resolve at construction; log what we pick so failures are diagnosable.
+    this.binaryPath = options.binaryPath || this._resolve();
+    if (!this.binaryPath) {
+      try { console.warn('[automa] no helper binary found; candidates:', candidateBinaryPaths().join(', ')); } catch (e) { /* ignore */ }
+    } else {
+      this._ensureExecutable();
+    }
+  }
+
+  _resolve() {
+    const found = resolveBinaryPath();
+    if (found) return found;
+    // Dev only: compile on first use so `npm run desktop` needs no manual step.
+    const { app } = require('electron');
+    if (!(app && app.isPackaged) && fs.existsSync(path.join(__dirname, 'cw-automa', 'main.swift'))) {
+      if (buildHelper(this.sourceBinaryPath)) return this.sourceBinaryPath;
+    }
+    return null;
+  }
+
+  _ensureExecutable() {
+    try {
+      if (this.binaryPath && fs.existsSync(this.binaryPath)) fs.chmodSync(this.binaryPath, 0o755);
+    } catch (e) { /* ignore */ }
+  }
+
+  diagnose() {
+    const exists = !!(this.binaryPath && fs.existsSync(this.binaryPath) && fs.statSync(this.binaryPath).isFile());
+    return { binary: this.binaryPath || '', exists, ready: this.ready };
   }
 
   _spawn() {
     if (this._proc && !this._proc.killed) return;
+    if (!this.binaryPath || !fs.existsSync(this.binaryPath)) {
+      this._flushError('helper binary missing: ' + (this.binaryPath || '(none)'));
+      return;
+    }
+    this._ensureExecutable();
     this._proc = spawn(this.binaryPath, [], { stdio: ['pipe', 'pipe', 'pipe'] });
     this._proc.stdout.setEncoding('utf8');
     this._proc.stderr.setEncoding('utf8');
@@ -107,7 +192,11 @@ class AutomationAdapter {
 
   async invoke(method, params = {}) {
     const ok = await this._boot();
-    if (!ok) throw new Error('automation helper unavailable');
+    if (!ok) {
+      let exists = false;
+      try { exists = !!(this.binaryPath && fs.existsSync(this.binaryPath)); } catch (e) { /* ignore */ }
+      throw new Error(`automation helper unavailable (binary=${this.binaryPath || '(none)'}, exists=${exists}, ready=${this.ready})`);
+    }
     const msg = await this._call(method, params);
     if (!msg.ok) throw new Error(msg.error || `${method} failed`);
     return msg.result ?? {};
@@ -171,15 +260,4 @@ class AutomationAdapter {
   }
 }
 
-function defaultBinaryPath() {
-  if (process.platform !== 'darwin') return '';
-  const { app } = require('electron');
-  // Packaged: cw-automa is copied under the app resources (extraResources).
-  if (app && app.isPackaged && process.resourcesPath) {
-    return path.join(process.resourcesPath, 'cw-automa');
-  }
-  // Dev: build output under electron/cw-automa/build.
-  return path.join(__dirname, 'cw-automa', 'build', 'cw-automa');
-}
-
-module.exports = { AutomationAdapter, defaultBinaryPath };
+module.exports = { AutomationAdapter, defaultBinaryPath: candidateBinaryPaths, resolveBinaryPath };

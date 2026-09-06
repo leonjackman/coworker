@@ -267,13 +267,28 @@ func handle(_ req: Request) {
             let depth = (req.params["depth"] as? Int) ?? 6
             let pid = frontmostPid() ?? -1
             let app = AXUIElementCreateApplication(pid_t(pid))
+            let frontName = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
+            // If we cannot even read the app's role, the process has NO
+            // Accessibility grant — report a precise, non-ambiguous error so the
+            // caller does NOT treat "empty UI" as "permission missing".
+            if axString(app, kAXRoleAttribute).isEmpty {
+                respond(false, nil, "accessibility_not_trusted")
+                return
+            }
             var counter = 0
             if let node = walk(app, path: "0", depth: depth, consumedRefs: &counter) {
                 let tree = nodeDict(node)
-                let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
-                respond(true, ["frontmost": front, "refs": counter, "root": tree], nil)
+                respond(true, ["frontmost": frontName, "refs": counter, "root": tree], nil)
             } else {
-                respond(false, nil, "empty accessibility tree for pid \(pid)")
+                // Trusted but the frontmost app has no readable interactive
+                // elements (e.g. it IS the agent/CoWorker itself, a menu-bar-only
+                // app, or a canvas). Return a minimal honest root so the snapshot
+                // path does NOT fail-closed on a UI that just isn't AX-rich.
+                let minimal: [String: Any] = [
+                    "ref": "1", "role": "AXApplication", "label": frontName,
+                    "note": "No readable elements in the frontmost app.",
+                ]
+                respond(true, ["frontmost": frontName, "refs": 1, "root": minimal], nil)
             }
         case "act":
             // act: click_ref/double/right/type_into(press+type)/set_value/focus/scroll/show

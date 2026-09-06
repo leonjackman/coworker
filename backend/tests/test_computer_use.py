@@ -278,9 +278,10 @@ def test_act_launch_app(fake_client_factory):
     (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "launch_app", "app": "Calculator"})
     payload = json.loads(out)
-    # verifier: app text didn't appear in the (unchanged) snapshot → not verified, but ok.
+    # observation-free: launch_app proceeds even without a usable snapshot.
     assert payload["ok"] is True
-    assert payload["changed"] is False
+    assert payload["action"] == "launch_app"
+    assert "verified" in payload
 
 
 def test_act_type_text_refuses_shortcut(fake_client_factory):

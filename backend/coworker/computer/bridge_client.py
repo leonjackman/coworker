@@ -546,12 +546,20 @@ def build_computer_tools(
                 ensure_ascii=False,
             )
 
-        # Fail-closed: if we cannot observe the desktop, refuse to guess.
-        before = _snapshot_text()
-        if before is None:
+        # Observation-independent actions: launch_app / press_hotkey do NOT need
+        # to see the screen — never fail-closed them or the agent will nag the
+        # user for a permission it already has.
+        observation_free = action in ("launch_app", "press_hotkey", "go_back")
+
+        # Fail-closed for actions that must know the target: if we cannot observe
+        # the desktop, refuse to guess (but never blame "permission" — the real
+        # cause is usually that the frontmost app exposes an empty/transient AX
+        # tree, or a missing grant for THIS process).
+        before = _snapshot_text() if not observation_free else None
+        if before is None and not observation_free:
             return json.dumps(
                 {
-                    "error": "Cannot see the desktop (Accessibility unavailable). Enable Accessibility for CoWorker in System Settings and retry; do NOT act on a screen you cannot observe.",
+                    "error": "Could not read the Accessibility tree just now. This usually means the frontmost app has no readable UI (or is still loading). Retry with computer_observe snapshot; if it stays empty, check that Accessibility is enabled for the RUNNING CoWorker process (not just any CoWorker entry).",
                     "error_code": "no_observation",
                 },
                 ensure_ascii=False,

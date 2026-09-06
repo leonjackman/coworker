@@ -775,7 +775,8 @@ class DesktopController {
   }
 
   adapterState() {
-    return { ok: true, platform: process.platform, paused: this.paused, adapter: this._adapter ? this._adapter.ready : false };
+    const diag = this._adapter ? this._adapter.diagnose() : { binary: '', exists: false, ready: false };
+    return { ok: true, platform: process.platform, paused: this.paused, ...diag };
   }
 
   destroy() {
