@@ -181,7 +181,9 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "permission error, stop and tell the user; do NOT act or pretend. When searching inside an app: "
             "type_into the field with submit=true (types real keys + Enter), then snapshot — results appear "
             "as AXList/AXTable rows under the field; double_click_ref the matching row (or press space) to "
-            "activate it — do NOT re-open the search."
+            "activate it — do NOT re-open the search. If type_into reports the text did not land "
+            "(focused value empty), that surface does not accept standard text editing — STOP and ask "
+            "the user; never retry-loop on the same field."
         )
     if status == "feature_off":
         return (
@@ -404,11 +406,19 @@ def build_computer_tools(
         bn = _normalize_for_verify(before or "")
         an = _normalize_for_verify(after)
         changed = an != bn
+        # Primary evidence for type_into is the FOCUSED field's actual value the
+        # helper read back (generic ground truth, no whole-tree diff).
+        focused_val = ""
+        if isinstance(res, dict):
+            focused = res.get("focused")
+            if isinstance(focused, dict):
+                focused_val = str(focused.get("value") or "")
         if action == "launch_app":
             # Launch switches the frontmost app, which changes the window tree.
             verified = bool(after) and (changed or (app.lower() in after.lower()))
         elif action == "type_into":
-            verified = bool(text) and (text.lower() in after.lower()) and changed
+            landed = focused_val.lower() if focused_val else ""
+            verified = bool(text) and (text.lower() in landed or text.lower() in an)
         else:
             verified = changed
         note = (
@@ -416,6 +426,12 @@ def build_computer_tools(
             if verified
             else "No confirmable content change — do NOT claim success. Re-read computer_observe snapshot (or the fresh_snapshot) and retry."
         )
+        if action == "type_into" and not verified:
+            note = (
+                "The text did NOT land in the focused field (readback value is empty/different). "
+                "This surface does not accept standard text editing. STOP and ask the user to enter "
+                "it manually (or use another route); do NOT retry-loop."
+            )
         preview = "\n".join(after.split("\n")[:16])
         return json.dumps(
             {
@@ -423,6 +439,7 @@ def build_computer_tools(
                 "action": action,
                 "verified": verified,
                 "changed": changed,
+                "focused_value": focused_val,
                 "note": note,
                 "after_preview": preview,
             },

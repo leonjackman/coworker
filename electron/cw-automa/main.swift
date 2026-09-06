@@ -250,48 +250,74 @@ func press(_ key: String, _ mods: [String]) {
     up?.post(tap: .cghidEventTap)
 }
 
-func typeText(_ text: String) {
-    for scalar in text.unicodeScalars {
-        var chars = [UniChar(scalar.value)]
-        let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true)
-        down?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &chars)
-        down?.post(tap: .cghidEventTap)
-        let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-        up?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &chars)
-        up?.post(tap: .cghidEventTap)
-    }
-}
-
 func sleepMs(_ ms: Int) {
     usleep(useconds_t(ms * 1000))
 }
 
-// A REAL editing session: many apps (Apple Music search, forms, IM fields) only
-// accept text typed with keyboard focus — AX setValue alone fills the value but
-// leaves the field "unfocused", so an Enter afterwards is discarded. Sequence:
-// activate app -> AX focus -> click the field (real caret) -> Cmd+A select all
-// -> type the text as keyboard events -> optionally press Enter to submit.
-func realTypeInto(app: AXUIElement, pid: pid_t, el: AXUIElement, text: String, submit: Bool) {
-    // 1) Bring the owning app to the front (clicks/keys must land on it).
+// ── System-level, app-agnostic text entry ────────────────────────────────
+// The ONLY input every app reliably accepts is a PASTE (clipboard + Cmd+V).
+// AX setValue can leave a field "unfocused" (no real editing session) and
+// per-character CGEvent unicode typing is flaky for CJK/IME. So text input =
+//   activate app -> focus field (AX) -> click (real caret) -> Cmd+A (select
+//   existing) -> PASTE the text -> restore the clipboard -> optional Enter.
+// This works for search fields, forms, editors, any Cocoa control — no app
+// detection anywhere.
+
+func readPaste() -> String? {
+    NSPasteboard.general.string(forType: .string)
+}
+
+func writePaste(_ text: String) {
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    pb.setString(text, forType: .string)
+}
+
+func pasteText(_ text: String) {
+    let prior = readPaste()
+    writePaste(text)
+    press("v", ["cmd"]) // Cmd+V: paste into the focused field
+    sleepMs(150)
+    // Restore the user's clipboard so we never leave it dirty.
+    if let prior = prior, !prior.isEmpty {
+        writePaste(prior)
+    } else {
+        NSPasteboard.general.clearContents()
+    }
+}
+
+// Read the currently focused element (value/role/label) of an app — generic
+// ground truth for "did the text actually land in the field?".
+func focusedInfo(_ app: AXUIElement) -> [String: String]? {
+    guard let raw = axAttr(app, kAXFocusedUIElementAttribute) else { return nil }
+    let fe = raw as! AXUIElement
+    var info: [String: String] = [:]
+    info["role"] = axString(fe, kAXRoleAttribute)
+    let label = displayLabel(fe)
+    if !label.isEmpty { info["label"] = label }
+    info["value"] = axString(fe, kAXValueAttribute)
+    return info
+}
+
+func activateApp(_ pid: pid_t, _ app: AXUIElement) {
     if let running = NSRunningApplication(processIdentifier: pid) {
         running.activate(options: [.activateIgnoringOtherApps])
     } else {
         AXUIElementPerformAction(app, kAXRaiseAction as CFString)
     }
+}
+
+// Real editing session for type_into.
+func realTypeInto(app: AXUIElement, pid: pid_t, el: AXUIElement, text: String, submit: Bool) {
+    activateApp(pid, app)
     sleepMs(160)
-    // 2) AX-level focus.
     AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, true as CFTypeRef)
     sleepMs(80)
-    // 3) Real click in the field -> caret + actual editing session.
-    clickCenter(el)
+    clickCenter(el)      // real caret + editing session
     sleepMs(140)
-    // 4) Select existing content so typing replaces it.
-    press("a", ["cmd"])
+    press("a", ["cmd"])  // select existing content
     sleepMs(60)
-    // 5) Type as keyboard events (unicode-safe; like typing/pasting, no IME).
-    typeText(text)
-    sleepMs(80)
-    // 6) Optional submit (Enter) — search fields need it while still focused.
+    pasteText(text)      // paste replaces the selection
     if submit {
         press("return", [])
         sleepMs(80)
@@ -418,7 +444,9 @@ func handle(_ req: Request) {
                 let submit = (req.params["submit"] as? Bool) ?? false
                 let pid = (req.params["pid"] as? Int) ?? Int(frontmostPid() ?? -1)
                 realTypeInto(app: app, pid: pid_t(pid), el: el, text: text, submit: submit)
-                respond(true, ["performed": "type_into", "submit": submit], nil)
+                var result: [String: Any] = ["performed": "type_into", "submit": submit]
+                if let focus = focusedInfo(app) { result["focused"] = focus }
+                respond(true, result, nil)
             } else {
                 respond(false, nil, "type_into requires text")
             }
@@ -432,7 +460,9 @@ func handle(_ req: Request) {
         press((req.params["key"] as? String) ?? "", (req.params["modifiers"] as? [String]) ?? [])
         respond(true, ["performed": "press_hotkey"], nil)
     case "type_text":
-        typeText((req.params["text"] as? String) ?? "")
+        // Paste into the CURRENTLY focused field (no click/focus here — caller
+        // ensures focus). Same app-agnostic clipboard mechanism as type_into.
+        pasteText((req.params["text"] as? String) ?? "")
         respond(true, ["performed": "type_text"], nil)
     case "click_coords":
         let pt = CGPoint(x: (req.params["x"] as? Double) ?? 0, y: (req.params["y"] as? Double) ?? 0)

@@ -336,6 +336,41 @@ def test_type_into_passes_submit(fake_client_factory):
     assert captured["text"] == "情歌王"
 
 
+def test_type_into_unverified_when_focused_value_empty(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    class _NoPaste(_FakeClient):
+        def ax_act(self, ref, op, **kw):
+            if op == "type_into":
+                return {"ok": True, "performed": "type_into", "focused": {"role": "AXTextField", "value": ""}}
+            return {"ok": True, "performed": op}
+
+    fake_client_factory(_NoPaste())
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = act.invoke({"action": "type_into", "ref": "axtextfield:apple music#1", "text": "情歌王", "submit": True})
+    payload = json.loads(out)
+    assert payload["verified"] is False
+    assert payload["focused_value"] == ""
+    assert "do NOT retry-loop" in payload["note"]
+
+
+def test_type_into_verified_by_focused_value(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    class _Pasted(_FakeClient):
+        def ax_act(self, ref, op, **kw):
+            if op == "type_into":
+                return {"ok": True, "performed": "type_into", "focused": {"role": "AXTextField", "value": kw.get("text")}}
+            return {"ok": True, "performed": op}
+
+    fake_client_factory(_Pasted())
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = act.invoke({"action": "type_into", "ref": "axtextfield:apple music#1", "text": "情歌王", "submit": True})
+    payload = json.loads(out)
+    assert payload["verified"] is True
+    assert payload["focused_value"] == "情歌王"
+
+
 def test_click_coords_passes_shot_geometry(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
