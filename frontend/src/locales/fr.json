@@ -258,6 +258,8 @@
   "shortcuts.send_message_desc": "Intervient dans la tâche en cours ; envoie normalement au repos.",
   "shortcuts.stop_agent": "Arrêter la génération",
   "shortcuts.stop_agent_desc": "Appuyez deux fois sur Échap pour arrêter l'agent.",
+  "shortcuts.stop_computer_control": "Arrêter le contrôle de l'ordinateur",
+  "shortcuts.stop_computer_control_desc": "Mettre en pause le pilotage du bureau (⇧⌘⎋).",
   "shortcuts.press_twice": "Appuyer deux fois sur {binding}",
   "shortcuts.toggle_sidebar": "Barre latérale",
   "shortcuts.toggle_sidebar_desc": "Affiche ou masque la barre latérale de l'espace de travail.",

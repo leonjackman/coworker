@@ -261,6 +261,8 @@
   "shortcuts.send_message_desc": "插入執行緊嘅任務做引導；冇嘢做緊嗰陣就正常傳送。",
   "shortcuts.stop_agent": "停止生成",
   "shortcuts.stop_agent_desc": "連撳兩次 Esc 停止運行緊嘅 Agent。",
+  "shortcuts.stop_computer_control": "停止電腦控制",
+  "shortcuts.stop_computer_control_desc": "暫停智能體操控你的桌面（⇧⌘⎋）。",
   "shortcuts.press_twice": "連撳兩次 {binding}",
   "shortcuts.toggle_sidebar": "切換側邊欄",
   "shortcuts.toggle_sidebar_desc": "顯示或隱藏工作區側邊欄。",

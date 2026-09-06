@@ -42,7 +42,8 @@ Electron main: electron/desktop-controller.js
     ├─ input         @nut-tree-fork/nut-js（in-process；macOS CGEvent）
     ├─ pause         powerMonitor 鎖屏/睡眠自動讓位
     ├─ abort         globalShortcut Cmd/Ctrl+Shift+Esc + tray「Emergency Stop」
-    └─ state         platform / permissions(accessibility, screen) / frontmost app
+    ├─ overlay       electron/activity-overlay.js（agent 操作中的透明遮罩提示）
+    └─ state         platform / permissions(accessibility, screen) / identity
          │
          loopback HTTP 127.0.0.1 隨機 port + bearer token（獨立 second bridge）
          │
@@ -53,6 +54,13 @@ Python backend: coworker/computer/bridge_client.py
     │             type/key/clipboard_set/paste）
     └─ computer_capability_line → SystemAssembler 注入 system prompt
 ```
+
+**操作中遮罩（ActivityOverlay）**：agent 在操作桌面時，於被操作的顯示器上疊一層**透明、不攔滑鼠 (`setIgnoreMouseEvents(true)`)** 的全螢幕置頂視窗：
+* 動態邊框：`filter:hue-rotate` 流光 + 內虛線呼吸 + 掃描線；
+* 聚焦環：在實際點擊目標處 pulse 一次（與 ego-browser 的 action highlight 同義；座標用同一 shot→point 換算 → 精準對齊）；
+* 角標 pill：`CoWorker 正在操作這台電腦 · ⇧⌘⎋ 可暫停`；暫停/鎖屏時轉紅 `已暫停`；
+* 閒置 ~4s 自動隱藏；`alwaysOnTop('screen-saver')` + `visibleOnAllWorkspaces(fullscreen)`；每顯示器一個視窗快取。
+* 純自身繪製、**不需螢幕錄製 TCC** → dev(未簽名) 亦可渲染。橋接提供 `/overlay/show|hide|capture`、`GET /overlay`（驗證用）。
 
 **座標契約**：`computer_observe` screenshot 回傳 `shot{width,height}` 與 `display{bounds}`；model 讀圖上的像素座標，於 `computer` 回傳 `display` + `shot_width/shot_height`；Electron 以
 `pointX = bounds.x + (x / shot.width) * bounds.width` 換算（保長寬比降檔 → 對 Retina 精確）。`shotToPoint` 為純函數、含單元測試。
@@ -125,6 +133,7 @@ macOS 的 TCC 權限**沒有**第三方可呼叫的「允許/不允許」系統�
 | 檔案 | 角色 |
 |---|---|
 | `electron/desktop-controller.js` | DesktopController（capture/input/pause/permission/coords） |
+| `electron/activity-overlay.js` | Agent 操作中的透明動態遮罩（邊框/聚焦環/pill/閒置隱藏） |
 | `electron/main.js` | computer bridge server、註冊 `/api/computer/bridge`、tray、熱鍵、powerMonitor、設定 IPC |
 | `backend/coworker/bridge_common.py` | 共用 bridge 基礎（BridgeInfo/截圖/設定/httpx client） |
 | `backend/coworker/computer_feature.py` | 主開關（預設 OFF + env bypass） |

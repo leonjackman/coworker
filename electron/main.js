@@ -1378,6 +1378,9 @@ async function handleComputerBridgeRequest(method, url, payload) {
   if (method === 'GET' && pathname === '/state') {
     return controller.state();
   }
+  if (method === 'GET' && pathname === '/overlay') {
+    return controller.overlayState();
+  }
   if (method !== 'POST') throw new Error('method_not_allowed');
 
   switch (pathname) {
@@ -1398,6 +1401,17 @@ async function handleComputerBridgeRequest(method, url, payload) {
     case '/permissions/open-settings': {
       const kind = payload && payload.kind ? String(payload.kind) : '';
       return controller.openPermissionSettings(kind);
+    }
+    case '/overlay/show': {
+      return controller.overlayShow(payload && payload.display);
+    }
+    case '/overlay/hide': {
+      return controller.overlayHide();
+    }
+    case '/overlay/capture': {
+      const dataUrl = await controller.overlayCapture(payload && payload.display);
+      if (!dataUrl) return { error: 'overlay unavailable', error_code: 'overlay_unavailable' };
+      return { image: dataUrl };
     }
     case '/pause': {
       const paused = payload && payload.paused !== undefined ? !!payload.paused : true;
@@ -1629,6 +1643,9 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  if (computerController) {
+    try { computerController.destroy(); } catch (e) { /* ignore */ }
+  }
   if (!IS_DEV) {
     stopBundledBackend();
   }
@@ -1889,6 +1906,20 @@ ipcMain.handle('computer-permission-open-settings', async (_event, kind) => {
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
+});
+
+// Renderer syncs the user-configured "stop computer control" shortcut so the OS
+// globalShortcut AND the on-screen overlay pill both follow the user's binding
+// (never hardcoded to ⇧⌘⎋). Ignored when the desktop controller is unavailable.
+ipcMain.on('computer-stop-shortcut', (_event, payload) => {
+  try {
+    ensureComputerController();
+    computerController.setStopShortcut(
+      payload && payload.accelerator,
+      payload && payload.label,
+      payload ? payload.enabled !== false : true,
+    );
+  } catch (e) { /* web / no desktop */ }
 });
 
 // ── Web settings IPC (Tavily) ──────────────────────────────────────────────

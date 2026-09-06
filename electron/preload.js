@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSettings: (payload) => ipcRenderer.invoke('saveSettings', payload),
   computerPermissionStatus: () => ipcRenderer.invoke('computer-permission-status'),
   computerPermissionOpenSettings: (kind) => ipcRenderer.invoke('computer-permission-open-settings', kind || ''),
+  setComputerStopShortcut: (payload) => ipcRenderer.send('computer-stop-shortcut', payload),
   streamChatMessage: (requestId, payload, onEvent) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;

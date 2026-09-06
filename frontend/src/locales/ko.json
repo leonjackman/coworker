@@ -584,6 +584,8 @@
   "shortcuts.send_message_desc": "실행 중인 작업에 끼어들며, 대기 중이면 일반 전송합니다.",
   "shortcuts.stop_agent": "생성 중지",
   "shortcuts.stop_agent_desc": "Esc를 두 번 눌러 실행 중인 Agent를 중지합니다.",
+  "shortcuts.stop_computer_control": "컴퓨터 제어 중지",
+  "shortcuts.stop_computer_control_desc": "바탕화면 제어 일시정지(⇧⌘⎋).",
   "shortcuts.press_twice": "{binding} 두 번 누르기",
   "shortcuts.toggle_sidebar": "사이드바 전환",
   "shortcuts.toggle_sidebar_desc": "워크스페이스 사이드바를 표시하거나 숨깁니다.",

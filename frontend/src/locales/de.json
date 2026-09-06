@@ -231,6 +231,8 @@
   "shortcuts.send_message_desc": "Wirft in die laufende Aufgabe ein; im Leerlauf normal senden.",
   "shortcuts.stop_agent": "Generierung stoppen",
   "shortcuts.stop_agent_desc": "Esc zweimal drücken, um den Agenten zu stoppen.",
+  "shortcuts.stop_computer_control": "Computer-Steuerung stoppen",
+  "shortcuts.stop_computer_control_desc": "Desktop-Steuerung anhalten (⇧⌘⎋).",
   "shortcuts.press_twice": "{binding} zweimal drücken",
   "shortcuts.toggle_sidebar": "Seitenleiste umschalten",
   "shortcuts.toggle_sidebar_desc": "Arbeitsbereich-Seitenleiste ein- oder ausblenden.",

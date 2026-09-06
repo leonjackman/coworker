@@ -239,6 +239,8 @@
   "shortcuts.send_message_desc": "插入正在运行的任务进行引导；空闲时直接发送。",
   "shortcuts.stop_agent": "停止生成",
   "shortcuts.stop_agent_desc": "连按两次 Esc 停止运行中的 Agent。",
+  "shortcuts.stop_computer_control": "停止电脑控制",
+  "shortcuts.stop_computer_control_desc": "暂停智能体操控你的桌面（⇧⌘⎋）。",
   "shortcuts.press_twice": "连按两次 {binding}",
   "shortcuts.toggle_sidebar": "切换侧边栏",
   "shortcuts.toggle_sidebar_desc": "显示或隐藏工作区侧边栏。",

@@ -239,6 +239,8 @@
   "shortcuts.send_message_desc": "Interject into the running task; sends normally when idle.",
   "shortcuts.stop_agent": "Stop Generation",
   "shortcuts.stop_agent_desc": "Press Esc twice to stop the running agent.",
+  "shortcuts.stop_computer_control": "Stop Computer Control",
+  "shortcuts.stop_computer_control_desc": "Pause the agent controlling your desktop (⇧⌘⎋).",
   "shortcuts.press_twice": "Press {binding} twice",
   "shortcuts.toggle_sidebar": "Toggle Sidebar",
   "shortcuts.toggle_sidebar_desc": "Show or hide the workspace sidebar.",

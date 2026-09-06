@@ -231,6 +231,8 @@
   "shortcuts.send_message_desc": "Вмешивается в выполняемую задачу; в простое отправляет как обычно.",
   "shortcuts.stop_agent": "Остановить генерацию",
   "shortcuts.stop_agent_desc": "Нажмите Esc дважды, чтобы остановить агента.",
+  "shortcuts.stop_computer_control": "Остановить управление компьютером",
+  "shortcuts.stop_computer_control_desc": "Приостановить управление рабочим столом (⇧⌘⎋).",
   "shortcuts.press_twice": "Дважды нажать {binding}",
   "shortcuts.toggle_sidebar": "Боковая панель",
   "shortcuts.toggle_sidebar_desc": "Показывает или скрывает боковую панель рабочего пространства.",

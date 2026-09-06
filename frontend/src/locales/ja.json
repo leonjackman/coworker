@@ -239,6 +239,8 @@
   "shortcuts.send_message_desc": "実行中のタスクに割り込み、待機中は通常送信します。",
   "shortcuts.stop_agent": "生成を停止",
   "shortcuts.stop_agent_desc": "Esc を 2 回押して実行中の Agent を停止します。",
+  "shortcuts.stop_computer_control": "コンピュータ操作を停止",
+  "shortcuts.stop_computer_control_desc": "デスクトップ操作を一時停止（⇧⌘⎋）。",
   "shortcuts.press_twice": "{binding} を 2 回押す",
   "shortcuts.toggle_sidebar": "サイドバーを切替",
   "shortcuts.toggle_sidebar_desc": "ワークスペースのサイドバーを表示／非表示にします。",

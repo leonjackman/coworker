@@ -63,6 +63,15 @@ export const SHORTCUT_REGISTRY: readonly ShortcutDefinition[] = [
     doublePress: true,
   },
   {
+    // OS-level: registered by the Electron main process (DesktopController) as a
+    // globalShortcut, so it works even when CoWorker is unfocused. Listed in the
+    // shortcuts page so it is discoverable; no renderer handler (none exists here).
+    id: 'stop-computer-control',
+    labelKey: 'shortcuts.stop_computer_control',
+    descriptionKey: 'shortcuts.stop_computer_control_desc',
+    defaultBinding: { key: 'Escape', mod: modKey(), shift: true },
+  },
+  {
     id: 'regenerate',
     labelKey: 'shortcuts.regenerate',
     descriptionKey: 'shortcuts.regenerate_desc',

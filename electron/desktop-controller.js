@@ -144,12 +144,44 @@ class DesktopController {
     this.paused = false;
     this.pauseReason = '';
     this._stopPauseListener = null;
+    this._overlay = null;
+    this._stopAccel = null;
+    this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
+    this._ensureAppPresentable();
+  }
+
+  // macOS treats an app as a background/accessory app (and REMOVES its Dock
+  // icon) when it only shows panel/overlay windows. Force the app back to a
+  // regular activation policy + show the Dock icon so the main CoWorker icon is
+  // never "closed" while the agent operates the desktop. No-op off macOS.
+  _ensureAppPresentable() {
+    if (process.platform !== 'darwin') return;
+    try {
+      if (typeof app.setActivationPolicy === 'function') app.setActivationPolicy('regular');
+    } catch (e) { /* ignore */ }
+    try {
+      if (app.dock && typeof app.dock.show === 'function') app.dock.show();
+    } catch (e) { /* ignore */ }
+  }
+
+  // Lazy ActivityOverlay (transparent on-screen "agent is operating" veil).
+  _overlayInstance() {
+    this._ensureAppPresentable();
+    if (this._overlay === null) {
+      const { ActivityOverlay } = require('./activity-overlay');
+      this._overlay = new ActivityOverlay();
+      // Adopt the current stop-shortcut label so the pill shows the real combo
+      // (not the cryptic ⎋ glyph) even before the renderer syncs it.
+      this._overlay.setStopShortcut(this._stopLabel);
+    }
+    return this._overlay;
   }
 
   // ── Pause / resume (human preemption) ────────────────────────────────
   setPaused(paused, reason = '') {
     this.paused = !!paused;
     this.pauseReason = paused ? reason : '';
+    if (this._overlay) this._overlay.setPaused(this.paused);
     return { ok: true, paused: this.paused, reason: this.pauseReason };
   }
 
@@ -193,14 +225,35 @@ class DesktopController {
   }
 
   registerEmergencyHotkey() {
-    // Cmd/Ctrl+Shift+Escape: yield control back to the human immediately.
+    // Default yield-control combo: Cmd/Ctrl+Shift+Escape. The renderer syncs the
+    // user's configured shortcut via setStopShortcut(), which re-registers this
+    // key so the OS hotkey always matches what the user sees in Settings.
     const accel = process.platform === 'darwin' ? 'Command+Shift+Escape' : 'Control+Shift+Escape';
-    try {
-      const ok = globalShortcut.register(accel, () => { this.pause('user'); });
-      if (!ok) console.warn('[computer] emergency hotkey registration failed:', accel);
-    } catch (e) {
-      console.warn('[computer] emergency hotkey unavailable:', e.message);
+    const label = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
+    this.setStopShortcut(accel, label, true);
+  }
+
+  // Apply the effective "stop computer control" shortcut: (re)register the OS
+  // globalShortcut and update the on-screen overlay pill so its hint text is
+  // never hardcoded. Unregisters the previous binding first.
+  setStopShortcut(accelerator, label, enabled = true) {
+    const accel = enabled ? String(accelerator || '') : '';
+    if (this._stopAccel) {
+      try { globalShortcut.unregister(this._stopAccel); } catch (e) { /* ignore */ }
+      this._stopAccel = null;
     }
+    if (accel) {
+      try {
+        const ok = globalShortcut.register(accel, () => this.pause('user'));
+        if (!ok) console.warn('[computer] stop shortcut registration failed:', accel);
+        else this._stopAccel = accel;
+      } catch (e) {
+        console.warn('[computer] stop shortcut unavailable:', (e && e.message) || e);
+      }
+    }
+    if (typeof label === 'string' && label) this._stopLabel = label;
+    if (this._overlay) this._overlay.setStopShortcut(this._stopLabel);
+    return { ok: true, acceler: this._stopAccel || null, label: this._stopLabel || '' };
   }
 
   // ── Observation ──────────────────────────────────────────────────────
@@ -351,6 +404,7 @@ class DesktopController {
   // Capture the chosen display, downscale to maxWidth, JPEG-encode.
   async screenshot({ display = 0, maxWidth = 1024, quality = 60 } = {}) {
     this._ensureNotPaused();
+    this._ensureAppPresentable();
     const all = screen.getAllDisplays();
     const target = all[Number(display) || 0] || all[0];
     if (!target) {
@@ -400,6 +454,8 @@ class DesktopController {
       x: Math.round(target.bounds.x), y: Math.round(target.bounds.y),
       width: Math.round(target.bounds.width), height: Math.round(target.bounds.height),
     };
+    // Activity overlay: show the "agent is operating" frame while capturing.
+    this._overlayInstance().veil({ id: String(target.id), bounds });
     return {
       image: shot.dataUrl,
       shot: { width: shot.width, height: shot.height },
@@ -430,6 +486,7 @@ class DesktopController {
   // Every mutating action goes here; while paused nothing is injected.
   async act(args) {
     this._ensureNotPaused();
+    this._ensureAppPresentable();
     // Preflight: nut.js (CGEvent) posts events SILENTLY when the process is not
     // an Accessibility-trusted client — a click would "succeed" while doing
     // nothing and the agent would never learn it needs permission. Surface the
@@ -517,6 +574,25 @@ class DesktopController {
     };
 
     try {
+      // Activity overlay: show the transparent "agent is operating" frame on the
+      // target display and pulse a focus ring at the coordinate being acted on.
+      const displayObj = screen.getAllDisplays()[displayIndex] || screen.getAllDisplays()[0];
+      if (displayObj) {
+        const ovDisplay = {
+          id: String(displayObj.id),
+          bounds: {
+            x: Math.round(displayObj.bounds.x), y: Math.round(displayObj.bounds.y),
+            width: Math.round(displayObj.bounds.width), height: Math.round(displayObj.bounds.height),
+          },
+        };
+        const hasPoint = ['click', 'double_click', 'right_click', 'move', 'drag'].includes(action);
+        if (hasPoint) {
+          const gx = shotToPoint(args.x, args.y, shot, ovDisplay);
+          this._overlayInstance().ping(ovDisplay, { x: gx.x - ovDisplay.bounds.x, y: gx.y - ovDisplay.bounds.y });
+        } else {
+          this._overlayInstance().veil(ovDisplay);
+        }
+      }
       switch (action) {
         case 'click': {
           const p = resolvePoint(args.x, args.y);
@@ -597,10 +673,41 @@ class DesktopController {
       throw err;
     }
   }
+
+  // ── Activity-overlay debug / lifecycle (used by the bridge) ───────────
+  overlayShow(display) {
+    this._overlayInstance().veil(display || (() => {
+      const d = screen.getAllDisplays()[0];
+      return d ? { id: String(d.id), bounds: { x: Math.round(d.bounds.x), y: Math.round(d.bounds.y), width: Math.round(d.bounds.width), height: Math.round(d.bounds.height) } } : null;
+    })());
+    return { ok: true };
+  }
+
+  overlayHide() {
+    if (this._overlay) this._overlay.hide();
+    return { ok: true };
+  }
+
+  overlayState() {
+    return { ok: true, paused: this.paused, has_overlay: !!this._overlay };
+  }
+
+  async overlayCapture(display) {
+    if (!this._overlay) return null;
+    return this._overlay.capture(display);
+  }
+
+  destroy() {
+    if (this._overlay) {
+      this._overlay.destroy();
+      this._overlay = null;
+    }
+  }
 }
 
 module.exports = {
   DesktopController,
+  ActivityOverlay: require('./activity-overlay').ActivityOverlay,
   shotToPoint,
   dataUrlToJpegInfo,
   NAMED_KEYS,

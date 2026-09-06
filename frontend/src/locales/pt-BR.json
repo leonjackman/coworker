@@ -231,6 +231,8 @@
   "shortcuts.send_message_desc": "Intervém na tarefa em execução; envia normalmente quando ocioso.",
   "shortcuts.stop_agent": "Parar geração",
   "shortcuts.stop_agent_desc": "Pressione Esc duas vezes para parar o agente.",
+  "shortcuts.stop_computer_control": "Parar controle do computador",
+  "shortcuts.stop_computer_control_desc": "Pausar o controle da área de trabalho (⇧⌘⎋).",
   "shortcuts.press_twice": "Pressione {binding} duas vezes",
   "shortcuts.toggle_sidebar": "Alternar barra lateral",
   "shortcuts.toggle_sidebar_desc": "Mostra ou oculta a barra lateral do workspace.",

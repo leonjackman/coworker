@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { Sparkles, X } from 'lucide-react';
 import { ChatInput, extractSessionIds, type CommandChip, type ComposerApi } from './components/ChatInput';
 import { useGlobalShortcuts } from './keys';
+import { useComputerStopShortcutSyncer } from './keys/computer-stop-shortcut';
 import { MessageList } from './components/MessageList';
 import { PendingDocks } from './components/PendingDocks';
 import { WebSetupHintBar } from './components/WebSetupHintBar';
@@ -198,6 +199,7 @@ function App() {
   // 停止生成需要连按两次 Esc：第一次记录时间并放行（菜单/弹窗仍可正常关闭），
   // 第二次在窗口期内的 Esc 才真正停止。
   const lastEscPressRef = useRef(0);
+  useComputerStopShortcutSyncer();
   useGlobalShortcuts({
     'toggle-work-mode': () => {
       setWorkMode((prev) => (prev === 'plan' ? 'build' : 'plan'));

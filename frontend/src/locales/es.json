@@ -306,6 +306,8 @@
   "shortcuts.send_message_desc": "Interviene en la tarea en curso; envía normalmente en reposo.",
   "shortcuts.stop_agent": "Detener generación",
   "shortcuts.stop_agent_desc": "Pulsa Esc dos veces para detener al agente.",
+  "shortcuts.stop_computer_control": "Detener control de la computadora",
+  "shortcuts.stop_computer_control_desc": "Pausar el control del escritorio (⇧⌘⎋).",
   "shortcuts.press_twice": "Pulsar {binding} dos veces",
   "shortcuts.toggle_sidebar": "Alternar barra lateral",
   "shortcuts.toggle_sidebar_desc": "Muestra u oculta la barra lateral del espacio de trabajo.",
