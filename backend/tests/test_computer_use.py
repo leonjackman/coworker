@@ -305,6 +305,19 @@ def test_act_fail_closed_without_observation(fake_client_factory):
     assert payload["error_code"] == "no_observation"
 
 
+def test_stale_ref_self_heals_with_fresh_snapshot(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient(ax_act=_PERM_ERR("computer_error", "no AX element for ref axbutton:搜索#1")))
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = act.invoke({"action": "click_ref", "ref": "axbutton:搜索#1"})
+    payload = json.loads(out)
+    assert payload["error_code"] == "computer_error"
+    assert "fresh_snapshot" in payload
+    assert payload["fresh_snapshot"] == _SNAP_TEXT
+    assert "stale" in payload["note"]
+
+
 def test_click_coords_passes_shot_geometry(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 

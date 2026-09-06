@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -167,16 +168,16 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
     if status == "ok":
         return (
             "OS Computer Use is ENABLED. Observe with computer_observe snapshot (Accessibility "
-            "element tree + [ref]s — works with just the Accessibility permission, no Screen "
-            "Recording needed). Act BY REF: click_ref/double_click_ref/right_click_ref/type_into/show. "
-            "Open apps ONLY via computer(action='launch_app'); press shortcuts ONLY via "
-            "computer(action='press_hotkey', key, modifiers) — NEVER type a shortcut as text "
-            "(type_text refuses it, e.g. do not type 'cmd+space'). Keep click_coords strictly as a "
-            "last resort for canvas/rendered content. Workflow: snapshot -> pick a ref -> act -> "
-            "read the returned after_preview -> continue only if verified. NEVER claim an outcome "
-            "unless the re-observed snapshot confirms it. If snapshot returns a permission error "
-            "you cannot see the desktop: stop and tell the user to grant Accessibilitiy, do NOT act "
-            "or pretend."
+            "element tree scoped to the focused window; refs are SEMANTIC identities like "
+            "[axbutton:搜索#1] = role:label#n, so they survive UI changes). Act BY REF: "
+            "click_ref/double_click_ref/right_click_ref/type_into/show on refs from the LATEST "
+            "snapshot only. Open apps ONLY via launch_app; press shortcuts ONLY via press_hotkey "
+            "(key+modifiers), NEVER type a shortcut as text. Keep click_coords strictly as a last "
+            "resort for canvas/rendered content (x,y in screenshot pixel space + shot_width/shot_height). "
+            "Workflow: snapshot -> pick a ref -> act -> read verified/after_preview -> continue only "
+            "if verified. If an action returns fresh_snapshot, re-pick a ref from it (the UI moved). "
+            "NEVER claim an outcome unless the returned evidence confirms it. If snapshot reports a "
+            "permission error, stop and tell the user; do NOT act or pretend."
         )
     if status == "feature_off":
         return (
@@ -377,23 +378,29 @@ def build_computer_tools(
             return None
         return str(res.get("text") or "")
 
+    def _normalize_for_verify(text: str) -> str:
+        """Compare content, not churn: drop on-screen positions which change every
+        frame (even when nothing meaningful moved)."""
+        return re.sub(r"at \(-?\d+,-?\d+\)", "", text or "")
+
     def _verify_and_report(before: str, action: str, text: str, app: str, res: dict[str, Any]) -> str:
         after = _snapshot_text()
-        b = before or ""
-        a = after or ""
-        changed = a != b
+        bn = _normalize_for_verify(before or "")
+        an = _normalize_for_verify(after or "")
+        changed = an != bn
         if action == "launch_app":
-            verified = bool(app) and changed and (app.lower() in a.lower())
+            # Launch switches the frontmost app, which changes the window tree.
+            verified = bool(after) and (changed or (app.lower() in (after or "").lower()))
         elif action == "type_into":
-            verified = bool(text) and (text.lower() in a.lower()) and (a != b)
+            verified = bool(text) and (text.lower() in (after or "").lower()) and changed
         else:
             verified = changed
         note = (
-            "Verified: the re-observed state changed as expected."
+            "Verified by content evidence: the re-observed state changed as expected."
             if verified
-            else "The re-observed state did NOT change as expected — re-read computer_observe snapshot before continuing and do not claim success."
+            else "No confirmable content change — do NOT claim success. Re-read computer_observe snapshot (or the fresh_snapshot) and retry."
         )
-        preview = "\n".join(a.split("\n")[:16])
+        preview = "\n".join((after or "").split("\n")[:16])
         return json.dumps(
             {
                 "ok": True,
@@ -457,7 +464,7 @@ def build_computer_tools(
                     "frontmost": result.get("frontmost") or "",
                     "refs": result.get("refs") or 0,
                     "snapshot": snap_text,
-                    "note": "Use the [ref] from this snapshot to act on real elements (click_ref, type_into, show). If snapshot is empty/unavailable, you cannot see the desktop — stop and do not claim anything.",
+                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n), so they survive most UI changes. ALWAYS act on the LATEST snapshot; if an action returns fresh_snapshot, re-pick a ref from it. If snapshot is empty/unavailable, you cannot see the desktop — stop and do not claim anything.",
                 },
                 ensure_ascii=False,
             )
