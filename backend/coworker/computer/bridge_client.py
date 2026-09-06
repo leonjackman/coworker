@@ -122,8 +122,14 @@ class ComputerClient(LoopbackBridgeClient):
     def ax_launch(self, app: str) -> dict[str, Any]:
         return self._call("POST", "/ax/launch", {"app": str(app)})
 
-    def ax_coords(self, x: float, y: float) -> dict[str, Any]:
-        return self._call("POST", "/ax/coords", {"x": float(x), "y": float(y)})
+    def ax_coords(self, x: float, y: float, shot_width: int = 0, shot_height: int = 0, display: int = 0) -> dict[str, Any]:
+        """Click at display points, or at screenshot-pixel coords mapped to points
+        when shot_width/shot_height (from the computer_observe screenshot) are given."""
+        return self._call("POST", "/ax/coords", {
+            "x": float(x), "y": float(y),
+            "shot_width": int(shot_width or 0), "shot_height": int(shot_height or 0),
+            "display": int(display or 0),
+        })
 
     def ax_scroll(self, dx: float = 0, dy: float = 0) -> dict[str, Any]:
         return self._call("POST", "/ax/scroll", {"dx": float(dx), "dy": float(dy)})
@@ -352,8 +358,11 @@ def build_computer_tools(
         key: str = Field("", description="For 'press_hotkey': key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or single symbol).")
         modifiers: list[str] = Field(default_factory=list, description="For 'press_hotkey': from cmd, ctrl, alt, shift (e.g. [\"cmd\"] for Cmd+Space).")
         text: str = Field("", description="For 'type_into'/'type_text': the text to enter. NEVER a keyboard shortcut — shortcuts go through press_hotkey.")
-        x: float = Field(0, description="For 'click_coords' (last resort): X in display points.")
-        y: float = Field(0, description="For 'click_coords' (last resort): Y in display points.")
+        x: float = Field(0, description="For 'click_coords' (last resort): X in the SCREENSHOT's pixel space (read it off the computer_observe screenshot).")
+        y: float = Field(0, description="For 'click_coords' (last resort): Y in the SCREENSHOT's pixel space.")
+        shot_width: int = Field(0, ge=0, description="For 'click_coords': screenshot width from the computer_observe screenshot result; 0 = coordinates are display points.")
+        shot_height: int = Field(0, ge=0, description="For 'click_coords': screenshot height from the computer_observe screenshot result; 0 = coordinates are display points.")
+        display: int = Field(0, ge=0, description="For 'click_coords': display index the screenshot was taken from.")
         dx: float = Field(0, description="For 'scroll': horizontal delta.")
         dy: float = Field(0, description="For 'scroll': vertical delta (positive scrolls down).")
 
@@ -416,7 +425,9 @@ def build_computer_tools(
         if action == "go_back":
             return client.ax_press("[", ["cmd"])
         if action == "click_coords":
-            return client.ax_coords(float(args.x or 0), float(args.y or 0))
+            return client.ax_coords(float(args.x or 0), float(args.y or 0),
+                                    int(args.shot_width or 0), int(args.shot_height or 0),
+                                    int(args.display or 0))
         return {"error": f"unknown computer action: {action}", "error_code": "computer_error"}
 
     def _observe_impl(action: str, display: int, max_width: int, depth: int) -> str | list:
@@ -524,6 +535,9 @@ def build_computer_tools(
         y: float = 0,
         dx: float = 0,
         dy: float = 0,
+        shot_width: int = 0,
+        shot_height: int = 0,
+        display: int = 0,
     ) -> str:
         """Operate the user's real desktop BY ACCESSIBILITY ELEMENT REF.
 
@@ -531,8 +545,10 @@ def build_computer_tools(
         clicks/typing (click_ref, double_click_ref, right_click_ref, type_into, show).
         Open apps only via launch_app; press keyboard shortcuts only via press_hotkey
         (cmd+space etc.) — NEVER type a shortcut as text (type_text refuses it). Keep
-        click_coords strictly as a last resort for canvas/rendered content. After every
-        action read the returned after_preview and only claim what it confirms.
+        click_coords strictly as a last resort for canvas/rendered content; its x,y are
+        in the SCREENSHOT's pixel space, so pass shot_width/shot_height (and display)
+        from that computer_observe screenshot result. After every action read the
+        returned after_preview and only claim what it confirms.
         """
         mods = [str(m) for m in (modifiers or [])]
 
@@ -570,7 +586,9 @@ def build_computer_tools(
         from types import SimpleNamespace
 
         ns = SimpleNamespace(
-            ref=ref, app=app, key=key, modifiers=mods, text=text, x=x, y=y, dx=dx, dy=dy,
+            ref=ref, app=app, key=key, modifiers=mods, text=text,
+            x=x, y=y, dx=dx, dy=dy,
+            shot_width=int(shot_width or 0), shot_height=int(shot_height or 0), display=int(display or 0),
         )
         try:
             result = _execute_action(action, ns)
@@ -578,6 +596,18 @@ def build_computer_tools(
             logger.warning("computer tool failed: %s", exc)
             return json.dumps({"error": str(exc)[:500], "error_code": "computer_error"}, ensure_ascii=False)
         if result.get("error_code"):
+            error = str(result.get("error") or "")
+            # Self-healing loop for stale refs: the AX tree churns when UI state
+            # changes (popovers/menus), so a ref from an older snapshot is often
+            # gone. Instead of a dead end, re-read the CURRENT tree and hand it
+            # back so the model immediately picks a valid ref.
+            if result.get("error_code") == "computer_error" and ("no AX element for ref" in error or "accessibility_not_trusted" in error):
+                now = _snapshot_text()
+                payload = {"error": error, "error_code": result["error_code"]}
+                if now is not None:
+                    payload["fresh_snapshot"] = now[:COMPUTER_OUTPUT_MAX_CHARS]
+                    payload["note"] = "The ref from your previous snapshot is stale (the UI changed). Re-pick a ref from fresh_snapshot above and retry."
+                return json.dumps(payload, ensure_ascii=False)
             return _render_computer_error(result, client)
         return _verify_and_report(before, action, str(text or ""), str(app or ""), result)
 

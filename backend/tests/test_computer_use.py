@@ -305,6 +305,24 @@ def test_act_fail_closed_without_observation(fake_client_factory):
     assert payload["error_code"] == "no_observation"
 
 
+def test_click_coords_passes_shot_geometry(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    captured = {}
+
+    class _Recording(_FakeClient):
+        def ax_coords(self, x, y, shot_width=0, shot_height=0, display=0):
+            captured.update({"x": x, "y": y, "sw": shot_width, "sh": shot_height, "display": display})
+            return {"ok": True, "performed": "click_coords"}
+
+    fake_client_factory(_Recording())
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    act.invoke({"action": "click_coords", "x": 512, "y": 300, "shot_width": 1024, "shot_height": 640, "display": 0})
+    assert captured["x"] == 512.0
+    assert captured["sw"] == 1024
+    assert captured["sh"] == 640
+
+
 # ---------------------------------------------------------------------------
 # HITL: guarded asks for the mutating tool, autonomous passes, observe never gated
 # ---------------------------------------------------------------------------

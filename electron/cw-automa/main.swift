@@ -80,7 +80,12 @@ func walk(_ el: AXUIElement, path: String, depth: Int, consumedRefs: inout Int) 
     guard !role.isEmpty else { return nil }
     consumedRefs += 1
     let ref = String(consumedRefs)
-    let label = axString(el, kAXTitleAttribute).isEmpty ? axString(el, kAXDescriptionAttribute) : axString(el, kAXTitleAttribute)
+    let title = axString(el, kAXTitleAttribute)
+    let desc = axString(el, kAXDescriptionAttribute)
+    let placeholder = axString(el, kAXPlaceholderValueAttribute)
+    // Fall back title -> description -> placeholder so search fields etc. show
+    // their hint text ("搜索") and become identifiable to the model.
+    let label = title.isEmpty ? (desc.isEmpty ? placeholder : desc) : title
     let value = axString(el, kAXValueAttribute)
     let enabled = aeEnabled(el)
     let pos = pointString(el)

@@ -757,11 +757,28 @@ class DesktopController {
     return this._adapterInstance().launch(app);
   }
 
-  async axClickCoords(x, y) {
+  // click_coords: (x,y) are in the SCREENSHOT pixel space the model saw, mapped
+  // to display point space (the exact shotToPoint contract). Pass shot_width/
+  // shot_height/display from the computer_observe screenshot result. Without a
+  // shot the coordinates are treated as raw display points.
+  async axClickCoords(x, y, opts = {}) {
     if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureAppPresentable();
     this._overlayVeil();
-    return this._adapterInstance().clickCoords(x, y);
+    let gx = Number(x);
+    let gy = Number(y);
+    const sw = Number(opts && opts.shot_width) || 0;
+    const sh = Number(opts && opts.shot_height) || 0;
+    if (sw > 0 && sh > 0) {
+      const index = Number(opts && opts.display) || 0;
+      const all = screen.getAllDisplays();
+      const d = all[index] || all[0];
+      const bounds = d ? { x: Math.round(d.bounds.x), y: Math.round(d.bounds.y), width: Math.round(d.bounds.width), height: Math.round(d.bounds.height) } : null;
+      const pt = shotToPoint(x, y, { width: sw, height: sh }, bounds ? { bounds } : null);
+      gx = pt.x;
+      gy = pt.y;
+    }
+    return this._adapterInstance().clickCoords(gx, gy);
   }
 
   async axScroll(dx, dy) {

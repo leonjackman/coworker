@@ -1432,7 +1432,7 @@ async function handleComputerBridgeRequest(method, url, payload) {
       return controller.axLaunch(String(payload && payload.app || ''));
     }
     case '/ax/coords': {
-      return controller.axClickCoords(Number(payload && payload.x) || 0, Number(payload && payload.y) || 0);
+      return controller.axClickCoords(Number(payload && payload.x) || 0, Number(payload && payload.y) || 0, payload || {});
     }
     case '/ax/scroll': {
       return controller.axScroll(Number(payload && payload.dx) || 0, Number(payload && payload.dy) || 0);
