@@ -20,6 +20,13 @@
         "pybackend",
         "pybackend*"
       ]
+    },
+    {
+      "from": "electron/cw-automa/build",
+      "to": "cw-automa",
+      "filter": [
+        "cw-automa"
+      ]
     }
   ],
   "publish": {

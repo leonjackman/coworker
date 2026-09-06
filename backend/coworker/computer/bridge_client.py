@@ -102,6 +102,35 @@ class ComputerClient(LoopbackBridgeClient):
         """Deep-link the user to the exact System Settings pane for a TCC kind."""
         return self._call("POST", "/permissions/open-settings", {"kind": str(kind)})
 
+    # ── Structure-first automation surface (native cw-automa AX helper) ──
+    def ax_snapshot(self, depth: int = 6) -> dict[str, Any]:
+        """Accessibility element tree flattened to text w/ stable refs. Primary
+        observation; only needs the Accessibility permission (no Screen Rec)."""
+        return self._call("POST", "/ax/snapshot", {"depth": int(depth)})
+
+    def ax_act(self, ref: str, op: str, **params: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {"ref": str(ref), "op": str(op)}
+        payload.update(params)
+        return self._call("POST", "/ax/act", payload)
+
+    def ax_press(self, key: str, modifiers: list[str] | None = None) -> dict[str, Any]:
+        return self._call("POST", "/ax/press", {"key": str(key), "modifiers": list(modifiers or [])})
+
+    def ax_type(self, text: str) -> dict[str, Any]:
+        return self._call("POST", "/ax/type", {"text": str(text)})
+
+    def ax_launch(self, app: str) -> dict[str, Any]:
+        return self._call("POST", "/ax/launch", {"app": str(app)})
+
+    def ax_coords(self, x: float, y: float) -> dict[str, Any]:
+        return self._call("POST", "/ax/coords", {"x": float(x), "y": float(y)})
+
+    def ax_scroll(self, dx: float = 0, dy: float = 0) -> dict[str, Any]:
+        return self._call("POST", "/ax/scroll", {"dx": float(dx), "dy": float(dy)})
+
+    def ax_frontmost(self) -> dict[str, Any]:
+        return self._call("POST", "/ax/frontmost", {})
+
 
 # ---------------------------------------------------------------------------
 # Capability status / system-prompt hint
@@ -131,16 +160,17 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
     status = computer_capability_status(data_dir)
     if status == "ok":
         return (
-            "OS Computer Use is ENABLED: use computer_observe to list displays, check "
-            "permissions and capture screenshots of the user's real desktop; use computer "
-            "to click, type, drag and press keys in ANY app (Finder, dialogs, other IDEs). "
-            "Coordinate contract: read pixel coordinates OFF the screenshot you were shown "
-            "and pass display + shot_width/shot_height from that screenshot result back to "
-            "computer. Workflow: screenshot -> decide exact coordinates -> computer act -> "
-            "small wait -> screenshot again to verify. Take at most one screenshot per step "
-            "and keep the default max_width; screenshots are token-expensive. If computer "
-            "returns a permission error, tell the user to enable the permission and do NOT "
-            "retry the same action."
+            "OS Computer Use is ENABLED. Observe with computer_observe snapshot (Accessibility "
+            "element tree + [ref]s — works with just the Accessibility permission, no Screen "
+            "Recording needed). Act BY REF: click_ref/double_click_ref/right_click_ref/type_into/show. "
+            "Open apps ONLY via computer(action='launch_app'); press shortcuts ONLY via "
+            "computer(action='press_hotkey', key, modifiers) — NEVER type a shortcut as text "
+            "(type_text refuses it, e.g. do not type 'cmd+space'). Keep click_coords strictly as a "
+            "last resort for canvas/rendered content. Workflow: snapshot -> pick a ref -> act -> "
+            "read the returned after_preview -> continue only if verified. NEVER claim an outcome "
+            "unless the re-observed snapshot confirms it. If snapshot returns a permission error "
+            "you cannot see the desktop: stop and tell the user to grant Accessibilitiy, do NOT act "
+            "or pretend."
         )
     if status == "feature_off":
         return (
@@ -159,11 +189,31 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
 # Tools
 # ---------------------------------------------------------------------------
 
-ObserveAction = Literal["state", "displays", "screenshot"]
+ObserveAction = Literal["state", "displays", "screenshot", "snapshot"]
 ComputerAction = Literal[
-    "click", "double_click", "right_click", "move", "drag",
-    "scroll", "type", "key", "clipboard_set", "paste",
+    "launch_app", "press_hotkey", "click_ref", "double_click_ref", "right_click_ref",
+    "type_into", "type_text", "scroll", "go_back", "show", "click_coords",
 ]
+
+# The macOS Accessibility (AX) element tree is the PRIMARY observation surface:
+# it only needs the Accessibility permission (NOT Screen Recording), and gives
+# the agent a real searchable element list with stable refs — so it acts by ref
+# instead of guessing pixel coordinates. Screen Recording is a secondary, visual
+# complement. When the AX tree is unavailable the mutating tools fail closed.
+
+_SHORTCUT_TOKENS = [
+    "cmd", "command", "ctrl", "control", "alt", "option", "shift",
+    "space", "enter", "return", "escape", "esc", "tab", "backspace",
+    "super", "meta", "\u2318", "\u21e7", "\u2325", "\u2303", "\u21a9",
+]
+
+
+def _looks_like_shortcut(text: str) -> bool:
+    """True when ``text`` is actually a keyboard shortcut typed as text."""
+    t = (text or "").lower()
+    if "+" in t:
+        return True
+    return any(token in t for token in _SHORTCUT_TOKENS)
 
 
 def _json_cap(result: dict[str, Any], limit: int = COMPUTER_OUTPUT_MAX_CHARS) -> str:
@@ -290,32 +340,93 @@ def build_computer_tools(
     client = ComputerClient(data_dir)
 
     class ObserveArgs(BaseModel):
-        action: ObserveAction = Field(..., description="What to do: state = permissions/displays/platform; screenshot = capture the chosen display; displays = list displays with indices.")
+        action: ObserveAction = Field(..., description="Read-only: state = permissions/platform/frontmost; displays = list displays; screenshot = capture the chosen display (visual, needs Screen Recording); snapshot = Accessibility element tree (text + refs) — the reliable observation, needs only Accessibility permission.")
         display: int = Field(0, ge=0, description="For 'screenshot': display index to capture (see displays list; 0 = primary).")
-        max_width: int = Field(max_shot_width, ge=320, le=2048, description="Max screenshot width in pixels (higher = clearer but more tokens).")
+        max_width: int = Field(max_shot_width, ge=320, le=2048, description="For 'screenshot': max screenshot width in pixels (higher = clearer but more tokens).")
+        depth: int = Field(6, ge=1, le=10, description="For 'snapshot': Accessibility tree depth.")
 
     class ComputerArgs(BaseModel):
-        action: ComputerAction = Field(..., description="What to do on the desktop.")
-        display: int = Field(0, ge=0, description="Display index (see the computer_observe displays list; 0 = primary).")
-        x: float = Field(0, description="For click/double_click/right_click/move/drag start: X in the screenshot's pixel space (or display point space when no shot given).")
-        y: float = Field(0, description="For click/double_click/right_click/move/drag start: Y in the screenshot's pixel space.")
-        x2: float = Field(0, description="For 'drag': target X.")
-        y2: float = Field(0, description="For 'drag': target Y.")
-        text: str = Field("", description="For 'type'/'clipboard_set': text to type or copy.")
-        key: str = Field("", description="For 'key': key name (Enter, Tab, Escape, Backspace, Delete, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, F1..F12, a-z, 0-9, or a single symbol).")
-        modifiers: list[str] = Field(default_factory=list, description="For 'key': modifier list from cmd, ctrl, alt, shift (e.g. [\"cmd\"] for Cmd+C).")
-        button: str = Field("left", description="For click/drag: left | right | middle.")
-        dx: float = Field(0, description="For 'scroll': horizontal delta (pixels).")
-        dy: float = Field(0, description="For 'scroll': vertical delta (pixels; positive scrolls down).")
-        shot_width: int = Field(0, ge=0, description="Width of the screenshot the coordinates were read from (from the computer_observe result); 0 = coordinates are display points.")
-        shot_height: int = Field(0, ge=0, description="Height of the screenshot the coordinates were read from; 0 = coordinates are display points.")
+        action: ComputerAction = Field(..., description="Structure-first desktop action. Prefer ref-based and intent-level actions; coordinates are a last resort for canvas/rendered content.")
+        ref: str = Field("", description="For click_ref/double_click_ref/right_click_ref/type_into/show: the element ref from the latest computer_observe snapshot.")
+        app: str = Field("", description="For 'launch_app': application name to open via the system launcher (e.g. 'Calculator', 'Safari').")
+        key: str = Field("", description="For 'press_hotkey': key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or single symbol).")
+        modifiers: list[str] = Field(default_factory=list, description="For 'press_hotkey': from cmd, ctrl, alt, shift (e.g. [\"cmd\"] for Cmd+Space).")
+        text: str = Field("", description="For 'type_into'/'type_text': the text to enter. NEVER a keyboard shortcut — shortcuts go through press_hotkey.")
+        x: float = Field(0, description="For 'click_coords' (last resort): X in display points.")
+        y: float = Field(0, description="For 'click_coords' (last resort): Y in display points.")
+        dx: float = Field(0, description="For 'scroll': horizontal delta.")
+        dy: float = Field(0, description="For 'scroll': vertical delta (positive scrolls down).")
 
-    def _observe_impl(action: str, display: int, max_width: int) -> str | list:
+    def _snapshot_text() -> str | None:
+        """Return the current AX snapshot text, or None when observation fails
+        (fail-closed: if we cannot see, the agent must not guess)."""
+        try:
+            res = client.ax_snapshot(6)
+        except Exception:
+            return None
+        if not isinstance(res, dict) or res.get("error_code"):
+            return None
+        return str(res.get("text") or "")
+
+    def _verify_and_report(before: str, action: str, text: str, app: str, res: dict[str, Any]) -> str:
+        after = _snapshot_text()
+        b = before or ""
+        a = after or ""
+        changed = a != b
+        if action == "launch_app":
+            verified = bool(app) and changed and (app.lower() in a.lower())
+        elif action == "type_into":
+            verified = bool(text) and (text.lower() in a.lower()) and (a != b)
+        else:
+            verified = changed
+        note = (
+            "Verified: the re-observed state changed as expected."
+            if verified
+            else "The re-observed state did NOT change as expected — re-read computer_observe snapshot before continuing and do not claim success."
+        )
+        preview = "\n".join(a.split("\n")[:16])
+        return json.dumps(
+            {
+                "ok": True,
+                "action": action,
+                "verified": verified,
+                "changed": changed,
+                "note": note,
+                "after_preview": preview,
+            },
+            ensure_ascii=False,
+        )
+
+    def _execute_action(action: str, args: Any) -> dict[str, Any]:
+        if action == "launch_app":
+            return client.ax_launch(str(args.app or ""))
+        if action == "press_hotkey":
+            return client.ax_press(str(args.key or ""), [str(m) for m in (args.modifiers or [])])
+        if action in ("click_ref", "double_click_ref", "right_click_ref"):
+            op = {"click_ref": "click", "double_click_ref": "double", "right_click_ref": "right"}[action]
+            return client.ax_act(str(args.ref or ""), op)
+        if action == "show":
+            return client.ax_act(str(args.ref or ""), "show")
+        if action == "type_into":
+            return client.ax_act(str(args.ref or ""), "type_into", text=str(args.text or ""))
+        if action == "type_text":
+            return client.ax_type(str(args.text or ""))
+        if action == "scroll":
+            return client.ax_scroll(float(args.dx or 0), float(args.dy or 0))
+        if action == "go_back":
+            return client.ax_press("[", ["cmd"])
+        if action == "click_coords":
+            return client.ax_coords(float(args.x or 0), float(args.y or 0))
+        return {"error": f"unknown computer action: {action}", "error_code": "computer_error"}
+
+    def _observe_impl(action: str, display: int, max_width: int, depth: int) -> str | list:
         try:
             if action == "state":
                 result = client.state()
             elif action == "displays":
                 result = client.displays()
+            elif action == "snapshot":
+                result = client.ax_snapshot(depth)
             elif action == "screenshot":
                 result = client.screenshot(display=display, max_width=max_width)
             else:
@@ -328,6 +439,17 @@ def build_computer_tools(
             return _render_computer_error(result, client)
         if action == "screenshot":
             return _screenshot_result(result, client, data_dir, session_id, vision, max_width)
+        if action == "snapshot":
+            snap_text = str(result.get("text") or "")
+            return json.dumps(
+                {
+                    "frontmost": result.get("frontmost") or "",
+                    "refs": result.get("refs") or 0,
+                    "snapshot": snap_text,
+                    "note": "Use the [ref] from this snapshot to act on real elements (click_ref, type_into, show). If snapshot is empty/unavailable, you cannot see the desktop — stop and do not claim anything.",
+                },
+                ensure_ascii=False,
+            )
         return _json_cap(result)
 
     def _screenshot_result(result: dict[str, Any], client: Any, data_dir: Path | str | None, session_id: str, vision: bool, max_width: int) -> str | list:
@@ -367,7 +489,7 @@ def build_computer_tools(
                     {
                         "screenshot": saved,
                         **geometry,
-                        "note": "This model has no vision capability; the screenshot was saved to disk instead of being shown. Use the computer tool carefully or ask the user what is on screen.",
+                        "note": "This model has no vision capability; the screenshot was saved to disk instead of being shown. Use computer_observe snapshot (accessibility tree) as the reliable observation instead.",
                     },
                     ensure_ascii=False,
                 )
@@ -378,79 +500,78 @@ def build_computer_tools(
         return json.dumps({"error": "screenshot came back empty", "error_code": "screen_permission", "hint": hint.strip()}, ensure_ascii=False)
 
     @tool(args_schema=ObserveArgs)
-    def computer_observe(action: str, display: int = 0, max_width: int = max_shot_width) -> str | list:
-        """Inspect the user's real desktop: list displays/permissions, or capture a screenshot.
+    def computer_observe(action: str, display: int = 0, max_width: int = max_shot_width, depth: int = 6) -> str | list:
+        """Inspect the user's real desktop: Accessibility snapshot, screenshot, or state.
 
-        Read-only. ``state`` returns platform, macOS permissions (input/screen) and the
-        display list with bounds. ``screenshot`` captures the chosen display and returns
-        it as an image (vision) or a saved path; the result always includes the exact
-        ``shot`` pixel geometry and ``display`` info — pass those back to the computer tool
-        so its click coordinates land exactly. Take one screenshot at a time and prefer the
-        default max_width: each screenshot costs real tokens.
+        Read-only. PREFER ``snapshot`` — it returns the Accessibility element tree as
+        text with stable [ref]s and only needs the Accessibility permission (works even
+        without Screen Recording), so you can act on real elements by ref. ``screenshot``
+        is the visual complement (needs Screen Recording). ``state`` returns platform,
+        permissions and the current frontmost app. The snapshot is your source of truth:
+        never claim an action "worked" unless the re-observed snapshot shows it.
         """
-        return _observe_impl(action, display, max_width)
+        return _observe_impl(action, display, max_width, depth)
 
     @tool(args_schema=ComputerArgs)
     def computer(
         action: str,
-        display: int = 0,
-        x: float = 0,
-        y: float = 0,
-        x2: float = 0,
-        y2: float = 0,
-        text: str = "",
+        ref: str = "",
+        app: str = "",
         key: str = "",
         modifiers: list[str] | None = None,
-        button: str = "left",
+        text: str = "",
+        x: float = 0,
+        y: float = 0,
         dx: float = 0,
         dy: float = 0,
-        shot_width: int = 0,
-        shot_height: int = 0,
     ) -> str:
-        """Operate the user's real desktop: click, drag, scroll, type or press keys in any app.
+        """Operate the user's real desktop BY ACCESSIBILITY ELEMENT REF.
 
-        Coordinates are in the pixel space of the screenshot you were shown (read them OFF
-        that image); pass display + shot_width + shot_height from the computer_observe
-        screenshot result. Never guess coordinates without a fresh screenshot. Prefer
-        keyboard shortcuts and the app's own menus; type text only into text fields. After
-        an action that changes the UI, take another screenshot to verify. This tool acts on
-        the user's whole machine — never operate apps the user is actively using, and stop
-        immediately if the user takes back control (pauses) the desktop.
+        Structure-first: use a ref from the latest computer_observe snapshot for
+        clicks/typing (click_ref, double_click_ref, right_click_ref, type_into, show).
+        Open apps only via launch_app; press keyboard shortcuts only via press_hotkey
+        (cmd+space etc.) — NEVER type a shortcut as text (type_text refuses it). Keep
+        click_coords strictly as a last resort for canvas/rendered content. After every
+        action read the returned after_preview and only claim what it confirms.
         """
         mods = [str(m) for m in (modifiers or [])]
-        payload: dict[str, Any] = {"action": action, "display": int(display)}
-        payload["shot"] = (
-            {"width": int(shot_width), "height": int(shot_height)}
-            if shot_width > 0 and shot_height > 0
-            else None
+
+        # Instant shortcut-as-text guard: type_* must never be a hotkey.
+        if action in ("type_text", "type_into") and _looks_like_shortcut(str(text or "")):
+            return json.dumps(
+                {
+                    "error": "You passed a keyboard shortcut as text. Use computer(action='press_hotkey', key='<key>', modifiers=['cmd']) instead.",
+                    "error_code": "shortcut_as_text",
+                },
+                ensure_ascii=False,
+            )
+
+        # Fail-closed: if we cannot observe the desktop, refuse to guess.
+        before = _snapshot_text()
+        if before is None:
+            return json.dumps(
+                {
+                    "error": "Cannot see the desktop (Accessibility unavailable). Enable Accessibility for CoWorker in System Settings and retry; do NOT act on a screen you cannot observe.",
+                    "error_code": "no_observation",
+                },
+                ensure_ascii=False,
+            )
+
+        # The `action` string also needs to be passed to arg-driven dispatch; build
+        # a lightweight namespace from the raw args for _execute_action.
+        from types import SimpleNamespace
+
+        ns = SimpleNamespace(
+            ref=ref, app=app, key=key, modifiers=mods, text=text, x=x, y=y, dx=dx, dy=dy,
         )
-        if action in ("click", "double_click", "right_click", "move", "drag"):
-            payload.update({"x": float(x), "y": float(y), "button": str(button) or "left"})
-        if action == "drag":
-            payload.update({"x2": float(x2), "y2": float(y2)})
-        if action in ("type", "clipboard_set"):
-            payload["text"] = str(text)
-        if action == "key":
-            payload["key"] = str(key)
-            payload["modifiers"] = mods
-        if action == "scroll":
-            payload["dx"] = float(dx)
-            payload["dy"] = float(dy)
         try:
-            result = client.act(payload)
+            result = _execute_action(action, ns)
         except Exception as exc:  # noqa: BLE001 - tool must never break a turn
             logger.warning("computer tool failed: %s", exc)
             return json.dumps({"error": str(exc)[:500], "error_code": "computer_error"}, ensure_ascii=False)
         if result.get("error_code"):
             return _render_computer_error(result, client)
-        return json.dumps(
-            {
-                "ok": True,
-                "action": action,
-                "note": "Now take another computer_observe screenshot to verify the result before continuing.",
-            },
-            ensure_ascii=False,
-        )
+        return _verify_and_report(before, action, str(text or ""), str(app or ""), result)
 
     return [computer_observe, computer]
 

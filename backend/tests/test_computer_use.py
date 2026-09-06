@@ -100,11 +100,18 @@ def test_resolve_empty_when_off_or_no_bridge(monkeypatch, tmp_path: Path):
 # Tools: names + bridge error surfacing
 # ---------------------------------------------------------------------------
 
+_SNAP_TEXT = "[1] AXApplication \"TestApp\"\n  [2] AXButton \"OK\" at (100,50)\n  [3] AXTextField value=\"\" at (120,80)"
+
+
 class _FakeClient:
-    def __init__(self, state=None, screenshot=None, act=None):
+    def __init__(self, state=None, screenshot=None, ax_act=None, snapshot_text: str | None = _SNAP_TEXT, request=None, frontmost="TestApp"):
         self._state = state if state is not None else {"ok": True, "platform": "darwin", "displays": []}
         self._screenshot = screenshot
-        self._act = act if act is not None else {"ok": True, "action": "click"}
+        self._ax_act = ax_act if ax_act is not None else {"ok": True, "performed": "click"}
+        self._snapshot_text = snapshot_text
+        self._request_result = request
+        self.requested_kinds = []
+        self._frontmost = frontmost
 
     def state(self):
         return self._state
@@ -116,7 +123,38 @@ class _FakeClient:
         return self._screenshot
 
     def act(self, payload):
-        return self._act
+        return self._ax_act
+
+    # Structure-first surface (native AX)
+    def ax_snapshot(self, depth=6):
+        if self._snapshot_text is None:
+            return {"error": "no accessibility", "error_code": "input_permission"}
+        return {"ok": True, "frontmost": self._frontmost, "refs": 3, "text": self._snapshot_text}
+
+    def ax_act(self, ref, op, text=None):
+        return self._ax_act
+
+    def ax_press(self, key, modifiers):
+        return {"ok": True, "performed": "press_hotkey", "key": key, "modifiers": modifiers}
+
+    def ax_type(self, text):
+        return {"ok": True, "performed": "type_text"}
+
+    def ax_launch(self, app):
+        return {"ok": True, "launched": app}
+
+    def ax_coords(self, x, y):
+        return {"ok": True, "performed": "click_coords"}
+
+    def ax_scroll(self, dx, dy):
+        return {"ok": True, "performed": "scroll"}
+
+    def ax_frontmost(self):
+        return {"ok": True, "pid": 1, "app": self._frontmost}
+
+    def request_permission(self, kind):
+        self.requested_kinds.append(kind)
+        return self._request_result or {"ok": True, "status": "not determined", "prompt_shown": True}
 
 
 def _data_url(body: bytes) -> str:
@@ -197,9 +235,9 @@ def test_observe_screenshot_rejects_empty_vision(fake_client_factory):
 def test_act_paused_hint(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
-    fake_client_factory(_FakeClient(act={"error": "computer paused by user", "error_code": "computer_paused", "reason": "user"}))
+    fake_client_factory(_FakeClient(ax_act={"error": "computer paused by user", "error_code": "computer_paused", "reason": "user"}))
     (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
-    out = act.invoke({"action": "click", "x": 10, "y": 10, "shot_width": 1024, "shot_height": 640})
+    out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert payload["error_code"] == "computer_paused"
     assert "paused" in payload["hint"]
@@ -208,30 +246,62 @@ def test_act_paused_hint(fake_client_factory):
 def test_act_ok(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
-    fake_client_factory(_FakeClient(act={"ok": True, "action": "click"}))
+    fake_client_factory(_FakeClient(ax_act={"ok": True, "performed": "click"}))
     (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
-    out = act.invoke({"action": "click", "x": 10, "y": 10, "shot_width": 1024, "shot_height": 640})
+    out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert payload["ok"] is True
+    assert "verified" in payload
 
 
-def test_act_passes_shot_geometry(fake_client_factory, monkeypatch):
+def test_act_press_hotkey_passes_key_and_modifiers(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     captured = {}
 
     class _Recording(_FakeClient):
-        def act(self, payload):
-            captured.update(payload)
-            return {"ok": True, "action": payload.get("action")}
+        def ax_press(self, key, modifiers):
+            captured.update({"key": key, "modifiers": modifiers})
+            return {"ok": True, "performed": "press_hotkey"}
 
     fake_client_factory(_Recording())
     (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
-    act.invoke({"action": "drag", "x": 1, "y": 2, "x2": 3, "y2": 4, "button": "left", "shot_width": 1024, "shot_height": 640, "display": 0})
-    assert captured["shot"] == {"width": 1024, "height": 640}
-    assert captured["x"] == 1.0
-    assert captured["y"] == 2.0
-    assert captured["x2"] == 3.0
+    act.invoke({"action": "press_hotkey", "key": "space", "modifiers": ["cmd"]})
+    assert captured["key"] == "space"
+    assert captured["modifiers"] == ["cmd"]
+
+
+def test_act_launch_app(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient(snapshot_text=_SNAP_TEXT))
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = act.invoke({"action": "launch_app", "app": "Calculator"})
+    payload = json.loads(out)
+    # verifier: app text didn't appear in the (unchanged) snapshot → not verified, but ok.
+    assert payload["ok"] is True
+    assert payload["changed"] is False
+
+
+def test_act_type_text_refuses_shortcut(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient())
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = act.invoke({"action": "type_text", "text": "cmd+spaceMusic"})
+    payload = json.loads(out)
+    assert payload["error_code"] == "shortcut_as_text"
+    assert "press_hotkey" in payload["error"]
+
+
+def test_act_fail_closed_without_observation(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient(snapshot_text=None))
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = act.invoke({"action": "click_ref", "ref": "2"})
+    payload = json.loads(out)
+    assert payload["error_code"] == "no_observation"
 
 
 # ---------------------------------------------------------------------------
@@ -284,9 +354,8 @@ def test_hitl_computer_observe_never_in_interrupt_map():
 # ---------------------------------------------------------------------------
 
 class _CountingClient(_FakeClient):
-    def __init__(self, request_result, *, act=None, screenshot=None):
-        super().__init__(act=act if act is not None else _FakeClient()._act,
-                         screenshot=screenshot if screenshot is not None else _FakeClient()._screenshot)
+    def __init__(self, request_result, *, ax_act=None, screenshot=None):
+        super().__init__(ax_act=ax_act if ax_act is not None else {"ok": True, "performed": "click"}, screenshot=screenshot)
         self._request_result = request_result
         self.requested_kinds = []
 
@@ -310,18 +379,18 @@ def test_act_auto_requests_permission_once_on_denial(fake_client_factory):
     counting = _install_counting(
         fake_client_factory,
         {"ok": True, "status": "denied", "opened_settings": True},
-        act=_PERM_ERR("input_permission", "no accessibility"),
+        ax_act=_PERM_ERR("input_permission", "no accessibility"),
     )
     # First act attempt fails on Accessibility; the OS is denied -> auto-request.
     (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
-    out = act.invoke({"action": "click", "x": 5, "y": 5})
+    out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert payload["error_code"] == "input_permission"
     assert counting.requested_kinds == ["accessibility"]
     assert "toggle CoWorker OFF and back ON" in payload["hint"]
 
     # A repeated identical failure must NOT re-request (once-guard).
-    out2 = act.invoke({"action": "click", "x": 5, "y": 5})
+    out2 = act.invoke({"action": "click_ref", "ref": "2"})
     assert json.loads(out2)["error_code"] == "input_permission"
     assert counting.requested_kinds == ["accessibility"]
 
@@ -350,10 +419,10 @@ def test_request_granted_then_retry_hint(fake_client_factory):
     counting = _install_counting(
         fake_client_factory,
         {"ok": True, "status": "authorized", "granted": True},
-        act=_PERM_ERR("input_permission", "no accessibility"),
+        ax_act=_PERM_ERR("input_permission", "no accessibility"),
     )
     (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
-    out = act.invoke({"action": "click", "x": 5, "y": 5})
+    out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert "granted just now" in payload["hint"]
 

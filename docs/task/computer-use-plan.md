@@ -30,42 +30,40 @@ MCP                      外部系統結構化能力接入（既有）
 | openclaw | OS 控制全委派外部；權限集中 native 殼（TCC）；截圖降檔 JPEG；無 vision 用副 model 描述 | ① 截圖固定降檔（max_width=1024, JPEG q60）；② 無 vision model 落盤給路徑；③ TCC onboarding 由 Electron(native) 探測與引導 |
 | Anthropic/OpenAI CU 規範 | 座標標準化、動作集最小、動作後驗證 | 座標契約（shot-space→display points）、最小動作集、observe→act→驗證循環 |
 
-## 三、目標架構（已落地）
+## 三、目標架構（已落地 —— 結構化 AX 根源改造）
 
-完全複用 browser bridge 模式，新增獨立通道（computer 可點擊/輸入全桌面，**絕不**與低權限面共用 channel）：
+對齊主流（codex CDP/DOM＋Guardian 證據審查；openclaw DOM/ref＋座標後備＋無視覺描述降級）：
+**觀察以 macOS Accessibility 元素樹（AX）為一級、截圖降級為視覺補充**；動作**離散、意圖級、以 ref 定位**；每個動作**回傳 before/after 快照並做結果斷言**；無法觀察時 **fail-closed**。
 
 ```
-Electron main: electron/desktop-controller.js
-  DesktopController
-    ├─ displays      screen.getAllDisplays()  (含 bounds/scaleFactor)
-    ├─ screenshot    desktopCapturer → 固定降檔 JPEG（保長寬比）
-    ├─ input         @nut-tree-fork/nut-js（in-process；macOS CGEvent）
-    ├─ pause         powerMonitor 鎖屏/睡眠自動讓位
-    ├─ abort         globalShortcut Cmd/Ctrl+Shift+Esc + tray「Emergency Stop」
-    ├─ overlay       electron/activity-overlay.js（agent 操作中的透明遮罩提示）
-    └─ state         platform / permissions(accessibility, screen) / identity
-         │
-         loopback HTTP 127.0.0.1 隨機 port + bearer token（獨立 second bridge）
-         │
-Python backend: coworker/computer/bridge_client.py
-    ├─ ComputerClient（httpx，讀 .coworker_settings.json 的 computer_bridge key）
-    ├─ computer_observe（read-only：state/displays/screenshot）
-    ├─ computer（mutating：click/double_click/right_click/move/drag/scroll/
-    │             type/key/clipboard_set/paste）
-    └─ computer_capability_line → SystemAssembler 注入 system prompt
+Electron main
+  ├─ AutomationAdapter (electron/automation-adapter.js) —— spawn 原生助手
+  │    └─ cw-automa (electron/cw-automa/main.swift, 原生 Swift/AX)
+  │         snapshot   → AX 元素樹 + 穩定 ref（只需輔助使用權限，免螢幕錄製）
+  │         act        → click/double/right/type_into/set_value/focus/show(ref)
+  │         press_hotkey → CGEvent 快捷鍵（非文字）
+  │         type_text  → CGEvent 逐字
+  │         launch     → open -a；click_coords → 座標後備；scroll/frontmost
+  ├─ DesktopController (desktop-controller.js)
+  │    ├─ axSnapshot/axAct/axPress/axType/axLaunch/axCoords/axScroll/axFrontmost/adapterState
+  │    ├─（保留）screenshot(desktopCapturer)、遮罩、權限、⇧⌘⎋動態快捷鍵、Dock 保底
+  └─ bridge 路由：/ax/snapshot|act|press|type|launch|coords|scroll|frontmost + GET /ax/state
+Python backend (bridge_client.py)
+  ├─ computer_observe → snapshot(一級/文字) + screenshot(二級/視覺) + state/displays
+  └─ computer → launch_app | press_hotkey | click_ref/double/right | type_into | type_text |
+                scroll | go_back | show | click_coords(後備)
+     每個動作：fail-closed（無 snapshot 即拒）+ before/after 斷言（verified）
+     type_text/type_into 拒「快捷鍵樣式文字」（引導 press_hotkey）
 ```
 
-**操作中遮罩（ActivityOverlay）**：agent 在操作桌面時，於被操作的顯示器上疊一層**透明、不攔滑鼠 (`setIgnoreMouseEvents(true)`)** 的全螢幕置頂視窗：
-* 動態邊框：`filter:hue-rotate` 流光 + 內虛線呼吸 + 掃描線；
-* 聚焦環：在實際點擊目標處 pulse 一次（與 ego-browser 的 action highlight 同義；座標用同一 shot→point 換算 → 精準對齊）；
-* 角標 pill：`CoWorker 正在操作這台電腦 · ⇧⌘⎋ 可暫停`；暫停/鎖屏時轉紅 `已暫停`；
-* 閒置 ~4s 自動隱藏；`alwaysOnTop('screen-saver')` + `visibleOnAllWorkspaces(fullscreen)`；每顯示器一個視窗快取。
-* 純自身繪製、**不需螢幕錄製 TCC** → dev(未簽名) 亦可渲染。橋接提供 `/overlay/show|hide|capture`、`GET /overlay`（驗證用）。
+**為什麼根治「說做不一致」**：動作由 ref 定位真元素（不猜座標）；快捷鍵只能 `press_hotkey`（不再把 `cmd+space` 當文字）；`launch_app` 開 App（不靠猜）；動作回 `after_preview`＋`verified`，模型只能按實際狀態描述；觀察不可得即拒絕——dev（僅輔助使用權限）即可完整測試（這正是之前 macOS 未簽名無法截屏的繞過）。
 
-**座標契約**：`computer_observe` screenshot 回傳 `shot{width,height}` 與 `display{bounds}`；model 讀圖上的像素座標，於 `computer` 回傳 `display` + `shot_width/shot_height`；Electron 以
-`pointX = bounds.x + (x / shot.width) * bounds.width` 換算（保長寬比降檔 → 對 Retina 精確）。`shotToPoint` 為純函數、含單元測試。
 
-**共用層**：`coworker/bridge_common.py`（BridgeInfo、設定檔讀寫、截圖 data-url 驗證/落盤、`LoopbackBridgeClient`）。browser bridge 保留既有實作；computer bridge 使用共用層，避免新面與舊面漂移。
+**操作中遮罩（ActivityOverlay）**：agent 操作桌面時於被操作顯示器疊一層**透明、不攔滑鼠**的全螢幕置頂視窗（動態邊框＋目標聚焦環＋角標 pill；pill 文字動態顯示用戶設定的停止快捷鍵）；閒置 ~4s 隱藏；純自身繪製、**不需螢幕錄製 TCC** → dev 亦可渲染。橋接 `/overlay/show|capture|hide`、`GET /overlay`。
+
+**共用層**：`coworker/bridge_common.py`（BridgeInfo、設定檔讀寫、截圖 data-url 驗證/落盤、`LoopbackBridgeClient`）。browser bridge 保留既有實作（DOM 編號＋座標）；computer bridge 使用共用層。
+
+**橫向對齊（瀏覽器面）**：內嵌瀏覽器已為「DOM 編號＋座標」結構化面；與桌面「AX ref」同哲學，後續可再升級為按 `ref` 點擊（codex `browser_use`/openclaw DOM+ref 對齊），不影響本批桌面主線。
 
 ## 四、安全模型（對齊「默認/完整」兩級權限）
 
@@ -133,6 +131,8 @@ macOS 的 TCC 權限**沒有**第三方可呼叫的「允許/不允許」系統�
 | 檔案 | 角色 |
 |---|---|
 | `electron/desktop-controller.js` | DesktopController（capture/input/pause/permission/coords） |
+| `electron/automation-adapter.js` | 結構化自動化 adapter（spawn cw-automa、JSON-lines、snapshotText/act） |
+| `electron/cw-automa/main.swift` | 原生 macOS AX/CGEvent 助手（snapshot/act/press/type/launch 後備） |
 | `electron/activity-overlay.js` | Agent 操作中的透明動態遮罩（邊框/聚焦環/pill/閒置隱藏） |
 | `electron/main.js` | computer bridge server、註冊 `/api/computer/bridge`、tray、熱鍵、powerMonitor、設定 IPC |
 | `backend/coworker/bridge_common.py` | 共用 bridge 基礎（BridgeInfo/截圖/設定/httpx client） |

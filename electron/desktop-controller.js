@@ -147,7 +147,18 @@ class DesktopController {
     this._overlay = null;
     this._stopAccel = null;
     this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
+    this._adapter = null;
     this._ensureAppPresentable();
+  }
+
+  // Lazy AutomationAdapter (native cw-automa AX helper). Structure-first source
+  // of truth for computer use; native macOS only.
+  _adapterInstance() {
+    if (this._adapter === null) {
+      const { AutomationAdapter } = require('./automation-adapter');
+      this._adapter = new AutomationAdapter();
+    }
+    return this._adapter;
   }
 
   // macOS treats an app as a background/accessory app (and REMOVES its Dock
@@ -697,10 +708,84 @@ class DesktopController {
     return this._overlay.capture(display);
   }
 
+  // ── Structure-first automation surface (native cw-automa) ─────────────
+  // Observation + actuation by Accessibility element ref; coordinates are an
+  // explicit fallback. Every mutating action also bumps the activity overlay.
+
+  _primaryDisplay() {
+    const d = screen.getAllDisplays()[0];
+    return d ? { id: String(d.id), bounds: { x: Math.round(d.bounds.x), y: Math.round(d.bounds.y), width: Math.round(d.bounds.width), height: Math.round(d.bounds.height) } } : null;
+  }
+
+  _overlayVeil() {
+    const d = this._primaryDisplay();
+    if (d) this._overlayInstance().veil(d);
+  }
+
+  async axSnapshot(depth = 6) {
+    if (process.platform !== 'darwin') return { frontmost: '', refs: 0, text: '', error: 'not on macOS' };
+    this._ensureAppPresentable();
+    const adapter = this._adapterInstance();
+    return adapter.snapshotText(depth);
+  }
+
+  async axAct(ref, op, params = {}) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureAppPresentable();
+    this._overlayVeil();
+    return this._adapterInstance().act({ ref, op, ...params });
+  }
+
+  async axPress(key, modifiers) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureAppPresentable();
+    this._overlayVeil();
+    return this._adapterInstance().press(key, modifiers);
+  }
+
+  async axType(text) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureAppPresentable();
+    this._overlayVeil();
+    return this._adapterInstance().type(text);
+  }
+
+  async axLaunch(app) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureAppPresentable();
+    this._overlayVeil();
+    return this._adapterInstance().launch(app);
+  }
+
+  async axClickCoords(x, y) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureAppPresentable();
+    this._overlayVeil();
+    return this._adapterInstance().clickCoords(x, y);
+  }
+
+  async axScroll(dx, dy) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    return this._adapterInstance().scroll(dx, dy);
+  }
+
+  async axFrontmost() {
+    if (process.platform !== 'darwin') return { pid: -1, app: '' };
+    return this._adapterInstance().frontmost();
+  }
+
+  adapterState() {
+    return { ok: true, platform: process.platform, paused: this.paused, adapter: this._adapter ? this._adapter.ready : false };
+  }
+
   destroy() {
     if (this._overlay) {
       this._overlay.destroy();
       this._overlay = null;
+    }
+    if (this._adapter) {
+      try { this._adapter.close(); } catch (e) { /* ignore */ }
+      this._adapter = null;
     }
   }
 }

@@ -1381,6 +1381,9 @@ async function handleComputerBridgeRequest(method, url, payload) {
   if (method === 'GET' && pathname === '/overlay') {
     return controller.overlayState();
   }
+  if (method === 'GET' && pathname === '/ax/state') {
+    return controller.adapterState();
+  }
   if (method !== 'POST') throw new Error('method_not_allowed');
 
   switch (pathname) {
@@ -1412,6 +1415,30 @@ async function handleComputerBridgeRequest(method, url, payload) {
       const dataUrl = await controller.overlayCapture(payload && payload.display);
       if (!dataUrl) return { error: 'overlay unavailable', error_code: 'overlay_unavailable' };
       return { image: dataUrl };
+    }
+    case '/ax/snapshot': {
+      return controller.axSnapshot(Number(payload && payload.depth) || 6);
+    }
+    case '/ax/act': {
+      return controller.axAct(String(payload && payload.ref || ''), String(payload && payload.op || 'click'), payload || {});
+    }
+    case '/ax/press': {
+      return controller.axPress(String(payload && payload.key || ''), Array.isArray(payload && payload.modifiers) ? payload.modifiers : []);
+    }
+    case '/ax/type': {
+      return controller.axType(String(payload && payload.text || ''));
+    }
+    case '/ax/launch': {
+      return controller.axLaunch(String(payload && payload.app || ''));
+    }
+    case '/ax/coords': {
+      return controller.axClickCoords(Number(payload && payload.x) || 0, Number(payload && payload.y) || 0);
+    }
+    case '/ax/scroll': {
+      return controller.axScroll(Number(payload && payload.dx) || 0, Number(payload && payload.dy) || 0);
+    }
+    case '/ax/frontmost': {
+      return controller.axFrontmost();
     }
     case '/pause': {
       const paused = payload && payload.paused !== undefined ? !!payload.paused : true;

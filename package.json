@@ -8,11 +8,12 @@
     "desktop": "electron .",
     "build:frontend": "npm --prefix frontend run build",
     "build:pybackend": "scripts/build-pybackend.sh",
+    "build:automa": "swiftc -O -o electron/cw-automa/build/cw-automa electron/cw-automa/main.swift",
     "build:windows": "npm run build:frontend && npm run build:pybackend && npx electron-builder --win --config electron-builder.config.json",
-    "build:macos": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac --config electron-builder.config.json",
-    "build:macos-universal": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac universal --config electron-builder.config.json",
+    "build:macos": "npm run build:frontend && npm run build:pybackend && npm run build:automa && npx electron-builder --mac --config electron-builder.config.json",
+    "build:macos-universal": "npm run build:frontend && npm run build:pybackend && npm run build:automa && npx electron-builder --mac universal --config electron-builder.config.json",
     "build:linux": "npm run build:frontend && npm run build:pybackend && npx electron-builder --linux --config electron-builder.config.json",
-    "build": "npm run build:frontend && npm run build:pybackend && npx electron-builder --mac universal --config electron-builder.config.json"
+    "build": "npm run build:frontend && npm run build:pybackend && npm run build:automa && npx electron-builder --mac universal --config electron-builder.config.json"
   },
   "keywords": [
     "electron",
