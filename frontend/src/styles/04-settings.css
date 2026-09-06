@@ -156,6 +156,18 @@
   background: color-mix(in srgb, var(--success, #2f9e44) 10%, var(--material-control));
 }
 
+.settings-chip--bad {
+  color: var(--destructive, #e03131);
+  border-color: color-mix(in srgb, var(--destructive, #e03131) 45%, var(--material-border));
+  background: color-mix(in srgb, var(--destructive, #e03131) 10%, var(--material-control));
+}
+
+.settings-chip--warn {
+  color: var(--warning, #e8590c);
+  border-color: color-mix(in srgb, var(--warning, #e8590c) 45%, var(--material-border));
+  background: color-mix(in srgb, var(--warning, #e8590c) 10%, var(--material-control));
+}
+
 .settings-chip--dim {
   color: var(--muted-foreground);
   opacity: 0.55;
@@ -429,6 +441,38 @@
 }
 
 /* ── Auto-update: settings panel ────────────────────────────────────── */
+
+.cu-perm-panel {
+  margin: 4px 14px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  background: var(--material-panel);
+  box-shadow: 0 1px 2px var(--material-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cu-perm-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.cu-perm-panel__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.cu-perm-panel__row--foot {
+  padding-top: 6px;
+  border-top: 1px solid var(--material-border);
+  justify-content: flex-end;
+}
 
 .update-panel {
   margin: 4px 14px 14px;

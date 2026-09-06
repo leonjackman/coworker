@@ -1869,6 +1869,28 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   }
 });
 
+// ── Computer-use permission IPC (Settings permission list, desktop only) ────
+// Read live TCC status and deep-link the exact System Settings pane so the
+// user can pre-enable the two permissions Computer Use needs. Any call fails
+// gracefully when the native controller is unavailable (web mode).
+ipcMain.handle('computer-permission-status', async () => {
+  try {
+    ensureComputerController();
+    return computerController.permissionStatus();
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle('computer-permission-open-settings', async (_event, kind) => {
+  try {
+    ensureComputerController();
+    return computerController.openPermissionSettings(String(kind || ''));
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
+
 // ── Web settings IPC (Tavily) ──────────────────────────────────────────────
 ipcMain.handle('get-web-settings', async () => {
   try {

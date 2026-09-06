@@ -1,4 +1,4 @@
-import { ArrowLeft, X } from 'lucide-react';
+import { ArrowLeft, RefreshCw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
@@ -60,6 +60,60 @@ function webCapabilityChip(web: WebSettings | null): { label: string; ok: boolea
       : { label: t('settings.web_not_configured'), ok: false };
   }
   return { label: t('settings.web_configured'), ok: true };
+}
+
+function cuPermChip(status: string | undefined): { label: string; tone: 'ok' | 'bad' | 'warn' | 'muted' } {
+  const s = status || '';
+  if (s === 'authorized' || s === 'granted') return { label: t('settings.permission_granted'), tone: 'ok' };
+  if (s === 'denied') return { label: t('settings.permission_denied'), tone: 'bad' };
+  if (s === 'restricted') return { label: t('settings.permission_restricted'), tone: 'warn' };
+  if (s === 'not determined') return { label: t('settings.permission_pending'), tone: 'muted' };
+  return { label: s || t('settings.permission_pending'), tone: 'muted' };
+}
+
+interface ComputerPermPanelProps {
+  screen?: string;
+  input?: string;
+  onOpen: (kind: string) => void;
+  onRefresh: () => void;
+}
+
+/**
+ * Sub-settings of "啟用電腦操控": the two macOS permissions CoWorker needs
+ * (Screen Recording + Input/Accessibility) plus a re-check action. Rendered as
+ * an indented panel directly under the master-switch row — same visual pattern
+ * as the Update panel under the About group ("檢查更新" area).
+ */
+function ComputerPermPanel({ screen, input, onOpen, onRefresh }: ComputerPermPanelProps) {
+  const rows = [
+    { kind: 'screen', label: t('settings.computer_permission_screen'), status: screen },
+    { kind: 'accessibility', label: t('settings.computer_permission_input'), status: input },
+  ];
+  return (
+    <div className="cu-perm-panel">
+      {rows.map((row) => {
+        const chip = cuPermChip(row.status);
+        return (
+          <div className="cu-perm-panel__row" key={row.kind}>
+            <span className="cu-perm-panel__name">{row.label}</span>
+            <span className={`settings-chip${chip.tone === 'ok' ? ' settings-chip--ok' : chip.tone === 'bad' ? ' settings-chip--bad' : chip.tone === 'warn' ? ' settings-chip--warn' : ''}`}>
+              {chip.label}
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => onOpen(row.kind)}>
+              {t('settings.computer_permission_open')}
+            </Button>
+          </div>
+        );
+      })}
+      <div className="cu-perm-panel__row cu-perm-panel__row--foot">
+        <span className="cu-perm-panel__name" />
+        <Button size="sm" variant="ghost" onClick={onRefresh}>
+          <RefreshCw size={13} />
+          {t('settings.computer_permission_recheck')}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export function SettingsView({
@@ -128,6 +182,28 @@ export function SettingsView({
       mounted = false;
     };
   }, []);
+
+  // OS Computer Use permission list: shown under the master-switch toggle when
+  // it is ON. Reads live TCC status (desktop only) and re-checks on focus so a
+  // change made in System Settings is reflected as soon as the user returns.
+  const [cuPerms, setCuPerms] = useState<{ screen?: string; input?: string }>({});
+  const refreshCuPerms = async () => {
+    if (!computerUseEnabled || !window.electronAPI?.computerPermissionStatus) return;
+    try {
+      const r = await window.electronAPI.computerPermissionStatus();
+      if (r?.ok && r.permissions) setCuPerms({ screen: r.permissions.screen, input: r.permissions.input });
+    } catch { /* ignore */ }
+  };
+  const openCuSettings = (kind: string) => {
+    void window.electronAPI?.computerPermissionOpenSettings?.(kind);
+  };
+  useEffect(() => {
+    if (!computerUseEnabled) return;
+    refreshCuPerms();
+    window.addEventListener('focus', refreshCuPerms);
+    return () => window.removeEventListener('focus', refreshCuPerms);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computerUseEnabled]);
 
   async function selectLanguage(language: string) {
     const allowed = ['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
@@ -282,6 +358,14 @@ export function SettingsView({
                 onChange: (value) => onGoalEnabledChange(value === 'true'),
               },
               {
+                id: 'audit',
+                type: 'action',
+                label: t('settings.audit_entry'),
+                description: t('settings.audit_entry_desc'),
+                actionLabel: t('settings.audit_open'),
+                onAction: () => onSettingsPageChange('audit'),
+              },
+              {
                 id: 'computer_use_enabled',
                 type: 'toggle',
                 label: t('settings.computer_use_enabled'),
@@ -293,15 +377,15 @@ export function SettingsView({
                 ],
                 onChange: (value) => onComputerUseEnabledChange(value === 'true'),
               },
-              {
-                id: 'audit',
-                type: 'action',
-                label: t('settings.audit_entry'),
-                description: t('settings.audit_entry_desc'),
-                actionLabel: t('settings.audit_open'),
-                onAction: () => onSettingsPageChange('audit'),
-              },
             ],
+            footer: computerUseEnabled && window.electronAPI?.computerPermissionStatus ? (
+              <ComputerPermPanel
+                screen={cuPerms.screen}
+                input={cuPerms.input}
+                onOpen={openCuSettings}
+                onRefresh={refreshCuPerms}
+              />
+            ) : null,
           },
           {
             id: 'web',

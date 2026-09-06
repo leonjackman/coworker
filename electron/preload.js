@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateRuntimeConfig: (payload) => ipcRenderer.invoke('update-runtime-config', payload),
   fetchSettings: () => ipcRenderer.invoke('fetchSettings'),
   saveSettings: (payload) => ipcRenderer.invoke('saveSettings', payload),
+  computerPermissionStatus: () => ipcRenderer.invoke('computer-permission-status'),
+  computerPermissionOpenSettings: (kind) => ipcRenderer.invoke('computer-permission-open-settings', kind || ''),
   streamChatMessage: (requestId, payload, onEvent) => {
     const listener = (_event, data) => {
       if (data.requestId !== requestId) return;

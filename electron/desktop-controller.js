@@ -296,6 +296,39 @@ class DesktopController {
     return openPermissionSettings(kind);
   }
 
+  // Live permission status for the Settings permission list. Reads the native
+  // TCC store fresh on every call (no caching), so toggling in System Settings
+  // while the app runs is reflected immediately on the next query. Also reports
+  // the running identity so users can tell dev (Electron) from packaged
+  // (CoWorker) — macOS grants each identity separately.
+  permissionStatus() {
+    const input = inputPermission().status;
+    const screen = screenPermission().status;
+    let sysScreen = 'unknown';
+    try {
+      sysScreen = systemPreferences.getMediaAccessStatus('screen');
+    } catch (e) { /* ignore */ }
+    let identity = { packaged: app.isPackaged };
+    try {
+      const path = require('path');
+      identity = {
+        packaged: app.isPackaged,
+        name: String(app.getName() || ''),
+        version: String(app.getVersion() || ''),
+        executable: path.basename(process.execPath || ''),
+      };
+    } catch (e) { /* ignore */ }
+    return {
+      ok: true,
+      identity,
+      permissions: {
+        input,
+        screen,
+        sys_screen: sysScreen,
+      },
+    };
+  }
+
   async state() {
     this._ensureNotPaused();
     const perms = { input: inputPermission(), screen: screenPermission() };

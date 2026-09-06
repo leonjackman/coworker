@@ -145,6 +145,8 @@ declare global {
       ) => Promise<void>;
       fetchSettings?: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
       saveSettings?: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
+      computerPermissionStatus?: () => Promise<{ ok: boolean; identity?: { packaged: boolean; name?: string; version?: string; executable?: string }; permissions?: { input: string; screen: string; sys_screen?: string }; error?: string }>;
+      computerPermissionOpenSettings?: (kind: string) => Promise<{ ok: boolean; opened_settings?: boolean; pane?: string; error?: string }>;
       listMcps: () => Promise<McpServerListPayload>;
       discoverMcps: () => Promise<McpDiscoverPayload>;
       createMcp: (request: McpServerCreateRequest) => Promise<{ server: McpServerEntry }>;
