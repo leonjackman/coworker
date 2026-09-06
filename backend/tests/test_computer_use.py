@@ -318,6 +318,24 @@ def test_stale_ref_self_heals_with_fresh_snapshot(fake_client_factory):
     assert "stale" in payload["note"]
 
 
+def test_type_into_passes_submit(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    captured = {}
+
+    class _Recording(_FakeClient):
+        def ax_act(self, ref, op, **kw):
+            if op == "type_into":
+                captured.update({"ref": ref, "text": kw.get("text"), "submit": kw.get("submit")})
+            return {"ok": True, "performed": op}
+
+    fake_client_factory(_Recording())
+    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    act.invoke({"action": "type_into", "ref": "axtextfield:apple music#1", "text": "情歌王", "submit": True})
+    assert captured["submit"] is True
+    assert captured["text"] == "情歌王"
+
+
 def test_click_coords_passes_shot_geometry(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 

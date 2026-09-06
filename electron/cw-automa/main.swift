@@ -262,6 +262,42 @@ func typeText(_ text: String) {
     }
 }
 
+func sleepMs(_ ms: Int) {
+    usleep(useconds_t(ms * 1000))
+}
+
+// A REAL editing session: many apps (Apple Music search, forms, IM fields) only
+// accept text typed with keyboard focus — AX setValue alone fills the value but
+// leaves the field "unfocused", so an Enter afterwards is discarded. Sequence:
+// activate app -> AX focus -> click the field (real caret) -> Cmd+A select all
+// -> type the text as keyboard events -> optionally press Enter to submit.
+func realTypeInto(app: AXUIElement, pid: pid_t, el: AXUIElement, text: String, submit: Bool) {
+    // 1) Bring the owning app to the front (clicks/keys must land on it).
+    if let running = NSRunningApplication(processIdentifier: pid) {
+        running.activate(options: [.activateIgnoringOtherApps])
+    } else {
+        AXUIElementPerformAction(app, kAXRaiseAction as CFString)
+    }
+    sleepMs(160)
+    // 2) AX-level focus.
+    AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, true as CFTypeRef)
+    sleepMs(80)
+    // 3) Real click in the field -> caret + actual editing session.
+    clickCenter(el)
+    sleepMs(140)
+    // 4) Select existing content so typing replaces it.
+    press("a", ["cmd"])
+    sleepMs(60)
+    // 5) Type as keyboard events (unicode-safe; like typing/pasting, no IME).
+    typeText(text)
+    sleepMs(80)
+    // 6) Optional submit (Enter) — search fields need it while still focused.
+    if submit {
+        press("return", [])
+        sleepMs(80)
+    }
+}
+
 func clickCenter(_ el: AXUIElement) {
     guard let p = framePoint(el), let s = frameValue(el, kAXSizeAttribute) else { return }
     let c = CGPoint(x: p.x + s.width / 2, y: p.y + s.height / 2)
@@ -379,9 +415,10 @@ func handle(_ req: Request) {
             respond(true, ["performed": op], nil)
         case "type_into":
             if let text = req.params["text"] as? String {
-                AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFTypeRef)
-                AXUIElementPerformAction(el, kAXConfirmAction as CFString)
-                respond(true, ["performed": "type_into"], nil)
+                let submit = (req.params["submit"] as? Bool) ?? false
+                let pid = (req.params["pid"] as? Int) ?? Int(frontmostPid() ?? -1)
+                realTypeInto(app: app, pid: pid_t(pid), el: el, text: text, submit: submit)
+                respond(true, ["performed": "type_into", "submit": submit], nil)
             } else {
                 respond(false, nil, "type_into requires text")
             }

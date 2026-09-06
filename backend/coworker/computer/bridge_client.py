@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -177,7 +178,10 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "Workflow: snapshot -> pick a ref -> act -> read verified/after_preview -> continue only "
             "if verified. If an action returns fresh_snapshot, re-pick a ref from it (the UI moved). "
             "NEVER claim an outcome unless the returned evidence confirms it. If snapshot reports a "
-            "permission error, stop and tell the user; do NOT act or pretend."
+            "permission error, stop and tell the user; do NOT act or pretend. When searching inside an app: "
+            "type_into the field with submit=true (types real keys + Enter), then snapshot — results appear "
+            "as AXList/AXTable rows under the field; double_click_ref the matching row (or press space) to "
+            "activate it — do NOT re-open the search."
         )
     if status == "feature_off":
         return (
@@ -359,6 +363,7 @@ def build_computer_tools(
         key: str = Field("", description="For 'press_hotkey': key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or single symbol).")
         modifiers: list[str] = Field(default_factory=list, description="For 'press_hotkey': from cmd, ctrl, alt, shift (e.g. [\"cmd\"] for Cmd+Space).")
         text: str = Field("", description="For 'type_into'/'type_text': the text to enter. NEVER a keyboard shortcut — shortcuts go through press_hotkey.")
+        submit: bool = Field(False, description="For 'type_into': press Enter after typing (search/submit fields need it while focused).")
         x: float = Field(0, description="For 'click_coords' (last resort): X in the SCREENSHOT's pixel space (read it off the computer_observe screenshot).")
         y: float = Field(0, description="For 'click_coords' (last resort): Y in the SCREENSHOT's pixel space.")
         shot_width: int = Field(0, ge=0, description="For 'click_coords': screenshot width from the computer_observe screenshot result; 0 = coordinates are display points.")
@@ -384,15 +389,26 @@ def build_computer_tools(
         return re.sub(r"at \(-?\d+,-?\d+\)", "", text or "")
 
     def _verify_and_report(before: str, action: str, text: str, app: str, res: dict[str, Any]) -> str:
-        after = _snapshot_text()
+        # Let the UI settle after the action so transient states don't cause false
+        # negatives. launch_app polls until the app window is actually readable.
+        if action == "launch_app":
+            after = ""
+            for _ in range(6):
+                time.sleep(0.4)
+                after = _snapshot_text() or ""
+                if after:
+                    break
+        else:
+            time.sleep(0.4)
+            after = _snapshot_text() or ""
         bn = _normalize_for_verify(before or "")
-        an = _normalize_for_verify(after or "")
+        an = _normalize_for_verify(after)
         changed = an != bn
         if action == "launch_app":
             # Launch switches the frontmost app, which changes the window tree.
-            verified = bool(after) and (changed or (app.lower() in (after or "").lower()))
+            verified = bool(after) and (changed or (app.lower() in after.lower()))
         elif action == "type_into":
-            verified = bool(text) and (text.lower() in (after or "").lower()) and changed
+            verified = bool(text) and (text.lower() in after.lower()) and changed
         else:
             verified = changed
         note = (
@@ -400,7 +416,7 @@ def build_computer_tools(
             if verified
             else "No confirmable content change — do NOT claim success. Re-read computer_observe snapshot (or the fresh_snapshot) and retry."
         )
-        preview = "\n".join((after or "").split("\n")[:16])
+        preview = "\n".join(after.split("\n")[:16])
         return json.dumps(
             {
                 "ok": True,
@@ -424,7 +440,7 @@ def build_computer_tools(
         if action == "show":
             return client.ax_act(str(args.ref or ""), "show")
         if action == "type_into":
-            return client.ax_act(str(args.ref or ""), "type_into", text=str(args.text or ""))
+            return client.ax_act(str(args.ref or ""), "type_into", text=str(args.text or ""), submit=bool(getattr(args, "submit", False)))
         if action == "type_text":
             return client.ax_type(str(args.text or ""))
         if action == "scroll":
@@ -538,6 +554,7 @@ def build_computer_tools(
         key: str = "",
         modifiers: list[str] | None = None,
         text: str = "",
+        submit: bool = False,
         x: float = 0,
         y: float = 0,
         dx: float = 0,
@@ -593,7 +610,7 @@ def build_computer_tools(
         from types import SimpleNamespace
 
         ns = SimpleNamespace(
-            ref=ref, app=app, key=key, modifiers=mods, text=text,
+            ref=ref, app=app, key=key, modifiers=mods, text=text, submit=bool(submit),
             x=x, y=y, dx=dx, dy=dy,
             shot_width=int(shot_width or 0), shot_height=int(shot_height or 0), display=int(display or 0),
         )
