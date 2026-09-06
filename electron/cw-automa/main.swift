@@ -457,7 +457,19 @@ func handle(_ req: Request) {
             respond(false, nil, "unsupported op \(op)")
         }
     case "press_hotkey":
-        press((req.params["key"] as? String) ?? "", (req.params["modifiers"] as? [String]) ?? [])
+        let key = (req.params["key"] as? String) ?? ""
+        let mods = (req.params["modifiers"] as? [String]) ?? []
+        let modifierOnly: Set<String> = ["cmd", "command", "leftcmd", "ctrl", "control",
+                                         "alt", "option", "shift", "super", "meta"]
+        if key.isEmpty || modifierOnly.contains(key.lowercased()) {
+            respond(false, nil, "param_error: press_hotkey needs a real key, not a bare modifier (\(key.isEmpty ? "empty key" : key)). Example: key:\"space\", modifiers:[\"cmd\"]")
+            return
+        }
+        if keyCode(key) == nil {
+            respond(false, nil, "param_error: unknown key \"\(key)\"")
+            return
+        }
+        press(key, mods)
         respond(true, ["performed": "press_hotkey"], nil)
     case "type_text":
         // Paste into the CURRENTLY focused field (no click/focus here — caller

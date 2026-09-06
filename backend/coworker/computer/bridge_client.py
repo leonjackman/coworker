@@ -183,7 +183,10 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "as AXList/AXTable rows under the field; double_click_ref the matching row (or press space) to "
             "activate it — do NOT re-open the search. If type_into reports the text did not land "
             "(focused value empty), that surface does not accept standard text editing — STOP and ask "
-            "the user; never retry-loop on the same field."
+            "the user; never retry-loop on the same field. Before acting, confirm what you are acting on: "
+            "computer_observe state returns frontmost. launch_app/app-switch is verified only when the "
+            "frontmost app actually changes; when a computer action returns verified=null, evaluate its "
+            "after_preview yourself and never claim a result you did not observe."
         )
     if status == "feature_off":
         return (
@@ -390,61 +393,91 @@ def build_computer_tools(
         frame (even when nothing meaningful moved)."""
         return re.sub(r"at \(-?\d+,-?\d+\)", "", text or "")
 
-    def _verify_and_report(before: str, action: str, text: str, app: str, res: dict[str, Any]) -> str:
-        # Let the UI settle after the action so transient states don't cause false
-        # negatives. launch_app polls until the app window is actually readable.
+    def _frontmost_pid() -> int | None:
+        try:
+            fm = client.ax_frontmost()
+            if isinstance(fm, dict) and not fm.get("error_code"):
+                pid = fm.get("pid")
+                return int(pid) if isinstance(pid, int) and pid > 0 else None
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _frontmost_name() -> str:
+        try:
+            fm = client.ax_frontmost()
+            if isinstance(fm, dict) and not fm.get("error_code"):
+                return str(fm.get("app") or "")
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
+
+    def _verify_and_report(before: str, action: str, text: str, app: str, res: dict[str, Any],
+                           front_before_pid: int | None) -> str:
+        # Evidence policy (Anthropic-aligned): only a STRONG identity signal may
+        # mark an action verified. "The snapshot text changed" is NOT one — an
+        # animating app changes constantly, which caused false "success" before.
+        # launch/app-switch: the app must actually become frontmost (pid change).
+        # type_into: the focused field's value must contain the text.
+        # Everything else: verified=null + the fresh observation, so the MODEL
+        # decides by looking — exactly Anthropic's "evaluate after each step".
         if action == "launch_app":
-            after = ""
+            after_pid = front_before_pid
+            name = ""
             for _ in range(6):
                 time.sleep(0.4)
-                after = _snapshot_text() or ""
-                if after:
+                after_pid = _frontmost_pid()
+                name = _frontmost_name()
+                if after_pid is not None and after_pid != front_before_pid:
                     break
-        else:
-            time.sleep(0.4)
-            after = _snapshot_text() or ""
-        bn = _normalize_for_verify(before or "")
-        an = _normalize_for_verify(after)
-        changed = an != bn
-        # Primary evidence for type_into is the FOCUSED field's actual value the
-        # helper read back (generic ground truth, no whole-tree diff).
+            verified = bool(after_pid) and after_pid != front_before_pid
+            changed = verified
+            preview = ""
+            if verified or (name and name):
+                st = _snapshot_text()
+                preview = "\n".join((st or "").split("\n")[:12])
+            note = (
+                f"Verified: frontmost changed to a different app ({name or '?'}). Confirm with computer_observe state."
+                if verified
+                else "Frontmost did NOT change to the requested app. Re-check with computer_observe state; do NOT assume it opened."
+            )
+            return json.dumps({
+                "ok": True, "action": action, "verified": verified, "changed": changed,
+                "frontmost_before_pid": front_before_pid, "frontmost_after_pid": after_pid,
+                "frontmost": name, "note": note, "after_preview": preview,
+            }, ensure_ascii=False)
+
+        time.sleep(0.35)
+        after = _snapshot_text() or ""
         focused_val = ""
         if isinstance(res, dict):
             focused = res.get("focused")
             if isinstance(focused, dict):
                 focused_val = str(focused.get("value") or "")
-        if action == "launch_app":
-            # Launch switches the frontmost app, which changes the window tree.
-            verified = bool(after) and (changed or (app.lower() in after.lower()))
-        elif action == "type_into":
+        if action == "type_into":
             landed = focused_val.lower() if focused_val else ""
-            verified = bool(text) and (text.lower() in landed or text.lower() in an)
-        else:
-            verified = changed
-        note = (
-            "Verified by content evidence: the re-observed state changed as expected."
-            if verified
-            else "No confirmable content change — do NOT claim success. Re-read computer_observe snapshot (or the fresh_snapshot) and retry."
-        )
-        if action == "type_into" and not verified:
-            note = (
-                "The text did NOT land in the focused field (readback value is empty/different). "
-                "This surface does not accept standard text editing. STOP and ask the user to enter "
-                "it manually (or use another route); do NOT retry-loop."
-            )
+            verified = bool(text) and (text.lower() in landed or text.lower() in _normalize_for_verify(after))
+            if not verified:
+                note = (
+                    "The text did NOT land in the focused field (readback value is empty/different). "
+                    "This surface does not accept standard text editing. STOP and ask the user to enter "
+                    "it manually (or use another route); do NOT retry-loop."
+                )
+            else:
+                note = "Verified by focused-field readback: the text is in the field."
+            return json.dumps({
+                "ok": True, "action": action, "verified": verified, "focused_value": focused_val,
+                "note": note, "after_preview": "\n".join(after.split("\n")[:16]),
+            }, ensure_ascii=False)
+
+        # No strong anchor (click/scroll/press_hotkey/show/coords): report
+        # verified=null and hand the fresh observation to the model to judge.
         preview = "\n".join(after.split("\n")[:16])
-        return json.dumps(
-            {
-                "ok": True,
-                "action": action,
-                "verified": verified,
-                "changed": changed,
-                "focused_value": focused_val,
-                "note": note,
-                "after_preview": preview,
-            },
-            ensure_ascii=False,
-        )
+        return json.dumps({
+            "ok": True, "action": action, "verified": None, "changed": None,
+            "note": "No automatic confirmation for this action. Evaluate the after_preview yourself: only continue/claim if the observation shows the intended result.",
+            "after_preview": preview,
+        }, ensure_ascii=False)
 
     def _execute_action(action: str, args: Any) -> dict[str, Any]:
         if action == "launch_app":
@@ -474,6 +507,12 @@ def build_computer_tools(
         try:
             if action == "state":
                 result = client.state()
+                # Attach the current frontmost app so the agent can confirm what
+                # it is actually acting on (launch/switch verification anchor).
+                fm = client.ax_frontmost()
+                if isinstance(fm, dict) and not fm.get("error_code"):
+                    result["frontmost_pid"] = fm.get("pid")
+                    result["frontmost"] = fm.get("app")
             elif action == "displays":
                 result = client.displays()
             elif action == "snapshot":
@@ -603,10 +642,14 @@ def build_computer_tools(
                 ensure_ascii=False,
             )
 
-        # Observation-independent actions: launch_app / press_hotkey do NOT need
+        # Observation-independent actions: launch_app / press_hotkey / go_back do NOT need
         # to see the screen — never fail-closed them or the agent will nag the
         # user for a permission it already has.
         observation_free = action in ("launch_app", "press_hotkey", "go_back")
+
+        # Capture the frontmost app identity before the action: the anchor for
+        # launch/app-switch verification (a pid CHANGE), never animation churn.
+        front_before_pid = _frontmost_pid()
 
         # Fail-closed for actions that must know the target: if we cannot observe
         # the desktop, refuse to guess (but never blame "permission" — the real
@@ -650,7 +693,7 @@ def build_computer_tools(
                     payload["note"] = "The ref from your previous snapshot is stale (the UI changed). Re-pick a ref from fresh_snapshot above and retry."
                 return json.dumps(payload, ensure_ascii=False)
             return _render_computer_error(result, client)
-        return _verify_and_report(before, action, str(text or ""), str(app or ""), result)
+        return _verify_and_report(before, action, str(text or ""), str(app or ""), result, front_before_pid)
 
     return [computer_observe, computer]
 

@@ -261,6 +261,11 @@ COMMON_COMMANDS = (
 #: Commands available on Unix-like systems (macOS + Linux).
 UNIX_COMMANDS = _UNIX_CORE
 
+#: macOS-only LaunchServices command: `open <file>` routes the file to its
+#: DEFAULT application (exactly like double-clicking) — the canonical, app-
+#: agnostic way to open/play a local file. See `man open` / Launch Services.
+_MACOS_COMMANDS = frozenset({"open"})
+
 #: Commands available on native Windows (cmd / PowerShell vocabulary).
 WINDOWS_COMMANDS = frozenset({
     # cmd builtins
@@ -292,6 +297,8 @@ def allowed_commands(platform: str | None = None) -> frozenset[str]:
     tag = platform_tag(platform)
     if tag == "win32":
         return COMMON_COMMANDS | WINDOWS_COMMANDS
+    if tag == "darwin":
+        return COMMON_COMMANDS | UNIX_COMMANDS | _MACOS_COMMANDS
     return COMMON_COMMANDS | UNIX_COMMANDS
 
 

@@ -54,8 +54,14 @@ class TestAllowedCommands:
             assert name in WINDOWS_COMMANDS
             assert name not in unix
 
-    def test_linux_and_darwin_share_unix_set(self):
-        assert allowed_commands("linux") == allowed_commands("darwin")
+    def test_linux_and_darwin_share_unix_set_except_macos_open(self):
+        # Darwin and Linux share the full Unix set, EXCEPT `open` — the macOS
+        # LaunchServices command that routes a file to its default app
+        # (app-agnostic way to open/play local files). Linux uses xdg-open, which
+        # is intentionally not allowlisted.
+        assert allowed_commands("linux") == allowed_commands("darwin") - {"open"}
+        assert "open" in allowed_commands("darwin")
+        assert "open" not in allowed_commands("linux")
 
     def test_workspace_allowlist_matches_platform(self):
         assert ALLOWED_COMMANDS == allowed_commands()
