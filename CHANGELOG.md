@@ -324,6 +324,55 @@
 - 新增測試覆蓋：欄位級剪裁保留 JSON 與分頁指針、清除佔位符路由、記憶預覽省略標記與預算、系統提示省略通知、緊急修剪優先級、跨會話分頁覆蓋完整性；後端全量自動化測試 379 項通過。
 - 以真實桌面前端 + 真實模型完成端到端驗收：Agent 依 `next_offset` 連續翻頁讀完 601 行檔案並正確命中結尾內容；跨會話分頁行為經真機驗證符合預期。
 
+## 0.6.8
+
+本版本引入「桌面操控（OS Computer Use）」——Agent 可截圖桌面、在任意原生 App 中點擊 / 拖拽 / 滾動 / 輸入，是真正跨應用的桌面級自動化能力。
+
+### 新增
+
+- **桌面操控（OS Computer Use）**：Agent 可截圖桌面、在任意原生 App 中執行全局點擊 / 拖拽 / 滾動 / 鍵入；總開關位於設置頁，預設關閉；預設權限下每次操作需人工確認（`Shift+Esc` 可暫停）。
+- **結構化 Accessibility 根源**：以 macOS AX API 為核心，ref 採用語義身份格式（`role:label#n`），支援視窗範圍限定、雜訊過濾與內容級驗證；虛擬游標自動定位後執行動作，截圖作為執行證據。
+- **AX-first 輸入梯層**：文字輸入優先走 `type_into` 真輸入會話（activate → focus → click → select → 鍵入 → 可選 Enter），支援 placeholder / 搜索框識別、聚焦元素 value 驗證與 bounded 不繞圈；退回到座標點擊與剪貼簿貼上作為備用。
+- **Codex 對齊的 JS 腳本表面**：注入持久化 JS 執行環境，Agent 可透過 `computer_script` 工具執行桌面級 JS 腳本，支援結構化 AX 定位與離散動作。
+- **`scroll_to` 動作**：支援一般元素滾動與 `app` 目標滾動（滾動到目標 App 的前面元素）。
+- **`press_hotkey` 動作**：全局熱鍵組合，含參數校驗與 `open` 白名單放行。
+- **桌面操控停止快捷鍵**：動態註冊全局快捷鍵（macOS 預設 `Shift+Cmd+Esc`），可於設置頁改綁與停用；快捷鍵在應用失焦時仍生效。
+- **桌面操控活動指示**：Agent 執行桌面操控時顯示遮罩活動指示器，Dock 圖標保底提示。
+- **權限子面板**：設置頁新增「桌面操控」手動權限檢查面板，可即時查看 Screen Recording 與 Accessibility 權限狀態並跳轉系統設定。
+- **兩級權限模型**：權限體系由三級收斂為兩級——「默認權限」（越界操作需確認）與「完整權限」（自動放行）。
+
+### 修復
+
+- **打包版 helper 路徑**：修正打包環境下 cw-automa Swift helper 的查找路徑，確保桌面端可正常載入。
+- **權限誤判修正**：修復 `fail-closed` 邏輯下偶爾將已授權判定為未授權的問題。
+- **虛擬游標瞬態顯示**：修復虛擬游標在動作間閃爍的問題，改為僅在動作執行時顯示。
+- **層建立修復**：修復 AX 層建立過程中偶爾失敗導致動作無效的問題。
+- **錨點驗證**：修正錨點比對邏輯，改為以 frontmost 視窗身分作為錨點（非樹文字），避免跨視窗誤操作。
+- **座標映射**：`click_coords` 現在正確映射截圖座標空間，並支援 stale-ref 自癒。
+- **打包腳本補齊**：補齊桌面端打包流程中 cw-automa helper 的簽名與嵌入步驟。
+
+### 技術細節
+
+- 桌面操控目前**僅支援 macOS**（依賴 macOS Accessibility API 與 cw-automa Swift helper）；Windows / Linux 上開關仍顯示但功能不可用。
+- 桌面操控動作受 HITL 中間件保護：`computer` 與 `computer_script` 工具在非自主模式下每動作需人工批准。
+
+### 品質
+
+- 新增 `test_computer_use_scroll.py`：覆蓋 `scroll_to` 動作與 app 目標滾動。
+
+### 重構
+
+- **前端模組化**：`App.tsx` 抽純邏輯層至 `src/lib/*` 領域模組；`App.css` 拆分為 `src/styles/*` 領域模組。
+- **後端模組化**：`main.py` 拆分為 `coworker/api` 領域模組。
+- **i18n 靜態化**：翻譯字典改為靜態併入，前端拉起即翻譯，不再等後端。
+- **啟動等待放寬**：後端就緒等待由 30 秒放寬至 1 分鐘，避免慢機冷啟動被誤終止。
+- **修復 regenerate event_stream**：修復 `closure-shadow UnboundLocalError`。
+
+### 打包
+
+- **helper 簽名修正**：打包版改用 certificate UUID 而非顯示名稱進行 helper 簽名。
+- **抑制 deprecation warnings**：helper 構建時靜默 macOS 已棄用警告。
+
 ## Unreleased
 
 （尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
