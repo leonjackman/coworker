@@ -114,6 +114,7 @@ class DesktopController {
     this._stopAccel = null;
     this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
     this._adapter = null;
+    this._script = null;
   }
 
   // Lazy AutomationAdapter (native cw-automa AX helper). Structure-first source
@@ -610,7 +611,131 @@ class DesktopController {
     return { ok: true, platform: process.platform, paused: this.paused, ...diag };
   }
 
+  // ── Persistent JS surface (Codex-parity) ──────────────────────────────
+  // The model runs JavaScript in an isolated worker; every native call below is
+  // re-validated here (paused gate + app identity) before it reaches the helper.
+
+  async axListApps(scope = 'running') {
+    if (process.platform !== 'darwin') return { apps: [] };
+    return this._adapterInstance().listApps(scope);
+  }
+
+  async axResolveApp(app) {
+    if (process.platform !== 'darwin') return { selector: app, pid: null };
+    return this._adapterInstance().resolveApp(app);
+  }
+
+  async axFocusApp(app) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
+    return this._adapterInstance().focusApp(app);
+  }
+
+  async axInputText(opts = {}) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
+    return this._adapterInstance().inputText(opts);
+  }
+
+  async axPressTo(app, key, modifiers, repeat) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
+    return this._adapterInstance().pressKeyTo(app, key, modifiers, repeat);
+  }
+
+  async axScrollTo(app, dx, dy, x, y) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
+    return this._adapterInstance().scrollTo(app, dx, dy, x, y);
+  }
+
+  async axDragTo(app, x1, y1, x2, y2) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
+    return this._adapterInstance().dragTo(app, x1, y1, x2, y2);
+  }
+
+  async axClickPointTo(app, x, y) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
+    return this._adapterInstance().clickPointTo(app, x, y);
+  }
+
+  async axUiSettle(opts = {}) {
+    if (process.platform !== 'darwin') return { settled: true };
+    return this._adapterInstance().uiSettle(opts);
+  }
+
+  // Dispatch table for native calls coming from the JS worker. Anything not
+  // listed here is refused, so the sandbox cannot reach arbitrary helper verbs.
+  async _replCall(method, args = {}) {
+    switch (method) {
+      case 'list_apps': return this.axListApps(args.scope || 'running');
+      case 'resolve_app': return this.axResolveApp(String(args.app || ''));
+      case 'frontmost': return this.axFrontmost();
+      case 'get_app_state': {
+        const res = await this.axAppState(String(args.app || ''), Number(args.depth) || 6);
+        return res;
+      }
+      case 'screenshot': return this.screenshot({ display: Number(args.display) || 0, maxWidth: Number(args.max_width) || 1024, quality: 60 });
+      case 'act': {
+        if (process.platform !== 'darwin') throw new Error('not on macOS');
+        this._ensureNotPaused();
+        const extra = {};
+        if (args.value !== undefined) extra.value = String(args.value);
+        return this._adapterInstance().actFor(String(args.app || ''), String(args.ref || ''), String(args.op || 'click'), extra);
+      }
+      case 'input_text': {
+        if (process.platform !== 'darwin') throw new Error('not on macOS');
+        this._ensureNotPaused();
+        return this._adapterInstance().inputText({
+          app: String(args.app || ''),
+          ref: String(args.ref || ''),
+          text: String(args.text || ''),
+          submit: !!args.submit,
+        });
+      }
+      case 'press_key': return this.axPressTo(String(args.app || ''), String(args.key || ''), args.modifiers, args.repeat);
+      case 'scroll': return this.axScrollTo(String(args.app || ''), Number(args.dx) || 0, Number(args.dy) || 0);
+      case 'drag': return this.axDragTo(String(args.app || ''), Number(args.x1), Number(args.y1), Number(args.x2), Number(args.y2));
+      case 'click_point': return this.axClickPointTo(String(args.app || ''), Number(args.x), Number(args.y));
+      case 'ui_settle': return this.axUiSettle({ app: String(args.app || ''), quietMs: args.quiet_ms, timeoutMs: args.timeout_ms });
+      default: {
+        const err = new Error(`computer script: unsupported native call '${method}'`);
+        err.code = 'computer_error';
+        throw err;
+      }
+    }
+  }
+
+  _scriptInstance() {
+    if (this._script) return this._script;
+    const { ComputerScript } = require('./computer-repl');
+    this._script = new ComputerScript({
+      call: (method, args) => this._replCall(method, args),
+      log: (m) => console.warn('[computer-script]', m),
+    });
+    return this._script;
+  }
+
+  async scriptRun(code, opts = {}) {
+    if (process.platform !== 'darwin') {
+      return { blocks: [{ type: 'text', text: 'computer script is macOS-only' }], error: 'unsupported_platform' };
+    }
+    this._ensureNotPaused();
+    return this._scriptInstance().run(code, opts);
+  }
+
+  async scriptReset() {
+    if (this._script) return this._script.reset();
+    return { reset: true };
+  }
+
   destroy() {
+    if (this._script) {
+      try { this._script.close(); } catch (e) { /* ignore */ }
+      this._script = null;
+    }
     if (this._adapter) {
       try { this._adapter.close(); } catch (e) { /* ignore */ }
       this._adapter = null;

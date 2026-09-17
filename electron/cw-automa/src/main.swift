@@ -106,6 +106,31 @@ func handleRequest(_ req: Request) {
         case "act":
             try handleAct(req.id, p)
 
+        case "list_apps":
+            let scope = p.str("scope", "running")
+            let apps = scope == "installed" ? AppInventory.installed() : AppInventory.running()
+            Responder.ok(req.id, ["scope": scope, "apps": apps.map { $0.dict }])
+
+        case "resolve_app":
+            let selector = p.str("app")
+            let pid = AppInventory.resolvePid(selector)
+            let url = AppInventory.resolveBundleURL(selector)
+            var out: [String: Any] = ["selector": selector]
+            if let pid { out["pid"] = Int(pid) }
+            if let url { out["path"] = url.path; out["bundleId"] = Bundle(url: url)?.bundleIdentifier ?? "" }
+            Responder.ok(req.id, out)
+
+        case "input_text":
+            try handleInputText(req.id, p)
+
+        case "ui_settle":
+            let pid = resolveAppPid(p.str("app")) ?? frontmostPid() ?? -1
+            guard pid > 0 else { throw HelperError("no_target", "ui_settle requires a running app") }
+            let settled = UISettle.wait(pid: pid,
+                                        quietMs: p.int("quiet_ms", 250),
+                                        timeoutMs: p.int("timeout_ms", 3000))
+            Responder.ok(req.id, ["settled": settled])
+
         case "click_coords":
             let pt = CGPoint(x: p.dbl("x"), y: p.dbl("y"))
             let target = try Injection.resolveCoordinateTarget(at: pt)
@@ -146,6 +171,66 @@ func handleRequest(_ req: Request) {
             let dy = Int(p.dbl("dy"))
             try Injection.scroll(x: lastPointerPoint.x, y: lastPointerPoint.y, dx: dx, dy: dy)
             Responder.ok(req.id, ["performed": "scroll"])
+
+        case "focus_app":
+            let selector = p.str("app")
+            guard let pid = AppInventory.resolvePid(selector) else {
+                throw HelperError("no_target", "app not running: \(selector)")
+            }
+            if p.bool("settle", true) {
+                NSRunningApplication(processIdentifier: pid)?.activate()
+                usleep(200 * 1000)
+                if let psn = ProcessTarget.resolve(pid: pid) { Injection.recordTarget(psn) }
+                _ = UISettle.wait(pid: pid, quietMs: 150, timeoutMs: 1500)
+            }
+            Responder.ok(req.id, ["focused": true, "pid": Int(pid)])
+
+        case "press_key":
+            let key = p.str("key")
+            let mods = p.strArray("modifiers")
+            let reps = max(1, p.int("repeat", 1))
+            guard !key.isEmpty else { throw HelperError("param_error", "press_key requires key") }
+            let pid = resolveActPid(p)
+            guard pid > 0 else {
+                throw HelperError("no_target", "press_key requires a running app")
+            }
+            let seq = mods.isEmpty ? key : mods.joined(separator: "+") + "+" + key
+            try Injection.keyToPid(seq, pid: pid, repeat: reps)
+            cursorShow(targetPid: pid)
+            hudPulse()
+            Responder.ok(req.id, ["performed": "press_key", "pid": Int(pid)])
+
+        case "scroll_to":
+            let pid = resolveActPid(p)
+            guard pid > 0 else {
+                throw HelperError("no_target", "scroll_to requires a running app")
+            }
+            let point = CGPoint(x: p.dbl("x", lastPointerPoint.x), y: p.dbl("y", lastPointerPoint.y))
+            try Injection.scrollToPid(x: point.x, y: point.y, dx: Int(p.dbl("dx")), dy: Int(p.dbl("dy")), pid: pid)
+            Responder.ok(req.id, ["performed": "scroll_to", "pid": Int(pid)])
+
+        case "drag_to":
+            let pid = resolveActPid(p)
+            guard pid > 0 else {
+                throw HelperError("no_target", "drag_to requires a running app")
+            }
+            let from = CGPoint(x: p.dbl("x1"), y: p.dbl("y1"))
+            let to = CGPoint(x: p.dbl("x2"), y: p.dbl("y2"))
+            cursorMove(from, targetPid: pid)
+            try Injection.dragToPid(from: from, to: to, button: .left, steps: max(1, p.int("steps", 12)), pid: pid)
+            cursorMove(to, targetPid: pid)
+            Responder.ok(req.id, ["performed": "drag_to", "pid": Int(pid)])
+
+        case "click_point_to":
+            let pid = resolveActPid(p)
+            guard pid > 0 else {
+                throw HelperError("no_target", "click_point_to requires a running app")
+            }
+            let pt = CGPoint(x: p.dbl("x"), y: p.dbl("y"))
+            cursorMove(pt, targetPid: pid)
+            try Injection.clickToPid(x: pt.x, y: pt.y, pid: pid)
+            cursorClick(pt, kind: .single)
+            Responder.ok(req.id, ["performed": "click_point_to", "pid": Int(pid)])
 
         case "launch":
             let app = p.str("app")
@@ -293,16 +378,7 @@ private let snapshotLock = NSLock()
 private func resolveAppPid(_ appName: String) -> pid_t? {
     if appName.isEmpty { return frontmostPid() }
     if let n = Int(appName), n > 0 { return pid_t(n) }
-    let apps = NSWorkspace.shared.runningApplications
-    if let a = apps.first(where: { $0.bundleIdentifier == appName || $0.localizedName == appName }) {
-        return a.processIdentifier
-    }
-    if let a = apps.first(where: {
-        ($0.localizedName ?? "").caseInsensitiveCompare(appName) == .orderedSame
-    }) {
-        return a.processIdentifier
-    }
-    return nil
+    return AppInventory.resolvePid(appName)
 }
 
 /// The single perception primitive: key-window AX tree (semantic refs) + the
@@ -388,13 +464,27 @@ private func handleSnapshot(_ id: Int, _ p: [String: Any]) throws {
 
 // MARK: - Act (semantic, by ref)
 
+/// Resolve the pid an action should target: explicit `pid`, else `app` name /
+/// bundle id / path, else the frontmost app. App-bound refs require this — a
+/// ref is only meaningful for the app it was observed in.
+private func resolveActPid(_ p: [String: Any]) -> pid_t {
+    if p["pid"] != nil { return pid_t(p.int("pid", -1)) }
+    let appName = p.str("app")
+    if !appName.isEmpty, let pid = AppInventory.resolvePid(appName) { return pid }
+    return frontmostPid() ?? -1
+}
+
 private func handleAct(_ id: Int, _ p: [String: Any]) throws {
-    let pid = pid_t(p.int("pid", Int(frontmostPid() ?? -1)))
+    let pid = resolveActPid(p)
+    guard pid > 0 else { throw HelperError("no_target", "no target app for act") }
+    // Remember the keyboard target so a following press_hotkey/type_text lands
+    // in the app we just acted on, not whatever happens to be frontmost.
+    if let t = ProcessTarget.resolve(pid: pid) { Injection.recordTarget(t) }
     let app = AXUIElementCreateApplication(pid)
     let ref = p.str("ref")
     let op = p.str("op", "click")
     guard let el = AX.find(app, ref: ref) else {
-        throw HelperError("computer_error", "no AX element for ref \(ref)")
+        throw HelperError("computer_error", "no AX element for ref \(ref) in app \(pid)")
     }
     let center = AX.center(el)
 
@@ -419,11 +509,13 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
         }
 
     case "set_value":
+        var result: [String: Any] = ["performed": op]
         if let text = p["value"] as? String {
-            AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFTypeRef)
+            let err = AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFTypeRef)
+            result["ax_status"] = err == .success ? "ok" : "error"
         }
         ensureAppFrontmost(pid)
-        Responder.ok(id, ["performed": op])
+        Responder.ok(id, result)
 
     case "focus":
         AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, true as CFTypeRef)
@@ -436,8 +528,14 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
         }
         let submit = p.bool("submit", false)
         if let c = center { cursorMove(c, targetPid: pid) } else { cursorShow(targetPid: pid) }
-        try realTypeInto(pid: pid, app: app, el: el, text: text, submit: submit)
-        var result: [String: Any] = ["performed": "type_into", "submit": submit]
+        // AX-first ladder; `ref` is already resolved to `el`.
+        let outcome = TextInput.enter(pid: pid, ref: ref, text: text, submit: submit)
+        var result: [String: Any] = [
+            "performed": "type_into", "submit": submit,
+            "strategy": outcome.strategy, "verified": outcome.verified,
+            "value": outcome.value,
+        ]
+        if !outcome.notes.isEmpty { result["notes"] = outcome.notes }
         if let focus = AX.focusedInfo(app) { result["focused"] = focus }
         ensureAppFrontmost(pid)
         Responder.ok(id, result)
@@ -450,6 +548,37 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
     default:
         throw HelperError("computer_error", "unsupported op \(op)")
     }
+}
+
+/// AX-first text entry into `ref` (or the app's focused element). Used by the
+/// persistent JS surface's `typeText`/`setValue` and by `type_into`.
+private func handleInputText(_ id: Int, _ p: [String: Any]) throws {
+    let pid = resolveActPid(p)
+    guard pid > 0 else { throw HelperError("no_target", "input_text requires a running app") }
+    let ref = p.str("ref")
+    let text = p.str("text")
+    guard !text.isEmpty else { throw HelperError("param_error", "input_text requires text") }
+    let submit = p.bool("submit", false)
+
+    NSRunningApplication(processIdentifier: pid)?.activate()
+    usleep(120 * 1000)
+    let app = AXUIElementCreateApplication(pid)
+    if !ref.isEmpty, let el = AX.find(app, ref: ref), let c = AX.center(el) {
+        cursorMove(c, targetPid: pid)
+    } else {
+        cursorShow(targetPid: pid)
+    }
+
+    let outcome = TextInput.enter(pid: pid, ref: ref, text: text, submit: submit)
+    ensureAppFrontmost(pid)
+
+    var result: [String: Any] = [
+        "performed": "input_text", "submit": submit,
+        "strategy": outcome.strategy, "verified": outcome.verified,
+        "value": outcome.value,
+    ]
+    if !outcome.notes.isEmpty { result["notes"] = outcome.notes }
+    Responder.ok(id, result)
 }
 
 /// Real editing session: activate → focus → click for a caret → select all →

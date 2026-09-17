@@ -370,6 +370,110 @@ enum Injection {
         }
     }
 
+    // MARK: Explicit-target variants (app-bound actions)
+
+    /// Press a key sequence into an explicit pid (no frontmost/lastTarget
+    /// inference). Used by the AX-first text ladder and the persistent surface.
+    static func keyToPid(_ sequence: String, pid: pid_t, repeat count: Int = 1) throws {
+        guard pid > 0 else { throw HelperError("no_target", "keyToPid requires a pid") }
+        let (flags, code) = try KeyMapping.parse(sequence)
+        let src = try eventSource()
+        let reps = max(1, count)
+        for i in 0..<reps {
+            guard let down = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true) else {
+                throw HelperError("event_alloc", "Failed to allocate key-down")
+            }
+            down.flags = flags
+            WindowTargetedEvent.post(down, to: pid)
+            usleep(interKeyGapMs * 1000)
+            guard let up = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false) else {
+                throw HelperError("event_alloc", "Failed to allocate key-up")
+            }
+            up.flags = []
+            WindowTargetedEvent.post(up, to: pid)
+            if i < reps - 1 { usleep(interKeyGapMs * 1000) }
+        }
+        if let t = ProcessTarget.resolve(pid: pid) { recordTarget(t) }
+    }
+
+    /// Layout-independent per-grapheme unicode typing into an explicit pid.
+    /// Returns false (instead of throwing) so the caller can fall through the
+    /// ladder to the next strategy.
+    @discardableResult
+    static func typeUnicodeToPid(_ text: String, pid: pid_t) -> Bool {
+        guard !text.isEmpty, pid > 0 else { return false }
+        guard let src = source else { return false }
+        for grapheme in text {
+            var utf16 = Array(String(grapheme).utf16)
+            guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true) else { return false }
+            down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+            WindowTargetedEvent.post(down, to: pid)
+            guard let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else { return false }
+            up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+            WindowTargetedEvent.post(up, to: pid)
+            usleep(interGraphemeGapMs * 1000)
+        }
+        if let t = ProcessTarget.resolve(pid: pid) { recordTarget(t) }
+        return true
+    }
+
+    /// A single click into an explicit pid (pointer focus fallback). Binds the
+    /// event to that pid's window under the point when one exists.
+    static func clickToPid(x: Double, y: Double, pid: pid_t) throws {
+        let point = CGPoint(x: x, y: y)
+        guard let target = ProcessTarget.resolve(pid: pid) else {
+            throw HelperError("no_target", "clickToPid: process \(pid) is not running")
+        }
+        try ensurePostable(pid)
+        let window = WindowList.window(at: point, pid: pid)
+        let down = try makeMouse(.leftMouseDown, at: point, button: .left, clickState: 1, target: target, window: window)
+        let up = try makeMouse(.leftMouseUp, at: point, button: .left, clickState: 1, target: target, window: window)
+        WindowTargetedEvent.post(down, to: pid)
+        usleep(pressHoldMs * 1000)
+        WindowTargetedEvent.post(up, to: pid)
+        recordTarget(target)
+    }
+
+    /// Scroll wheel events into an explicit pid, at a point inside its window.
+    static func scrollToPid(x: Double, y: Double, dx: Int, dy: Int, pid: pid_t) throws {
+        guard let target = ProcessTarget.resolve(pid: pid) else {
+            throw HelperError("no_target", "scrollToPid: process \(pid) is not running")
+        }
+        try ensurePostable(pid)
+        let point = CGPoint(x: x, y: y)
+        guard let src = source,
+              let ev = CGEvent(
+                scrollWheelEvent2Source: src, units: .pixel, wheelCount: 2,
+                wheel1: Int32(clamping: dy), wheel2: Int32(clamping: dx), wheel3: 0
+              )
+        else { throw HelperError("event_alloc", "Failed to allocate scroll event") }
+        ev.location = point
+        WindowTargetedEvent.post(ev, to: pid)
+        recordTarget(target)
+    }
+
+    /// Drag gesture into an explicit pid, bound to its window under `from`.
+    static func dragToPid(from: CGPoint, to: CGPoint, button: MouseButton, steps: Int, pid: pid_t) throws {
+        guard let target = ProcessTarget.resolve(pid: pid) else {
+            throw HelperError("no_target", "dragToPid: process \(pid) is not running")
+        }
+        try ensurePostable(pid)
+        let window = WindowList.window(at: from, pid: pid)
+        let n = max(1, steps)
+        let down = try makeMouse(button.down, at: from, button: button, clickState: 1, target: target, window: window)
+        WindowTargetedEvent.post(down, to: pid)
+        for step in 1...n {
+            let t = Double(step) / Double(n)
+            let pt = CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t)
+            let ev = try makeMouse(button.dragged, at: pt, button: button, clickState: 1, target: target, window: window)
+            WindowTargetedEvent.post(ev, to: pid)
+            usleep(6 * 1000)
+        }
+        let up = try makeMouse(button.up, at: to, button: button, clickState: 1, target: target, window: window)
+        WindowTargetedEvent.post(up, to: pid)
+        recordTarget(target)
+    }
+
     // MARK: Teardown
 
     /// Release anything we pressed but never released, so an aborted agent loop

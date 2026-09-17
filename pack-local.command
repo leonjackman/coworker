@@ -114,6 +114,45 @@ swiftc -O -o "$ROOT_DIR/electron/cw-automa/build/cw-automa" "$ROOT_DIR"/electron
 [[ -x "$ROOT_DIR/electron/cw-automa/build/cw-automa" ]] || fail "Native helper build failed"
 ok "Native helper built"
 
+# Stable-sign the helper so macOS TCC grants survive rebuilds. macOS keys
+# Accessibility/Screen Recording to the binary's code-signing identity: an
+# ad-hoc signature (codesign -s -) rotates that identity on every rebuild and
+# forces the user to re-grant. We use a stable --identifier and, when a
+# Developer ID / Apple Development cert is available, a stable identity too.
+HELPER_BIN="$ROOT_DIR/electron/cw-automa/build/cw-automa"
+HELPER_ID="com.coworker.cw-automa"
+HELPER_IDENTITY="${CW_SIGN_IDENTITY:-}"
+if [[ -z "$HELPER_IDENTITY" ]]; then
+  HELPER_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+    | sed -n 's/.*"\(.*\)"/\1/p' \
+    | grep -E 'Developer ID Application|Apple Development' | head -1 || true)"
+fi
+
+helper_signed=0
+if [[ -n "$HELPER_IDENTITY" ]]; then
+  # Try a stable cert with a secure timestamp (needs keychain access), then
+  # without the timestamp, before giving up on the identity.
+  for attempt in "--timestamp" ""; do
+    # shellcheck disable=SC2086
+    if codesign --force --options runtime $attempt --identifier "$HELPER_ID" \
+         --sign "$HELPER_IDENTITY" "$HELPER_BIN" >/dev/null 2>&1; then
+      helper_signed=1
+      break
+    fi
+  done
+fi
+if [[ "$helper_signed" != "1" ]]; then
+  # Ad-hoc with a stable identifier: at least the identifier is constant, but
+  # the cdhash still rotates, so TCC may re-prompt after each rebuild.
+  codesign --force --identifier "$HELPER_ID" --sign - "$HELPER_BIN" >/dev/null 2>&1 || true
+fi
+ACTUAL_ID="$(codesign -dv "$HELPER_BIN" 2>&1 | sed -n 's/^Identifier=//p')"
+if [[ "$helper_signed" == "1" ]]; then
+  ok "Native helper signed (identity: $HELPER_IDENTITY; id: ${ACTUAL_ID:-?}) — TCC grants persist across rebuilds"
+else
+  warn "Native helper ad-hoc signed (id: ${ACTUAL_ID:-?}). No stable cert reachable — macOS may re-prompt for Accessibility/Screen Recording after each rebuild (set CW_SIGN_IDENTITY to fix)."
+fi
+
 echo "[4/5] Packaging app (electron-builder --dir)..."
 if [[ "$SIGN" == "1" ]]; then
   echo "  Signing enabled (Developer ID auto-discovery)."

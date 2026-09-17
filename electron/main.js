@@ -1432,6 +1432,35 @@ async function handleComputerBridgeRequest(method, url, payload) {
     case '/ax/frontmost': {
       return controller.axFrontmost();
     }
+    case '/ax/list_apps': {
+      return controller.axListApps(String(payload && payload.scope || 'running'));
+    }
+    case '/ax/resolve_app': {
+      return controller.axResolveApp(String(payload && payload.app || ''));
+    }
+    case '/ax/input_text': {
+      return controller.axInputText({
+        app: String(payload && payload.app || ''),
+        ref: String(payload && payload.ref || ''),
+        text: String(payload && payload.text || ''),
+        submit: !!(payload && payload.submit),
+      });
+    }
+    case '/ax/ui_settle': {
+      return controller.axUiSettle({
+        app: String(payload && payload.app || ''),
+        quietMs: Number(payload && payload.quiet_ms) || 250,
+        timeoutMs: Number(payload && payload.timeout_ms) || 3000,
+      });
+    }
+    case '/ax/js': {
+      return controller.scriptRun(String(payload && payload.code || ''), {
+        timeoutMs: Number(payload && payload.timeout_ms) || 0,
+      });
+    }
+    case '/ax/js_reset': {
+      return controller.scriptReset();
+    }
     case '/pause': {
       const paused = payload && payload.paused !== undefined ? !!payload.paused : true;
       const reason = payload && payload.reason ? String(payload.reason) : 'user';

@@ -93,7 +93,7 @@ def test_resolve_empty_when_off_or_no_bridge(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(cbc, "computer_enabled", lambda: True)
     monkeypatch.setattr(cbc, "computer_available", lambda _d: True)
     names = [getattr(t, "name", "") for t in cbc.resolve_computer_tools(tmp_path, session_id="s")]
-    assert names == ["computer_observe", "computer"]
+    assert names == ["computer_observe", "computer", "computer_script"]
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +112,8 @@ class _FakeClient:
         self._request_result = request
         self.requested_kinds = []
         self._frontmost = frontmost
+        self._script_result = {"blocks": [{"type": "text", "text": "hello"}], "error": None}
+        self.reset_called = False
 
     def state(self):
         return self._state
@@ -162,6 +164,26 @@ class _FakeClient:
     def ax_frontmost(self):
         return {"ok": True, "pid": 1, "app": self._frontmost}
 
+    # Persistent JS surface
+    def ax_script(self, code, timeout_ms=0):
+        return self._script_result
+
+    def ax_script_reset(self):
+        self.reset_called = True
+        return {"reset": True}
+
+    def ax_list_apps(self, scope="running"):
+        return {"apps": [{"bundleId": "com.apple.Safari", "displayName": "Safari", "pid": 42}]}
+
+    def ax_resolve_app(self, app):
+        return {"selector": app, "pid": 42, "bundleId": "com.apple.Safari"}
+
+    def ax_input_text(self, ref, text, app="", submit=False):
+        return {"ok": True, "performed": "input_text", "strategy": "ax_value", "verified": True}
+
+    def ax_ui_settle(self, app="", quiet_ms=250, timeout_ms=3000):
+        return {"settled": True}
+
     def request_permission(self, kind):
         self.requested_kinds.append(kind)
         return self._request_result or {"ok": True, "status": "not determined", "prompt_shown": True}
@@ -191,14 +213,79 @@ def test_build_tools_names(fake_client_factory):
 
     fake_client_factory(_FakeClient())
     tools = build_computer_tools(Path("/tmp"), session_id="sess")
-    assert [getattr(t, "name", "") for t in tools] == ["computer_observe", "computer"]
+    assert [getattr(t, "name", "") for t in tools] == ["computer_observe", "computer", "computer_script"]
+
+
+def _script_tool(tools):
+    return next(t for t in tools if getattr(t, "name", "") == "computer_script")
+
+
+def test_script_text_output(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    client = fake_client_factory(_FakeClient())
+    client._script_result = {"blocks": [{"type": "text", "text": "apps=63"}, {"type": "text", "text": "refs=95"}], "error": None}
+    tool = _script_tool(build_computer_tools(Path("/tmp"), session_id="sess"))
+    out = tool.invoke({"code": "cua.emitText('x')"})
+    assert "apps=63" in out and "refs=95" in out
+
+
+def test_script_error_is_surfaced(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    client = fake_client_factory(_FakeClient())
+    client._script_result = {"blocks": [{"type": "text", "text": "partial"}], "error": "ReferenceError: foo is not defined"}
+    tool = _script_tool(build_computer_tools(Path("/tmp"), session_id="sess"))
+    out = tool.invoke({"code": "foo"})
+    assert "ReferenceError" in out and "do NOT repeat" in out
+
+
+def test_script_reset(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    client = fake_client_factory(_FakeClient())
+    tool = _script_tool(build_computer_tools(Path("/tmp"), session_id="sess"))
+    out = tool.invoke({"reset": True})
+    assert client.reset_called is True
+    assert '"reset": true' in out.lower()
+
+
+def test_script_requires_code(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient())
+    tool = _script_tool(build_computer_tools(Path("/tmp"), session_id="sess"))
+    out = tool.invoke({"code": "  "})
+    assert "param_error" in out
+
+
+def test_script_image_vision_block(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    client = fake_client_factory(_FakeClient())
+    client._script_result = {"blocks": [{"type": "image", "image": _data_url(_VALID_JPEG)}], "error": None}
+    tool = _script_tool(build_computer_tools(Path("/tmp"), session_id="sess", vision=True))
+    out = tool.invoke({"code": "cua.emitImage(await app.getScreenshot())"})
+    assert isinstance(out, list)
+    assert any(b.get("type") == "image_url" for b in out)
+
+
+def test_script_image_non_vision_saved(tmp_path: Path, fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    client = fake_client_factory(_FakeClient())
+    client._script_result = {"blocks": [{"type": "image", "image": _data_url(_VALID_JPEG)}], "error": None}
+    tool = _script_tool(build_computer_tools(tmp_path, session_id="sess", vision=False))
+    out = tool.invoke({"code": "cua.emitImage(await app.getScreenshot())"})
+    assert isinstance(out, str)
+    assert "saved to disk" in out
 
 
 def test_observe_state(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient(state={"ok": True, "platform": "darwin", "displays": []}))
-    (observe, _act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (observe, _act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = observe.invoke({"action": "state"})
     assert json.loads(out)["platform"] == "darwin"
 
@@ -207,7 +294,7 @@ def test_observe_app_state_reports_window_and_diff(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient())
-    (observe, _act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (observe, _act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     payload = json.loads(observe.invoke({"action": "app_state"}))
     assert payload["changed"] is False
     assert payload["removed"] == ["axbutton:x#9"]
@@ -221,7 +308,7 @@ def test_observe_screenshot_vision_block(fake_client_factory):
 
     shot = {"image": _data_url(_VALID_JPEG), **_GEOMETRY}
     fake_client_factory(_FakeClient(screenshot=shot))
-    (observe, _act) = build_computer_tools(Path("/tmp"), vision=True, session_id="sess")
+    (observe, _act, _script) = build_computer_tools(Path("/tmp"), vision=True, session_id="sess")
     out = observe.invoke({"action": "screenshot"})
     assert isinstance(out, list)
     text_part = [p for p in out if p.get("type") == "text"][0]
@@ -236,7 +323,7 @@ def test_observe_screenshot_non_vision_saved(tmp_path: Path, fake_client_factory
 
     shot = {"image": _data_url(_VALID_JPEG), **_GEOMETRY}
     fake_client_factory(_FakeClient(screenshot=shot))
-    (observe, _act) = build_computer_tools(tmp_path, vision=False, session_id="sess-1")
+    (observe, _act, _script) = build_computer_tools(tmp_path, vision=False, session_id="sess-1")
     out = observe.invoke({"action": "screenshot"})
     payload = json.loads(out)
     assert "screenshot" in payload
@@ -249,7 +336,7 @@ def test_observe_screenshot_rejects_empty_vision(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient(screenshot={"image": "data:image/jpeg;base64,", **_GEOMETRY}))
-    (observe, _act) = build_computer_tools(Path("/tmp"), vision=True, session_id="sess")
+    (observe, _act, _script) = build_computer_tools(Path("/tmp"), vision=True, session_id="sess")
     out = observe.invoke({"action": "screenshot"})
     assert isinstance(out, str)
     assert json.loads(out)["error_code"] == "screen_permission"
@@ -259,7 +346,7 @@ def test_act_paused_hint(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient(ax_act={"error": "computer paused by user", "error_code": "computer_paused", "reason": "user"}))
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert payload["error_code"] == "computer_paused"
@@ -270,7 +357,7 @@ def test_act_ok(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient(ax_act={"ok": True, "performed": "click"}))
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert payload["ok"] is True
@@ -288,7 +375,7 @@ def test_act_press_hotkey_passes_key_and_modifiers(fake_client_factory):
             return {"ok": True, "performed": "press_hotkey"}
 
     fake_client_factory(_Recording())
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     act.invoke({"action": "press_hotkey", "key": "space", "modifiers": ["cmd"]})
     assert captured["key"] == "space"
     assert captured["modifiers"] == ["cmd"]
@@ -298,7 +385,7 @@ def test_act_launch_app(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient(snapshot_text=_SNAP_TEXT))
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "launch_app", "app": "Calculator"})
     payload = json.loads(out)
     # observation-free: launch_app proceeds even without a usable snapshot.
@@ -311,7 +398,7 @@ def test_act_type_text_refuses_shortcut(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient())
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "type_text", "text": "cmd+spaceMusic"})
     payload = json.loads(out)
     assert payload["error_code"] == "shortcut_as_text"
@@ -322,7 +409,7 @@ def test_act_fail_closed_without_observation(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient(snapshot_text=None))
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert payload["error_code"] == "no_observation"
@@ -332,7 +419,7 @@ def test_stale_ref_self_heals_with_fresh_snapshot(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
     fake_client_factory(_FakeClient(ax_act=_PERM_ERR("computer_error", "no AX element for ref axbutton:搜索#1")))
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "click_ref", "ref": "axbutton:搜索#1"})
     payload = json.loads(out)
     assert payload["error_code"] == "computer_error"
@@ -353,7 +440,7 @@ def test_type_into_passes_submit(fake_client_factory):
             return {"ok": True, "performed": op}
 
     fake_client_factory(_Recording())
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     act.invoke({"action": "type_into", "ref": "axtextfield:apple music#1", "text": "情歌王", "submit": True})
     assert captured["submit"] is True
     assert captured["text"] == "情歌王"
@@ -369,7 +456,7 @@ def test_type_into_unverified_when_focused_value_empty(fake_client_factory):
             return {"ok": True, "performed": op}
 
     fake_client_factory(_NoPaste())
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "type_into", "ref": "axtextfield:apple music#1", "text": "情歌王", "submit": True})
     payload = json.loads(out)
     assert payload["verified"] is False
@@ -387,7 +474,7 @@ def test_type_into_verified_by_focused_value(fake_client_factory):
             return {"ok": True, "performed": op}
 
     fake_client_factory(_Pasted())
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "type_into", "ref": "axtextfield:apple music#1", "text": "情歌王", "submit": True})
     payload = json.loads(out)
     assert payload["verified"] is True
@@ -405,7 +492,7 @@ def test_click_coords_passes_shot_geometry(fake_client_factory):
             return {"ok": True, "performed": "click_coords"}
 
     fake_client_factory(_Recording())
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     act.invoke({"action": "click_coords", "x": 512, "y": 300, "shot_width": 1024, "shot_height": 640, "display": 0})
     assert captured["x"] == 512.0
     assert captured["sw"] == 1024
@@ -481,6 +568,29 @@ def _install_counting(fake_client_factory, request_result, **kw):
     return counting
 
 
+def test_script_loop_guard(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient())
+    tool = _script_tool(build_computer_tools(Path("/tmp"), session_id="sess"))
+    code = "await (await cua.getApp('Finder')).getAXState();"
+    first = tool.invoke({"code": code})
+    second = tool.invoke({"code": code})
+    third = tool.invoke({"code": code})
+    assert "loop_guard" not in first and "loop_guard" not in second
+    assert "loop_guard" in third
+
+
+def test_computer_loop_guard(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient())
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    for _ in range(2):
+        assert "loop_guard" not in act.invoke({"action": "click_ref", "ref": "axbutton:ok#1"})
+    assert "loop_guard" in act.invoke({"action": "click_ref", "ref": "axbutton:ok#1"})
+
+
 def test_act_auto_requests_permission_once_on_denial(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
@@ -490,7 +600,7 @@ def test_act_auto_requests_permission_once_on_denial(fake_client_factory):
         ax_act=_PERM_ERR("input_permission", "no accessibility"),
     )
     # First act attempt fails on Accessibility; the OS is denied -> auto-request.
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert payload["error_code"] == "input_permission"
@@ -511,7 +621,7 @@ def test_observe_auto_requests_screen_permission(fake_client_factory):
         {"ok": True, "status": "not determined", "prompt_shown": True},
         screenshot=_PERM_ERR("screen_permission", "capture empty"),
     )
-    (observe, _act) = build_computer_tools(Path("/tmp"), vision=True, session_id="sess")
+    (observe, _act, _script) = build_computer_tools(Path("/tmp"), vision=True, session_id="sess")
     out = observe.invoke({"action": "screenshot"})
     payload = json.loads(out) if isinstance(out, str) else out
     assert isinstance(payload, dict)
@@ -529,7 +639,7 @@ def test_request_granted_then_retry_hint(fake_client_factory):
         {"ok": True, "status": "authorized", "granted": True},
         ax_act=_PERM_ERR("input_permission", "no accessibility"),
     )
-    (_observe, act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = act.invoke({"action": "click_ref", "ref": "2"})
     payload = json.loads(out)
     assert "granted just now" in payload["hint"]

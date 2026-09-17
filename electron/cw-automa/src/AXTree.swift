@@ -197,6 +197,15 @@ enum AX {
         return result
     }
 
+    /// The app's current focused (keyboard) element, if any.
+    static func focusedElement(_ app: AXUIElement) -> AXUIElement? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID()
+        else { return nil }
+        return unsafeBitCast(raw, to: AXUIElement.self)
+    }
+
     /// Focused element readback (role/label/value) for post-type verification.
     static func focusedInfo(_ app: AXUIElement) -> [String: String]? {
         guard let raw = attr(app, kAXFocusedUIElementAttribute) else { return nil }

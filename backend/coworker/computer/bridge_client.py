@@ -147,6 +147,34 @@ class ComputerClient(LoopbackBridgeClient):
     def ax_frontmost(self) -> dict[str, Any]:
         return self._call("POST", "/ax/frontmost", {})
 
+    # ── Persistent JS surface (Codex-parity) ─────────────────────────────
+    def ax_script(self, code: str, timeout_ms: int = 0) -> dict[str, Any]:
+        """Run one JavaScript cell in the persistent computer-use worker."""
+        return self._call("POST", "/ax/js", {"code": str(code), "timeout_ms": int(timeout_ms or 0)})
+
+    def ax_script_reset(self) -> dict[str, Any]:
+        """Discard the persistent worker and its bindings."""
+        return self._call("POST", "/ax/js_reset", {})
+
+    def ax_list_apps(self, scope: str = "running") -> dict[str, Any]:
+        return self._call("POST", "/ax/list_apps", {"scope": str(scope or "running")})
+
+    def ax_resolve_app(self, app: str) -> dict[str, Any]:
+        return self._call("POST", "/ax/resolve_app", {"app": str(app or "")})
+
+    def ax_input_text(self, ref: str, text: str, app: str = "", submit: bool = False) -> dict[str, Any]:
+        payload: dict[str, Any] = {"ref": str(ref or ""), "text": str(text or ""), "submit": bool(submit)}
+        if app:
+            payload["app"] = str(app)
+        return self._call("POST", "/ax/input_text", payload)
+
+    def ax_ui_settle(self, app: str = "", quiet_ms: int = 250, timeout_ms: int = 3000) -> dict[str, Any]:
+        return self._call("POST", "/ax/ui_settle", {
+            "app": str(app or ""),
+            "quiet_ms": int(quiet_ms or 250),
+            "timeout_ms": int(timeout_ms or 3000),
+        })
+
 
 # ---------------------------------------------------------------------------
 # Capability status / system-prompt hint
@@ -176,25 +204,22 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
     status = computer_capability_status(data_dir)
     if status == "ok":
         return (
-            "OS Computer Use is ENABLED. Observe with computer_observe snapshot (Accessibility "
-            "element tree scoped to the focused window; refs are SEMANTIC identities like "
-            "[axbutton:搜索#1] = role:label#n, so they survive UI changes). Act BY REF: "
-            "click_ref/double_click_ref/right_click_ref/type_into/show on refs from the LATEST "
-            "snapshot only. Open apps ONLY via launch_app; press shortcuts ONLY via press_hotkey "
-            "(key+modifiers), NEVER type a shortcut as text. Keep click_coords strictly as a last "
-            "resort for canvas/rendered content (x,y in screenshot pixel space + shot_width/shot_height). "
-            "Workflow: snapshot -> pick a ref -> act -> read verified/after_preview -> continue only "
-            "if verified. If an action returns fresh_snapshot, re-pick a ref from it (the UI moved). "
-            "NEVER claim an outcome unless the returned evidence confirms it. If snapshot reports a "
-            "permission error, stop and tell the user; do NOT act or pretend. When searching inside an app: "
-            "type_into the field with submit=true (types real keys + Enter), then snapshot — results appear "
-            "as AXList/AXTable rows under the field; double_click_ref the matching row (or press space) to "
-            "activate it — do NOT re-open the search. If type_into reports the text did not land "
-            "(focused value empty), that surface does not accept standard text editing — STOP and ask "
-            "the user; never retry-loop on the same field. Before acting, confirm what you are acting on: "
-            "computer_observe state returns frontmost. launch_app/app-switch is verified only when the "
-            "frontmost app actually changes; when a computer action returns verified=null, evaluate its "
-            "after_preview yourself and never claim a result you did not observe."
+            "OS Computer Use is ENABLED. PRIMARY surface = computer_script (persistent JavaScript): "
+            "`const app = await cua.getApp('Music')` binds an app, then in ONE call observe + act, with "
+            "loops/conditions: app.getAXState() (AX tree text + integer indices), app.getScreenshot(), "
+            "app.click(refOrIndex), app.typeText(text,{submit}), app.paste(text), app.setValue(ref,text), "
+            "app.pressKey('cmd+f'), app.scroll(target,'down',pages), app.drag([x,y],[x,y]), app.settle(). "
+            "Element targets are observed refs (strings like 'axbutton:搜索#1') or INTEGER indices from the "
+            "SAME cell's getAXState (call it first). Bindings persist across calls; use computer_script(reset=true) "
+            "for a fresh session. No require/process/fs/network. "
+            "INPUT LADDER (AX-first): setValue (most deterministic) -> typeText -> paste. After any input, "
+            "re-observe and confirm the field/result changed before claiming success; if AX readback is empty, "
+            "trust the paste receipt/field change instead of retrying blindly. "
+            "Legacy low-level tools remain: computer_observe (state/snapshot/app_state/screenshot) and computer "
+            "(click_ref/type_into/press_hotkey/launch_app/click_coords). Open apps ONLY via launch_app or "
+            "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey — never type a shortcut as text. "
+            "If an action fails the SAME way twice, STOP and ask the user instead of retry-looping. "
+            "NEVER claim an outcome you did not observe. If a permission error is reported, stop and tell the user."
         )
     if status == "feature_off":
         return (
@@ -362,6 +387,20 @@ def build_computer_tools(
     from pydantic import BaseModel, Field
 
     client = ComputerClient(data_dir)
+
+    # Loop breaker: the single most common failure mode is retry-looping the
+    # same call. The toolset persists for the session, so we can detect N
+    # consecutive IDENTICAL calls and refuse the next one, forcing a change of
+    # strategy (or a question to the user) instead of an unbounded loop.
+    _recent: dict[str, list[str]] = {"computer": [], "computer_script": []}
+    _LOOP_LIMIT = 3
+
+    def _loop_guard(kind: str, signature: str) -> bool:
+        hist = _recent[kind]
+        hist.append(signature)
+        if len(hist) > _LOOP_LIMIT:
+            hist.pop(0)
+        return hist.count(signature) >= _LOOP_LIMIT
 
     class ObserveArgs(BaseModel):
         action: ObserveAction = Field(..., description="Read-only: state = permissions/platform/frontmost; displays = list displays; screenshot = capture the chosen display (visual, needs Screen Recording); snapshot = Accessibility element tree (text + refs) — the reliable observation, needs only Accessibility permission.")
@@ -667,6 +706,23 @@ def build_computer_tools(
         """
         mods = [str(m) for m in (modifiers or [])]
 
+        sig = json.dumps(
+            [action, ref, app, key, mods, str(text or ""), bool(submit), x, y, dx, dy],
+            ensure_ascii=False,
+        )
+        if _loop_guard("computer", sig):
+            return json.dumps(
+                {
+                    "error": "Loop guard: you have issued this exact computer action 3 times. Stop repeating it.",
+                    "error_code": "loop_guard",
+                    "note": (
+                        "Change strategy: re-observe with computer_observe (or computer_script + app.getAXState), "
+                        "pick a DIFFERENT ref/target, or ask the user. Do not repeat the same call."
+                    ),
+                },
+                ensure_ascii=False,
+            )
+
         # Instant shortcut-as-text guard: type_* must never be a hotkey.
         if action in ("type_text", "type_into") and _looks_like_shortcut(str(text or "")):
             return json.dumps(
@@ -730,7 +786,125 @@ def build_computer_tools(
             return _render_computer_error(result, client)
         return _verify_and_report(before, action, str(text or ""), str(app or ""), result, front_before_pid)
 
-    return [computer_observe, computer]
+    class ScriptArgs(BaseModel):
+        code: str = Field(
+            "",
+            description=(
+                "JavaScript for the persistent computer-use worker. `cua` is the only global: "
+                "await cua.getApp('Safari'|bundleId|path) binds an app; then "
+                "app.getAXState({disableDiffing?}), app.getScreenshot(), app.getAXStateAndScreenshot(), "
+                "app.click(refOrIndex|[x,y]), app.drag([x,y],[x,y]), app.pressKey('cmd+s'), "
+                "app.scroll(target,'down',pages), app.typeText('hi',{submit?}), app.paste('hi'), "
+                "app.setValue(ref,'v'), app.focus(ref), app.settle(). "
+                "Element targets are observed refs (strings) or integer indices from the SAME cell's "
+                "getAXState (call it first). cua.emitText(x)/cua.emitImage(shot) show output. "
+                "No require/process/fs/network. Persist across cells via globalThis."
+            ),
+        )
+        reset: bool = Field(False, description="Discard the worker and all bindings (fresh session).")
+        timeout_ms: int = Field(0, ge=0, le=60000, description="Optional wall timeout for this cell (default 30s, cap 60s).")
+
+    def _render_script_blocks(blocks: Any, client: Any, data_dir: Any, session_id: str, vision: bool) -> str | list:
+        texts: list[str] = []
+        images: list[str] = []
+        saved: list[str] = []
+        for b in (blocks or []):
+            if not isinstance(b, dict):
+                continue
+            kind = b.get("type")
+            if kind == "text":
+                if b.get("text"):
+                    texts.append(str(b["text"]))
+            elif kind == "image":
+                url = str(b.get("image") or b.get("image_url") or b.get("data") or "")
+                if not url:
+                    continue
+                if (
+                    isinstance(url, str)
+                    and url.startswith("data:")
+                    and looks_like_image_data_url(url)
+                ):
+                    if vision:
+                        images.append(url)
+                    else:
+                        path = save_screenshot(url, data_dir, session_id)
+                        if path:
+                            saved.append(path)
+                else:
+                    texts.append(f"[image block omitted: {url[:80]}]")
+        body = "\n".join(t for t in texts if t).strip()
+        if images:
+            out: list[Any] = []
+            if body:
+                out.append({"type": "text", "text": body})
+            for url in images:
+                out.append({"type": "image_url", "image_url": {"url": url}})
+            return out
+        if saved:
+            note = "This model has no vision; screenshots were saved to disk: " + ", ".join(saved)
+            return json.dumps({"output": body, "note": note}, ensure_ascii=False)
+        return body or "(no output)"
+
+    @tool(args_schema=ScriptArgs)
+    def computer_script(code: str = "", reset: bool = False, timeout_ms: int = 0) -> str | list:
+        """Drive the desktop with a persistent JavaScript session (primary macOS surface).
+
+        This is the preferred way to control macOS apps: you write JS that binds an app
+        (``await cua.getApp('Music')``) and then observes and acts on it in ONE call —
+        including loops and conditional logic — so a multi-step task (click a field, type,
+        press Return, verify) does not need a tool round-trip per step. Bindings persist
+        across calls; set ``reset=true`` to start fresh. Native calls are re-validated by
+        the app (pause gate, permissions, app identity), so nothing here bypasses safety.
+
+        The input ladder is AX-first: prefer ``app.setValue(ref, text)`` (most
+        deterministic), then ``app.typeText(text, {submit})``, then ``app.paste(text)``.
+        Always re-observe (``app.getAXState()``) and check the result before claiming
+        success. If a call fails twice the same way, stop and ask the user.
+        """
+        try:
+            if reset:
+                res = client.ax_script_reset()
+                if isinstance(res, dict) and res.get("error_code"):
+                    return _render_computer_error(res, client)
+                _recent["computer_script"].clear()
+                return json.dumps({"reset": True, "note": "Computer-use session reset."}, ensure_ascii=False)
+            if not str(code or "").strip():
+                return json.dumps({"error": "computer_script requires code (or reset=true)", "error_code": "param_error"}, ensure_ascii=False)
+            if _loop_guard("computer_script", str(code)):
+                return json.dumps(
+                    {
+                        "error": "Loop guard: you have submitted this exact script 3 times. Stop repeating it.",
+                        "error_code": "loop_guard",
+                        "note": (
+                            "Change approach: observe the current state first (app.getAXState()), try the "
+                            "next rung of the input ladder (setValue -> typeText -> paste -> pressKey), or ask "
+                            "the user. Do not re-run the same script."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+            result = client.ax_script(str(code), int(timeout_ms or 0))
+        except Exception as exc:  # noqa: BLE001 - tool must never break a turn
+            logger.warning("computer_script failed: %s", exc)
+            return json.dumps({"error": str(exc)[:500], "error_code": "computer_error"}, ensure_ascii=False)
+
+        if isinstance(result, dict) and result.get("error_code"):
+            return _render_computer_error(result, client)
+        blocks = result.get("blocks") if isinstance(result, dict) else None
+        rendered = _render_script_blocks(blocks, client, data_dir, session_id, vision)
+        err = result.get("error") if isinstance(result, dict) else None
+        if err:
+            note = (
+                "The cell raised an error. Inspect the app state before continuing; "
+                "do NOT repeat the same failing call."
+            )
+            if isinstance(rendered, list):
+                rendered = rendered + [{"type": "text", "text": f"error: {err}\n{note}"}]
+            else:
+                rendered = f"{rendered}\nerror: {err}\n{note}"
+        return rendered
+
+    return [computer_observe, computer, computer_script]
 
 
 def resolve_computer_tools(

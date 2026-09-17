@@ -175,3 +175,61 @@ macOS 的 TCC 權限**沒有**第三方可呼叫的「允許/不允許」系統�
 | `frontend/...`（App/SettingsView/chatService/electron.d.ts/locales） | 開關 UI |
 | `package.json` | 依賴 `@nut-tree-fork/nut-js` |
 | `electron-builder.config.json` | `asarUnpack` nut-js native module |
+
+---
+
+## 十、2026-09-17 Codex-parity 持久 JS 表面 + AX-first 輸入階梯
+
+對照 `cc-haha`（`native/cu-helper`，官方 Codex `unified-computer-use` plugin 的相容實作）
+與 OpenAI 官方建議（code execution 為主、`computer` 工具為輔），把主介面從「每動作一個
+tool call、ref 對 frontmost」改成「綁定 App 的持久 JavaScript session」。
+
+### 新增：`computer_script`（macOS 主介面）
+
+模型寫 JS，一次呼叫內完成 observe → act → 驗證，可寫 loop/條件：
+
+```js
+const app = await cua.getApp('Music');          // 綁定 App（名稱/bundleId/path）
+await app.getAXState();                          // AX 樹（文字 + 整數索引）
+await app.setValue(3, '七里香');                  // AX 直接寫值（最確定）
+await app.typeText('七里香', { submit: true });   // AX-first，退回 unicode 按鍵 → 粘貼
+await app.pressKey('cmd+f');
+await app.settle();                              // UI-settle
+cua.emitText('done');
+```
+
+- 實作：`electron/computer-repl.js`（主行程管理器）+ `electron/computer-repl-kernel.js`
+  （`worker_threads` + `node:vm` 沙箱；無 `require`/`process`/`fs`/網路）。
+- 限制（對齊 Codex/cc-haha）：每 cell 256 原生呼叫、原始碼 256 KiB、輸出 128 塊/16 MiB、
+  逾時預設 30 s（上限 60 s）；逾時/取消即丟棄 worker，**已執行的動作不回放**。
+- 綁定跨 cell 以 `globalThis` 保留；`computer_script(reset=true)` 開新 session。
+- 主行程 `DesktopController._replCall` 是白名單分派：每個原生呼叫都再過 pause gate、
+  權限與 App 身份檢查，沙箱無法觸及任意 helper verb。
+
+### AX-first 輸入階梯（`TextInput.swift`）
+
+1. `ax_value`：`AXUIElementSetAttributeValue(kAXValue)`（元素可設值時，最確定）
+2. `unicode_keys`：AX 聚焦後 `CGEvent.keyboardSetUnicodeString`（layout/CJK 安全；
+   補上原本是死碼的 `Injection.typeUnicode`）
+3. `clipboard`：一般剪貼簿 + **promised-data 收據** + `AXObserver` 確認**目標欄位真的變了**；
+   使用者剪貼簿優先，只在仍持有時還原
+4. 提交：`Return`；指標點擊僅作為 AX 聚焦失敗時的最後手段
+
+每次回報 `strategy` / `verified` / `value` / `notes`，不再用單一 AXValue 判定而產生假陰性。
+
+### 其他根治
+
+- **App 綁定的 ref**：`act`/`input_text`/`press_key` 全程帶 `app`/`pid`，helper 端
+  `resolveActPid` 解析並 `recordTarget`；不再用 frontmost 解 ref（原本會對到 Dock）。
+- **App 解析**：`AppInventory.resolvePid` 支援名稱/bundleId/pid/path/**bundle 檔名**
+  （非英語系系統 `localizedName` 會是「访达」，英文 "Finder" 仍可解析）。
+- **UI settle**：`UISettle.swift` 以 AX 樹簽章輪詢至穩定（取代固定 sleep）。
+- **穩定簽名**：`pack-local.command` 以固定 `--identifier`（有憑證時用固定身份）簽 helper，
+  避免 ad-hoc 每次重建輪替 cdhash 導致 TCC 重授（可用 `CW_SIGN_IDENTITY` 指定）。
+
+### 驗證
+
+- `scripts/computer-repl-smoke.js`：對真實 helper 跑 listApps/getApp/getAXState、
+  整數索引守衛、沙箱（`require`/`process` 為 undefined）、逾時重置、逾時後可續用 → PASS。
+- `backend/tests/test_computer_use.py`：36 passed（含 script 文字/錯誤/reset/無碼/vision/落盤）。
+- HITL：`computer_script` 與 `computer` 同級（`_EXEC_TOOLS`、子代理排除、逐動作審批）。

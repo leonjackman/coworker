@@ -215,6 +215,13 @@ def command_approval_middleware(
             "description": "Coworker wants to control your computer (click/type/key on the desktop).",
             "when": _needs_computer_approval,
         },
+        # The persistent JS surface drives the same real desktop through a worker;
+        # it is a mutating computer-use tool, so it follows the identical gate.
+        "computer_script": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to run a computer-use script controlling your desktop.",
+            "when": _needs_computer_approval,
+        },
     }
 
     def _mcp_policy_for(tool_call: Any) -> dict[str, Any] | None:

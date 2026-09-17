@@ -326,6 +326,64 @@ class AutomationAdapter {
     return this.invoke('frontmost', {});
   }
 
+  // ── Persistent JS surface (Codex-parity) ─────────────────────────────
+  async listApps(scope = 'running') {
+    return this.invoke('list_apps', { scope: scope === 'installed' ? 'installed' : 'running' });
+  }
+
+  async resolveApp(app) {
+    return this.invoke('resolve_app', { app: String(app || '') });
+  }
+
+  async focusApp(app, settle = true) {
+    return this.invoke('focus_app', { app: String(app || ''), settle: !!settle });
+  }
+
+  async inputText({ app = '', ref = '', text = '', submit = false } = {}) {
+    const params = { text: String(text || ''), submit: !!submit };
+    if (app) params.app = String(app);
+    if (ref) params.ref = String(ref);
+    return this.invoke('input_text', params);
+  }
+
+  async pressKeyTo(app, key, modifiers = [], repeat = 1) {
+    const params = { key: String(key || ''), modifiers: modifiers || [], repeat: Number(repeat) || 1 };
+    if (app) params.app = String(app);
+    return this.invoke('press_key', params);
+  }
+
+  async scrollTo(app, dx, dy, x, y) {
+    const params = { dx: Number(dx) || 0, dy: Number(dy) || 0 };
+    if (app) params.app = String(app);
+    if (typeof x === 'number') params.x = x;
+    if (typeof y === 'number') params.y = y;
+    return this.invoke('scroll_to', params);
+  }
+
+  async dragTo(app, x1, y1, x2, y2, steps = 12) {
+    const params = { x1: Number(x1), y1: Number(y1), x2: Number(x2), y2: Number(y2), steps: Number(steps) || 12 };
+    if (app) params.app = String(app);
+    return this.invoke('drag_to', params);
+  }
+
+  async clickPointTo(app, x, y) {
+    const params = { x: Number(x), y: Number(y) };
+    if (app) params.app = String(app);
+    return this.invoke('click_point_to', params);
+  }
+
+  async uiSettle({ app = '', quietMs = 250, timeoutMs = 3000 } = {}) {
+    const params = { quiet_ms: Number(quietMs) || 250, timeout_ms: Number(timeoutMs) || 3000 };
+    if (app) params.app = String(app);
+    return this.invoke('ui_settle', params);
+  }
+
+  async actFor(app, ref, op, extra = {}) {
+    const params = Object.assign({ ref: String(ref || ''), op: String(op || 'click') }, extra || {});
+    if (app) params.app = String(app);
+    return this.invoke('act', params);
+  }
+
   close() {
     if (this._proc && !this._proc.killed) { try { this._proc.kill(); } catch (e) { /* ignore */ } }
     this._proc = null;
