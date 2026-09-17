@@ -10,6 +10,7 @@
 #   ./pack-local.command --skip-frontend --skip-backend   # reuse existing build outputs
 #   ./pack-local.command --clean         # wipe release/ before packaging
 #   ./pack-local.command --sign          # sign with the discovered Developer ID cert
+#   ./pack-local.command CW_SIGN_UUID=... # force a specific cert UUID
 #
 # Local builds are unsigned by default (CSC_IDENTITY_AUTO_DISCOVERY=false) to
 # avoid codesign blocking on keychain authorization. Signing/notarization is
@@ -119,23 +120,27 @@ ok "Native helper built"
 # ad-hoc signature (codesign -s -) rotates that identity on every rebuild and
 # forces the user to re-grant. We use a stable --identifier and, when a
 # Developer ID / Apple Development cert is available, a stable identity too.
+#
+# security find-identity returns duplicate entries for the same cert (different
+# keychain items → same display name). Passing the display name to codesign
+# triggers "ambiguous" errors. We extract the UUID (fingerprint) instead.
 HELPER_BIN="$ROOT_DIR/electron/cw-automa/build/cw-automa"
 HELPER_ID="com.coworker.cw-automa"
-HELPER_IDENTITY="${CW_SIGN_IDENTITY:-}"
-if [[ -z "$HELPER_IDENTITY" ]]; then
-  HELPER_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n 's/.*"\(.*\)"/\1/p' \
-    | grep -E 'Developer ID Application|Apple Development' | head -1 || true)"
+HELPER_UUID="${CW_SIGN_UUID:-}"
+if [[ -z "$HELPER_UUID" ]]; then
+  HELPER_UUID="$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep -E 'Developer ID Application|Apple Development' | head -1 \
+    | awk '{print $2}' || true)"
 fi
 
 helper_signed=0
-if [[ -n "$HELPER_IDENTITY" ]]; then
-  # Try a stable cert with a secure timestamp (needs keychain access), then
-  # without the timestamp, before giving up on the identity.
+if [[ -n "$HELPER_UUID" ]]; then
+  # Sign with the cert UUID (fingerprint) — unique, avoids "ambiguous" errors
+  # from duplicate keychain entries with the same display name.
   for attempt in "--timestamp" ""; do
     # shellcheck disable=SC2086
     if codesign --force --options runtime $attempt --identifier "$HELPER_ID" \
-         --sign "$HELPER_IDENTITY" "$HELPER_BIN" >/dev/null 2>&1; then
+         --sign "$HELPER_UUID" "$HELPER_BIN" >/dev/null 2>&1; then
       helper_signed=1
       break
     fi
@@ -148,9 +153,9 @@ if [[ "$helper_signed" != "1" ]]; then
 fi
 ACTUAL_ID="$(codesign -dv "$HELPER_BIN" 2>&1 | sed -n 's/^Identifier=//p')"
 if [[ "$helper_signed" == "1" ]]; then
-  ok "Native helper signed (identity: $HELPER_IDENTITY; id: ${ACTUAL_ID:-?}) — TCC grants persist across rebuilds"
+  ok "Native helper signed (id: ${ACTUAL_ID:-?}) — TCC grants persist across rebuilds"
 else
-  warn "Native helper ad-hoc signed (id: ${ACTUAL_ID:-?}). No stable cert reachable — macOS may re-prompt for Accessibility/Screen Recording after each rebuild (set CW_SIGN_IDENTITY to fix)."
+  warn "Native helper ad-hoc signed (id: ${ACTUAL_ID:-?}). No stable cert reachable — macOS may re-prompt for Accessibility/Screen Recording after each rebuild (set CW_SIGN_UUID to fix)."
 fi
 
 echo "[4/5] Packaging app (electron-builder --dir)..."
