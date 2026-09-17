@@ -1429,6 +1429,15 @@ async function handleComputerBridgeRequest(method, url, payload) {
     case '/ax/scroll': {
       return controller.axScroll(Number(payload && payload.dx) || 0, Number(payload && payload.dy) || 0);
     }
+    case '/ax/scroll_to': {
+      return controller.axScrollTo(
+        String(payload && payload.app || ''),
+        Number(payload && payload.dx) || 0,
+        Number(payload && payload.dy) || 0,
+        Number(payload && payload.x) || 0,
+        Number(payload && payload.y) || 0,
+      );
+    }
     case '/ax/frontmost': {
       return controller.axFrontmost();
     }

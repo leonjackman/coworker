@@ -161,6 +161,9 @@ class _FakeClient:
     def ax_scroll(self, dx, dy):
         return {"ok": True, "performed": "scroll"}
 
+    def ax_scroll_to(self, app, dx, dy, x, y):
+        return {"ok": True, "performed": "scroll_to", "app": app}
+
     def ax_frontmost(self):
         return {"ok": True, "pid": 1, "app": self._frontmost}
 
@@ -517,7 +520,7 @@ class _StubReq:
         self.tool_call = {}
 
 
-def test_hitl_computer_gating():
+def test_hitl_computer_gating(fake_client_factory):
     from coworker.agent.middleware.hitl import command_approval_middleware
 
     [hitl] = command_approval_middleware()
@@ -534,6 +537,15 @@ def test_hitl_computer_gating():
     assert when(req("execute", "guarded")) is True      # 默認權限 -> 逐動作審批
     assert when(req("execute", "autonomous")) is False  # 完整權限 -> 直接放行
     assert when(req("discuss", "guarded")) is False     # 非 execute phase 不審
+
+    # scroll_to requires scroll_app
+    fake_client_factory(_FakeClient())
+    from coworker.computer.bridge_client import build_computer_tools
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    bad = act.invoke({"action": "scroll_to", "dx": 0, "dy": 240})
+    assert "param_error" in bad
+    good = act.invoke({"action": "scroll_to", "scroll_app": "Finder", "dx": 0, "dy": 240})
+    assert "scroll_to" in good
     assert when(req("execute", "guarded"))
 
 

@@ -157,6 +157,10 @@ function makeBinding(selector, state) {
       const [dx, dy] = map[dir] || map.down;
       return app('scroll', { dx, dy });
     },
+    async scrollTo(target, dx, dy, x, y) {
+      const appRef = resolveTarget(target);
+      return app('scroll_to', { app: appRef, dx: Number(dx) || 0, dy: Number(dy) || 0, x: Number(x) || 0, y: Number(y) || 0 });
+    },
     async drag(from, to) {
       return app('drag', { x1: from[0], y1: from[1], x2: to[0], y2: to[1] });
     },

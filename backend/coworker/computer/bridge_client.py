@@ -144,6 +144,18 @@ class ComputerClient(LoopbackBridgeClient):
     def ax_scroll(self, dx: float = 0, dy: float = 0) -> dict[str, Any]:
         return self._call("POST", "/ax/scroll", {"dx": float(dx), "dy": float(dy)})
 
+    def ax_scroll_to(
+        self, app: str = "", dx: float = 0, dy: float = 0, x: float = 0, y: float = 0,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"dx": float(dx), "dy": float(dy)}
+        if app:
+            payload["app"] = str(app)
+        if x:
+            payload["x"] = float(x)
+        if y:
+            payload["y"] = float(y)
+        return self._call("POST", "/ax/scroll_to", payload)
+
     def ax_frontmost(self) -> dict[str, Any]:
         return self._call("POST", "/ax/frontmost", {})
 
@@ -241,7 +253,7 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
 ObserveAction = Literal["state", "displays", "screenshot", "snapshot", "app_state"]
 ComputerAction = Literal[
     "launch_app", "press_hotkey", "click_ref", "double_click_ref", "right_click_ref",
-    "type_into", "type_text", "scroll", "go_back", "show", "click_coords",
+    "type_into", "type_text", "scroll", "scroll_to", "go_back", "show", "click_coords",
 ]
 
 # The macOS Accessibility (AX) element tree is the PRIMARY observation surface:
@@ -422,8 +434,11 @@ def build_computer_tools(
         shot_width: int = Field(0, ge=0, description="For 'click_coords': screenshot width from the computer_observe screenshot result; 0 = coordinates are display points.")
         shot_height: int = Field(0, ge=0, description="For 'click_coords': screenshot height from the computer_observe screenshot result; 0 = coordinates are display points.")
         display: int = Field(0, ge=0, description="For 'click_coords': display index the screenshot was taken from.")
-        dx: float = Field(0, description="For 'scroll': horizontal delta.")
-        dy: float = Field(0, description="For 'scroll': vertical delta (positive scrolls down).")
+        dx: float = Field(0, description="For 'scroll'/'scroll_to': horizontal delta.")
+        dy: float = Field(0, description="For 'scroll'/'scroll_to': vertical delta (positive scrolls down).")
+        scroll_app: str = Field("", description="For 'scroll_to': target app name or bundle id to scroll (required — scroll_to without app is forbidden).")
+        scroll_x: float = Field(0, description="For 'scroll_to': X coordinate within the target app's window to scroll at.")
+        scroll_y: float = Field(0, description="For 'scroll_to': Y coordinate within the target app's window to scroll at.")
 
     def _snapshot_text() -> str | None:
         """Return the current AX snapshot text, or None when observation fails
@@ -543,6 +558,14 @@ def build_computer_tools(
             return client.ax_type(str(args.text or ""))
         if action == "scroll":
             return client.ax_scroll(float(args.dx or 0), float(args.dy or 0))
+        if action == "scroll_to":
+            if not str(getattr(args, "scroll_app", "") or ""):
+                return {"error": "scroll_to requires 'scroll_app' (target app name or bundle id)", "error_code": "param_error"}
+            return client.ax_scroll_to(
+                str(getattr(args, "scroll_app", "") or ""),
+                float(args.dx or 0), float(args.dy or 0),
+                float(args.scroll_x or 0), float(args.scroll_y or 0),
+            )
         if action == "go_back":
             return client.ax_press("[", ["cmd"])
         if action == "click_coords":
@@ -685,6 +708,9 @@ def build_computer_tools(
         shot_width: int = 0,
         shot_height: int = 0,
         display: int = 0,
+        scroll_app: str = "",
+        scroll_x: float = 0,
+        scroll_y: float = 0,
     ) -> str:
         """Operate the user's real desktop BY ACCESSIBILITY ELEMENT REF.
 

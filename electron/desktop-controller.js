@@ -601,6 +601,12 @@ class DesktopController {
     return this._adapterInstance().scroll(dx, dy);
   }
 
+  async axScrollTo(app, dx, dy, x, y) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
+    return this._adapterInstance().scrollTo(app, dx, dy, x, y);
+  }
+
   async axFrontmost() {
     if (process.platform !== 'darwin') return { pid: -1, app: '' };
     return this._adapterInstance().frontmost();
