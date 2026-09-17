@@ -27,7 +27,7 @@ Electron main
 ```
 
 要點：
-- **真實 OS 游標全程不動**；agent 的指標是 helper 畫的虛擬鼠標。回歸驗證：`electron/cw-automa/scripts/cursor-invariance.sh`（注入虛擬游標前後，真實 `CGEvent.location` 必須不變）。
+- **真實 OS 游標全程不動**；agent 的指標是 helper 畫的虛擬鼠標（**瞬態**：動作期間顯示，最後一次動作約 3 秒後自動隱藏；暫停或使用者切到其他 App 時立即隱藏）。回歸驗證：`electron/cw-automa/scripts/cursor-invariance.sh`（注入虛擬游標前後，真實 `CGEvent.location` 必須不變）；目視驗證：`electron/cw-automa/scripts/cursor-demo.sh`。
 - **停止 Computer Use**：全域快捷鍵（預設 ⌘/Ctrl+⇧+Esc，可自訂）→ `pause` → helper 隱藏游標並顯示**紅色「已暫停」pill**；tray 同步 Pause/Resume/Emergency Stop。所有注入路徑（含 `/ax/*`）都過 `_ensureNotPaused()`，暫停時無法注入。
 - **單一感知原語** `get_app_state`（helper：`snapshot`/`get_app_state`；Python：`computer_observe(action="app_state")`）：關鍵視窗 AX 樹＋視窗標題/框＋與上一讀的增量 diff（`changed` / `removed[]`），只有 Accessibility 權限需求。
 - **已刪除的廢舊實現**：`electron/activity-overlay.js`、舊單檔 `electron/cw-automa/main.swift`、`@nut-tree-fork/nut-js` 依賴、`/overlay/*` 與 `GET /overlay` 路由，以及相關死方法/死 export。

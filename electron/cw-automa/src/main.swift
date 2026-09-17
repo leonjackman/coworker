@@ -113,12 +113,14 @@ func handleRequest(_ req: Request) {
                 throw HelperError("param_error", "unknown key \"\(key)\"")
             }
             try Injection.key(mods.isEmpty ? key : mods.joined(separator: "+") + "+" + key, repeat: 1)
+            cursorShow(targetPid: Injection.lastTargetPid)
             hudPulse()
             Responder.ok(req.id, ["performed": "press_hotkey"])
 
         case "type_text":
             // Paste into the CURRENTLY focused field; caller ensures focus.
             try Clipboard.paste(p.str("text"), into: Injection.lastTargetPid.flatMap(ProcessTarget.resolve))
+            cursorShow(targetPid: Injection.lastTargetPid)
             hudPulse()
             Responder.ok(req.id, ["performed": "type_text"])
 
@@ -133,6 +135,8 @@ func handleRequest(_ req: Request) {
             if app.isEmpty { throw HelperError("param_error", "launch requires app") }
             let ok = NSWorkspace.shared.launchApplication(app)
             if ok {
+                cursorShow(targetPid: Injection.lastTargetPid)
+                hudPulse()
                 Responder.ok(req.id, ["launched": app])
             } else {
                 throw HelperError("launch_failed", "open -a failed for \(app)")
@@ -168,6 +172,24 @@ func handleRequest(_ req: Request) {
         case "cursor_hide", "cursor_park":
             cursorHide()
             Responder.ok(req.id, ["shown": false])
+
+        case "cursor_debug":
+            DispatchQueue.main.async {
+                Responder.ok(req.id, VirtualCursor.shared.debugInfo())
+            }
+
+        case "cursor_demo":
+            let seconds = p.dbl("seconds", 3)
+            DispatchQueue.main.async {
+                VirtualCursor.shared.beginDemo(seconds: seconds)
+                if let d = Geometry.displays().first {
+                    let c = CGPoint(x: d.bounds.midX, y: d.bounds.midY)
+                    VirtualCursor.shared.move(to: c, targetPid: nil, animated: true)
+                    VirtualCursor.shared.click(at: c, kind: .single)
+                }
+                StatusHUD.shared.showActive()
+            }
+            Responder.ok(req.id, ["demo": true])
 
         case "hud_show":
             hudPulse()
@@ -345,7 +367,7 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
     switch op {
     case "click", "double", "right":
         let kind: VirtualCursor.ClickKind = op == "double" ? .doubleClick : (op == "right" ? .rightClick : .single)
-        if let c = center { cursorMove(c, targetPid: pid) }
+        if let c = center { cursorMove(c, targetPid: pid) } else { cursorShow(targetPid: pid) }
         let axResult = AXUIElementPerformAction(el, kAXPressAction as CFString)
         if axResult == .success {
             if let c = center { cursorClick(c, kind: kind) }
@@ -375,7 +397,7 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
             throw HelperError("param_error", "type_into requires text")
         }
         let submit = p.bool("submit", false)
-        if let c = center { cursorMove(c, targetPid: pid) }
+        if let c = center { cursorMove(c, targetPid: pid) } else { cursorShow(targetPid: pid) }
         try realTypeInto(pid: pid, app: app, el: el, text: text, submit: submit)
         var result: [String: Any] = ["performed": "type_into", "submit": submit]
         if let focus = AX.focusedInfo(app) { result["focused"] = focus }

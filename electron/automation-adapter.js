@@ -92,14 +92,28 @@ class AutomationAdapter {
   }
 
   _resolve() {
-    const found = resolveBinaryPath();
-    if (found) return found;
-    // Dev only: compile on first use so `npm run desktop` needs no manual step.
     const { app } = require('electron');
-    if (!(app && app.isPackaged) && fs.existsSync(path.join(__dirname, 'cw-automa', 'src', 'main.swift'))) {
-      if (buildHelper(this.sourceBinaryPath)) return this.sourceBinaryPath;
+    const isDev = !(app && app.isPackaged);
+    const srcDir = path.join(__dirname, 'cw-automa', 'src');
+    const found = resolveBinaryPath();
+
+    // Dev: (re)compile from src. This also catches the "binary exists but the
+    // Swift sources changed" case, which previously left the app on a stale
+    // helper forever.
+    if (isDev && fs.existsSync(path.join(srcDir, 'main.swift'))) {
+      let stale = !found;
+      if (found) {
+        try {
+          const binM = fs.statSync(found).mtimeMs;
+          const newest = fs.readdirSync(srcDir)
+            .filter((f) => f.endsWith('.swift'))
+            .reduce((m, f) => Math.max(m, fs.statSync(path.join(srcDir, f)).mtimeMs), 0);
+          if (newest > binM) stale = true;
+        } catch (e) { /* ignore */ }
+      }
+      if (stale && buildHelper(this.sourceBinaryPath)) return this.sourceBinaryPath;
     }
-    return null;
+    return found || null;
   }
 
   _ensureExecutable() {
@@ -280,6 +294,12 @@ class AutomationAdapter {
   }
   async cursorHide() {
     return this.invoke('cursor_hide', {});
+  }
+  async cursorDebug() {
+    return this.invoke('cursor_debug', {});
+  }
+  async cursorDemo(seconds = 3) {
+    return this.invoke('cursor_demo', { seconds });
   }
   async hudShow() {
     return this.invoke('hud_show', {});

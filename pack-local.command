@@ -64,18 +64,18 @@ if [[ "$CLEAN" == "1" ]]; then
 fi
 
 if [[ "$SKIP_FRONTEND" == "1" ]]; then
-  echo "[1/4] Skipping frontend build (reusing frontend/dist)"
+  echo "[1/5] Skipping frontend build (reusing frontend/dist)"
 else
-  echo "[1/4] Preparing + building frontend..."
+  echo "[1/5] Preparing + building frontend..."
   ensure_node_deps "$ROOT_DIR/frontend" "Frontend dependencies" || exit 1
   (cd "$ROOT_DIR/frontend" && npm run build)
   ok "Frontend built"
 fi
 
 if [[ "$SKIP_BACKEND" == "1" ]]; then
-  echo "[2/4] Skipping backend build (reusing backend/dist)"
+  echo "[2/5] Skipping backend build (reusing backend/dist)"
 else
-   echo "[2/4] Building Python backend (PyInstaller)..."
+   echo "[2/5] Building Python backend (PyInstaller)..."
    # Ensure the venv exists AND has requirements installed before freezing.
    ensure_python_venv "$ROOT_DIR/backend/venv" "$ROOT_DIR/backend/requirements.txt" || exit 1
    [[ -x "$PYTHON_BIN" ]] || fail "Python venv not found at $PYTHON_BIN"
@@ -100,7 +100,21 @@ else
   fi
 fi
 
-echo "[3/4] Packaging app (electron-builder --dir)..."
+echo "[3/5] Building native helper (cw-automa)..."
+# The helper was previously never built by this script, so the packaged app
+# shipped whatever stale binary happened to sit in electron/cw-automa/build.
+# Always rebuild from src so the app never carries an outdated computer-use
+# kernel (this is what made the blue virtual cursor never appear).
+if ! command -v swiftc >/dev/null 2>&1; then
+  fail "swiftc not found — install Xcode Command Line Tools: xcode-select --install"
+fi
+mkdir -p "$ROOT_DIR/electron/cw-automa/build"
+rm -f "$ROOT_DIR/electron/cw-automa/build/cw-automa"
+swiftc -O -o "$ROOT_DIR/electron/cw-automa/build/cw-automa" "$ROOT_DIR"/electron/cw-automa/src/*.swift
+[[ -x "$ROOT_DIR/electron/cw-automa/build/cw-automa" ]] || fail "Native helper build failed"
+ok "Native helper built"
+
+echo "[4/5] Packaging app (electron-builder --dir)..."
 if [[ "$SIGN" == "1" ]]; then
   echo "  Signing enabled (Developer ID auto-discovery)."
 else
@@ -116,7 +130,7 @@ if [[ -z "$APP_PATH" ]]; then
   exit 0
 fi
 
-echo "[4/4] Result: $APP_PATH"
+echo "[5/5] Result: $APP_PATH"
 if [[ "$OPEN_APP" == "1" ]]; then
   # Fully terminate any running CoWorker instance (main + helpers + bundled
   # backend) BEFORE opening the fresh build. A graceful `osascript quit` can

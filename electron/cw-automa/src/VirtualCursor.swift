@@ -37,6 +37,13 @@ final class VirtualCursor {
     private var didObserve = false
     private var didPreload = false
 
+    // The cursor is transient: it shows while the agent is acting and hides a
+    // few seconds after the last action, so "control ended" == cursor gone.
+    private var idleTimer: Timer?
+    private var demoResumeTimer: Timer?
+    private var idleSuppressed = false
+    private let idleInterval: TimeInterval = 3.0
+
     private init() {}
 
     // MARK: Lifecycle
@@ -56,10 +63,13 @@ final class VirtualCursor {
         if let targetPid { self.targetPid = targetPid }
         visible = true
         applyVisibility()
+        noteActivity()
     }
 
     func hide() {
         visible = false
+        idleTimer?.invalidate(); idleTimer = nil
+        demoResumeTimer?.invalidate(); demoResumeTimer = nil
         stopGlide()
         for w in windows.values { w.orderOut(nil) }
         clearRipples()
@@ -67,8 +77,57 @@ final class VirtualCursor {
 
     func park() { hide() }
 
+    /// Reset the idle timer that hides the cursor once control stops. Called on
+    /// every show/move/click, so an actively-working agent keeps it visible and
+    /// a finished one lets it disappear.
+    func noteActivity() {
+        guard !idleSuppressed else { return }
+        idleTimer?.invalidate()
+        let t = Timer(timeInterval: idleInterval, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hide() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        idleTimer = t
+    }
+
+    /// Demo mode: keep the cursor visible for `seconds` (ignoring the idle
+    /// timer), then hide it. Used by the `cursor_demo` command / cursor-demo.sh.
+    func beginDemo(seconds: Double) {
+        idleSuppressed = true
+        idleTimer?.invalidate(); idleTimer = nil
+        demoResumeTimer?.invalidate()
+        show(targetPid: nil)
+        let t = Timer(timeInterval: max(1.0, seconds), repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.idleSuppressed = false
+                self?.hide()
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        demoResumeTimer = t
+    }
+
     /// The virtual cursor's current logical point (for the invariance probe).
     var current: CGPoint { position }
+
+    /// Diagnostics for the `cursor_debug` command.
+    func debugInfo() -> [String: Any] {
+        var count = 0
+        var hasLayer = false
+        var anyVisible = false
+        for (_, win) in windows {
+            count += 1
+            if let layer = win.flipped?.ensureCursorLayer() {
+                hasLayer = true
+                if win.isVisible && !layer.isHidden { anyVisible = true }
+            }
+        }
+        return [
+            "windows": count, "hasLayer": hasLayer, "visible": visible,
+            "layerVisible": anyVisible,
+            "position": ["x": position.x, "y": position.y],
+        ]
+    }
 
     // MARK: Motion
 
@@ -76,6 +135,7 @@ final class VirtualCursor {
     /// never made to wait, and the real OS cursor never moves.
     func move(to p: CGPoint, targetPid: pid_t? = nil, animated: Bool = true) {
         preload()
+        noteActivity()
         if let targetPid { self.targetPid = targetPid }
         let dst = sanitized(p)
         if !visible { position = dst; place(animated: false); return }
@@ -98,8 +158,10 @@ final class VirtualCursor {
     /// Show click feedback at a logical point. Posts no input events.
     func click(at p: CGPoint?, kind: ClickKind = .single) {
         guard visible else { return }
+        noteActivity()
         let logical = sanitized(p ?? position)
         guard let (win, view) = windowAndView(containing: logical) else { return }
+        _ = view.ensureCursorLayer()
         let local = view.convertFromLogical(logical, in: win)
         pulse(view.cursorLayer)
         let ring = makeRipple(at: local, kind: kind)
@@ -150,20 +212,21 @@ final class VirtualCursor {
     private func place(animated: Bool) {
         let activeID = Geometry.display(containing: position)?.id
         for (id, win) in windows {
-            guard let view = win.flipped, let cursor = view.cursorLayer else { continue }
+            guard let view = win.flipped else { continue }
+            let cursor = view.ensureCursorLayer()
+            let hidden: Bool
             if id == activeID {
-                let local = view.convertFromLogical(position, in: win)
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                cursor.position = local
-                cursor.isHidden = !visible
-                CATransaction.commit()
+                if let cursor {
+                    cursor.position = view.convertFromLogical(position, in: win)
+                }
+                hidden = !visible
             } else {
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                cursor.isHidden = true
-                CATransaction.commit()
+                hidden = true
             }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            cursor?.isHidden = hidden
+            CATransaction.commit()
         }
     }
 
@@ -237,8 +300,6 @@ final class VirtualCursor {
                 if let t = self.targetPid,
                    NSWorkspace.shared.frontmostApplication?.processIdentifier != t {
                     for w in self.windows.values { w.orderOut(nil) }
-                } else {
-                    self.applyVisibility()
                 }
             }
         }
@@ -326,10 +387,11 @@ private final class CursorWindow: NSWindow {
         animationBehavior = .none
         hidesOnDeactivate = false
         let v = CursorView(frame: CGRect(origin: .zero, size: contentRect.size))
+        v.wantsLayer = true
         v.logicalOrigin = display.bounds.origin
-        v.syncScale(display.scale)
-        v.installCursorLayer()
         contentView = v
+        v.syncScale(display.scale)
+        _ = v.ensureCursorLayer()
     }
 
     override var canBecomeKey: Bool { false }
@@ -359,12 +421,27 @@ private final class CursorView: NSView {
     }
 
     func installCursorLayer() {
-        guard cursorLayer == nil, let host = layer else { return }
+        _ = ensureCursorLayer()
+    }
+
+    /// Idempotently create the arrow layer. A layer-backed view's `layer` only
+    /// materialises once it is in a window / wantsLayer is set, so this is safe
+    /// (and correct) to call late — the old code called it before `contentView`
+    /// was assigned, when `layer` was still nil, which silently drew nothing.
+    @discardableResult
+    func ensureCursorLayer() -> CALayer? {
+        if let existing = cursorLayer { return existing }
+        if layer == nil { wantsLayer = true }
+        guard let host = layer else { return nil }
+        // The view is flipped (top-left origin); make the backing layer match so
+        // sublayer positions are top-left too, instead of AppKit's default.
+        host.isGeometryFlipped = true
         let cursor = CursorView.makeArrow()
         cursor.contentsScale = host.contentsScale
         cursor.isHidden = true
         host.addSublayer(cursor)
         cursorLayer = cursor
+        return cursor
     }
 
     /// A macOS-shaped arrow whose tip is the exact point being acted on.
