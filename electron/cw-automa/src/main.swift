@@ -34,6 +34,13 @@ func frontmostPid() -> pid_t? {
     NSWorkspace.shared.frontmostApplication?.processIdentifier
 }
 
+/// Re-activate the target app if something (e.g. Dock) stole frontmost.
+/// Used as a post-action recovery so the next observe/action sees the right app.
+private func ensureAppFrontmost(_ pid: pid_t) {
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier != pid else { return }
+    NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
+}
+
 // MARK: - Virtual cursor bridging (main-actor owned)
 
 func cursorShow(targetPid: pid_t?) {
@@ -98,6 +105,7 @@ func handleRequest(_ req: Request) {
             cursorMove(pt, targetPid: target.pid)
             try Injection.click(x: pt.x, y: pt.y, button: .left, count: 1, modifiers: [])
             cursorClick(pt, kind: .single)
+            ensureAppFrontmost(target.pid)
             Responder.ok(req.id, ["performed": "click_coords"])
 
         case "press_hotkey":
@@ -115,6 +123,7 @@ func handleRequest(_ req: Request) {
             try Injection.key(mods.isEmpty ? key : mods.joined(separator: "+") + "+" + key, repeat: 1)
             cursorShow(targetPid: Injection.lastTargetPid)
             hudPulse()
+            if let pid = Injection.lastTargetPid { ensureAppFrontmost(pid) }
             Responder.ok(req.id, ["performed": "press_hotkey"])
 
         case "type_text":
@@ -122,6 +131,7 @@ func handleRequest(_ req: Request) {
             try Clipboard.paste(p.str("text"), into: Injection.lastTargetPid.flatMap(ProcessTarget.resolve))
             cursorShow(targetPid: Injection.lastTargetPid)
             hudPulse()
+            if let pid = Injection.lastTargetPid { ensureAppFrontmost(pid) }
             Responder.ok(req.id, ["performed": "type_text"])
 
         case "scroll":
@@ -137,6 +147,16 @@ func handleRequest(_ req: Request) {
             if ok {
                 cursorShow(targetPid: Injection.lastTargetPid)
                 hudPulse()
+                // Brief settle then re-activate to beat the Dock out.
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
+                    let apps = NSWorkspace.shared.runningApplications
+                    for a in apps {
+                        if let name = a.localizedName, name.lowercased().contains(app.lowercased()) {
+                            a.activate(options: [.activateIgnoringOtherApps])
+                            break
+                        }
+                    }
+                }
                 Responder.ok(req.id, ["launched": app])
             } else {
                 throw HelperError("launch_failed", "open -a failed for \(app)")
@@ -371,12 +391,14 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
         let axResult = AXUIElementPerformAction(el, kAXPressAction as CFString)
         if axResult == .success {
             if let c = center { cursorClick(c, kind: kind) }
+            ensureAppFrontmost(pid)
             Responder.ok(id, ["performed": op])
         } else if let c = center {
             // AX press unavailable (canvas/rendered control) — non-blocking click.
             let button: MouseButton = op == "right" ? .right : .left
             try Injection.click(x: c.x, y: c.y, button: button, count: op == "double" ? 2 : 1, modifiers: [])
             cursorClick(c, kind: kind)
+            ensureAppFrontmost(pid)
             Responder.ok(id, ["performed": op, "via": "coords-fallback"])
         } else {
             throw HelperError("computer_error", "element has no frame for coordinate fallback")
@@ -386,10 +408,12 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
         if let text = p["value"] as? String {
             AXUIElementSetAttributeValue(el, kAXValueAttribute as CFString, text as CFTypeRef)
         }
+        ensureAppFrontmost(pid)
         Responder.ok(id, ["performed": op])
 
     case "focus":
         AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, true as CFTypeRef)
+        ensureAppFrontmost(pid)
         Responder.ok(id, ["performed": op])
 
     case "type_into":
@@ -401,10 +425,12 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
         try realTypeInto(pid: pid, app: app, el: el, text: text, submit: submit)
         var result: [String: Any] = ["performed": "type_into", "submit": submit]
         if let focus = AX.focusedInfo(app) { result["focused"] = focus }
+        ensureAppFrontmost(pid)
         Responder.ok(id, result)
 
     case "show":
         AXUIElementPerformAction(el, kAXRaiseAction as CFString)
+        ensureAppFrontmost(pid)
         Responder.ok(id, ["performed": "show"])
 
     default:
