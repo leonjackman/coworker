@@ -34,11 +34,18 @@ func frontmostPid() -> pid_t? {
     NSWorkspace.shared.frontmostApplication?.processIdentifier
 }
 
+/// Launch an app by name. Wraps the deprecated `launchApplication` so the
+/// deprecation warning is localized to one call site.
+private func launchAppByName(_ name: String) -> Bool {
+    // swift:disable:next DeprecatedDeclaration
+    return NSWorkspace.shared.launchApplication(name)
+}
+
 /// Re-activate the target app if something (e.g. Dock) stole frontmost.
 /// Used as a post-action recovery so the next observe/action sees the right app.
 private func ensureAppFrontmost(_ pid: pid_t) {
     guard NSWorkspace.shared.frontmostApplication?.processIdentifier != pid else { return }
-    NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
+    NSRunningApplication(processIdentifier: pid)?.activate()
 }
 
 // MARK: - Virtual cursor bridging (main-actor owned)
@@ -143,7 +150,14 @@ func handleRequest(_ req: Request) {
         case "launch":
             let app = p.str("app")
             if app.isEmpty { throw HelperError("param_error", "launch requires app") }
-            let ok = NSWorkspace.shared.launchApplication(app)
+            var ok = false
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app) {
+                NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration())
+                ok = true
+            } else {
+                // Fallback: try as app name via open -a (deprecated but still works).
+                ok = launchAppByName(app)
+            }
             if ok {
                 cursorShow(targetPid: Injection.lastTargetPid)
                 hudPulse()
@@ -152,7 +166,7 @@ func handleRequest(_ req: Request) {
                     let apps = NSWorkspace.shared.runningApplications
                     for a in apps {
                         if let name = a.localizedName, name.lowercased().contains(app.lowercased()) {
-                            a.activate(options: [.activateIgnoringOtherApps])
+                            a.activate()
                             break
                         }
                     }
@@ -441,7 +455,7 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
 /// Real editing session: activate → focus → click for a caret → select all →
 /// paste → optional Return. All input uses postToPid (no cursor hijack).
 private func realTypeInto(pid: pid_t, app: AXUIElement, el: AXUIElement, text: String, submit: Bool) throws {
-    NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateIgnoringOtherApps])
+    NSRunningApplication(processIdentifier: pid)?.activate()
     usleep(160 * 1000)
     AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, true as CFTypeRef)
     usleep(80 * 1000)
