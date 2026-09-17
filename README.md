@@ -46,7 +46,7 @@
 | 📦 **Skills** | SKILL.md-based skills with marketplace browsing, one-click install (SkillHub · ClawHub), and in-chat install via the agent — plus **self-authoring**: the agent captures repeatable procedures as draft skills that wait in a review queue for your approval |
 | 🌐 **Web Search & Fetch** | Web search powered by [Tavily](https://tavily.com) (`web_search`) and web page fetching (`web_fetch`), with configurable search depth, result count, Cloudflare retry, and secure keychain storage for your API key |
 | 🖥️ **Built-in Browser** | Embedded Chromium view the agent can drive — navigate, click, type, scroll, screenshot, evaluate JS, and read DOM; right-click to capture elements or the whole page into your chat |
-| 🧭 **OS Computer Use** | Desktop-scale control — screenshots, global clicks / drag / scroll / typing in any native app. Master switch off by default; every mutating action asks under default permission (⇧⌘⎋ pauses) |
+| 🧭 **OS Computer Use** | Desktop-scale control — screenshots, global clicks / drag / scroll / typing in any native app. Master switch off by default; every mutating action asks under default permission (Shift+⌘+Esc pauses). **Currently macOS only.** |
 | 🔒 **Human-In-The-Loop** | Approves boundary-crossing file writes, memory updates, and MCP tools before they run — with 默認權限 (default) / 完整權限 (full) permission levels |
 | 📓 **Change Tracking** | Every file change logged with before/after diffs; edit / regenerate / revert restores the state before changes |
 | 🖥️ **Integrated Terminal** | Interactive PTY shell in the bottom panel, plus a live tool-audit feed |
