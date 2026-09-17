@@ -551,7 +551,7 @@ def build_computer_tools(
                     "removed": result.get("removed") or [],
                     "window": result.get("window") or {},
                     "snapshot": str(result.get("text") or ""),
-                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n). 'changed' false means the tree is identical to the previous read — reuse your prior understanding and do not re-reason. If removed[] lists refs, they no longer exist. ALWAYS act on the LATEST app_state.",
+                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n). 'changed' false means the tree is identical to the previous read — reuse your prior understanding and do not re-reason. If removed[] lists refs, they no longer exist. ALWAYS act on the LATEST app_state. Element roles matter: AXTextField/AXTextArea accept typing (type_into); AXButton/AXStaticText/AXGroup are for clicking only — clicking a non-editable element will not open a text field.",
                 },
                 ensure_ascii=False,
             )
@@ -562,7 +562,7 @@ def build_computer_tools(
                     "frontmost": result.get("frontmost") or "",
                     "refs": result.get("refs") or 0,
                     "snapshot": snap_text,
-                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n), so they survive most UI changes. ALWAYS act on the LATEST snapshot; if an action returns fresh_snapshot, re-pick a ref from it. If snapshot is empty/unavailable, you cannot see the desktop — stop and do not claim anything.",
+                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n), so they survive most UI changes. ALWAYS act on the LATEST snapshot; if an action returns fresh_snapshot, re-pick a ref from it. If snapshot is empty/unavailable, you cannot see the desktop — stop and do not claim anything. Element roles matter: AXTextField/AXTextArea accept typing (type_into); AXButton/AXStaticText/AXGroup are for clicking only — clicking a non-editable element will not open a text field.",
                 },
                 ensure_ascii=False,
             )
@@ -657,6 +657,13 @@ def build_computer_tools(
         in the SCREENSHOT's pixel space, so pass shot_width/shot_height (and display)
         from that computer_observe screenshot result. After every action read the
         returned after_preview and only claim what it confirms.
+
+        For typing (type_into / type_text): the ref MUST point to an AXTextField or
+        AXTextArea element (look for ``AXTextField`` or ``AXTextArea`` in the snapshot).
+        Clicking an AXStaticText / AXButton / AXGroup will NOT make it editable — those
+        are display elements, not input fields. If no AXTextField exists in the snapshot,
+        the UI is not ready for typing (wait, click a search button to reveal the field,
+        or use a keyboard shortcut like cmd+F to open the find/search field).
         """
         mods = [str(m) for m in (modifiers or [])]
 
