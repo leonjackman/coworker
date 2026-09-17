@@ -1378,9 +1378,6 @@ async function handleComputerBridgeRequest(method, url, payload) {
   if (method === 'GET' && pathname === '/state') {
     return controller.state();
   }
-  if (method === 'GET' && pathname === '/overlay') {
-    return controller.overlayState();
-  }
   if (method === 'GET' && pathname === '/ax/state') {
     return controller.adapterState();
   }
@@ -1405,19 +1402,14 @@ async function handleComputerBridgeRequest(method, url, payload) {
       const kind = payload && payload.kind ? String(payload.kind) : '';
       return controller.openPermissionSettings(kind);
     }
-    case '/overlay/show': {
-      return controller.overlayShow(payload && payload.display);
-    }
-    case '/overlay/hide': {
-      return controller.overlayHide();
-    }
-    case '/overlay/capture': {
-      const dataUrl = await controller.overlayCapture(payload && payload.display);
-      if (!dataUrl) return { error: 'overlay unavailable', error_code: 'overlay_unavailable' };
-      return { image: dataUrl };
-    }
     case '/ax/snapshot': {
       return controller.axSnapshot(Number(payload && payload.depth) || 6);
+    }
+    case '/ax/app_state': {
+      return controller.axAppState(
+        String(payload && payload.app || ''),
+        Number(payload && payload.depth) || 6,
+      );
     }
     case '/ax/act': {
       return controller.axAct(String(payload && payload.ref || ''), String(payload && payload.op || 'click'), payload || {});
@@ -1936,7 +1928,7 @@ ipcMain.handle('computer-permission-open-settings', async (_event, kind) => {
 });
 
 // Renderer syncs the user-configured "stop computer control" shortcut so the OS
-// globalShortcut AND the on-screen overlay pill both follow the user's binding
+// globalShortcut AND the native status pill both follow the user's binding
 // (never hardcoded to ⇧⌘⎋). Ignored when the desktop controller is unavailable.
 ipcMain.on('computer-stop-shortcut', (_event, payload) => {
   try {

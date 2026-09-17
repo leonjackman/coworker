@@ -4,7 +4,34 @@
 >
 > 調研對象：CoWorker 本倉（backend + electron + frontend）、`codex`（codex-rs Rust 工作區）、`openclaw`（TS/Node monorepo）、Anthropic/OpenAI computer-use 規範。
 >
-> 狀態：已實現（macOS 為首要平台），含 17 個新增後端單元測試；全量 412 個後端測試通過，前端可建置，Electron 冒煙通過。
+> 狀態：已實現（macOS 為首要平台）。**2026-09 完成注入內核重構**，見下方 §〇；文中 §四之後描述的是重構前的注入/遮罩設計，已由 §〇 取代。
+
+---
+
+## 〇、2026-09 注入內核重構（現行架構）
+
+舊實現用 `@nut-tree-fork/nut-js` 做 `CGEventPost(.cghidEventTap)` 全域注入，會**搬動使用者的真實滑鼠**，並在操作時鋪一層**整屏 veil**；對 Electron/CEF 應用則因事件未攜帶視窗身份而被靜默丟棄。重構把控制權收斂到一個原生常駐 helper：
+
+```
+Electron main
+  ├─ AutomationAdapter  (electron/automation-adapter.js)   spawn + JSON-lines
+  │     └─ cw-automa    (electron/cw-automa/src/*.swift)   單一注入/感知內核
+  │           • Injection.swift          CGEvent.postToPid ONLY（永不 cghidEventTap / warp）
+  │           • WindowTargetedEvent.swift 事件帶視窗身份 → Electron/CEF 可收；建 800ms 焦點沉降
+  │           • VirtualCursor.swift      每螢幕 click-through 藍色虛擬鼠標（glide＋點擊漣漪）
+  │           • StatusHUD.swift          小型狀態 pill（操作中/已暫停，顯示停止快捷鍵）
+  │           • AXTree.swift             key-window AX 樹、語義 ref、文本渲染、diff
+  │           • Permissions.swift        helper 自己觸發 TCC（AX / Screen Recording）
+  │           • Geometry / KeyMapping / Clipboard / Protocol / main.swift
+  └─ DesktopController (electron/desktop-controller.js)  pause/權限/截圖，無任何注入
+```
+
+要點：
+- **真實 OS 游標全程不動**；agent 的指標是 helper 畫的虛擬鼠標。回歸驗證：`electron/cw-automa/scripts/cursor-invariance.sh`（注入虛擬游標前後，真實 `CGEvent.location` 必須不變）。
+- **停止 Computer Use**：全域快捷鍵（預設 ⌘/Ctrl+⇧+Esc，可自訂）→ `pause` → helper 隱藏游標並顯示**紅色「已暫停」pill**；tray 同步 Pause/Resume/Emergency Stop。所有注入路徑（含 `/ax/*`）都過 `_ensureNotPaused()`，暫停時無法注入。
+- **單一感知原語** `get_app_state`（helper：`snapshot`/`get_app_state`；Python：`computer_observe(action="app_state")`）：關鍵視窗 AX 樹＋視窗標題/框＋與上一讀的增量 diff（`changed` / `removed[]`），只有 Accessibility 權限需求。
+- **已刪除的廢舊實現**：`electron/activity-overlay.js`、舊單檔 `electron/cw-automa/main.swift`、`@nut-tree-fork/nut-js` 依賴、`/overlay/*` 與 `GET /overlay` 路由，以及相關死方法/死 export。
+- 尚待：視窗鎖定截圖（ScreenCaptureKit）與 UI-settle 去抖；目前截圖仍走 Electron `desktopCapturer` 全顯示器。
 
 ---
 

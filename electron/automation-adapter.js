@@ -55,12 +55,17 @@ function resolveBinaryPath() {
 }
 
 // Compile the Swift helper from source (dev only). Returns true on success.
+// The helper is now a multi-file Swift target under `cw-automa/src`.
 function buildHelper(sourceBinaryPath) {
   try {
-    const main = path.join(__dirname, 'cw-automa', 'main.swift');
-    if (!fs.existsSync(main)) return false;
+    const srcDir = path.join(__dirname, 'cw-automa', 'src');
+    if (!fs.existsSync(path.join(srcDir, 'main.swift'))) return false;
+    const sources = fs.readdirSync(srcDir)
+      .filter((f) => f.endsWith('.swift'))
+      .sort()
+      .map((f) => path.join(srcDir, f));
     fs.mkdirSync(path.dirname(sourceBinaryPath), { recursive: true });
-    execFileSync('swiftc', ['-O', '-o', sourceBinaryPath, main], { timeout: 120000 });
+    execFileSync('swiftc', ['-O', '-o', sourceBinaryPath, ...sources], { timeout: 180000 });
     return fs.existsSync(sourceBinaryPath);
   } catch (e) {
     try { console.warn('[automa] swiftc build failed:', (e && e.message) || e); } catch (err) { /* ignore */ }
@@ -91,7 +96,7 @@ class AutomationAdapter {
     if (found) return found;
     // Dev only: compile on first use so `npm run desktop` needs no manual step.
     const { app } = require('electron');
-    if (!(app && app.isPackaged) && fs.existsSync(path.join(__dirname, 'cw-automa', 'main.swift'))) {
+    if (!(app && app.isPackaged) && fs.existsSync(path.join(__dirname, 'cw-automa', 'src', 'main.swift'))) {
       if (buildHelper(this.sourceBinaryPath)) return this.sourceBinaryPath;
     }
     return null;
@@ -203,13 +208,27 @@ class AutomationAdapter {
   }
 
   // ── High-level API ───────────────────────────────────────────────────
-  async snapshot(depth = 6) {
-    return this.invoke('snapshot', { depth });
+  async snapshot(depth = 6, app = '') {
+    const params = { depth };
+    if (app) params.app = app;
+    return this.invoke('snapshot', params);
   }
 
-  // Flatten the tree into compact `[ref] role label` lines the model can read.
-  async snapshotText(depth = 6, maxLines = 400) {
-    const res = await this.snapshot(depth);
+  // get_app_state: the richer perception primitive (window info + AX diff).
+  async getAppState(app = '', depth = 6) {
+    const params = { depth };
+    if (app) params.app = app;
+    return this.invoke('get_app_state', params);
+  }
+
+  // Compact `[ref] role label value at (x,y)` lines the model can read. The
+  // helper now renders this directly; the local walk is a fallback for older
+  // helper builds.
+  async snapshotText(depth = 6, maxLines = 400, app = '') {
+    const res = await this.snapshot(depth, app);
+    if (typeof res.text === 'string' && res.text.length > 0) {
+      return { frontmost: res.frontmost || '', refs: res.refs || 0, text: res.text };
+    }
     const lines = [];
     const walk = (node, indent) => {
       if (lines.length >= maxLines) return;
@@ -246,6 +265,39 @@ class AutomationAdapter {
   }
   async clickCoords(x, y) {
     return this.invoke('click_coords', { x, y });
+  }
+  async clickPoint(x, y, kind = 'left') {
+    return this.invoke('click_point', { x, y, kind });
+  }
+  async dragPoint(x1, y1, x2, y2, button = 'left') {
+    return this.invoke('drag_point', { x1, y1, x2, y2, button });
+  }
+  async cursorMove(x, y) {
+    return this.invoke('cursor_move', { x, y });
+  }
+  async cursorShow() {
+    return this.invoke('cursor_show', {});
+  }
+  async cursorHide() {
+    return this.invoke('cursor_hide', {});
+  }
+  async hudShow() {
+    return this.invoke('hud_show', {});
+  }
+  async hudPause(paused) {
+    return this.invoke('hud_pause', { paused: !!paused });
+  }
+  async hudHide() {
+    return this.invoke('hud_hide', {});
+  }
+  async setStopLabel(label) {
+    return this.invoke('set_stop_label', { label: String(label || '') });
+  }
+  async permissions() {
+    return this.invoke('permissions', {});
+  }
+  async requestPermission(kind) {
+    return this.invoke('permissions_request', { kind: String(kind || 'accessibility') });
   }
   async scroll(dx, dy) {
     return this.invoke('scroll', { dx: dx || 0, dy: dy || 0 });

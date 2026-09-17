@@ -134,6 +134,16 @@ class _FakeClient:
     def ax_act(self, ref, op, text=None):
         return self._ax_act
 
+    def ax_app_state(self, app="", depth=6):
+        if self._snapshot_text is None:
+            return {"error": "no accessibility", "error_code": "input_permission"}
+        return {
+            "ok": True, "frontmost": self._frontmost, "app": self._frontmost or "TestApp",
+            "pid": 1, "refs": 3, "changed": False, "removed": ["axbutton:x#9"],
+            "window": {"title": "Test Window", "frame": {"x": 0, "y": 0, "width": 800, "height": 600}},
+            "text": self._snapshot_text,
+        }
+
     def ax_press(self, key, modifiers):
         return {"ok": True, "performed": "press_hotkey", "key": key, "modifiers": modifiers}
 
@@ -191,6 +201,19 @@ def test_observe_state(fake_client_factory):
     (observe, _act) = build_computer_tools(Path("/tmp"), session_id="sess")
     out = observe.invoke({"action": "state"})
     assert json.loads(out)["platform"] == "darwin"
+
+
+def test_observe_app_state_reports_window_and_diff(fake_client_factory):
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient())
+    (observe, _act) = build_computer_tools(Path("/tmp"), session_id="sess")
+    payload = json.loads(observe.invoke({"action": "app_state"}))
+    assert payload["changed"] is False
+    assert payload["removed"] == ["axbutton:x#9"]
+    assert payload["window"]["title"] == "Test Window"
+    assert payload["refs"] == 3
+    assert _SNAP_TEXT in payload["snapshot"]
 
 
 def test_observe_screenshot_vision_block(fake_client_factory):

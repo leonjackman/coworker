@@ -110,6 +110,14 @@ class ComputerClient(LoopbackBridgeClient):
         observation; only needs the Accessibility permission (no Screen Rec)."""
         return self._call("POST", "/ax/snapshot", {"depth": int(depth)})
 
+    def ax_app_state(self, app: str = "", depth: int = 6) -> dict[str, Any]:
+        """get_app_state: key-window AX tree + window info + an incremental diff
+        against the previous read. ``app`` empty targets the frontmost app."""
+        payload: dict[str, Any] = {"depth": int(depth)}
+        if app:
+            payload["app"] = str(app)
+        return self._call("POST", "/ax/app_state", payload)
+
     def ax_act(self, ref: str, op: str, **params: Any) -> dict[str, Any]:
         payload: dict[str, Any] = {"ref": str(ref), "op": str(op)}
         payload.update(params)
@@ -205,7 +213,7 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
 # Tools
 # ---------------------------------------------------------------------------
 
-ObserveAction = Literal["state", "displays", "screenshot", "snapshot"]
+ObserveAction = Literal["state", "displays", "screenshot", "snapshot", "app_state"]
 ComputerAction = Literal[
     "launch_app", "press_hotkey", "click_ref", "double_click_ref", "right_click_ref",
     "type_into", "type_text", "scroll", "go_back", "show", "click_coords",
@@ -359,7 +367,8 @@ def build_computer_tools(
         action: ObserveAction = Field(..., description="Read-only: state = permissions/platform/frontmost; displays = list displays; screenshot = capture the chosen display (visual, needs Screen Recording); snapshot = Accessibility element tree (text + refs) — the reliable observation, needs only Accessibility permission.")
         display: int = Field(0, ge=0, description="For 'screenshot': display index to capture (see displays list; 0 = primary).")
         max_width: int = Field(max_shot_width, ge=320, le=2048, description="For 'screenshot': max screenshot width in pixels (higher = clearer but more tokens).")
-        depth: int = Field(6, ge=1, le=10, description="For 'snapshot': Accessibility tree depth.")
+        depth: int = Field(6, ge=1, le=10, description="For 'snapshot'/'app_state': Accessibility tree depth.")
+        app: str = Field("", description="For 'app_state': target app display name or bundle id; empty = frontmost app.")
 
     class ComputerArgs(BaseModel):
         action: ComputerAction = Field(..., description="Structure-first desktop action. Prefer ref-based and intent-level actions; coordinates are a last resort for canvas/rendered content.")
@@ -503,7 +512,7 @@ def build_computer_tools(
                                     int(args.display or 0))
         return {"error": f"unknown computer action: {action}", "error_code": "computer_error"}
 
-    def _observe_impl(action: str, display: int, max_width: int, depth: int) -> str | list:
+    def _observe_impl(action: str, display: int, max_width: int, depth: int, app: str = "") -> str | list:
         try:
             if action == "state":
                 result = client.state()
@@ -517,6 +526,8 @@ def build_computer_tools(
                 result = client.displays()
             elif action == "snapshot":
                 result = client.ax_snapshot(depth)
+            elif action == "app_state":
+                result = client.ax_app_state(app, depth)
             elif action == "screenshot":
                 result = client.screenshot(display=display, max_width=max_width)
             else:
@@ -529,6 +540,21 @@ def build_computer_tools(
             return _render_computer_error(result, client)
         if action == "screenshot":
             return _screenshot_result(result, client, data_dir, session_id, vision, max_width)
+        if action == "app_state":
+            return json.dumps(
+                {
+                    "frontmost": result.get("frontmost") or "",
+                    "app": result.get("app") or "",
+                    "pid": result.get("pid"),
+                    "refs": result.get("refs") or 0,
+                    "changed": result.get("changed"),
+                    "removed": result.get("removed") or [],
+                    "window": result.get("window") or {},
+                    "snapshot": str(result.get("text") or ""),
+                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n). 'changed' false means the tree is identical to the previous read — reuse your prior understanding and do not re-reason. If removed[] lists refs, they no longer exist. ALWAYS act on the LATEST app_state.",
+                },
+                ensure_ascii=False,
+            )
         if action == "snapshot":
             snap_text = str(result.get("text") or "")
             return json.dumps(
@@ -590,17 +616,19 @@ def build_computer_tools(
         return json.dumps({"error": "screenshot came back empty", "error_code": "screen_permission", "hint": hint.strip()}, ensure_ascii=False)
 
     @tool(args_schema=ObserveArgs)
-    def computer_observe(action: str, display: int = 0, max_width: int = max_shot_width, depth: int = 6) -> str | list:
+    def computer_observe(action: str, display: int = 0, max_width: int = max_shot_width, depth: int = 6, app: str = "") -> str | list:
         """Inspect the user's real desktop: Accessibility snapshot, screenshot, or state.
 
-        Read-only. PREFER ``snapshot`` — it returns the Accessibility element tree as
-        text with stable [ref]s and only needs the Accessibility permission (works even
-        without Screen Recording), so you can act on real elements by ref. ``screenshot``
-        is the visual complement (needs Screen Recording). ``state`` returns platform,
-        permissions and the current frontmost app. The snapshot is your source of truth:
-        never claim an action "worked" unless the re-observed snapshot shows it.
+        Read-only. PREFER ``app_state`` (or ``snapshot``) — it returns the Accessibility
+        element tree as text with stable [ref]s and only needs the Accessibility permission
+        (works even without Screen Recording), so you can act on real elements by ref.
+        ``app_state`` adds the key window's title/frame and a ``changed`` flag plus the
+        ``removed`` refs (incremental diff), so you can skip re-reasoning an unchanged UI.
+        ``screenshot`` is the visual complement (needs Screen Recording). ``state`` returns
+        platform, permissions and the current frontmost app. The snapshot is your source of
+        truth: never claim an action "worked" unless the re-observed snapshot shows it.
         """
-        return _observe_impl(action, display, max_width, depth)
+        return _observe_impl(action, display, max_width, depth, app)
 
     @tool(args_schema=ComputerArgs)
     def computer(

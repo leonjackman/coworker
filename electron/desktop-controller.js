@@ -7,9 +7,11 @@
 // never reach.
 //
 //   capture    electron.desktopCapturer  (macOS Screen Recording TCC)
-//   input      @nut-tree-fork/nut-js      (in-process; CGEvent on macOS,
-//                                          SendInput on Windows, X11 on Linux;
-//                                          macOS Accessibility TCC)
+//   input      native cw-automa helper    (CGEvent.postToPid only — the real
+//                                          OS cursor is NEVER moved; the agent
+//                                          drives a blue virtual cursor overlay
+//                                          inside the helper. macOS Accessibility
+//                                          TCC)
 //   coords     the model acts in "shot space" (the pixel grid of the JPEG it
 //              was shown); Electron maps shot fraction -> display point space:
 //                pointX = bounds.x + (x / shot.width)  * bounds.width
@@ -27,17 +29,6 @@
 'use strict';
 
 const { app, screen, desktopCapturer, clipboard, globalShortcut, powerMonitor, shell, systemPreferences } = require('electron');
-
-const NUT = '@nut-tree-fork/nut-js';
-const MAC_PERMS = '@nut-tree-fork/node-mac-permissions';
-
-let _nut = null;
-function nut() {
-  if (_nut === null) {
-    _nut = require(NUT);
-  }
-  return _nut;
-}
 
 // ── Coordinate contract (pure helpers, unit-tested) ────────────────────────
 
@@ -57,26 +48,19 @@ function shotToPoint(x, y, shot, display) {
   return { x: cx, y: cy };
 }
 
-// Convert a JPEG's byte length into a rough "model token" estimate (1 token ~ 4
-// chars of base64). Purely informational — the Python side owns real budgeting.
-function dataUrlToJpegInfo(dataUrl) {
-  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/jpeg;base64,')) {
-    return { width: 0, height: 0, bytes: 0 };
-  }
-  return { width: 0, height: 0, bytes: Math.floor(((dataUrl.length - 23) * 3) / 4) };
-}
-
 // ── Platform helpers ────────────────────────────────────────────────────────
 
 function isDarwin() {
   return process.platform === 'darwin';
 }
 
+// Permission status via Electron's own native APIs — no nut-js / native-perms
+// module required any more (the input path itself now lives in cw-automa).
 function inputPermission() {
   try {
     if (isDarwin()) {
-      const perms = require(MAC_PERMS);
-      return { status: perms.getAuthStatus('accessibility') };
+      const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+      return { status: trusted ? 'authorized' : 'denied' };
     }
     return { status: 'granted' };
   } catch (e) {
@@ -87,8 +71,11 @@ function inputPermission() {
 function screenPermission() {
   try {
     if (isDarwin()) {
-      const perms = require(MAC_PERMS);
-      return { status: perms.getAuthStatus('screen') };
+      const raw = systemPreferences.getMediaAccessStatus('screen');
+      const status = raw === 'granted'
+        ? 'authorized'
+        : (raw === 'not-determined' ? 'not determined' : raw);
+      return { status };
     }
     return { status: 'granted' };
   } catch (e) {
@@ -117,26 +104,6 @@ function openPermissionSettings(kind) {
   return { ok: true, opened_settings: true, pane };
 }
 
-// ── Key / modifier maps ─────────────────────────────────────────────────────
-
-const NAMED_KEYS = {
-  enter: 'Enter', return: 'Enter', escape: 'Escape', esc: 'Escape', tab: 'Tab',
-  backspace: 'Backspace', delete: 'Delete', space: 'Space', ' ': 'Space',
-  home: 'Home', end: 'End', pageup: 'PageUp', pagedown: 'PageDown',
-  up: 'Up', down: 'Down', left: 'Left', right: 'Right',
-  f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4', f5: 'F5', f6: 'F6',
-  f7: 'F7', f8: 'F8', f9: 'F9', f10: 'F10', f11: 'F11', f12: 'F12',
-  '0': 'Num0', '1': 'Num1', '2': 'Num2', '3': 'Num3', '4': 'Num4',
-  '5': 'Num5', '6': 'Num6', '7': 'Num7', '8': 'Num8', '9': 'Num9',
-};
-
-const MODIFIERS = {
-  cmd: 'LeftSuper', command: 'LeftSuper', super: 'LeftSuper', meta: 'LeftSuper',
-  ctrl: 'LeftControl', control: 'LeftControl',
-  alt: 'LeftAlt', option: 'LeftAlt',
-  shift: 'LeftShift',
-};
-
 // ── Main controller ─────────────────────────────────────────────────────────
 
 class DesktopController {
@@ -144,11 +111,9 @@ class DesktopController {
     this.paused = false;
     this.pauseReason = '';
     this._stopPauseListener = null;
-    this._overlay = null;
     this._stopAccel = null;
     this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
     this._adapter = null;
-    this._ensureAppPresentable();
   }
 
   // Lazy AutomationAdapter (native cw-automa AX helper). Structure-first source
@@ -161,38 +126,20 @@ class DesktopController {
     return this._adapter;
   }
 
-  // macOS treats an app as a background/accessory app (and REMOVES its Dock
-  // icon) when it only shows panel/overlay windows. Force the app back to a
-  // regular activation policy + show the Dock icon so the main CoWorker icon is
-  // never "closed" while the agent operates the desktop. No-op off macOS.
-  _ensureAppPresentable() {
-    if (process.platform !== 'darwin') return;
-    try {
-      if (typeof app.setActivationPolicy === 'function') app.setActivationPolicy('regular');
-    } catch (e) { /* ignore */ }
-    try {
-      if (app.dock && typeof app.dock.show === 'function') app.dock.show();
-    } catch (e) { /* ignore */ }
-  }
-
-  // Lazy ActivityOverlay (transparent on-screen "agent is operating" veil).
-  _overlayInstance() {
-    this._ensureAppPresentable();
-    if (this._overlay === null) {
-      const { ActivityOverlay } = require('./activity-overlay');
-      this._overlay = new ActivityOverlay();
-      // Adopt the current stop-shortcut label so the pill shows the real combo
-      // (not the cryptic ⎋ glyph) even before the renderer syncs it.
-      this._overlay.setStopShortcut(this._stopLabel);
-    }
-    return this._overlay;
-  }
-
   // ── Pause / resume (human preemption) ────────────────────────────────
   setPaused(paused, reason = '') {
     this.paused = !!paused;
     this.pauseReason = paused ? reason : '';
-    if (this._overlay) this._overlay.setPaused(this.paused);
+    try {
+      const adapter = this._adapterInstance();
+      if (this.paused) {
+        // Park the native virtual cursor + switch the status pill to "paused".
+        adapter.cursorHide().catch(() => {});
+        adapter.hudPause(true).catch(() => {});
+      } else {
+        adapter.hudPause(false).catch(() => {});
+      }
+    } catch (e) { /* helper unavailable */ }
     return { ok: true, paused: this.paused, reason: this.pauseReason };
   }
 
@@ -263,7 +210,9 @@ class DesktopController {
       }
     }
     if (typeof label === 'string' && label) this._stopLabel = label;
-    if (this._overlay) this._overlay.setStopShortcut(this._stopLabel);
+    // Push the (possibly rebound) label to the native status pill so it always
+    // shows the user's real shortcut, never a hardcoded glyph.
+    try { this._adapterInstance().setStopLabel(this._stopLabel).catch(() => {}); } catch (e) { /* ignore */ }
     return { ok: true, acceler: this._stopAccel || null, label: this._stopLabel || '' };
   }
 
@@ -332,7 +281,7 @@ class DesktopController {
     if (st === 'not determined') {
       // AX prompt: macOS shows its accessibility consent alert/pane.
       try {
-        systemPreferences.isTrustedAccessibilityClient(true);
+        this._promptAccessibility();
       } catch (e) {
         console.warn('[computer] accessibility prompt failed:', (e && e.message) || e);
       }
@@ -347,7 +296,7 @@ class DesktopController {
     // denied: macOS will not re-alert; try the AX prompt anyway (cheap, some
     // versions re-show it), then open the pane so the user can reset the entry.
     try {
-      systemPreferences.isTrustedAccessibilityClient(true);
+      this._promptAccessibility();
     } catch (e) { /* ignore */ }
     const retried = inputPermission().status;
     if (retried === 'authorized') return { ok: true, kind: k, status: 'authorized', granted: true };
@@ -358,6 +307,14 @@ class DesktopController {
   // Class wrapper over the module-level helper (deep-link to System Settings).
   openPermissionSettings(kind) {
     return openPermissionSettings(kind);
+  }
+
+  // Raise the Accessibility consent prompt for the HELPER process (which posts
+  // the synthetic input, so macOS attributes accessibility to it), with
+  // Electron's own prompt as a fallback when the helper is unavailable.
+  _promptAccessibility() {
+    try { this._adapterInstance().requestPermission('accessibility').catch(() => {}); } catch (e) { /* ignore */ }
+    try { systemPreferences.isTrustedAccessibilityClient(true); } catch (e) { /* ignore */ }
   }
 
   // Live permission status for the Settings permission list. Reads the native
@@ -415,7 +372,6 @@ class DesktopController {
   // Capture the chosen display, downscale to maxWidth, JPEG-encode.
   async screenshot({ display = 0, maxWidth = 1024, quality = 60 } = {}) {
     this._ensureNotPaused();
-    this._ensureAppPresentable();
     const all = screen.getAllDisplays();
     const target = all[Number(display) || 0] || all[0];
     if (!target) {
@@ -465,8 +421,8 @@ class DesktopController {
       x: Math.round(target.bounds.x), y: Math.round(target.bounds.y),
       width: Math.round(target.bounds.width), height: Math.round(target.bounds.height),
     };
-    // Activity overlay: show the "agent is operating" frame while capturing.
-    this._overlayInstance().veil({ id: String(target.id), bounds });
+    // The native virtual cursor is shown only while the agent acts; a capture
+    // does not move it and no longer paints any full-display overlay.
     return {
       image: shot.dataUrl,
       shot: { width: shot.width, height: shot.height },
@@ -494,170 +450,62 @@ class DesktopController {
   }
 
   // ── Injection ────────────────────────────────────────────────────────
-  // Every mutating action goes here; while paused nothing is injected.
+  // Every mutating action goes here; while paused nothing is injected. All real
+  // input is delivered by the native helper with CGEvent.postToPid — the real OS
+  // cursor is never moved. Kept as a thin compatibility surface over the helper.
   async act(args) {
     this._ensureNotPaused();
-    this._ensureAppPresentable();
-    // Preflight: nut.js (CGEvent) posts events SILENTLY when the process is not
-    // an Accessibility-trusted client — a click would "succeed" while doing
-    // nothing and the agent would never learn it needs permission. Surface the
-    // missing permission up-front so the Python layer auto-triggers the OS
-    // prompt instead of typing into the void.
-    if (isDarwin()) {
-      const input = inputPermission().status;
-      if (input !== 'authorized') {
-        const err = new Error(
-          input === 'restricted'
-            ? 'input permission is restricted by the system'
-            : 'macOS Accessibility (input) permission is not granted',
-        );
-        err.code = 'input_permission';
-        throw err;
-      }
+    if (isDarwin() && inputPermission().status !== 'authorized') {
+      const err = new Error('macOS Accessibility (input) permission is not granted');
+      err.code = 'input_permission';
+      throw err;
     }
-    const { Point, Button, Key, mouse, keyboard } = nut();
     const action = String(args.action || '');
-    const button = Button[{ left: 'LEFT', right: 'RIGHT', middle: 'MIDDLE' }[String(args.button || 'left')] || 'LEFT'];
+    const adapter = this._adapterInstance();
     const shot = args.shot || null;
     const displayIndex = Number(args.display) || 0;
 
-    const resolvePoint = (px, py) => {
+    const toPoint = (px, py) => {
       const all = screen.getAllDisplays();
       const d = all[displayIndex] || all[0];
-      const bound = d ? { x: Math.round(d.bounds.x), y: Math.round(d.bounds.y), width: Math.round(d.bounds.width), height: Math.round(d.bounds.height) } : null;
-      const pt = shotToPoint(px, py, shot, bound ? { bounds: bound } : null);
-      return new Point(pt.x, pt.y);
-    };
-
-    const hasKey = (name) => !!(Key && Key[name] !== undefined);
-
-    const realKey = (key) => {
-      const k = String(key || '').toLowerCase();
-      if (NAMED_KEYS[k]) return { name: NAMED_KEYS[k], typed: false };
-      if (k.length === 1) {
-        const upper = k.toUpperCase();
-        const code = /^[A-Z]$/.test(upper) ? upper : null;
-        if (code && keyboard.Key && keyboard.Key[code] !== undefined) return { name: code, typed: false };
-        return { name: k, typed: true }; // symbol/unicode -> typeString
-      }
-      if (/^f(\d{1,2})$/.test(k)) return { name: k.toUpperCase(), typed: false };
-      return { name: null, typed: true, text: String(key) };
-    };
-
-    const tap = async (key) => {
-      const r = realKey(key);
-      if (r.name && hasKey(r.name)) {
-        await keyboard.pressKey(Key[r.name]);
-        await keyboard.releaseKey(Key[r.name]);
-        return;
-      }
-      if (r.typed !== false) {
-        await keyboard.type(String(key));
-        return;
-      }
-      const err = new Error(`unsupported key: ${key}`);
-      err.code = 'computer_error';
-      throw err;
-    };
-
-    const tapWithMods = async (key, mods) => {
-      const r = realKey(key);
-      if (r.typed) {
-        // Modifier + free text is ambiguous; press modifiers, type text, release.
-        const keys = (mods || []).map((m) => Key[MODIFIERS[String(m).toLowerCase()]]).filter(Boolean);
-        for (const mk of keys) await keyboard.pressKey(mk);
-        await keyboard.type(String(key));
-        for (const mk of keys.slice().reverse()) await keyboard.releaseKey(mk);
-        return;
-      }
-      if (!hasKey(r.name)) {
-        const err = new Error(`unsupported key with modifiers: ${key}`);
-        err.code = 'computer_error';
-        throw err;
-      }
-      const keys = [Key[r.name]];
-      for (const m of mods || []) {
-        const n = MODIFIERS[String(m).toLowerCase()];
-        if (n && Key[n] !== undefined) keys.push(Key[n]);
-      }
-      for (const k of keys) await keyboard.pressKey(k);
-      for (const k of keys.slice().reverse()) await keyboard.releaseKey(k);
+      const bounds = d ? {
+        x: Math.round(d.bounds.x), y: Math.round(d.bounds.y),
+        width: Math.round(d.bounds.width), height: Math.round(d.bounds.height),
+      } : null;
+      return shotToPoint(px, py, shot, bounds ? { bounds } : null);
     };
 
     try {
-      // Activity overlay: show the transparent "agent is operating" frame on the
-      // target display and pulse a focus ring at the coordinate being acted on.
-      const displayObj = screen.getAllDisplays()[displayIndex] || screen.getAllDisplays()[0];
-      if (displayObj) {
-        const ovDisplay = {
-          id: String(displayObj.id),
-          bounds: {
-            x: Math.round(displayObj.bounds.x), y: Math.round(displayObj.bounds.y),
-            width: Math.round(displayObj.bounds.width), height: Math.round(displayObj.bounds.height),
-          },
-        };
-        const hasPoint = ['click', 'double_click', 'right_click', 'move', 'drag'].includes(action);
-        if (hasPoint) {
-          const gx = shotToPoint(args.x, args.y, shot, ovDisplay);
-          this._overlayInstance().ping(ovDisplay, { x: gx.x - ovDisplay.bounds.x, y: gx.y - ovDisplay.bounds.y });
-        } else {
-          this._overlayInstance().veil(ovDisplay);
-        }
-      }
       switch (action) {
-        case 'click': {
-          const p = resolvePoint(args.x, args.y);
-          await mouse.setPosition(p);
-          await mouse.click(button);
-          break;
-        }
-        case 'double_click': {
-          const p = resolvePoint(args.x, args.y);
-          await mouse.setPosition(p);
-          await mouse.doubleClick(button);
-          break;
-        }
+        case 'click':
+        case 'double_click':
         case 'right_click': {
-          const p = resolvePoint(args.x, args.y);
-          await mouse.setPosition(p);
-          await mouse.rightClick();
+          const pt = toPoint(args.x, args.y);
+          const kind = action === 'double_click' ? 'double' : (action === 'right_click' ? 'right' : 'left');
+          await adapter.clickPoint(pt.x, pt.y, kind);
           break;
         }
         case 'move': {
-          const p = resolvePoint(args.x, args.y);
-          await mouse.setPosition(p);
+          const pt = toPoint(args.x, args.y);
+          await adapter.cursorMove(pt.x, pt.y);
           break;
         }
         case 'drag': {
-          const p1 = resolvePoint(args.x, args.y);
-          const p2 = resolvePoint(args.x2, args.y2);
-          await mouse.setPosition(p1);
-          await mouse.pressButton(button);
-          await mouse.setPosition(p2);
-          await mouse.releaseButton(button);
+          const p1 = toPoint(args.x, args.y);
+          const p2 = toPoint(args.x2, args.y2);
+          await adapter.dragPoint(p1.x, p1.y, p2.x, p2.y, String(args.button || 'left'));
           break;
         }
         case 'scroll': {
-          const dx = Number(args.dx) || 0;
-          const dy = Number(args.dy) || 0;
-          const lines = Math.max(1, Math.round(Math.abs(dy || dx) / 30) || 1);
-          if (dy > 0) for (let i = 0; i < lines; i++) await mouse.scrollUp(1);
-          else if (dy < 0) for (let i = 0; i < lines; i++) await mouse.scrollDown(1);
-          if (dx > 0) for (let i = 0; i < lines; i++) await mouse.scrollRight(1);
-          else if (dx < 0) for (let i = 0; i < lines; i++) await mouse.scrollLeft(1);
+          await adapter.scroll(Number(args.dx) || 0, Number(args.dy) || 0);
           break;
         }
         case 'type': {
-          await keyboard.type(String(args.text || ''));
+          await adapter.type(String(args.text || ''));
           break;
         }
         case 'key': {
-          const mods = Array.isArray(args.modifiers) ? args.modifiers : [];
-          if (mods.length) {
-            await tapWithMods(args.key, mods);
-          } else {
-            await tap(args.key);
-          }
+          await adapter.press(String(args.key || ''), Array.isArray(args.modifiers) ? args.modifiers : []);
           break;
         }
         case 'clipboard_set': {
@@ -665,9 +513,7 @@ class DesktopController {
           break;
         }
         case 'paste': {
-          const modKey = process.platform === 'darwin' ? 'LeftSuper' : 'LeftControl';
-          await keyboard.pressKey(keyboard.Key[modKey], keyboard.Key.V);
-          await keyboard.releaseKey(keyboard.Key.V, keyboard.Key[modKey]);
+          await adapter.press('v', ['cmd']);
           break;
         }
         default: {
@@ -685,75 +531,43 @@ class DesktopController {
     }
   }
 
-  // ── Activity-overlay debug / lifecycle (used by the bridge) ───────────
-  overlayShow(display) {
-    this._overlayInstance().veil(display || (() => {
-      const d = screen.getAllDisplays()[0];
-      return d ? { id: String(d.id), bounds: { x: Math.round(d.bounds.x), y: Math.round(d.bounds.y), width: Math.round(d.bounds.width), height: Math.round(d.bounds.height) } } : null;
-    })());
-    return { ok: true };
-  }
-
-  overlayHide() {
-    if (this._overlay) this._overlay.hide();
-    return { ok: true };
-  }
-
-  overlayState() {
-    return { ok: true, paused: this.paused, has_overlay: !!this._overlay };
-  }
-
-  async overlayCapture(display) {
-    if (!this._overlay) return null;
-    return this._overlay.capture(display);
-  }
-
   // ── Structure-first automation surface (native cw-automa) ─────────────
   // Observation + actuation by Accessibility element ref; coordinates are an
-  // explicit fallback. Every mutating action also bumps the activity overlay.
-
-  _primaryDisplay() {
-    const d = screen.getAllDisplays()[0];
-    return d ? { id: String(d.id), bounds: { x: Math.round(d.bounds.x), y: Math.round(d.bounds.y), width: Math.round(d.bounds.width), height: Math.round(d.bounds.height) } } : null;
-  }
-
-  _overlayVeil() {
-    const d = this._primaryDisplay();
-    if (d) this._overlayInstance().veil(d);
-  }
+  // explicit fallback. The helper moves its virtual cursor as it acts.
 
   async axSnapshot(depth = 6) {
     if (process.platform !== 'darwin') return { frontmost: '', refs: 0, text: '', error: 'not on macOS' };
-    this._ensureAppPresentable();
     const adapter = this._adapterInstance();
     return adapter.snapshotText(depth);
   }
 
+  // get_app_state: key-window AX tree + window info + incremental AX diff.
+  async axAppState(app = '', depth = 6) {
+    if (process.platform !== 'darwin') throw new Error('not on macOS');
+    return this._adapterInstance().getAppState(app, depth);
+  }
+
   async axAct(ref, op, params = {}) {
     if (process.platform !== 'darwin') throw new Error('not on macOS');
-    this._ensureAppPresentable();
-    this._overlayVeil();
+    this._ensureNotPaused();
     return this._adapterInstance().act({ ref, op, ...params });
   }
 
   async axPress(key, modifiers) {
     if (process.platform !== 'darwin') throw new Error('not on macOS');
-    this._ensureAppPresentable();
-    this._overlayVeil();
+    this._ensureNotPaused();
     return this._adapterInstance().press(key, modifiers);
   }
 
   async axType(text) {
     if (process.platform !== 'darwin') throw new Error('not on macOS');
-    this._ensureAppPresentable();
-    this._overlayVeil();
+    this._ensureNotPaused();
     return this._adapterInstance().type(text);
   }
 
   async axLaunch(app) {
     if (process.platform !== 'darwin') throw new Error('not on macOS');
-    this._ensureAppPresentable();
-    this._overlayVeil();
+    this._ensureNotPaused();
     return this._adapterInstance().launch(app);
   }
 
@@ -763,8 +577,7 @@ class DesktopController {
   // shot the coordinates are treated as raw display points.
   async axClickCoords(x, y, opts = {}) {
     if (process.platform !== 'darwin') throw new Error('not on macOS');
-    this._ensureAppPresentable();
-    this._overlayVeil();
+    this._ensureNotPaused();
     let gx = Number(x);
     let gy = Number(y);
     const sw = Number(opts && opts.shot_width) || 0;
@@ -783,6 +596,7 @@ class DesktopController {
 
   async axScroll(dx, dy) {
     if (process.platform !== 'darwin') throw new Error('not on macOS');
+    this._ensureNotPaused();
     return this._adapterInstance().scroll(dx, dy);
   }
 
@@ -797,10 +611,6 @@ class DesktopController {
   }
 
   destroy() {
-    if (this._overlay) {
-      this._overlay.destroy();
-      this._overlay = null;
-    }
     if (this._adapter) {
       try { this._adapter.close(); } catch (e) { /* ignore */ }
       this._adapter = null;
@@ -810,9 +620,5 @@ class DesktopController {
 
 module.exports = {
   DesktopController,
-  ActivityOverlay: require('./activity-overlay').ActivityOverlay,
   shotToPoint,
-  dataUrlToJpegInfo,
-  NAMED_KEYS,
-  MODIFIERS,
 };
