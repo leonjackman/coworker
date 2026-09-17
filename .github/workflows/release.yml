@@ -74,6 +74,15 @@ jobs:
           npm ci
           cd frontend && npm ci
 
+      - name: Build native helper (cw-automa)
+        # The Swift helper is gitignored (`build/`), so a fresh checkout has no
+        # binary. electron-builder only WARNS when an extraResources source is
+        # missing, so without this step the release silently ships with no
+        # computer-use kernel. Compile it here and fail loud if it is absent.
+        run: |
+          npm run build:automa
+          test -x electron/cw-automa/build/cw-automa || { echo "::error::cw-automa helper was not built"; exit 1; }
+
       - name: Build
         env:
           APPLE_API_KEY: /Users/runner/signing-security/api-key.p8
