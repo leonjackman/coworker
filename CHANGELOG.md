@@ -373,6 +373,29 @@
 - **helper 簽名修正**：打包版改用 certificate UUID 而非顯示名稱進行 helper 簽名。
 - **抑制 deprecation warnings**：helper 構建時靜默 macOS 已棄用警告。
 
+## 0.6.9
+
+本版本聚焦穩定性：修復自動化期間的輪詢風暴卡死、一條複合命令誤殺系統進程導致的跨 App 崩潰、推理模型思考內容串流顯示殘缺，以及自動技能審批設置不生效等問題。
+
+### 修復
+
+- **輪詢風暴導致界面卡死**：狀態輪詢 effect 每次執行都自行 `setTimeout` 排下一次，而 `focus` 事件又直接呼叫輪詢；自動化操作（視窗焦點頻繁抖動）時每觸發一次 focus 就複製出一條常駐輪詢鏈，鏈數不斷累積至每秒數十次請求，把前後端一起拖垮、界面卡死。改為單一輪詢鏈 + `inFlight` 併發去重，focus 僅觸發一次即時輪詢。
+- **複合命令誤殺進程（跨 App 崩潰根因）**：`run_command` 對純字串一律 `shlex.split` + `shell=False`，`;` / `&&` / 管道不會被解讀為命令分隔符，而是變成第一個程式的多餘 argv。實際事故：`pkill -f "vite.js preview"; sleep 1; sh -c "…"` 被拆成 `pkill -f "…;" sleep "1;" sh -c …`，`pkill` 的多個 pattern 以 OR 匹配整條命令行（`sh` 幾乎命中所有進程），誤殺 coworker / VSCode / OpenCode 的 Helper 進程導致三者同時崩潰。新增 `platform.normalize_command()`：清單原樣執行；含殼層控制符的字串改走平台 shell（`sh -c` / Windows `powershell -Command`）；其餘才 `shlex.split`。agent 的 `run_command` 工具與手動終端皆套用。
+- **推理模型思考內容串流顯示不全**：推理模型（DeepSeek 等）的 `reasoning_content` 為增量 token，但前端 4 處處理器以「覆蓋」而非「追加」寫入，畫面逐字閃過、最後只剩最後一個字元（如「。」）；且 `done` 合併時把多段推理塌縮進第一段（一輪常有多段推理與工具交錯）。後端 `_extract_reasoning_from_chunk` 又對每個 token 做 `strip()`，導致英文詞間空格遺失（`The user` → `Theuser`）。修正為前端逐段追加、`mergeMessageParts` 以序號對齊第 N 段推理、後端原樣保留空白。
+- **排隊訊息執行時清空輸入框**：排隊訊息自動送出時走一般發送路徑，會清空使用者當下正在編輯的草稿（含附件 / 引用 chip）。新增 `preserveComposer`，自動發送排隊 / 插話訊息時保留輸入框，並改用條目自身的附件 / 引用，避免誤帶當前 composer 的 chips。
+- **自動技能審批設置未生效**：對話中的 `skill_manage` / `install_skill` 未讀取「自動技能－需要人工審核」設置，無論如何設定都落入待審批佇列（實例可見 `staged: true`）。改為依設置直接生效或進草稿，並將該設置納入建圖快取鍵（切換即時生效），委派子代理同步套用。
+- **技能提示詞與行為不一致**：工具描述、技能目錄安裝說明、自我校準指引與審視系統提示皆寫死「一律進草稿待審批」，在免審批模式下誤導模型。全部改為依 `approval_required` 動態生成，做到「用戶怎麼設置就怎麼執行」。
+
+### 改動
+
+- **排隊編輯按鈕常駐**：佇列項目的「編輯」按鈕改為與「發送」按鈕一致的常駐顯示（原本僅 hover 才顯示）。
+- **設定頁類型修正**：`ComputerPermPanel` 的可選屬性在 `exactOptionalPropertyTypes` 下改為 `string | undefined`，消除 `tsc` 型別錯誤。
+
+### 品質
+
+- 新增 `test_run_command_normalize.py`（複合命令走 shell、崩潰原字串回歸）、`test_reasoning_stream.py`（推理 token 空白保留），並擴充 `test_skill_self_authoring.py`（免審批工具分流、四處文案與設置一致）。
+- 全量後端測試通過；前端 `tsc --noEmit` 零錯誤、`vite build` 通過。
+
 ## Unreleased
 
 （尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
