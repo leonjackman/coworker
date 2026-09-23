@@ -14,6 +14,8 @@ Tests can force a platform via :func:`force_platform`.
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import shutil
 import sys
 
@@ -363,6 +365,44 @@ def default_shell(platform: str | None = None) -> str:
     return "/bin/bash" if tag == "linux" else "/bin/zsh"
 
 
+# Shell control operators that make a plain string a *compound* command. When
+# one is present the string must run through the platform shell (`sh -c`); a
+# naive ``shlex.split`` + ``shell=False`` turns ``;`` / ``&&`` / pipes into
+# literal argv for the FIRST program. That is what caused a system-wide crash:
+# the agent sent ``pkill -f "vite.js preview"; sleep 1; sh -c "…"`` which became
+# ``pkill -f "vite.js preview;" sleep "1;" sh -c …`` — ``pkill`` then treated
+# ``sh`` (and other tokens) as extra ``-f`` match patterns and killed unrelated
+# processes across every Electron app.
+_SHELL_METACHAR_RE = re.compile(r"[|&;<>()$`\n\r]")
+
+
+def shell_wrap_command(command: str, platform: str | None = None) -> list[str]:
+    """Wrap a compound shell string so it runs through the platform shell."""
+    if is_windows(platform):
+        return ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+    # POSIX sh is the most portable choice and is always allowlisted.
+    return ["sh", "-c", command]
+
+
+def normalize_command(command: str | list[str], platform: str | None = None) -> list[str]:
+    """Normalize a ``run_command`` argument into an argv list.
+
+    - a list is used verbatim (already an argv);
+    - a string containing shell control operators (``;`` ``&&`` ``|`` ``>``
+      ``$`` ``…``) runs through the platform shell so those operators mean what
+      they say, instead of being passed as extra arguments to the first program;
+    - any other string is POSIX-shlex split (falls back to a single argument).
+    """
+    if not isinstance(command, str):
+        return list(command)
+    if _SHELL_METACHAR_RE.search(command):
+        return shell_wrap_command(command, platform)
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return [command]
+
+
 # ---------------------------------------------------------------------------
 # LLM-facing hints
 # ---------------------------------------------------------------------------
@@ -424,7 +464,9 @@ __all__ = [
     "is_linux",
     "is_macos",
     "is_windows",
+    "normalize_command",
     "platform_hint",
     "platform_tag",
     "resolve_command_name",
+    "shell_wrap_command",
 ]

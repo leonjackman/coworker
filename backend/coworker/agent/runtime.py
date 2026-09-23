@@ -935,11 +935,18 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             chat_mode = self._resolve_project_dir() == CHAT_MEMORY_DIR
         except Exception:  # noqa: BLE001 - defensive
             chat_mode = False
+        # 自動技能「需要人工審核」設置：false 時對話中的 skill_manage /
+        # install_skill 直接生效（免草稿佇列）。必須納入建圖快取鍵，否則切換
+        # 設置後工具集仍是舊的，寫入依舊落在待審批佇列。
+        from coworker.config import skill_auto_apply_enabled
+
+        auto_apply_skills = skill_auto_apply_enabled(self.data_dir)
         key = (
             work_mode,
             language,
             autonomy,
             chat_mode,
+            auto_apply_skills,
             frozenset(self.referenced_sessions),
             tuple(sorted(getattr(t, "name", "") for t in web_tools)),
             bool(browser_tool),
@@ -971,6 +978,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 web_tools=web_tools,
                 browser_tool=browser_tool,
                 computer_tools=computer_tools,
+                auto_apply_skills=auto_apply_skills,
                 use_worker_enabled=True,
                 language=language,
                 max_concurrent=self.settings.max_concurrent_workers if self.settings else 4,

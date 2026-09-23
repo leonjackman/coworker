@@ -2,12 +2,14 @@
 
 After a settled turn that actually used tools, a lightweight review decides
 whether a repeatable procedure — especially one the user corrected — should be
-captured as a skill. Every capture is STAGED as a **draft** for human approval
-via the skill draft queue; the agent never auto-enables a skill.
+captured as a skill. By default every capture is STAGED as a **draft** for human
+approval via the skill draft queue; when the user turns approval off the capture
+is applied directly as an active skill. The agent never silently enables a skill
+against the user's approval preference.
 
 Calibration discipline: user guidance is the calibration source. The review may
-propose from its own success too, but the proposal is only ever a draft — the
-human approves or rejects it.
+propose from its own success too, but the outcome (draft or direct apply) always
+follows the user's approval setting.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ Rules:
   in order: ## When to Use, ## Procedure (numbered steps), ## Pitfalls, ## Verification.
 - description <= 160 chars, concrete enough for the agent to decide when to load it.
 - If nothing is worth capturing, respond with action=none.
-- Your capture is only a proposal: it will be staged as a draft and the human approves it. Do not mention this in content.
+- Do not mention the approval/activation workflow in the skill content.
 
 Respond with ONLY a JSON object, no commentary, no markdown fence:
 {"action": "create"|"update"|"none", "name": "<slug>", "content": "<full SKILL.md string>"}"""
@@ -137,7 +139,7 @@ async def run_skill_review(
     tail = _conversation_tail(messages)
     tools = _tool_summary(parts)
     catalog = _format_catalog(skill_manager)
-    system_prompt = _build_system_prompt(aggressiveness)
+    system_prompt = _build_system_prompt(aggressiveness, approval_required)
 
     human = (
         "## Conversation tail\n"
@@ -239,9 +241,19 @@ AGGRESSIVENESS_RULES: dict[str, str] = {
 }
 
 
-def _build_system_prompt(aggressiveness: str) -> str:
+def _build_system_prompt(aggressiveness: str, approval_required: bool = True) -> str:
     rule = AGGRESSIVENESS_RULES.get(aggressiveness, AGGRESSIVENESS_RULES["cautious"])
-    return f"{REVIEW_SYSTEM_PROMPT}\n\n{rule}"
+    if approval_required:
+        outcome = (
+            "Your capture is only a proposal: it will be staged as a draft and the "
+            "human approves it. Do not mention this in the content."
+        )
+    else:
+        outcome = (
+            "The user disabled skill approval, so your capture is applied immediately "
+            "as an active skill. Do not mention this in the content."
+        )
+    return f"{REVIEW_SYSTEM_PROMPT}\n\n{rule}\n\n{outcome}"
 
 
 def _format_catalog(skill_manager: Any) -> str:

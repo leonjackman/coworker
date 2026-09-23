@@ -493,8 +493,8 @@ class SkillManager:
 
         ``create`` stages a new skill; ``edit``/``patch`` stage a replacement of
         an existing skill; ``delete`` removes it immediately (HITL-gated). Every
-        write is staged as a draft awaiting approval — the agent never enables a
-        skill on its own.
+        create/edit/patch write is staged as a draft awaiting approval — the
+        direct-write (no-approval) path is :meth:`apply_agent_skill`.
         """
         action = (action or "").lower()
         if action == "create":

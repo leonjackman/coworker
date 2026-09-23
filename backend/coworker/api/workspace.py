@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import shlex
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from coworker.projects import CHAT_MEMORY_DIR, CHAT_PROJECT_ID, ProjectStore
@@ -225,8 +224,10 @@ async def project_dashboard(project_id: str):
 async def workspace_command(request: WorkspaceCommandRequest):
     try:
         workspace = workspace_controller.workspace_for_project(request.project_id) if request.project_id else workspace_controller.default()
+        from coworker.platform import normalize_command
+
         result = workspace.run_command(
-            shlex.split(request.command),
+            normalize_command(request.command),
             cwd=request.cwd,
             timeout_seconds=request.timeout_seconds,
             audit_context={"source": "bottom_panel_terminal"},

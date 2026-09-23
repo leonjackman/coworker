@@ -466,21 +466,16 @@
   justify-content: center;
   border: none;
   border-radius: 6px;
-  background: transparent;
-  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  color: var(--accent);
   cursor: pointer;
-  opacity: 0;
-  transition: background 150ms ease, color 150ms ease, opacity 150ms ease;
-}
-
-.todo-block__queue-item:hover .todo-block__queue-edit,
-.todo-block__queue-item--editing .todo-block__queue-edit {
-  opacity: 1;
+  transition: background 150ms ease, color 150ms ease, transform 150ms ease;
 }
 
 .todo-block__queue-edit:hover {
-  background: color-mix(in oklab, var(--accent) 16%, transparent);
-  color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 24%, transparent);
+  color: var(--accent-foreground);
+  transform: translateY(-1px);
 }
 
 .todo-block__queue-input {

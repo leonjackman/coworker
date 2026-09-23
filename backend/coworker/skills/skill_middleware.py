@@ -142,27 +142,48 @@ def build_skill_section(
     except Exception as exc:  # noqa: BLE001 - a scan failure must not break chat
         logger.warning("Skill catalog refresh failed: %s", exc)
         return ""
-    section = format_skills_prompt_bounded(skills) if skills else ""
+    from coworker.config import skill_auto_apply_enabled
+
+    auto_apply = skill_auto_apply_enabled(getattr(manager, "data_dir", None))
+    section = format_skills_prompt_bounded(skills, auto_apply=auto_apply) if skills else ""
     if active:
         section = f"{section}\n\n{_format_active_skills(active)}".strip()
     if section:
-        section = f"{section}\n\n{SELF_CALIBRATION_GUIDANCE}".strip()
+        section = f"{section}\n\n{_self_calibration_guidance(auto_apply)}".strip()
     return section
 
 
-SELF_CALIBRATION_GUIDANCE = (
-    "## Capturing reusable procedures (skill_manage)\n"
-    "When you discover a repeatable multi-step procedure — especially when the "
-    "user corrects your approach and shows you the right way — proactively capture "
-    "it as a skill using the `skill_manage` tool (action=create for a new skill, "
-    "action=patch/edit to improve an existing one). Use the SKILL.md house format: "
-    "YAML frontmatter (name + description) and four body sections in order — "
-    "## When to Use, ## Procedure (numbered steps), ## Pitfalls, ## Verification. "
-    "Check <available_skills> first: if an existing skill already covers the "
-    "procedure, update it (same name) instead of creating a duplicate. Every write "
-    "is staged as a draft for the user's approval and only affects future "
-    "conversations once approved."
-)
+def _self_calibration_guidance(auto_apply: bool) -> str:
+    """Mode-specific "how to capture a skill" note.
+
+    The write semantics differ by the user's approval setting, so the guidance
+    must match it — never tell the agent a write is "staged" when it in fact
+    applies immediately (or vice versa).
+    """
+    guidance = (
+        "## Capturing reusable procedures (skill_manage)\n"
+        "When you discover a repeatable multi-step procedure — especially when the "
+        "user corrects your approach and shows you the right way — proactively capture "
+        "it as a skill using the `skill_manage` tool (action=create for a new skill, "
+        "action=patch/edit to improve an existing one). Use the SKILL.md house format: "
+        "YAML frontmatter (name + description) and four body sections in order — "
+        "## When to Use, ## Procedure (numbered steps), ## Pitfalls, ## Verification. "
+        "Check <available_skills> first: if an existing skill already covers the "
+        "procedure, update it (same name) instead of creating a duplicate."
+    )
+    if auto_apply:
+        guidance += (
+            " Skill approval is OFF: a successful write takes effect immediately as an "
+            "active skill and is available in the next turn. There is no draft and no "
+            "approval step — do NOT tell the user anything is waiting for approval."
+        )
+    else:
+        guidance += (
+            " Skill approval is ON: every create/patch/edit write is staged as a draft "
+            "for the user's approval and only affects future conversations once approved. "
+            "Tell the user it is waiting for their review."
+        )
+    return guidance
 
 
 class SkillMiddleware(AgentMiddleware):

@@ -699,8 +699,12 @@ def _extract_reasoning_from_chunk(chunk: Any) -> str | None:
     raw = additional_kwargs.get("reasoning")
     if not isinstance(raw, str) or not raw.strip():
         raw = additional_kwargs.get("reasoning_content")
+    # Return the chunk verbatim: OpenAI-compatible providers (DeepSeek, ...)
+    # stream reasoning incrementally and tokens carry significant leading
+    # whitespace (e.g. " user"). Stripping per chunk concatenates into
+    # "Theuserasks…" — the surrounding words lose their spaces.
     if isinstance(raw, str) and raw.strip():
-        return raw.strip()
+        return raw
     return None
 
 

@@ -204,17 +204,18 @@ def build_workspace_tools(
         Returns JSON with ``return_code`` (0 = success), ``stdout``, ``stderr``,
         ``timed_out``. A non-zero ``return_code`` means FAILURE — never blindly
         re-run the exact same command; adjust the path/scope or use another tool.
-        ``command`` may be an argv array or a plain shell string (shlex-normalized).
+        ``command`` may be an argv array or a plain shell string. A string with
+        shell control operators (``;`` ``&&`` ``|`` ``>`` …) is run through the
+        platform shell (``sh -c``), so use normal shell syntax for compound cmds.
         Set ``background=true`` for long-running builds/tests: the tool returns a
         ``job_id`` immediately; poll with the run_command_status tool.
         """
-        import shlex as _shlex
+        from .. import platform as _platform
 
-        if isinstance(command, str):
-            try:
-                command = _shlex.split(command)
-            except ValueError:
-                command = [command]
+        # Normalize BEFORE exec: a bare compound string must go through the shell,
+        # not be shlex-split into extra argv for the first program (e.g. extra
+        # `pkill -f` patterns → unrelated process kills).
+        command = _platform.normalize_command(command)
         try:
             # Runtime policy approval (HITL) is owned by HumanInTheLoopMiddleware;
             # this tool call is not the sync bottom-panel approval flow.
@@ -327,8 +328,9 @@ def build_workspace_tools(
         Use this when you discover a repeatable multi-step procedure worth
         capturing — especially when the user corrects your approach. create
         authors a NEW skill; patch and edit modify an existing one; delete
-        removes it. Every create/patch/edit write is STAGED as a draft for the
-        user's approval and never affects future conversations until approved.
+        removes it. create/patch/edit follow the user's approval setting: staged
+        as a draft when approval is required, applied immediately when off (this
+        description is rewritten at build time to match the active setting).
         """
         try:
             if skill_manager is None:
@@ -627,6 +629,31 @@ def build_workspace_tools(
         return json.dumps(goal.to_dict(), ensure_ascii=False)
 
     tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, skill_manage, git_status]
+    # Keep the agent-facing skill-write descriptions in lock-step with the user's
+    # approval setting: never claim a write is staged when approval is off (it
+    # applies immediately), and never claim it is immediate when approval is on.
+    _skill_write_semantics = (
+        " The user disabled skill approval, so this takes effect immediately as an "
+        "active skill (no draft, no approval step) and is available in the next turn."
+        if auto_apply_skills
+        else " This is staged as a draft in the review queue and only takes effect "
+        "after the user approves it — tell the user it awaits their approval."
+    )
+    for _skill_tool in tools:
+        if getattr(_skill_tool, "name", "") == "skill_manage":
+            _skill_tool.description = (
+                "Create, patch, edit, or delete a skill (procedural memory). Use this "
+                "when you discover a repeatable multi-step procedure worth capturing — "
+                "especially when the user corrects your approach. create authors a NEW "
+                "skill; patch and edit modify an existing one; delete removes it."
+                + _skill_write_semantics
+            )
+        elif getattr(_skill_tool, "name", "") == "install_skill":
+            _skill_tool.description = (
+                "Install a NEW skill from chat (the file tools cannot write outside the "
+                "workspace sandbox). `content` must be the complete SKILL.md text with "
+                "YAML frontmatter (name + description)." + _skill_write_semantics
+            )
     if readonly:
         # Reviewer/auditor sub-agents get no workspace mutation tools.
         tools = [search_files, read_file, git_status]

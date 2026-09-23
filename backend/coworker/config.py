@@ -139,3 +139,19 @@ def read_skill_review_settings(data_dir: Path) -> dict:
     if isinstance(stored.get("approval_required"), bool):
         out["approval_required"] = stored["approval_required"]
     return out
+
+
+def skill_auto_apply_enabled(data_dir: Path | None) -> bool:
+    """True when the user disabled skill approval (Hermes-style free write).
+
+    Single source of truth for the "不需要人工審核" toggle: the conversation's
+    ``skill_manage`` / ``install_skill`` tools and the post-turn review all gate
+    on this. A missing/unreadable data dir or settings file means "require
+    approval" (fail safe: never auto-apply a skill).
+    """
+    if data_dir is None:
+        return False
+    try:
+        return not bool(read_skill_review_settings(data_dir).get("approval_required", True))
+    except Exception:  # noqa: BLE001 - a broken settings file must not auto-apply
+        return False

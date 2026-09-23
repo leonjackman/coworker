@@ -414,11 +414,15 @@ def load_skill_from_file(
     )
 
 
-def format_skills_prompt(skills: list[SkillEntry]) -> str:
+def format_skills_prompt(skills: list[SkillEntry], *, auto_apply: bool | None = None) -> str:
     """Render the Agent Skills catalog block injected into the system prompt.
 
     Format follows the agentskills.io integration template (byte-compatible with
     openclaw/pi). Only the catalog is always in context; bodies load on demand.
+
+    ``auto_apply`` mirrors the user's "require approval for auto skills" setting
+    so the install note tells the truth about whether a write takes effect
+    immediately or waits for approval. ``None`` keeps the note mode-neutral.
     """
     if not skills:
         return ""
@@ -438,10 +442,25 @@ def format_skills_prompt(skills: list[SkillEntry]) -> str:
         "build/install a skill), you MUST use the dedicated `install_skill` tool with the skill "
         "name and its full SKILL.md content. Do NOT use write_file or run_command to write to the "
         "`~/.agents/skills/...` paths listed in <location> above — those paths live outside the "
-        "workspace sandbox and the file tools will reject them. After install_skill succeeds the "
-        "skill is immediately available as a `/skill <name>` command (or a direct `/<command>` "
-        "sub-command when the skill declares `commands`) and in the Installed Skills list."
+        "workspace sandbox and the file tools will reject them. "
     )
+    if auto_apply is True:
+        install_note += (
+            "Skill approval is OFF, so install_skill takes effect immediately: the skill becomes "
+            "active at once and is available as a `/skill <name>` command (or a direct `/<command>` "
+            "sub-command when the skill declares `commands`) in the very next turn."
+        )
+    elif auto_apply is False:
+        install_note += (
+            "Skill approval is ON, so install_skill stages a draft in the review queue and the "
+            "skill only becomes available as a `/skill <name>` command after the user approves it. "
+            "Tell the user it is waiting for approval."
+        )
+    else:
+        install_note += (
+            "Whether install_skill takes effect immediately or is staged for approval depends on "
+            "the user's skill-approval setting."
+        )
     lines.append(install_note)
     for skill in skills:
         lines.append("  <skill>")
@@ -477,7 +496,7 @@ def _clip_description(desc: str, limit: int) -> str:
     return " ".join(desc.split())[:limit]
 
 
-def format_skills_prompt_bounded(skills: list["SkillEntry"]) -> str:
+def format_skills_prompt_bounded(skills: list["SkillEntry"], *, auto_apply: bool | None = None) -> str:
     """``format_skills_prompt`` + a hard token budget (mainstream, P4).
 
     Renders the catalog normally; if it exceeds ``SKILLS_CATALOG_MAX_TOKENS``
@@ -487,7 +506,7 @@ def format_skills_prompt_bounded(skills: list["SkillEntry"]) -> str:
     from coworker.context import estimate_text_tokens
 
     def _render(list_: list) -> str:
-        return format_skills_prompt(list_)
+        return format_skills_prompt(list_, auto_apply=auto_apply)
 
     rendered = _render(skills)
     if estimate_text_tokens(rendered) <= SKILLS_CATALOG_MAX_TOKENS:

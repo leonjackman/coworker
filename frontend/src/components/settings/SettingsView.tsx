@@ -72,8 +72,8 @@ function cuPermChip(status: string | undefined): { label: string; tone: 'ok' | '
 }
 
 interface ComputerPermPanelProps {
-  screen?: string;
-  input?: string;
+  screen?: string | undefined;
+  input?: string | undefined;
   onOpen: (kind: string) => void;
   onRefresh: () => void;
 }

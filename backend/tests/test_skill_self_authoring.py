@@ -426,6 +426,91 @@ def test_review_approval_off_applies_directly(manager):
     assert manager.get("auto-skill") is not None
 
 
+def test_skill_manage_tool_honors_auto_apply_flag(manager):
+    """Regression: the in-conversation ``skill_manage`` tool must apply directly
+    when ``auto_apply_skills`` is on and stage a draft when it is off."""
+    from coworker.agent.graph import build_workspace_tools
+
+    class _DummyWorkspace:
+        pass
+
+    def _create(auto_apply: bool, name: str) -> dict:
+        tools = build_workspace_tools(
+            _DummyWorkspace(),
+            skill_manager=manager,
+            auto_apply_skills=auto_apply,
+            session_id="s-auto",
+        )
+        tool = next(t for t in tools if getattr(t, "name", "") == "skill_manage")
+        return json.loads(
+            tool.invoke(
+                {"action": "create", "name": name, "content": SKILL_CONTENT.format(name=name, desc="auto flag probe")}
+            )
+        )
+
+    direct = _create(True, "auto-on")
+    assert direct.get("applied") is True, direct
+    assert manager.get("auto-on") is not None
+
+    staged = _create(False, "auto-off")
+    assert staged.get("staged") is True, staged
+    assert manager.get("auto-off") is None
+    assert "auto-off" in [p["name"] for p in manager.pending()]
+
+
+def test_skill_auto_apply_enabled_reads_setting():
+    """Single source of truth for the 'needs approval' toggle read by the
+    runtime tool wiring (and the review loop)."""
+    from coworker.config import skill_auto_apply_enabled
+
+    assert skill_auto_apply_enabled(None) is False
+    _write_review_settings(approval_required=False)
+    assert skill_auto_apply_enabled(main.settings.data_dir) is True
+    _write_review_settings(approval_required=True)
+    assert skill_auto_apply_enabled(main.settings.data_dir) is False
+
+
+def test_skill_write_messaging_matches_approval_setting(manager):
+    """Regression: every agent-facing skill-write message (tool descriptions,
+    catalog install note, self-calibration guidance, review prompt) must follow
+    the user's approval setting — no always-on 'staged as a draft'."""
+    from coworker.agent.graph import build_workspace_tools
+    from coworker.agent.skill_review import _build_system_prompt
+    from coworker.skills.skill_middleware import build_skill_section
+
+    class _DummyWorkspace:
+        pass
+
+    def _tool_descriptions(auto_apply: bool) -> str:
+        tools = build_workspace_tools(
+            _DummyWorkspace(), skill_manager=manager, auto_apply_skills=auto_apply, session_id="s-msg"
+        )
+        by_name = {getattr(t, "name", ""): t for t in tools}
+        return f"{by_name['skill_manage'].description}\n{by_name['install_skill'].description}"
+
+    assert "immediately" in _tool_descriptions(True)
+    assert "staged as a draft" not in _tool_descriptions(True)
+    assert "staged as a draft" in _tool_descriptions(False)
+    assert "immediately" not in _tool_descriptions(False)
+
+    # System-prompt catalog note + self-calibration guidance follow the setting.
+    manager.apply_agent_skill(
+        "create", "msg-skill", SKILL_CONTENT.format(name="msg-skill", desc="msg probe"), sources=["session:x"]
+    )
+    _write_review_settings(approval_required=False)
+    section = build_skill_section(manager, [])
+    assert "takes effect immediately" in section and "staged as a draft" not in section
+    _write_review_settings(approval_required=True)
+    section = build_skill_section(manager, [])
+    assert "staged as a draft" in section
+
+    # Review system prompt follows the approval_required argument.
+    assert "applied immediately" in _build_system_prompt("cautious", False)
+    assert "staged as a draft" in _build_system_prompt("cautious", True)
+
+    _write_review_settings(aggressiveness="cautious", approval_required=True)
+
+
 def test_passive_aggressiveness_skips_review(manager):
     """aggressiveness=passive disables the review loop entirely."""
     from coworker.agent.runtime import OpenAICompatibleStreamRuntime

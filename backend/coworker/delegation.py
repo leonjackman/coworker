@@ -367,6 +367,9 @@ class Delegator:
                 browser_tool = None
                 browser_capability = ""
         # 复用 build_workspace_tools 构建工具集
+        from coworker.config import skill_auto_apply_enabled
+
+        auto_apply_skills = skill_auto_apply_enabled(self.data_dir)
         tools = build_workspace_tools(
             self.workspace,
             audit_context,
@@ -381,6 +384,7 @@ class Delegator:
             readonly=readonly,
             web_tools=web_tools,
             browser_tool=browser_tool,
+            auto_apply_skills=auto_apply_skills,
             # WorkerAgent 集成（不启用 use_worker tool，只复用工具构建逻辑）
             use_worker_enabled=False,
             language=self.language,

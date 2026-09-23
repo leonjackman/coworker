@@ -645,8 +645,9 @@ function App() {
       removeQueuedMessage(sessionId, queuedId);
       void sendMessage({
         message: entry.message,
-        ...(entry.attachments && entry.attachments.length > 0 ? { attachments: entry.attachments } : {}),
-        ...(entry.references && entry.references.length > 0 ? { references: entry.references } : {}),
+        attachments: entry.attachments ?? [],
+        references: entry.references ?? [],
+        preserveComposer: true,
       });
       return;
     }
@@ -878,7 +879,10 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
     const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
         const [active, approvals] = await Promise.all([
           chatService.listActiveSessions(),
@@ -898,14 +902,25 @@ function App() {
         setPendingBySession(bySession);
       } catch {
         /* 静默失败：下一次轮询重试，不打断指示器既有状态 */
-      }
-      if (!cancelled) {
-        timer = setTimeout(poll, 5000);
+      } finally {
+        inFlight = false;
       }
     };
-    void poll();
+    // 单一轮询链：只有定时器回调会安排下一次轮询。过去 `poll` 每次执行都
+    // 自己 `setTimeout`，而 focus 事件又直接调用 `poll`，导致每次 focus 都
+    // 复制出一条常驻轮询链；自动化操作（窗口焦点频繁抖动）时链数不断累积，
+    // 每秒数十次请求把前后端一起拖垮、界面卡死。focus 现在只触发一次即时
+    // 轮询，且 `inFlight` 去重并发。
+    const scheduleNext = () => {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        void poll().finally(scheduleNext);
+      }, 5000);
+    };
+    void poll().finally(scheduleNext);
     const onFocus = () => {
-      if (!cancelled) void poll();
+      void poll();
     };
     window.addEventListener('focus', onFocus);
     return () => {
@@ -1188,6 +1203,9 @@ function App() {
     skipUserAppend?: boolean;
     /** skipUserBubble 时复用的 user 消息 id（interject 时创建的）。 */
     userMessageId?: string;
+    /** 自动发送排隊/插話消息时：不要清空用户正在编辑的输入框（draft 属于用户，
+     *  与这条排隊消息无关）。 */
+    preserveComposer?: boolean;
   }) => {
     const typedMessage = (override?.message ?? input).trim();
     if (isThinking) {
@@ -1392,7 +1410,7 @@ function App() {
       }),
     ]);
     }
-    if (!override?.skipUserBubble) {
+    if (!override?.skipUserBubble && !override?.preserveComposer) {
       setInput('');
       // 发送即清空输入框里的附件与引用：它们已被捕获进用户消息气泡（上方
       // setMessages 的 attachments/references）和即将发出的请求体，无需再停留
@@ -1862,8 +1880,8 @@ function App() {
         if (!steer) continue;
         void sendMessage({
           message: steer.message,
-          ...(steer.attachments && steer.attachments.length > 0 ? { attachments: steer.attachments } : {}),
-          ...(steer.references && steer.references.length > 0 ? { references: steer.references } : {}),
+          attachments: steer.attachments ?? [],
+          references: steer.references ?? [],
           sessionId,
           skipUserBubble: true,
           skipUserAppend: true,
@@ -1877,8 +1895,11 @@ function App() {
       if (dequeued) {
         void sendMessage({
           message: dequeued.message,
-          ...(dequeued.attachments && dequeued.attachments.length > 0 ? { attachments: dequeued.attachments } : {}),
-          ...(dequeued.references && dequeued.references.length > 0 ? { references: dequeued.references } : {}),
+          // 用排隊條目自身的附件/引用（空即空），不要回退到用戶當前 composer 的
+          // chips；並保留用戶正在編輯的輸入框內容。
+          attachments: dequeued.attachments ?? [],
+          references: dequeued.references ?? [],
+          preserveComposer: true,
         });
       }
     }
@@ -2200,7 +2221,7 @@ function App() {
       } else if (event.type === 'reasoning_delta') {
         const last = localParts[localParts.length - 1];
         if (last && last.type === 'reasoning') {
-          last.content = event.content;
+          last.content += event.content;
         } else {
           localParts.push({ type: 'reasoning', content: event.content });
         }
@@ -2448,7 +2469,7 @@ function App() {
       } else if (event.type === 'reasoning_delta') {
         const last = localParts[localParts.length - 1];
         if (last && last.type === 'reasoning') {
-          last.content = event.content;
+          last.content += event.content;
         } else {
           localParts.push({ type: 'reasoning', content: event.content });
         }
@@ -2793,7 +2814,7 @@ function App() {
           } else if (event.type === 'reasoning_delta') {
             const last = resumeParts[resumeParts.length - 1];
             if (last && last.type === 'reasoning') {
-              last.content = event.content;
+              last.content += event.content;
             } else {
               resumeParts.push({ type: 'reasoning', content: event.content });
             }

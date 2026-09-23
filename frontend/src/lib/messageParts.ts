@@ -4,6 +4,11 @@ import { t } from './i18n';
 
 function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePart[] {
   const merged = [...base];
+  // Reasoning blocks repeat within a turn (interleaved with tool calls for
+  // reasoning models like DeepSeek), so the Nth incoming reasoning part must
+  // coalesce with the Nth existing one — matching the first would collapse
+  // every segment into a single block and leave only the last one on screen.
+  let reasoningIndex = 0;
   for (const part of extra) {
     if (part.type === 'tool') {
       const index = merged.findIndex((p) => p.type === 'tool' && (p as Extract<MessagePart, { type: 'tool' }>).id === part.id);
@@ -26,7 +31,19 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
         merged.push(part);
       }
     } else if (part.type === 'reasoning') {
-      const index = merged.findIndex((p) => p.type === 'reasoning');
+      const target = reasoningIndex++;
+      let index = -1;
+      let seen = -1;
+      for (let i = 0; i < merged.length; i += 1) {
+        const candidate = merged[i];
+        if (candidate && candidate.type === 'reasoning') {
+          seen += 1;
+          if (seen === target) {
+            index = i;
+            break;
+          }
+        }
+      }
       if (index >= 0) {
         merged[index] = { ...merged[index], ...part };
       } else {
@@ -118,7 +135,7 @@ function applyStreamEventToParts(parts: MessagePart[], event: StreamEvent): Mess
       const last = parts[parts.length - 1];
       if (last && last.type === 'reasoning') {
         const next = [...parts];
-        next[next.length - 1] = { ...last, content: event.content };
+        next[next.length - 1] = { ...last, content: last.content + event.content };
         return next;
       }
       return [...parts, { type: 'reasoning', content: event.content }];
