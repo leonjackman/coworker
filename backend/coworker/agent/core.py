@@ -182,6 +182,36 @@ class SkillManageArgs(BaseModel):
     )
 
 
+class WorkflowArgs(BaseModel):
+    action: Literal[
+        "list",
+        "get",
+        "run",
+        "create",
+        "update",
+        "delete",
+        "validate",
+        "render",
+        "pending",
+        "approve",
+        "reject",
+        "runs",
+    ] = Field(
+        description=(
+            "Workflow operation. list = catalog; get = one workflow's steps; "
+            "run = execute deterministically by name (inputs optional); "
+            "create/update = save a workflow from full YAML content; delete = remove; "
+            "validate/render = check or canonicalize YAML; pending = drafts awaiting "
+            "approval; approve/reject = resolve a draft; runs = run history."
+        )
+    )
+    name: str = Field(default="", description="Workflow name (required for get/run/create/update/delete/approve/reject/runs).")
+    content: str = Field(default="", description="Full workflow YAML (required for create/update/validate/render).")
+    inputs: dict | None = Field(default=None, description="Input values for action=run (keys must match the workflow's declared inputs).")
+    run_id: str = Field(default="", description="Resume a specific run id (optional, with action=run).")
+    resume: bool = Field(default=False, description="Resume a previously interrupted run instead of starting fresh.")
+
+
 class GitStatusArgs(BaseModel):
     """No arguments — inspects the workspace git repository."""
 

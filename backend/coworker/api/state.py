@@ -20,6 +20,9 @@ from coworker.mcp.mcp import McpManager
 from coworker.mcp.mcp_session import McpSessionManager
 from coworker.sessions import SessionStore, _now
 from coworker.skills.skill_manager import SkillManager
+from coworker.workflows.manager import WorkflowManager
+from coworker.schedules.manager import ScheduleManager
+from coworker.schedules.runner import ScheduleRunner, build_server_environment
 from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
 from coworker.org import (
     AGENT_STATUS_ACTIVE,
@@ -190,9 +193,20 @@ config_controller = AppConfigController(settings, provider_manager)
 mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
 mcp_sessions = McpSessionManager(settings.data_dir, mcp_manager)
 skill_manager = SkillManager(settings.data_dir, settings.workspace_dir)
+workflow_manager = WorkflowManager(settings.data_dir)
 project_store = ProjectStore(settings.data_dir / "projects.json")
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
+schedule_runner = ScheduleRunner(
+    workflow_manager=workflow_manager,
+    env_factory=lambda: build_server_environment(settings.data_dir, settings.data_dir / "scheduled"),
+    provider_manager=provider_manager,
+    data_dir=settings.data_dir,
+    workspace_root=settings.data_dir / "scheduled",
+    approval_store=command_approval_store,
+    skill_manager=skill_manager,
+)
+schedule_manager = ScheduleManager(settings.data_dir, schedule_runner)
 worker_event_bus.configure(settings.data_dir)
 memory_manager = MemoryManager(
     settings.data_dir,
@@ -233,7 +247,7 @@ workspace_controller = WorkspaceController(
     org_store=org_store,
     chat_workspace_path=settings.data_dir / "chat",
 )
-agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, memory_manager=memory_manager, project_store=project_store, provider_manager=provider_manager)
+agent_registry = AgentRuntimeRegistry(settings, session_store, mcp_session_manager=mcp_sessions, skill_manager=skill_manager, workflow_manager=workflow_manager, memory_manager=memory_manager, project_store=project_store, provider_manager=provider_manager)
 mcp_sessions.start()
 mcp_sessions.prewarm()
 atexit.register(mcp_sessions.shutdown)
@@ -249,6 +263,7 @@ if _legacy_orphan_log.exists():
         pass
 _checkpoint_sweep_task: asyncio.Task | None = None
 _snapshot_gc_task: asyncio.Task | None = None
+_workflow_scheduler_task: asyncio.Task | None = None
 async def _checkpoint_sweep_loop() -> None:
     while True:
         await asyncio.sleep(settings.checkpoint_sweep_interval_seconds)
@@ -294,6 +309,13 @@ async def _startup_checkpoint_maintenance() -> None:
     _checkpoint_sweep_task = asyncio.create_task(_checkpoint_sweep_loop())
     global _snapshot_gc_task
     _snapshot_gc_task = asyncio.create_task(_snapshot_gc_loop())
+    global _workflow_scheduler_task
+    try:
+        # The schedule engine loop always runs; it is a no-op while the Settings
+        # master toggle is off, so enabling cron takes effect without restart.
+        _workflow_scheduler_task = asyncio.create_task(schedule_manager.engine.loop())
+    except Exception as exc:  # pragma: no cover - scheduler must never block startup
+        logger.warning("schedule engine start failed: %s", exc)
     # Best-effort: tag already-installed skills (from before the provenance
     # feature) so their market cards show as "already installed". Retries until
     # the upstream market is reachable, then stops.
@@ -316,6 +338,15 @@ async def _stop_checkpoint_maintenance() -> None:
         snap_task.cancel()
         try:
             await snap_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    global _workflow_scheduler_task
+    sched_task = _workflow_scheduler_task
+    _workflow_scheduler_task = None
+    if sched_task is not None:
+        sched_task.cancel()
+        try:
+            await sched_task
         except (asyncio.CancelledError, Exception):
             pass
 _stream_tasks: dict[str, asyncio.Task] = {}

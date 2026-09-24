@@ -154,7 +154,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
     mode: AgentMode = "single"
     owns_runtime_messages = True
 
-    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoints_dir: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None, checkpoint_manager: Any | None = None):
+    def __init__(self, workspace: Workspace, approval_store: CommandApprovalStore, trace_store: AgentTraceStore, checkpoints_dir: Path, provider: ProviderEntry, model_override: str | None = None, change_store: ChangeStore | None = None, session_store: SessionStore | None = None, referenced_sessions: set[str] | None = None, data_dir: Path | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, workflow_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, agent: str = DEFAULT_AGENT_NAME, project_id: str | None = None, settings: Any | None = None, checkpoint_manager: Any | None = None):
         llm_cls = ReasonPreservingChatOpenAI.create
         self.settings = settings
         self.provider_id = provider.id
@@ -172,6 +172,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         self.data_dir = data_dir
         self.mcp_session_manager = mcp_session_manager
         self.skill_manager = skill_manager
+        self.workflow_manager = workflow_manager
         self.memory_manager = memory_manager
         self.project_store = project_store
         self.project_id = project_id or ""
@@ -971,6 +972,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 session_store=self.session_store,
                 referenced_sessions=self.referenced_sessions,
                 skill_manager=self.skill_manager,
+                workflow_manager=getattr(self, "workflow_manager", None),
                 memory_store=memory_store,
                 memory_rel=memory_rel,
                 delegator=self._delegator,
@@ -1008,6 +1010,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             data_dir=self.data_dir,
             mcp_session_manager=self.mcp_session_manager,
             skill_manager=self.skill_manager,
+            workflow_manager=getattr(self, "workflow_manager", None),
             memory_manager=memory_view,
             workspace=self.workspace,
             context_budget=self.context_budget_chars,
@@ -1242,10 +1245,11 @@ class SimulatedStreamRuntime(AgentStreamRuntime):
 
 
 class AgentRuntimeRegistry:
-    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, provider_manager: ProviderManager | None = None):
+    def __init__(self, settings: BackendSettings, session_store: SessionStore | None = None, mcp_session_manager: Any | None = None, skill_manager: Any | None = None, workflow_manager: Any | None = None, memory_manager: Any | None = None, project_store: Any | None = None, provider_manager: ProviderManager | None = None):
         self.settings = settings
         self.session_store = session_store
         self.skill_manager = skill_manager
+        self.workflow_manager = workflow_manager
         self.memory_manager = memory_manager
         self.project_store = project_store
         self.default_workspace = Workspace(
@@ -1362,7 +1366,7 @@ class AgentRuntimeRegistry:
                 return SimulatedStreamRuntime(self.settings, selected_workspace, session_store=self.session_store, referenced_sessions=referenced_sessions)
             raise RuntimeError("No provider configured for streaming. Add a provider in Settings first.")
         if mode == "single":
-            runtime = OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoints_dir, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings, checkpoint_manager=self.checkpoint_manager)
+            runtime = OpenAICompatibleStreamRuntime(selected_workspace, self.approval_store, self.trace_store, self.checkpoints_dir, provider, model, change_store=self.change_store, session_store=self.session_store, referenced_sessions=referenced_sessions, data_dir=self.settings.data_dir, mcp_session_manager=self.mcp_session_manager, skill_manager=self.skill_manager, workflow_manager=self.workflow_manager, memory_manager=self.memory_manager, project_store=self.project_store, agent=agent or DEFAULT_AGENT_NAME, project_id=project_id, settings=self.settings, checkpoint_manager=self.checkpoint_manager)
             if session_id:
                 self._runtime_cache[key] = runtime
                 if len(self._runtime_cache) > RUNTIME_CACHE_MAX:

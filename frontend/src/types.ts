@@ -5,7 +5,7 @@ export type WorkMode = 'plan' | 'build';
 // Two-level permission (默認權限 / 完整權限): guarded = default permission,
 // autonomous = full permission. Legacy "supervised" folds into guarded.
 export type Autonomy = 'guarded' | 'autonomous';
-export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'memory' | 'org' | 'dashboard';
+export type AppView = 'chat' | 'providers' | 'settings' | 'mcp' | 'skills' | 'workflows' | 'schedules' | 'memory' | 'org' | 'dashboard';
 export type Transport = 'stdio' | 'http' | 'sse' | 'streamable_http' | 'websocket';
 
 export interface McpToolEntry {
@@ -893,6 +893,201 @@ export interface ContextUsage {
 export interface Todo {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
+}
+
+// -- Workflows --------------------------------------------------------------
+
+export interface WorkflowInputSpec {
+  name: string;
+  type: string;
+  required: boolean;
+  default: unknown;
+  description: string;
+}
+
+export interface WorkflowStep {
+  id: string;
+  kind: string;
+  do?: string;
+  params?: Record<string, unknown>;
+  locator?: Record<string, unknown>;
+  pre?: string[];
+  post?: string[];
+  on_error?: Record<string, unknown>;
+  timeout?: number;
+  approval?: boolean;
+  when?: string;
+  foreach?: string;
+  as_name?: string;
+  description?: string;
+  then?: WorkflowStep[];
+  else?: WorkflowStep[];
+  body?: WorkflowStep[];
+}
+
+export interface WorkflowEntry {
+  name: string;
+  description: string;
+  version: number;
+  platform: string;
+  inputs: WorkflowInputSpec[];
+  outputs: Record<string, string>;
+  triggers: string[];
+  provenance: Record<string, unknown>;
+  status: string;
+  source: string;
+  step_count: number;
+  created_at: string;
+  updated_at: string;
+  file_path: string;
+  steps?: WorkflowStep[];
+  yaml?: string;
+  history?: Array<{ version: number; file_path: string; updated_at: string }>;
+}
+
+export interface WorkflowsListResponse {
+  status: string;
+  workflows: WorkflowEntry[];
+}
+
+export interface WorkflowDetailResponse {
+  status: string;
+  workflow: WorkflowEntry;
+}
+
+export interface WorkflowDraft {
+  name: string;
+  description?: string;
+  created_at?: string;
+  content: string;
+  provenance?: Record<string, unknown>;
+  sources?: string[];
+  step_count?: number;
+  action?: string;
+  diagnostics?: string[];
+}
+
+export interface WorkflowPendingResponse {
+  status: string;
+  pending: WorkflowDraft[];
+}
+
+export interface WorkflowPendingDetailResponse {
+  status: string;
+  name: string;
+  content: string;
+}
+
+export interface WorkflowRun {
+  run_id: string;
+  workflow: string;
+  status: string;
+  context: Record<string, unknown>;
+  completed: string[];
+  outputs: Record<string, unknown>;
+  error: string;
+  started_at: string;
+  ended_at: string;
+  trigger: string;
+}
+
+export interface WorkflowRunResponse {
+  status: string;
+  run: WorkflowRun;
+  message?: string;
+}
+
+export interface WorkflowRunsResponse {
+  status: string;
+  runs: WorkflowRun[];
+}
+
+export interface WorkflowRunEvent {
+  run_id: string;
+  seq: number;
+  type: string;
+  step_id?: string;
+  status?: string;
+  message?: string;
+  data?: Record<string, unknown>;
+  at?: string;
+}
+
+export interface WorkflowValidateResponse {
+  status: string;
+  valid: boolean;
+  errors: string[];
+}
+
+// -- Schedules (cron) -------------------------------------------------------
+
+export type ScheduleTargetType = 'workflow' | 'command' | 'agent';
+export type ScheduleOverlap = 'skip' | 'queue' | 'replace' | 'allow';
+export type ScheduleMisfire = 'skip' | 'run_once' | 'catchup';
+
+export interface CronSchedule {
+  id: string;
+  name: string;
+  target_type: ScheduleTargetType;
+  workflow: string;
+  command: string;
+  prompt: string;
+  inputs: Record<string, unknown>;
+  cron: string;
+  timezone: string;
+  enabled: boolean;
+  overlap: ScheduleOverlap;
+  misfire: ScheduleMisfire;
+  grace_seconds: number;
+  retry_max: number;
+  retry_backoff: number;
+  timeout_seconds: number;
+  last_run_at: string;
+  last_status: string;
+  last_run_id: string;
+  last_error: string;
+  run_count: number;
+  next_run_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SchedulesListResponse {
+  status: string;
+  schedules: CronSchedule[];
+}
+
+export interface ScheduleDetailResponse {
+  status: string;
+  schedule: CronSchedule;
+}
+
+export interface ScheduleRunRecord {
+  at: string;
+  status: string;
+  run_id: string;
+  error: string;
+  output: string;
+  trigger: string;
+}
+
+export interface ScheduleRunsResponse {
+  status: string;
+  runs: ScheduleRunRecord[];
+}
+
+export interface SchedulePreviewResponse {
+  status: string;
+  description?: string;
+  runs: string[];
+  message?: string;
+}
+
+export interface ScheduleValidateResponse {
+  status: string;
+  valid: boolean;
+  errors: string[];
+  description?: string;
 }
 
 // -- Skills -----------------------------------------------------------------

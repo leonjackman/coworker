@@ -133,6 +133,7 @@ class SystemAssembler(AgentMiddleware):
         workspace: Any | None = None,
         memory_manager: Any | None = None,
         skill_manager: Any | None = None,
+        workflow_manager: Any | None = None,
         mcp_summary_provider: Callable[[], str | None] | None = None,
         chat_mode: bool = False,
     ):
@@ -140,6 +141,7 @@ class SystemAssembler(AgentMiddleware):
         self.workspace = workspace
         self.memory_manager = memory_manager
         self.skill_manager = skill_manager
+        self.workflow_manager = workflow_manager
         self.mcp_summary_provider = mcp_summary_provider
         # 聊天项目（__chat__）：替换 phase 片段为聊天契约，去掉"可修改文件/运行
         # 命令/write_todos"的编码执行指令（base 已由 build_cw_chat_system_prompt 接管）。
@@ -192,6 +194,15 @@ class SystemAssembler(AgentMiddleware):
         if self.skill_manager is None or is_discuss:
             return ""
         return build_skill_section(self.skill_manager, messages, self._skill_body_cache)
+
+    def _workflows_section(self, is_discuss: bool) -> str:
+        if self.workflow_manager is None or is_discuss:
+            return ""
+        try:
+            return self.workflow_manager.prompt_block()
+        except Exception as exc:  # noqa: BLE001 - a catalog hiccup must never break chat
+            logger.warning("workflow catalog unavailable: %s", exc)
+            return ""
 
     def _mcp_section(self, is_discuss: bool) -> str:
         if self.mcp_summary_provider is None or is_discuss:
@@ -259,6 +270,9 @@ class SystemAssembler(AgentMiddleware):
         skills = self._skills_section(messages, is_discuss)
         if skills:
             fragments.append((50, "skills", skills))
+        workflows = self._workflows_section(is_discuss)
+        if workflows:
+            fragments.append((48, "workflows", workflows))
 
         fragments.sort(key=lambda f: f[0], reverse=True)
         content, budget_ok = self._compose(fragments)

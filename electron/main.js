@@ -1931,7 +1931,7 @@ ipcMain.handle('fetchSettings', async () => {
   try {
     return await requestBackend('/settings');
   } catch (e) {
-    return { max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false };
+    return { max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false, workflow_scheduler_enabled: false };
   }
 });
 
@@ -1939,7 +1939,7 @@ ipcMain.handle('saveSettings', async (event, payload) => {
   try {
     return await requestBackend('/settings', 'POST', payload);
   } catch (e) {
-    return { status: 'error', max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false, detail: e.message };
+    return { status: 'error', max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false, workflow_scheduler_enabled: false, detail: e.message };
   }
 });
 

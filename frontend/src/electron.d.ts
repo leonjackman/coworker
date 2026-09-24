@@ -143,8 +143,8 @@ declare global {
         options?: { work_mode?: string; autonomy?: string; revert_code?: boolean; assistant_message_id?: string; provider_id?: string; model?: string },
         language?: string,
       ) => Promise<void>;
-      fetchSettings?: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
-      saveSettings?: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
+      fetchSettings?: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }>;
+      saveSettings?: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean; workflow_scheduler_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }>;
       computerPermissionStatus?: () => Promise<{ ok: boolean; identity?: { packaged: boolean; name?: string; version?: string; executable?: string }; permissions?: { input: string; screen: string; sys_screen?: string }; error?: string }>;
       computerPermissionOpenSettings?: (kind: string) => Promise<{ ok: boolean; opened_settings?: boolean; pane?: string; error?: string }>;
       setComputerStopShortcut?: (payload: { enabled: boolean; accelerator: string; label: string }) => void;

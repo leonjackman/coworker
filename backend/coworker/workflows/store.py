@@ -1,0 +1,277 @@
+"""Versioned workflow storage, draft queue and run history (W02).
+
+Layout under ``<data_dir>/workflows``::
+
+    <name>.yaml                     current (active) definition
+    .history/<name>/v<N>.yaml       immutable version snapshots
+    .drafts/<name>.yaml             agent/recorded drafts awaiting approval
+    .runs/<run_id>.json             run checkpoint (for resume)
+    .runs/<run_id>.events.jsonl     run event stream
+
+YAML on disk is the source of truth; the store never rewrites a file it did not
+parse.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from coworker.atomicio import atomic_write_text
+from coworker.logger import get_logger
+
+from .model import Run, RunEvent, Workflow, WorkflowParseError
+from .parser import load_workflow_file, parse_workflow, render_workflow
+
+logger = get_logger(__name__)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class WorkflowStore:
+    """Disk-backed workflow catalog + drafts + runs."""
+
+    def __init__(self, root: Path):
+        self.root = Path(root)
+        self.drafts_dir = self.root / ".drafts"
+        self.history_dir = self.root / ".history"
+        self.runs_dir = self.root / ".runs"
+        self._lock = threading.RLock()
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.drafts_dir.mkdir(parents=True, exist_ok=True)
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── active workflows ────────────────────────────────────────────────
+
+    def path_for(self, name: str) -> Path:
+        return self.root / f"{name}.yaml"
+
+    def exists(self, name: str) -> bool:
+        return self.path_for(name).is_file()
+
+    def read_text(self, name: str) -> str | None:
+        path = self.path_for(name)
+        if not path.is_file():
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    def list_active(self, source: str = "user") -> list[Workflow]:
+        workflows: list[Workflow] = []
+        for path in sorted(self.root.glob("*.yaml")):
+            workflow, _ = load_workflow_file(path, source)
+            if workflow is not None:
+                workflows.append(workflow)
+        return workflows
+
+    def get(self, name: str, source: str = "user") -> Workflow | None:
+        path = self.path_for(name)
+        if not path.is_file():
+            return None
+        workflow, _ = load_workflow_file(path, source)
+        return workflow
+
+    def save(self, workflow: Workflow, *, archive: bool = True) -> Workflow:
+        """Persist a workflow; snapshots the previous version when archiving."""
+        with self._lock:
+            path = self.path_for(workflow.name)
+            if archive and path.is_file():
+                previous = self.get(workflow.name)
+                if previous is not None:
+                    self._snapshot(previous)
+            workflow = _with_timestamps(workflow, created_existing=path.is_file())
+            atomic_write_text(path, render_workflow(workflow))
+            return workflow
+
+    def _snapshot(self, workflow: Workflow) -> None:
+        try:
+            target_dir = self.history_dir / workflow.name
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / f"v{workflow.version}.yaml"
+            if not target.exists():
+                atomic_write_text(target, render_workflow(workflow))
+        except Exception as exc:  # noqa: BLE001 - history must never block a save
+            logger.warning("workflow snapshot failed for %s: %s", workflow.name, exc)
+
+    def next_version(self, name: str) -> int:
+        current = self.get(name)
+        if current is None:
+            return 1
+        return int(current.version) + 1
+
+    def delete(self, name: str) -> bool:
+        with self._lock:
+            path = self.path_for(name)
+            if not path.is_file():
+                return False
+            try:
+                path.unlink()
+            except OSError:
+                return False
+            return True
+
+    def history(self, name: str) -> list[dict[str, Any]]:
+        target_dir = self.history_dir / name
+        if not target_dir.is_dir():
+            return []
+        versions: list[dict[str, Any]] = []
+        for path in sorted(target_dir.glob("v*.yaml")):
+            version_label = path.stem.lstrip("v")
+            versions.append(
+                {
+                    "version": int(version_label) if version_label.isdigit() else 0,
+                    "file_path": str(path),
+                    "updated_at": _mtime(path),
+                }
+            )
+        versions.sort(key=lambda v: v["version"])
+        return versions
+
+    # ── drafts ──────────────────────────────────────────────────────────
+
+    def draft_path(self, name: str) -> Path:
+        return self.drafts_dir / f"{name}.yaml"
+
+    def write_draft(self, name: str, content: str) -> None:
+        with self._lock:
+            atomic_write_text(self.draft_path(name), content)
+
+    def read_draft(self, name: str) -> str | None:
+        path = self.draft_path(name)
+        if not path.is_file():
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    def list_drafts(self) -> list[dict[str, Any]]:
+        drafts: list[dict[str, Any]] = []
+        for path in sorted(self.drafts_dir.glob("*.yaml")):
+            content = self.read_draft(path.stem)
+            if content is None:
+                continue
+            workflow, _ = parse_workflow(content, name_hint=path.stem, source="agent")
+            entry: dict[str, Any] = {
+                "name": path.stem,
+                "created_at": _mtime(path),
+                "content": content,
+            }
+            if workflow is not None:
+                entry["description"] = workflow.description
+                entry["provenance"] = workflow.provenance
+                entry["step_count"] = len(workflow.steps)
+                entry["sources"] = workflow.provenance.get("sources", [])
+                entry["action"] = workflow.provenance.get("action", "create")
+            else:
+                entry["diagnostics"] = parse_workflow(content, name_hint=path.stem)[1]
+            drafts.append(entry)
+        return drafts
+
+    def remove_draft(self, name: str) -> bool:
+        with self._lock:
+            path = self.draft_path(name)
+            if not path.is_file():
+                return False
+            try:
+                path.unlink()
+            except OSError:
+                return False
+            return True
+
+    def replace_draft_content(self, name: str, content: str) -> bool:
+        if not self.draft_path(name).is_file():
+            return False
+        self.write_draft(name, content)
+        return True
+
+    # ── runs ────────────────────────────────────────────────────────────
+
+    def run_path(self, run_id: str) -> Path:
+        return self.runs_dir / f"{run_id}.json"
+
+    def save_run(self, run: Run) -> None:
+        with self._lock:
+            atomic_write_text(
+                self.run_path(run.run_id),
+                json.dumps(run.to_dict(), ensure_ascii=False, indent=2),
+            )
+
+    def load_run(self, run_id: str) -> Run | None:
+        path = self.run_path(run_id)
+        if not path.is_file():
+            return None
+        try:
+            return Run.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def list_runs(self, workflow: str = "", limit: int = 50) -> list[dict[str, Any]]:
+        runs: list[dict[str, Any]] = []
+        for path in sorted(self.runs_dir.glob("*.json"), key=_mtime, reverse=True):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if workflow and data.get("workflow") != workflow:
+                continue
+            runs.append(data)
+            if len(runs) >= limit:
+                break
+        return runs
+
+    def append_event(self, event: RunEvent) -> None:
+        path = self.runs_dir / f"{event.run_id}.events.jsonl"
+        line = json.dumps(event.to_dict(), ensure_ascii=False)
+        with self._lock:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+
+    def read_events(self, run_id: str) -> list[dict[str, Any]]:
+        path = self.runs_dir / f"{run_id}.events.jsonl"
+        if not path.is_file():
+            return []
+        events: list[dict[str, Any]] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        except OSError:
+            return []
+        return events
+
+
+def _with_timestamps(workflow: Workflow, *, created_existing: bool) -> Workflow:
+    from dataclasses import replace
+
+    now = _now()
+    created = workflow.created_at or ("" if created_existing else now)
+    if created_existing and workflow.created_at:
+        created = workflow.created_at
+    return replace(workflow, created_at=created or now, updated_at=now)
+
+
+def _mtime(path: Path) -> str:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        return ""
+
+
+def parse_workflow_or_raise(content: str, *, name_hint: str = "", source: str = "user") -> Workflow:
+    workflow, diagnostics = parse_workflow(content, name_hint=name_hint, source=source)
+    if workflow is None:
+        raise WorkflowParseError("; ".join(diagnostics) or "invalid workflow")
+    return workflow

@@ -1,0 +1,340 @@
+"""WorkflowManager: the facade used by the API and the agent tools (W02/W26/W29).
+
+Owns the store, the catalog/registry, the executor and the draft queue. All
+mutating operations return plain dicts so both the HTTP layer and tool layer can
+render them directly.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Callable
+
+from coworker.logger import get_logger
+
+from .env import StepEnvironment
+from .executor import WorkflowExecutor
+from .model import (
+    Workflow,
+    WorkflowParseError,
+    WorkflowValidationError,
+    Step,
+)
+from .parser import parse_workflow, render_workflow, validate
+from .recorder import record_draft
+from .registry import WorkflowRegistry
+from .store import WorkflowStore
+
+logger = get_logger(__name__)
+
+VALID_PENDING_ACTIONS = {"create", "update"}
+
+
+class WorkflowManager:
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        secrets: Callable[[str], str | None] | None = None,
+        listener: Callable[[Any], None] | None = None,
+    ):
+        self.root = Path(data_dir) / "workflows"
+        self.store = WorkflowStore(self.root)
+        self.registry = WorkflowRegistry(self.store)
+        self.executor = WorkflowExecutor(self.store, secrets=secrets, listener=listener)
+
+    # ── catalog ─────────────────────────────────────────────────────────
+
+    def list(self, *, statuses: tuple[str, ...] = ("active",)) -> list[dict[str, Any]]:
+        return [w.to_dict(include_steps=False) for w in self.registry.list(statuses=statuses)]
+
+    def get(self, name: str, *, include_steps: bool = True) -> dict[str, Any] | None:
+        workflow = self.store.get(name)
+        if workflow is None:
+            return None
+        data = workflow.to_dict(include_steps=include_steps)
+        if include_steps:
+            data["yaml"] = self.store.read_text(name) or ""
+        data["history"] = self.store.history(name)
+        return data
+
+    def prompt_block(self) -> str:
+        return self.registry.prompt_block()
+
+    # ── mutations ───────────────────────────────────────────────────────
+
+    def create(self, content: str, *, overwrite: bool = False) -> dict[str, Any]:
+        workflow = self._parse_or_raise(content)
+        if self.store.exists(workflow.name) and not overwrite:
+            return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
+        workflow = Workflow(
+            **{**workflow.__dict__, "version": 1 if not overwrite else self.store.next_version(workflow.name),
+               "status": "active", "source": "user"}
+        )
+        saved = self.store.save(workflow, archive=overwrite)
+        return {"status": "ok", "workflow": saved.to_dict(include_steps=False)}
+
+    def update(self, name: str, content: str) -> dict[str, Any]:
+        existing = self.store.get(name)
+        if existing is None:
+            return {"status": "error", "message": f"workflow not found: {name}"}
+        workflow = self._parse_or_raise(content, name_hint=name)
+        # Name changes are allowed only by creating a new workflow.
+        if workflow.name != name and self.store.exists(workflow.name):
+            return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
+        workflow = Workflow(
+            **{**workflow.__dict__, "version": self.store.next_version(name),
+               "status": workflow.status or "active", "source": existing.source}
+        )
+        saved = self.store.save(workflow)
+        if workflow.name != name:
+            self.store.delete(name)
+        return {"status": "ok", "workflow": saved.to_dict(include_steps=False)}
+
+    def delete(self, name: str) -> dict[str, Any]:
+        removed = self.store.delete(name)
+        if not removed:
+            return {"status": "error", "message": f"workflow not found: {name}"}
+        return {"status": "ok", "name": name, "removed": True}
+
+    def export(self, name: str) -> dict[str, Any]:
+        text = self.store.read_text(name)
+        if text is None:
+            return {"status": "error", "message": f"workflow not found: {name}"}
+        return {"status": "ok", "name": name, "yaml": text}
+
+    def versions(self, name: str) -> list[dict[str, Any]]:
+        return self.store.history(name)
+
+    def rollback(self, name: str, version: int) -> dict[str, Any]:
+        """Restore a historical version as a NEW version (forward-only history)."""
+        target = self.store.history_dir / name / f"v{int(version)}.yaml"
+        if not target.is_file():
+            return {"status": "error", "message": f"no version {version} for {name}"}
+        try:
+            content = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            return {"status": "error", "message": str(exc)}
+        result = self.update(name, content)
+        if result.get("status") == "ok":
+            result["rolled_back_to"] = int(version)
+        return result
+
+    def set_status(self, name: str, status: str) -> dict[str, Any]:
+        workflow = self.store.get(name)
+        if workflow is None:
+            return {"status": "error", "message": f"workflow not found: {name}"}
+        from dataclasses import replace
+
+        saved = self.store.save(replace(workflow, status=status))
+        return {"status": "ok", "workflow": saved.to_dict(include_steps=False)}
+
+    def render(self, content: str) -> dict[str, Any]:
+        result = parse_workflow(content)
+        workflow, diagnostics = result
+        if workflow is None:
+            return {"status": "error", "message": "; ".join(diagnostics), "diagnostics": diagnostics}
+        return {
+            "status": "ok",
+            "yaml": render_workflow(workflow),
+            "workflow": workflow.to_dict(include_steps=False),
+            "diagnostics": diagnostics,
+        }
+
+    def validate(self, content: str) -> dict[str, Any]:
+        workflow, diagnostics = parse_workflow(content)
+        errors = validate(workflow) if workflow is not None else diagnostics
+        return {"status": "ok" if not errors else "error", "errors": errors, "valid": not errors}
+
+    # ── drafts ──────────────────────────────────────────────────────────
+
+    def list_pending(self) -> list[dict[str, Any]]:
+        return self.store.list_drafts()
+
+    def read_pending(self, name: str) -> str | None:
+        return self.store.read_draft(name)
+
+    def stage_draft(
+        self,
+        name: str,
+        content: str,
+        *,
+        sources: list[str] | None = None,
+        action: str = "create",
+    ) -> dict[str, Any]:
+        workflow, diagnostics = parse_workflow(content, name_hint=name)
+        if workflow is None:
+            return {"status": "error", "message": "; ".join(diagnostics) or "invalid workflow"}
+        errors = validate(workflow)
+        if errors:
+            return {"status": "error", "message": "; ".join(errors)}
+        if action not in VALID_PENDING_ACTIONS:
+            action = "create"
+        provenance = dict(workflow.provenance)
+        provenance.setdefault("action", action)
+        provenance.setdefault("sources", sources or [])
+        from dataclasses import replace
+
+        workflow = replace(workflow, provenance=provenance, status="draft")
+        self.store.write_draft(workflow.name, render_workflow(workflow))
+        return {"status": "ok", "name": workflow.name, "staged": True, "action": action}
+
+    def update_pending(self, name: str, content: str) -> dict[str, Any]:
+        workflow, diagnostics = parse_workflow(content, name_hint=name)
+        if workflow is None:
+            return {"status": "error", "message": "; ".join(diagnostics)}
+        if not self.store.replace_draft_content(name, content):
+            return {"status": "error", "message": f"no pending draft: {name}"}
+        return {"status": "ok", "name": name}
+
+    def approve_pending(self, name: str) -> dict[str, Any]:
+        content = self.store.read_draft(name)
+        if content is None:
+            return {"status": "error", "message": f"no pending draft: {name}"}
+        workflow, diagnostics = parse_workflow(content, name_hint=name)
+        if workflow is None:
+            return {"status": "error", "message": "; ".join(diagnostics)}
+        action = str(workflow.provenance.get("action") or "create")
+        existing = self.store.get(workflow.name)
+        from dataclasses import replace
+
+        if existing is not None:
+            version = self.store.next_version(workflow.name)
+            source = existing.source
+        else:
+            version = workflow.version or 1
+            source = "agent"
+        workflow = replace(workflow, version=version, status="active", source=source)
+        saved = self.store.save(workflow)
+        self.store.remove_draft(name)
+        if workflow.name != name:
+            self.store.remove_draft(workflow.name)
+        return {
+            "status": "ok",
+            "name": workflow.name,
+            "approved": True,
+            "action": action,
+            "workflow": saved.to_dict(include_steps=False),
+        }
+
+    def reject_pending(self, name: str) -> dict[str, Any]:
+        removed = self.store.remove_draft(name)
+        if not removed:
+            return {"status": "error", "message": f"no pending draft: {name}"}
+        return {"status": "ok", "name": name, "rejected": True}
+
+    # ── runs ────────────────────────────────────────────────────────────
+
+    def run(
+        self,
+        name: str,
+        inputs: dict[str, Any] | None = None,
+        *,
+        env: StepEnvironment | None = None,
+        run_id: str | None = None,
+        resume: bool = False,
+        trigger: str = "manual",
+        on_patch: Callable[[str, str, dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        workflow = self.store.get(name)
+        if workflow is None:
+            return {"status": "error", "message": f"workflow not found: {name}"}
+        run = self.executor.run(
+            workflow,
+            inputs or {},
+            env=env,
+            run_id=run_id,
+            resume=resume,
+            trigger=trigger,
+            on_patch=on_patch or self._default_patch,
+        )
+        return {"status": run.status, "run": run.to_dict()}
+
+    def list_runs(self, name: str = "", limit: int = 50) -> list[dict[str, Any]]:
+        return self.store.list_runs(workflow=name, limit=limit)
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        run = self.store.load_run(run_id)
+        return run.to_dict() if run else None
+
+    def read_events(self, run_id: str) -> list[dict[str, Any]]:
+        return self.store.read_events(run_id)
+
+    def _default_patch(self, workflow_name: str, step_id: str, fields: dict[str, Any]) -> None:
+        """Persist a self-heal patch: rewrite the step and bump the version (W15)."""
+        workflow = self.store.get(workflow_name)
+        if workflow is None:
+            return
+        new_steps = _patch_steps(workflow.steps, step_id, fields)
+        if new_steps is None:
+            return
+        from dataclasses import replace
+
+        patched = replace(
+            workflow,
+            steps=new_steps,
+            version=self.store.next_version(workflow_name),
+            provenance={**workflow.provenance, "healed_step": step_id},
+        )
+        self.store.save(patched)
+
+    # ── recording ───────────────────────────────────────────────────────
+
+    def stage_recorded(
+        self,
+        name: str,
+        steps: list[dict[str, Any]],
+        *,
+        description: str,
+        inputs: list[dict[str, Any]] | None = None,
+        triggers: list[str] | None = None,
+        sources: list[str] | None = None,
+    ) -> dict[str, Any]:
+        draft = record_draft(
+            name,
+            steps,
+            description=description,
+            inputs=inputs,
+            triggers=triggers,
+            sources=sources,
+        )
+        return self.stage_draft(name, draft, sources=sources)
+
+    # ── helpers ─────────────────────────────────────────────────────────
+
+    def _parse_or_raise(self, content: str, *, name_hint: str = "") -> Workflow:
+        workflow, diagnostics = parse_workflow(content, name_hint=name_hint)
+        if workflow is None:
+            raise WorkflowParseError("; ".join(diagnostics) or "invalid workflow")
+        errors = validate(workflow)
+        if errors:
+            raise WorkflowValidationError("; ".join(errors))
+        return workflow
+
+
+def _patch_steps(steps: list[Step], step_id: str, fields: dict[str, Any]) -> list[Step] | None:
+    from dataclasses import replace
+
+    found = False
+    out: list[Step] = []
+    for step in steps:
+        if step.id == step_id:
+            found = True
+            out.append(replace(step, **{k: v for k, v in fields.items() if k in {"locator", "params", "do"}}))
+            continue
+        then = _patch_steps(step.then, step_id, fields)
+        else_ = _patch_steps(step.else_, step_id, fields)
+        body = _patch_steps(step.body, step_id, fields)
+        if then is not None or else_ is not None or body is not None:
+            found = True
+            out.append(
+                replace(
+                    step,
+                    then=then if then is not None else step.then,
+                    else_=else_ if else_ is not None else step.else_,
+                    body=body if body is not None else step.body,
+                )
+            )
+            continue
+        out.append(step)
+    return out if found else None

@@ -82,6 +82,18 @@ import type {
   OrgTeamUpdatePayload,
   GoalResponse,
   GoalSetMeta,
+  WorkflowsListResponse,
+  WorkflowDetailResponse,
+  WorkflowPendingResponse,
+  WorkflowPendingDetailResponse,
+  WorkflowRunResponse,
+  WorkflowRunsResponse,
+  WorkflowValidateResponse,
+  SchedulesListResponse,
+  ScheduleDetailResponse,
+  ScheduleRunsResponse,
+  SchedulePreviewResponse,
+  ScheduleValidateResponse,
 } from '../types';
 import { getLanguage } from '../lib/i18n';
 
@@ -191,8 +203,8 @@ export interface ChatService {
     onEvent: StreamEventCallback,
     options?: { signal?: AbortSignalLike; workMode?: string; autonomy?: string; revertCode?: boolean; assistantMessageId?: string; providerId?: string; model?: string },
   ) => Promise<void>;
-  fetchSettings: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
-  saveSettings: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>;
+  fetchSettings: () => Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }>;
+  saveSettings: (settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean; workflow_scheduler_enabled?: boolean }) => Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }>;
   listMcps: () => Promise<McpServerListPayload>;
   discoverMcps: () => Promise<McpDiscoverPayload>;
   createMcp: (request: McpServerCreateRequest) => Promise<McpServerEntry>;
@@ -213,6 +225,29 @@ export interface ChatService {
   updatePendingSkill: (name: string, content: string) => Promise<{ status: string }>;
   approvePendingSkill: (name: string) => Promise<{ status: string }>;
   rejectPendingSkill: (name: string) => Promise<{ status: string }>;
+  listWorkflows: () => Promise<WorkflowsListResponse>;
+  getWorkflow: (name: string) => Promise<WorkflowDetailResponse>;
+  createWorkflow: (content: string, overwrite?: boolean) => Promise<{ status: string; message?: string }>;
+  updateWorkflow: (name: string, content: string) => Promise<{ status: string; message?: string }>;
+  deleteWorkflow: (name: string) => Promise<{ status: string; removed: boolean }>;
+  runWorkflow: (name: string, inputs?: Record<string, unknown>, resume?: boolean, runId?: string) => Promise<WorkflowRunResponse>;
+  listWorkflowRuns: (name: string, limit?: number) => Promise<WorkflowRunsResponse>;
+  listPendingWorkflows: () => Promise<WorkflowPendingResponse>;
+  getPendingWorkflow: (name: string) => Promise<WorkflowPendingDetailResponse>;
+  approvePendingWorkflow: (name: string) => Promise<{ status: string }>;
+  rejectPendingWorkflow: (name: string) => Promise<{ status: string }>;
+  validateWorkflow: (content: string) => Promise<WorkflowValidateResponse>;
+  renderWorkflow: (content: string) => Promise<{ status: string; yaml: string; message?: string }>;
+  listSchedules: () => Promise<SchedulesListResponse>;
+  getSchedule: (id: string) => Promise<ScheduleDetailResponse>;
+  createSchedule: (payload: Record<string, unknown>) => Promise<ScheduleDetailResponse>;
+  updateSchedule: (id: string, payload: Record<string, unknown>) => Promise<ScheduleDetailResponse>;
+  deleteSchedule: (id: string) => Promise<{ status: string; removed: boolean }>;
+  setScheduleEnabled: (id: string, enabled: boolean) => Promise<ScheduleDetailResponse>;
+  runScheduleNow: (id: string) => Promise<{ status: string; result?: Record<string, unknown> }>;
+  listScheduleRuns: (id: string, limit?: number) => Promise<ScheduleRunsResponse>;
+  previewSchedule: (cron: string, timezone: string, count?: number) => Promise<SchedulePreviewResponse>;
+  validateSchedule: (payload: Record<string, unknown>) => Promise<ScheduleValidateResponse>;
   listMarketSources: () => Promise<MarketSourceResponse>;
   listMarketCategories: (source: string) => Promise<MarketCategoriesResponse>;
   searchMarketSkills: (query: MarketQuery) => Promise<MarketSkillsResponse>;
@@ -559,6 +594,152 @@ class ElectronChatService implements ChatService {
   async rejectPendingSkill(name: string): Promise<{ status: string }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.rejectPendingSkill(name);
+  }
+
+  // -- Workflows ------------------------------------------------------------
+  // Workflows talk to the backend over HTTP directly (same pattern as org),
+  // so the panel works both in the browser dev server and the Electron app.
+
+  private async _workflowRequest<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await fetch(`${BACKEND_URL}${path}`, init);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || `Backend returned ${response.status}`);
+    }
+    return payload as T;
+  }
+
+  async listWorkflows(): Promise<WorkflowsListResponse> {
+    return this._workflowRequest<WorkflowsListResponse>('/workflows');
+  }
+
+  async getWorkflow(name: string): Promise<WorkflowDetailResponse> {
+    return this._workflowRequest<WorkflowDetailResponse>(`/workflows/${encodeURIComponent(name)}`);
+  }
+
+  async createWorkflow(content: string, overwrite = false): Promise<{ status: string; message?: string }> {
+    return this._workflowRequest('/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, overwrite }),
+    });
+  }
+
+  async updateWorkflow(name: string, content: string): Promise<{ status: string; message?: string }> {
+    return this._workflowRequest(`/workflows/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async deleteWorkflow(name: string): Promise<{ status: string; removed: boolean }> {
+    return this._workflowRequest(`/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  }
+
+  async runWorkflow(name: string, inputs: Record<string, unknown> = {}, resume = false, runId?: string): Promise<WorkflowRunResponse> {
+    return this._workflowRequest<WorkflowRunResponse>(`/workflows/${encodeURIComponent(name)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs, resume, run_id: runId }),
+    });
+  }
+
+  async listWorkflowRuns(name: string, limit = 50): Promise<WorkflowRunsResponse> {
+    return this._workflowRequest<WorkflowRunsResponse>(
+      `/workflows/${encodeURIComponent(name)}/runs?limit=${limit}`,
+    );
+  }
+
+  async listPendingWorkflows(): Promise<WorkflowPendingResponse> {
+    return this._workflowRequest<WorkflowPendingResponse>('/workflows/pending');
+  }
+
+  async getPendingWorkflow(name: string): Promise<WorkflowPendingDetailResponse> {
+    return this._workflowRequest<WorkflowPendingDetailResponse>(`/workflows/pending/${encodeURIComponent(name)}`);
+  }
+
+  async approvePendingWorkflow(name: string): Promise<{ status: string }> {
+    return this._workflowRequest(`/workflows/pending/${encodeURIComponent(name)}/approve`, { method: 'POST' });
+  }
+
+  async rejectPendingWorkflow(name: string): Promise<{ status: string }> {
+    return this._workflowRequest(`/workflows/pending/${encodeURIComponent(name)}/reject`, { method: 'POST' });
+  }
+
+  async validateWorkflow(content: string): Promise<WorkflowValidateResponse> {
+    return this._workflowRequest<WorkflowValidateResponse>('/workflows/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async renderWorkflow(content: string): Promise<{ status: string; yaml: string; message?: string }> {
+    return this._workflowRequest('/workflows/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async listSchedules(): Promise<SchedulesListResponse> {
+    return this._workflowRequest<SchedulesListResponse>('/schedules');
+  }
+
+  async getSchedule(id: string): Promise<ScheduleDetailResponse> {
+    return this._workflowRequest<ScheduleDetailResponse>(`/schedules/${encodeURIComponent(id)}`);
+  }
+
+  async createSchedule(payload: Record<string, unknown>): Promise<ScheduleDetailResponse> {
+    return this._workflowRequest<ScheduleDetailResponse>('/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateSchedule(id: string, payload: Record<string, unknown>): Promise<ScheduleDetailResponse> {
+    return this._workflowRequest<ScheduleDetailResponse>(`/schedules/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSchedule(id: string): Promise<{ status: string; removed: boolean }> {
+    return this._workflowRequest(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async setScheduleEnabled(id: string, enabled: boolean): Promise<ScheduleDetailResponse> {
+    return this._workflowRequest<ScheduleDetailResponse>(
+      `/schedules/${encodeURIComponent(id)}/${enabled ? 'enable' : 'disable'}`,
+      { method: 'POST' },
+    );
+  }
+
+  async runScheduleNow(id: string): Promise<{ status: string; result?: Record<string, unknown> }> {
+    return this._workflowRequest(`/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' });
+  }
+
+  async listScheduleRuns(id: string, limit = 50): Promise<ScheduleRunsResponse> {
+    return this._workflowRequest<ScheduleRunsResponse>(`/schedules/${encodeURIComponent(id)}/runs?limit=${limit}`);
+  }
+
+  async previewSchedule(cron: string, timezone: string, count = 5): Promise<SchedulePreviewResponse> {
+    return this._workflowRequest<SchedulePreviewResponse>('/schedules/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cron, timezone, count }),
+    });
+  }
+
+  async validateSchedule(payload: Record<string, unknown>): Promise<ScheduleValidateResponse> {
+    return this._workflowRequest<ScheduleValidateResponse>('/schedules/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
   }
 
   async listMarketSources(): Promise<MarketSourceResponse> {
@@ -1003,14 +1184,14 @@ class ElectronChatService implements ChatService {
     }
   }
 
-  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
+  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.fetchSettings?.() ?? { max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false };
+    return window.electronAPI.fetchSettings?.() ?? { max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false, workflow_scheduler_enabled: false };
   }
 
-  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
+  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean; workflow_scheduler_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
-    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false };
+    return window.electronAPI.saveSettings?.(settings) ?? { status: 'ok', max_attachment_mb: 25, revert_code: true, goal_enabled: true, computer_use_enabled: false, workflow_scheduler_enabled: false };
   }
 
   async listProviders(): Promise<ProvidersListResponse> {
@@ -1731,12 +1912,12 @@ class HttpChatService implements ChatService {
     return response.title;
   }
 
-  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
-    return this.request<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>('/settings');
+  async fetchSettings(): Promise<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }> {
+    return this.request<{ max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }>('/settings');
   }
 
-  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }> {
-    return this.request<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean }>('/settings', {
+  async saveSettings(settings: { max_attachment_mb?: number; revert_code?: boolean; goal_enabled?: boolean; computer_use_enabled?: boolean; workflow_scheduler_enabled?: boolean }): Promise<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }> {
+    return this.request<{ status: string; max_attachment_mb: number; revert_code: boolean; goal_enabled: boolean; computer_use_enabled: boolean; workflow_scheduler_enabled: boolean }>('/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
@@ -1879,6 +2060,136 @@ class HttpChatService implements ChatService {
   async rejectPendingSkill(name: string): Promise<{ status: string }> {
     return this.request<{ status: string }>(`/skills/pending/${encodeURIComponent(name)}/reject`, {
       method: 'POST',
+    });
+  }
+
+  async listWorkflows(): Promise<WorkflowsListResponse> {
+    return this.request<WorkflowsListResponse>('/workflows');
+  }
+
+  async getWorkflow(name: string): Promise<WorkflowDetailResponse> {
+    return this.request<WorkflowDetailResponse>(`/workflows/${encodeURIComponent(name)}`);
+  }
+
+  async createWorkflow(content: string, overwrite = false): Promise<{ status: string; message?: string }> {
+    return this.request('/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, overwrite }),
+    });
+  }
+
+  async updateWorkflow(name: string, content: string): Promise<{ status: string; message?: string }> {
+    return this.request(`/workflows/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async deleteWorkflow(name: string): Promise<{ status: string; removed: boolean }> {
+    return this.request(`/workflows/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  }
+
+  async runWorkflow(name: string, inputs: Record<string, unknown> = {}, resume = false, runId?: string): Promise<WorkflowRunResponse> {
+    return this.request<WorkflowRunResponse>(`/workflows/${encodeURIComponent(name)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs, resume, run_id: runId }),
+    });
+  }
+
+  async listWorkflowRuns(name: string, limit = 50): Promise<WorkflowRunsResponse> {
+    return this.request<WorkflowRunsResponse>(`/workflows/${encodeURIComponent(name)}/runs?limit=${limit}`);
+  }
+
+  async listPendingWorkflows(): Promise<WorkflowPendingResponse> {
+    return this.request<WorkflowPendingResponse>('/workflows/pending');
+  }
+
+  async getPendingWorkflow(name: string): Promise<WorkflowPendingDetailResponse> {
+    return this.request<WorkflowPendingDetailResponse>(`/workflows/pending/${encodeURIComponent(name)}`);
+  }
+
+  async approvePendingWorkflow(name: string): Promise<{ status: string }> {
+    return this.request(`/workflows/pending/${encodeURIComponent(name)}/approve`, { method: 'POST' });
+  }
+
+  async rejectPendingWorkflow(name: string): Promise<{ status: string }> {
+    return this.request(`/workflows/pending/${encodeURIComponent(name)}/reject`, { method: 'POST' });
+  }
+
+  async validateWorkflow(content: string): Promise<WorkflowValidateResponse> {
+    return this.request<WorkflowValidateResponse>('/workflows/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async renderWorkflow(content: string): Promise<{ status: string; yaml: string; message?: string }> {
+    return this.request('/workflows/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  async listSchedules(): Promise<SchedulesListResponse> {
+    return this.request<SchedulesListResponse>('/schedules');
+  }
+
+  async getSchedule(id: string): Promise<ScheduleDetailResponse> {
+    return this.request<ScheduleDetailResponse>(`/schedules/${encodeURIComponent(id)}`);
+  }
+
+  async createSchedule(payload: Record<string, unknown>): Promise<ScheduleDetailResponse> {
+    return this.request<ScheduleDetailResponse>('/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateSchedule(id: string, payload: Record<string, unknown>): Promise<ScheduleDetailResponse> {
+    return this.request<ScheduleDetailResponse>(`/schedules/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSchedule(id: string): Promise<{ status: string; removed: boolean }> {
+    return this.request(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
+  async setScheduleEnabled(id: string, enabled: boolean): Promise<ScheduleDetailResponse> {
+    return this.request<ScheduleDetailResponse>(`/schedules/${encodeURIComponent(id)}/${enabled ? 'enable' : 'disable'}`, {
+      method: 'POST',
+    });
+  }
+
+  async runScheduleNow(id: string): Promise<{ status: string; result?: Record<string, unknown> }> {
+    return this.request(`/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' });
+  }
+
+  async listScheduleRuns(id: string, limit = 50): Promise<ScheduleRunsResponse> {
+    return this.request<ScheduleRunsResponse>(`/schedules/${encodeURIComponent(id)}/runs?limit=${limit}`);
+  }
+
+  async previewSchedule(cron: string, timezone: string, count = 5): Promise<SchedulePreviewResponse> {
+    return this.request<SchedulePreviewResponse>('/schedules/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cron, timezone, count }),
+    });
+  }
+
+  async validateSchedule(payload: Record<string, unknown>): Promise<ScheduleValidateResponse> {
+    return this.request<ScheduleValidateResponse>('/schedules/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
   }
 

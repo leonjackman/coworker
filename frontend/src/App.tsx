@@ -18,6 +18,8 @@ import { GoalCard } from './components/GoalCard';
 import { ProvidersPanel } from './components/ProvidersPanel';
 import { MCPPanel } from './components/MCPPanel';
 import { SkillsPanel } from './components/SkillsPanel';
+import { WorkflowsPanel } from './components/WorkflowsPanel';
+import { SchedulesPanel } from './components/SchedulesPanel';
 import { MemoryPanel } from './components/MemoryPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
@@ -155,6 +157,7 @@ function App() {
   const [goalEnabled, setGoalEnabled] = useState<boolean>(true);
   // OS Computer Use 总开关（默認關閉）：控制 agent 操作真实桌面的能力。
   const [computerUseEnabled, setComputerUseEnabled] = useState<boolean>(false);
+  const [workflowSchedulerEnabled, setWorkflowSchedulerEnabled] = useState<boolean>(false);
   const [workMode, setWorkMode] = useState<WorkMode>(() => {
     const stored = localStorage.getItem('cw.workMode') as WorkMode | null;
     return stored === 'plan' || stored === 'build' ? stored : 'build';
@@ -1098,6 +1101,9 @@ function App() {
           }
           if (typeof settings.computer_use_enabled === 'boolean') {
             setComputerUseEnabled(settings.computer_use_enabled);
+          }
+          if (typeof settings.workflow_scheduler_enabled === 'boolean') {
+            setWorkflowSchedulerEnabled(settings.workflow_scheduler_enabled);
           }
         } catch { /* ignore */ }
         try {
@@ -3335,6 +3341,69 @@ function App() {
       setActiveView('skills');
       return;
     }
+    if (command === '/workflow') {
+      // No args -> open the Workflows panel. With args -> run it:
+      //   /workflow <name> [{"input": "value"}]
+      const rest = message.slice('/workflow'.length).trim();
+      if (!rest) {
+        setActiveView('workflows');
+        return;
+      }
+      const wsCommandId = `assistant-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const wfName = rest.split(/\s+/)[0] ?? '';
+      if (!wfName) {
+        setActiveView('workflows');
+        return;
+      }
+      let wfInputs: Record<string, unknown> = {};
+      const jsonPart = rest.slice(wfName.length).trim();
+      if (jsonPart) {
+        try {
+          const parsed = JSON.parse(jsonPart);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            wfInputs = parsed as Record<string, unknown>;
+          } else {
+            throw new Error('inputs must be a JSON object');
+          }
+        } catch (error) {
+          setMessages((current) => [
+            ...current,
+            createMessage('assistant', translateError(error) || t('workflows.invalid_json'), { status: 'error' }),
+          ]);
+          return;
+        }
+      }
+      setMessages((current) => [
+        ...current,
+        createMessage('assistant', t('workflows.running').replace('{name}', wfName), {
+          id: wsCommandId,
+          status: 'running',
+          ...(sessionIdRef.current ? { sessionId: sessionIdRef.current } : {}),
+        }),
+      ]);
+      void (async () => {
+        try {
+          const result = await chatService.runWorkflow(wfName, wfInputs);
+          const run = result.run;
+          const summary =
+            run.status === 'ok'
+              ? t('workflows.run_ok').replace('{name}', wfName).replace('{steps}', String(run.completed.length))
+              : `${run.status} — ${run.error || ''}`;
+          setMessages((current) =>
+            current.map((m) => (m.id === wsCommandId ? { ...m, content: summary, status: 'done' } : m)),
+          );
+        } catch (error) {
+          setMessages((current) =>
+            current.map((m) =>
+              m.id === wsCommandId
+                ? { ...m, content: translateError(error) || t('workflows.failed_to_load'), status: 'error' }
+                : m,
+            ),
+          );
+        }
+      })();
+      return;
+    }
     if (command === '/memory') {
       setActiveView('memory');
       return;
@@ -3894,6 +3963,11 @@ function App() {
     chatService.saveSettings({ computer_use_enabled: value }).catch(() => { /* ignore */ });
   };
 
+  const changeWorkflowSchedulerEnabled = (value: boolean) => {
+    setWorkflowSchedulerEnabled(value);
+    chatService.saveSettings({ workflow_scheduler_enabled: value }).catch(() => { /* ignore */ });
+  };
+
   const changeMemorySettings = (patch: MemorySettingsPatch) => {
     setMemorySettings((cur) => {
       const base: MemorySettings = cur ?? {
@@ -4228,6 +4302,10 @@ function App() {
                   onSkillsChange={refreshSkills}
                   onPendingCountChange={() => void refreshPendingSkillCount()}
                 />
+              ) : activeView === 'workflows' ? (
+                <WorkflowsPanel />
+              ) : activeView === 'schedules' ? (
+                <SchedulesPanel />
               ) : activeView === 'memory' ? (
                 <MemoryPanel projectId={currentProjectId} />
               ) : activeView === 'org' && orgProjectId ? (
@@ -4261,6 +4339,8 @@ function App() {
                   onGoalEnabledChange={changeGoalEnabled}
                   computerUseEnabled={computerUseEnabled}
                   onComputerUseEnabledChange={changeComputerUseEnabled}
+                  workflowSchedulerEnabled={workflowSchedulerEnabled}
+                  onWorkflowSchedulerEnabledChange={changeWorkflowSchedulerEnabled}
                   onThemeSettingsChange={changeThemeSettings}
                   onAutonomyChange={setAutonomy}
                   memorySettings={memorySettings}

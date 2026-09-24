@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, ChevronUp, Copy, FileText, Folder, FolderOpen, LayoutDashboard, Loader2, MessageCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, FolderTree } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, ChevronUp, Clock, Copy, FileText, Folder, FolderOpen, LayoutDashboard, Loader2, MessageCircle, MessageSquare, MessageSquarePlus, MoreHorizontal, Network, Pencil, Plus, Settings2, Trash2, Users, FolderTree, Workflow } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AppView, OrgRosterEntry, ProjectEntry, SessionBadgeMap, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
@@ -663,6 +663,14 @@ export function WorkspaceSidebar({
               {t('skills.pending')} {pendingSkillCount}
             </span>
           )}
+        </button>
+        <button className={`sidebar-nav-item ${activeView === 'workflows' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('workflows')}>
+          <Workflow size={17} />
+          {!collapsed && <span>{t('nav.workflows')}</span>}
+        </button>
+        <button className={`sidebar-nav-item ${activeView === 'schedules' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('schedules')}>
+          <Clock size={17} />
+          {!collapsed && <span>{t('nav.schedules')}</span>}
         </button>
       </nav>
 

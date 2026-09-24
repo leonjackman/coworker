@@ -135,7 +135,7 @@ export interface ComposerApi {
   attachFiles: () => void;
 }
 
-const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/settings", "/memory"];
+const SLASH_COMMANDS = ["/help", "/new", "/clear", "/goal", "/providers", "/skills", "/workflow", "/settings", "/memory"];
 
 interface SlashCommandItem {
   command: string;

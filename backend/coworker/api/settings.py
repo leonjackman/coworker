@@ -21,6 +21,7 @@ from coworker.agent.core import (
 )
 from coworker.computer_feature import computer_feature
 from coworker.goal_feature import goal_feature
+from coworker.workflow_feature import workflow_feature
 from coworker.memory.memory_manager import DEFAULT_AGENT, MemoryConfig, MemoryManager
 from coworker.web import (
     ALLOWED_PROVIDERS,
@@ -131,6 +132,7 @@ class SettingsUpdate(BaseModel):
     revert_code: Optional[bool] = None
     goal_enabled: Optional[bool] = None
     computer_use_enabled: Optional[bool] = None
+    workflow_scheduler_enabled: Optional[bool] = None
 class LogSettingsUpdate(BaseModel):
     log_level: str = "INFO"
 class LogConfigUpdate(BaseModel):
@@ -290,6 +292,7 @@ async def get_settings():
         "revert_code": read_user_revert_code(),
         "goal_enabled": goal_feature.is_enabled(),
         "computer_use_enabled": computer_feature.is_enabled(),
+        "workflow_scheduler_enabled": workflow_feature.is_enabled(),
     }
 @router.post("/settings")
 async def set_settings(request: SettingsUpdate):
@@ -305,6 +308,8 @@ async def set_settings(request: SettingsUpdate):
             existing["goal_enabled"] = bool(request.goal_enabled)
         if request.computer_use_enabled is not None:
             existing["computer_use_enabled"] = bool(request.computer_use_enabled)
+        if request.workflow_scheduler_enabled is not None:
+            existing["workflow_scheduler_enabled"] = bool(request.workflow_scheduler_enabled)
         _save_user_settings_file(existing)
     except Exception as exc:
         return {
@@ -313,6 +318,7 @@ async def set_settings(request: SettingsUpdate):
             "revert_code": read_user_revert_code(),
             "goal_enabled": goal_feature.is_enabled(),
             "computer_use_enabled": computer_feature.is_enabled(),
+            "workflow_scheduler_enabled": workflow_feature.is_enabled(),
             "detail": str(exc),
         }
     return {
@@ -321,6 +327,7 @@ async def set_settings(request: SettingsUpdate):
         "revert_code": read_user_revert_code(),
         "goal_enabled": goal_feature.is_enabled(),
         "computer_use_enabled": computer_feature.is_enabled(),
+        "workflow_scheduler_enabled": workflow_feature.is_enabled(),
     }
 class WebConfigUpdate(BaseModel):
     enabled: Optional[bool] = None

@@ -29,6 +29,8 @@ interface SettingsViewProps {
   onGoalEnabledChange: (value: boolean) => void;
   computerUseEnabled: boolean;
   onComputerUseEnabledChange: (value: boolean) => void;
+  workflowSchedulerEnabled: boolean;
+  onWorkflowSchedulerEnabledChange: (value: boolean) => void;
   onThemeSettingsChange: (settings: ThemeSettings) => void;
   onAutonomyChange: (mode: Autonomy) => void;
   memorySettings: MemorySettings | null;
@@ -126,7 +128,10 @@ export function SettingsView({
   goalEnabled,
   onGoalEnabledChange,
   computerUseEnabled,
-  onComputerUseEnabledChange,  onThemeSettingsChange,
+  onComputerUseEnabledChange,
+  workflowSchedulerEnabled,
+  onWorkflowSchedulerEnabledChange,
+  onThemeSettingsChange,
   onAutonomyChange,
   memorySettings,
   onMemorySettingsChange,
@@ -376,6 +381,18 @@ export function SettingsView({
                   { value: 'false', label: t('memory.disabled') },
                 ],
                 onChange: (value) => onComputerUseEnabledChange(value === 'true'),
+              },
+              {
+                id: 'workflow_scheduler_enabled',
+                type: 'toggle',
+                label: t('settings.workflow_scheduler_enabled'),
+                description: t('settings.workflow_scheduler_enabled_desc'),
+                value: workflowSchedulerEnabled ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onWorkflowSchedulerEnabledChange(value === 'true'),
               },
             ],
             footer: computerUseEnabled && window.electronAPI?.computerPermissionStatus ? (

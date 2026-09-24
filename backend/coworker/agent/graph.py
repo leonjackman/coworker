@@ -58,6 +58,7 @@ from .core import (
     SearchFilesArgs,
     TextEditArgs,
     WriteFileArgs,
+    WorkflowArgs,
     _CHILD_EXCLUDED_TOOLS,
     _WRITE_ARG_PATH_KEYS,
     _looks_like_raw_paste,
@@ -92,6 +93,7 @@ def build_workspace_tools(
     referenced_sessions: set[str] | None = None,
     skill_manager: Any | None = None,
     skill_market_manager: Any | None = None,
+    workflow_manager: Any | None = None,
     memory_store: Any | None = None,
     memory_rel: str = "",
     delegator: Any | None = None,
@@ -366,6 +368,79 @@ def build_workspace_tools(
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:
             return _error_result(exc, "skill_manage")
+
+    def _build_workflow_env() -> Any:
+        """Compose a StepEnvironment from the mounted tools (shared bridge)."""
+        from ..workflows.env import build_tool_environment
+
+        return build_tool_environment(
+            workspace=workspace,
+            tools=tools,
+            skill_manager=skill_manager,
+            audit_context=audit_context,
+        )
+
+    @tool(args_schema=WorkflowArgs)
+    def workflow(
+        action: str,
+        name: str = "",
+        content: str = "",
+        inputs: dict | None = None,
+        run_id: str = "",
+        resume: bool = False,
+    ) -> str:
+        """Author, inspect and deterministically run saved workflows.
+
+        A workflow is a reusable, parameterized procedure (skills + commands +
+        browser/app actions in order). Prefer running an existing workflow from
+        <available_workflows> over re-doing its steps by hand. Actions:
+        list / get / run / create / update / delete / validate / render /
+        pending / approve / reject / runs.
+        """
+        if workflow_manager is None:
+            return _error_result(ValueError("workflow system unavailable"), "workflow")
+        try:
+            if action == "list":
+                return json.dumps({"status": "ok", "workflows": workflow_manager.list()}, ensure_ascii=False)
+            if action == "get":
+                data = workflow_manager.get(name)
+                if data is None:
+                    return json.dumps({"status": "error", "message": f"workflow not found: {name}"}, ensure_ascii=False)
+                return json.dumps({"status": "ok", "workflow": data}, ensure_ascii=False)
+            if action == "create":
+                result = workflow_manager.create(content)
+                return json.dumps(result, ensure_ascii=False)
+            if action == "update":
+                result = workflow_manager.update(name, content)
+                return json.dumps(result, ensure_ascii=False)
+            if action == "delete":
+                return json.dumps(workflow_manager.delete(name), ensure_ascii=False)
+            if action == "validate":
+                return json.dumps(workflow_manager.validate(content), ensure_ascii=False)
+            if action == "render":
+                return json.dumps(workflow_manager.render(content), ensure_ascii=False)
+            if action == "pending":
+                return json.dumps({"status": "ok", "pending": workflow_manager.list_pending()}, ensure_ascii=False)
+            if action == "approve":
+                return json.dumps(workflow_manager.approve_pending(name), ensure_ascii=False)
+            if action == "reject":
+                return json.dumps(workflow_manager.reject_pending(name), ensure_ascii=False)
+            if action == "runs":
+                return json.dumps({"status": "ok", "runs": workflow_manager.list_runs(name)}, ensure_ascii=False)
+            if action == "run":
+                env = _build_workflow_env()
+                result = workflow_manager.run(
+                    name,
+                    inputs or {},
+                    env=env,
+                    run_id=run_id or None,
+                    resume=bool(resume),
+                    trigger="agent",
+                )
+                return json.dumps(result, ensure_ascii=False)
+            return json.dumps({"status": "error", "message": f"unknown action: {action}"}, ensure_ascii=False)
+        except Exception as exc:
+            return _error_result(exc, "workflow")
 
     @tool(args_schema=GitStatusArgs)
     def git_status() -> str:
@@ -735,6 +810,11 @@ def build_workspace_tools(
             calibration_key=worker_calibration_key,
         )
         tools.extend(worker_tool.create_tools())
+    if workflow_manager is not None:
+        # Workflow orchestration is available to the main agent only (workers
+        # must not recursively launch long-running workflows). Appended AFTER
+        # worker_tools is derived so it never leaks into sub-agents.
+        tools.append(workflow)
     # Record the full registered tool-name set on the workspace so the phase gate
     # can tell the model a hallucinated tool (e.g. list_directory) does not exist
     # instead of a misleading "not available in the current phase/autonomy".
@@ -783,6 +863,7 @@ def build_coworker_agent_graph(
     data_dir: Path | None = None,
     mcp_session_manager: Any | None = None,
     skill_manager: Any | None = None,
+    workflow_manager: Any | None = None,
     memory_manager: Any | None = None,
     workspace: Any | None = None,  # NEW: for external write HITL bridge
     context_budget: int | None = None,
@@ -908,6 +989,7 @@ def build_coworker_agent_graph(
             workspace=workspace,
             memory_manager=memory_manager,
             skill_manager=skill_manager,
+            workflow_manager=workflow_manager,
             mcp_summary_provider=mcp_middleware._mcp_summary,
             chat_mode=chat_mode,
         )
