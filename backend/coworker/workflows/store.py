@@ -18,6 +18,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 from typing import Any
 
 from coworker.atomicio import atomic_write_text
@@ -34,10 +35,17 @@ def _now() -> str:
 
 
 class WorkflowStore:
-    """Disk-backed workflow catalog + drafts + runs."""
+    """Disk-backed workflow catalog + drafts + runs.
 
-    def __init__(self, root: Path):
+    Workflows live in the primary ``root`` (user scope). ``roots_provider``
+    optionally returns extra roots (e.g. per-project ``.coworker/workflows``)
+    that are also scanned; a workflow is read from and written back to whichever
+    root already holds it (project scope wins if it was installed there).
+    """
+
+    def __init__(self, root: Path, roots_provider: Callable[[], list[Path]] | None = None):
         self.root = Path(root)
+        self._roots_provider = roots_provider
         self.drafts_dir = self.root / ".drafts"
         self.history_dir = self.root / ".history"
         self.runs_dir = self.root / ".runs"
@@ -49,11 +57,31 @@ class WorkflowStore:
 
     # ── active workflows ────────────────────────────────────────────────
 
+    def _extra_roots(self) -> list[Path]:
+        if self._roots_provider is None:
+            return []
+        try:
+            roots = [Path(p) for p in (self._roots_provider() or []) if p]
+        except Exception:  # noqa: BLE001
+            return []
+        out: list[Path] = []
+        for root in roots:
+            if root != self.root and root not in out:
+                out.append(root)
+        return out
+
     def path_for(self, name: str) -> Path:
         return self.root / f"{name}.yaml"
 
+    def _find_path(self, name: str) -> Path | None:
+        for root in [self.root, *self._extra_roots()]:
+            candidate = root / f"{name}.yaml"
+            if candidate.is_file():
+                return candidate
+        return None
+
     def exists(self, name: str) -> bool:
-        return self.path_for(name).is_file()
+        return self._find_path(name) is not None
 
     def read_text(self, name: str) -> str | None:
         path = self.path_for(name)
@@ -66,23 +94,31 @@ class WorkflowStore:
 
     def list_active(self, source: str = "user") -> list[Workflow]:
         workflows: list[Workflow] = []
-        for path in sorted(self.root.glob("*.yaml")):
-            workflow, _ = load_workflow_file(path, source)
-            if workflow is not None:
-                workflows.append(workflow)
+        seen: set[str] = set()
+        for root in [self.root, *self._extra_roots()]:
+            for path in sorted(root.glob("*.yaml")):
+                workflow, _ = load_workflow_file(path, source)
+                if workflow is not None and workflow.name not in seen:
+                    seen.add(workflow.name)
+                    workflows.append(workflow)
         return workflows
 
     def get(self, name: str, source: str = "user") -> Workflow | None:
-        path = self.path_for(name)
-        if not path.is_file():
+        path = self._find_path(name)
+        if path is None:
             return None
         workflow, _ = load_workflow_file(path, source)
         return workflow
 
     def save(self, workflow: Workflow, *, archive: bool = True) -> Workflow:
-        """Persist a workflow; snapshots the previous version when archiving."""
+        """Persist a workflow; snapshots the previous version when archiving.
+
+        Writes back to the root that already holds the workflow (so a
+        project-scoped workflow stays in its project), else the primary root.
+        """
         with self._lock:
-            path = self.path_for(workflow.name)
+            existing = self._find_path(workflow.name)
+            path = existing or self.path_for(workflow.name)
             if archive and path.is_file():
                 previous = self.get(workflow.name)
                 if previous is not None:
@@ -109,9 +145,10 @@ class WorkflowStore:
 
     def delete(self, name: str) -> bool:
         with self._lock:
-            path = self.path_for(name)
-            if not path.is_file():
+            found = self._find_path(name)
+            if found is None:
                 return False
+            path = found
             try:
                 path.unlink()
             except OSError:

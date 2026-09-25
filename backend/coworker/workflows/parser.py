@@ -14,9 +14,9 @@ from typing import Any
 import yaml
 
 from .model import (
-    DEFAULT_ON_ERROR,
     VALID_INPUT_TYPES,
     VALID_KINDS,
+    VALID_STEP_MODES,
     Workflow,
     WorkflowInput,
     WorkflowParseError,
@@ -40,6 +40,9 @@ _STEP_KEYS = frozenset(
         "locator",
         "pre",
         "post",
+        "goal",
+        "success",
+        "mode",
         "on_error",
         "timeout",
         "approval",
@@ -154,9 +157,10 @@ def _parse_step(raw: Any, index: int, diagnostics: list[str], scope: str) -> Ste
     locator = raw.get("locator") if isinstance(raw.get("locator"), dict) else None
     pre = [str(x) for x in _as_list(raw.get("pre"))]
     post = [str(x) for x in _as_list(raw.get("post"))]
-    on_error = raw.get("on_error") if isinstance(raw.get("on_error"), dict) else dict(DEFAULT_ON_ERROR)
-    merged_on_error = dict(DEFAULT_ON_ERROR)
-    merged_on_error.update(on_error)
+    goal = str(raw.get("goal") or "")
+    success = [str(x) for x in _as_list(raw.get("success"))]
+    mode = str(raw.get("mode") or "auto").strip().lower()
+    on_error = dict(raw.get("on_error")) if isinstance(raw.get("on_error"), dict) else {}
     try:
         timeout = int(raw.get("timeout", 30))
     except (TypeError, ValueError):
@@ -175,7 +179,10 @@ def _parse_step(raw: Any, index: int, diagnostics: list[str], scope: str) -> Ste
         locator=locator,
         pre=pre,
         post=post,
-        on_error=merged_on_error,
+        goal=goal,
+        success=success,
+        mode=mode,
+        on_error=on_error,
         timeout=timeout,
         approval=bool(raw.get("approval", False)),
         when=str(raw.get("when") or raw.get("if") or "").strip(),
@@ -258,6 +265,7 @@ def parse_workflow(
         outputs=outputs,
         triggers=triggers,
         provenance=data.get("provenance") if isinstance(data.get("provenance"), dict) else {},
+        fingerprint=str(data.get("fingerprint") or ""),
         status=status,
         source=source,
         file_path=file_path,
@@ -320,6 +328,8 @@ def _validate_steps(steps: list[Step], scope: str, seen: set[str]) -> list[str]:
         seen.add(step.id)
         if step.kind not in VALID_KINDS:
             errors.append(f"{scope}/{step.id}: unknown kind '{step.kind}'")
+        if step.mode not in VALID_STEP_MODES:
+            errors.append(f"{scope}/{step.id}: unknown mode '{step.mode}'")
         if step.kind == "branch":
             if not step.when:
                 errors.append(f"{scope}/{step.id}: branch requires 'when'")
@@ -360,6 +370,8 @@ def render_workflow(workflow: Workflow) -> str:
         data["triggers"] = list(workflow.triggers)
     if workflow.provenance:
         data["provenance"] = dict(workflow.provenance)
+    if workflow.fingerprint:
+        data["fingerprint"] = workflow.fingerprint
     if workflow.status and workflow.status != "active":
         data["status"] = workflow.status
     if workflow.created_at:

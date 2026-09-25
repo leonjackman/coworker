@@ -33,12 +33,14 @@ class ScheduleEngine:
         runner: ScheduleRunner,
         *,
         tick_cap_seconds: int = 30,
+        max_concurrent: int = 4,
     ):
         self.store = store
         self.runner = runner
         self.tick_cap_seconds = max(5, int(tick_cap_seconds))
         self._running: dict[str, asyncio.Task] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._semaphore = asyncio.Semaphore(max(1, int(max_concurrent)))
         self._stop = False
 
     # ── helpers ─────────────────────────────────────────────────────────
@@ -84,6 +86,10 @@ class ScheduleEngine:
     # ── firing ──────────────────────────────────────────────────────────
 
     async def _run(self, schedule_id: str) -> None:
+        async with self._semaphore:
+            await self._run_inner(schedule_id)
+
+    async def _run_inner(self, schedule_id: str) -> None:
         schedule = self.store.get(schedule_id)
         if schedule is None:
             return
@@ -120,6 +126,16 @@ class ScheduleEngine:
             )
         except Exception:  # noqa: BLE001 - history persistence is best-effort
             pass
+        if latest.last_status == "failed":
+            from coworker.notifications import notify
+
+            notify(
+                self.store.root.parent,
+                kind="schedule_failed",
+                title=latest.name,
+                detail=latest.last_error,
+                ref=latest.id,
+            )
         logger.info("schedule %s -> %s", schedule_id, latest.last_status)
 
     async def fire(self, schedule: Schedule, *, mark_skipped: bool = False) -> None:

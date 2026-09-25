@@ -406,6 +406,37 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         except Exception:  # noqa: BLE001 - a review scheduling hiccup must never break a turn
             logger.warning("skill review scheduling failed", exc_info=True)
 
+    def _maybe_review_workflow(self, session_id: str, messages: list[Any] | None, parts: list[Any]) -> None:
+        """Fire-and-forget workflow authoring review after a settled turn (W24)."""
+        try:
+            if self.workflow_manager is None or self.llm is None:
+                return
+            if os.getenv("COWORKER_WORKFLOW_REVIEW", "1") not in ("1", "true", "True"):
+                return
+            used_tools = any(
+                isinstance(p, dict)
+                and p.get("type") in ("tool_start", "tool_delta", "tool_end", "tool")
+                for p in parts
+            )
+            if not used_tools:
+                return
+            if not messages:
+                messages = self._recent_session_messages(session_id)
+            from coworker.workflows.review import run_workflow_review
+
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                run_workflow_review(
+                    self.llm,
+                    self.workflow_manager,
+                    session_id=session_id,
+                    messages=messages or [],
+                    parts=parts,
+                )
+            )
+        except Exception:  # noqa: BLE001 - review scheduling must never break a turn
+            logger.warning("workflow review scheduling failed", exc_info=True)
+
     def _build_delegator(self, session_id: str, language: Language, work_mode: WorkMode, autonomy: Autonomy):
         """Return a team Delegator when the project org is multi-agent, else None."""
         try:
@@ -885,6 +916,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     # Failed turn: still offer a skill-review pass so "hit errors
                     # and found a (partial) working path" can be captured as a draft.
                     self._maybe_self_review(session_id, messages, parts)
+                    self._maybe_review_workflow(session_id, messages, parts)
                     # Do NOT yield an error event here before raising: every consumer
                     # of this stream wraps it in `_sse_events`, whose producer already
                     # turns a raise into exactly one terminal `error` event (via the
@@ -904,6 +936,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
         self._maybe_self_review(session_id, messages, parts)
+        self._maybe_review_workflow(session_id, messages, parts)
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": merged_parts, "usage": run_usage, "loop_reason": loop_reason or LOOP_REASON_FINAL, "compaction": {"summary": compact_summary, "count": compact_count, "fingerprints": compact_fingerprints, "failed": compact_failed}}
 
     def _compiled_graph(
@@ -1199,6 +1232,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         yield {"type": "stage", "name": "finalizing", "status": "done"}
         self._nudge_memory(session_id)
         self._maybe_self_review(session_id, None, parts)
+        self._maybe_review_workflow(session_id, None, parts)
         yield {"type": "done", "content": final_content, "mode": self.mode, "provider": self.provider_name, "model": self.model_name, "parts": _merge_event_parts(_terminate_stray_tools(parts)), "loop_reason": resumed_loop_reason}
         return
 

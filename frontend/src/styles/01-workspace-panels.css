@@ -53,6 +53,8 @@
 .workspace-shell--mcp,
 .workspace-shell--settings,
 .workspace-shell--skills,
+.workspace-shell--workflows,
+.workspace-shell--schedules,
 .workspace-shell--memory,
 .workspace-shell--org,
 .workspace-shell--dashboard {

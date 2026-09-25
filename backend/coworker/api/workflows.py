@@ -15,7 +15,16 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from coworker.api.state import app, logger, settings, workflow_manager
+from coworker.api.state import (
+    app,
+    command_approval_store,
+    logger,
+    provider_manager,
+    session_store,
+    settings,
+    skill_manager,
+    workflow_manager,
+)
 
 router = APIRouter()
 
@@ -30,7 +39,13 @@ def _server_environment() -> Any:
 
     workspace_root = settings.data_dir / "workflows_workspace"
     workspace_root.mkdir(parents=True, exist_ok=True)
-    return build_server_environment(settings.data_dir, workspace_root)
+    return build_server_environment(
+        settings.data_dir,
+        workspace_root,
+        provider_manager=provider_manager,
+        approval_store=command_approval_store,
+        skill_manager=skill_manager,
+    )
 
 _TERMINAL = {"ok", "failed", "needs_human", "paused"}
 
@@ -50,6 +65,21 @@ class WorkflowStatusPayload(BaseModel):
 
 class WorkflowRollbackPayload(BaseModel):
     version: int = Field(description="Historical version to restore.")
+
+
+class WorkflowFeedbackPayload(BaseModel):
+    feedback: str = Field(description="What was wrong / how it should behave.")
+    step_id: str = ""
+    run_id: str = ""
+    apply: bool = False
+
+
+class WorkflowRecordSessionPayload(BaseModel):
+    session_id: str = Field(description="Session whose turn should be turned into a workflow draft.")
+
+
+class WorkflowResumePayload(BaseModel):
+    decisions: dict[str, Any] = Field(default_factory=dict, description="Map of step_id -> bool (approval) or str (answer).")
 
 
 class WorkflowRecordPayload(BaseModel):
@@ -138,6 +168,33 @@ def get_run(run_id: str):
     return {"status": "ok", "run": run}
 
 
+@router.post("/workflows/runs/{run_id}/resume")
+def resume_run(run_id: str, payload: WorkflowResumePayload):
+    try:
+        env = _server_environment()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("workflow server environment unavailable: %s", exc)
+        env = None
+    result = workflow_manager.resume(run_id, payload.decisions, env=env)
+    if result.get("status") == "error" and "no run" in (result.get("message") or ""):
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result
+
+
+@router.get("/workflows/runs/{run_id}/events.json")
+def get_run_events(run_id: str):
+    if workflow_manager.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail=f"no run: {run_id}")
+    return {"status": "ok", "events": workflow_manager.read_events(run_id)}
+
+
+@router.get("/workflows/runs/{run_id}/evidence")
+def get_run_evidence(run_id: str):
+    if workflow_manager.get_run(run_id) is None:
+        raise HTTPException(status_code=404, detail=f"no run: {run_id}")
+    return {"status": "ok", "evidence": workflow_manager.read_evidence(run_id)}
+
+
 @router.get("/workflows/runs/{run_id}/events")
 async def stream_run_events(run_id: str):
     """Replay persisted run events, then follow until the run is terminal."""
@@ -169,6 +226,23 @@ def render_workflow_route(payload: WorkflowContentPayload):
     return workflow_manager.render(payload.content)
 
 
+class WorkflowStepsPayload(BaseModel):
+    name: str
+    description: str = ""
+    version: int = 1
+    platform: str = ""
+    inputs: list[dict[str, Any]] | None = None
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    triggers: list[str] | None = None
+    status: str = "active"
+
+
+@router.post("/workflows/render/steps")
+def render_workflow_steps(payload: WorkflowStepsPayload):
+    """Render structured steps (visual editor) into canonical workflow YAML."""
+    return workflow_manager.render_steps(payload.model_dump())
+
+
 @router.post("/workflows/validate")
 def validate_workflow_route(payload: WorkflowContentPayload):
     return workflow_manager.validate(payload.content)
@@ -185,10 +259,48 @@ def create_workflow(payload: WorkflowCreatePayload):
     return result
 
 
+@router.get("/workflows/templates")
+def list_workflow_templates():
+    return {"status": "ok", "templates": workflow_manager.list_templates()}
+
+
+@router.post("/workflows/templates/{template_id}/install")
+def install_workflow_template(template_id: str):
+    result = workflow_manager.install_template(template_id)
+    if result.get("status") != "ok":
+        code = 404 if "not found" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=code, detail=result.get("message", "install failed"))
+    return result
+
+
 @router.post("/workflows/import")
 def import_workflow(payload: WorkflowCreatePayload):
     """Import a workflow from exported YAML (alias of create)."""
     return create_workflow(payload)
+
+
+@router.post("/workflows/record/from-session")
+async def record_workflow_from_session(payload: WorkflowRecordSessionPayload):
+    """Stage a draft by reviewing a session's recent turns (W27)."""
+    from coworker.agent.headless import build_default_llm
+    from coworker.workflows.review import run_workflow_review
+
+    llm = build_default_llm(provider_manager, settings.data_dir)
+    if llm is None:
+        raise HTTPException(status_code=400, detail="no enabled provider configured")
+    messages: list[dict[str, Any]] = []
+    try:
+        session = session_store.load(payload.session_id)
+        for message in (getattr(session, "messages", []) or [])[-12:]:
+            content = getattr(message, "content", "")
+            if content:
+                messages.append({"type": getattr(message, "role", "") or "human", "content": content})
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=404, detail=f"session not available: {exc}") from exc
+    result = await run_workflow_review(
+        llm, workflow_manager, session_id=payload.session_id, messages=messages, parts=[]
+    )
+    return {"status": "ok", "review": result}
 
 
 @router.post("/workflows/record")
@@ -205,6 +317,44 @@ def record_workflow(payload: WorkflowRecordPayload):
     if result.get("status") != "ok":
         raise HTTPException(status_code=400, detail=result.get("message", "record failed"))
     return result
+
+
+@router.post("/workflows/{name}/feedback")
+async def workflow_feedback(name: str, payload: WorkflowFeedbackPayload):
+    """Revise a workflow from user feedback, then stage/apply it (learning loop)."""
+    from coworker.agent.headless import build_default_llm
+    from coworker.workflows.feedback import run_workflow_revision
+
+    current = workflow_manager.export(name)
+    if current.get("status") != "ok":
+        raise _not_found(name)
+    llm = build_default_llm(provider_manager, settings.data_dir)
+    if llm is None:
+        raise HTTPException(status_code=400, detail="no enabled provider configured")
+
+    revision = await run_workflow_revision(
+        llm,
+        current["yaml"],
+        payload.feedback,
+        step_id=payload.step_id,
+        run_id=payload.run_id,
+    )
+    if revision.get("status") != "ok":
+        raise HTTPException(status_code=400, detail=revision.get("message", "revision failed"))
+
+    validation = workflow_manager.validate(revision["yaml"])
+    if not validation.get("valid"):
+        raise HTTPException(status_code=400, detail="; ".join(validation.get("errors", [])) or "invalid revision")
+
+    if payload.apply:
+        result = workflow_manager.update(name, revision["yaml"])
+    else:
+        result = workflow_manager.stage_draft(
+            name, revision["yaml"], sources=[f"feedback:{name}"], action="update"
+        )
+    if result.get("status") != "ok":
+        raise HTTPException(status_code=400, detail=result.get("message", "feedback failed"))
+    return {"status": "ok", "applied": bool(payload.apply), "result": result, "yaml": revision["yaml"]}
 
 
 @router.get("/workflows/{name}/export")

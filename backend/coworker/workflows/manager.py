@@ -37,9 +37,10 @@ class WorkflowManager:
         *,
         secrets: Callable[[str], str | None] | None = None,
         listener: Callable[[Any], None] | None = None,
+        roots_provider: Callable[[], list[Path]] | None = None,
     ):
         self.root = Path(data_dir) / "workflows"
-        self.store = WorkflowStore(self.root)
+        self.store = WorkflowStore(self.root, roots_provider)
         self.registry = WorkflowRegistry(self.store)
         self.executor = WorkflowExecutor(self.store, secrets=secrets, listener=listener)
 
@@ -67,9 +68,11 @@ class WorkflowManager:
         workflow = self._parse_or_raise(content)
         if self.store.exists(workflow.name) and not overwrite:
             return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
+        from .fingerprint import current_fingerprint
+
         workflow = Workflow(
             **{**workflow.__dict__, "version": 1 if not overwrite else self.store.next_version(workflow.name),
-               "status": "active", "source": "user"}
+               "status": "active", "source": "user", "fingerprint": current_fingerprint()}
         )
         saved = self.store.save(workflow, archive=overwrite)
         return {"status": "ok", "workflow": saved.to_dict(include_steps=False)}
@@ -82,9 +85,12 @@ class WorkflowManager:
         # Name changes are allowed only by creating a new workflow.
         if workflow.name != name and self.store.exists(workflow.name):
             return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
+        from .fingerprint import current_fingerprint
+
         workflow = Workflow(
             **{**workflow.__dict__, "version": self.store.next_version(name),
-               "status": workflow.status or "active", "source": existing.source}
+               "status": workflow.status or "active", "source": existing.source,
+               "fingerprint": current_fingerprint()}
         )
         saved = self.store.save(workflow)
         if workflow.name != name:
@@ -96,6 +102,22 @@ class WorkflowManager:
         if not removed:
             return {"status": "error", "message": f"workflow not found: {name}"}
         return {"status": "ok", "name": name, "removed": True}
+
+    def list_templates(self) -> list[dict[str, Any]]:
+        from .templates import list_templates
+
+        return list_templates()
+
+    def install_template(self, template_id: str, *, overwrite: bool = False) -> dict[str, Any]:
+        from .templates import get_template
+
+        template = get_template(template_id)
+        if template is None:
+            return {"status": "error", "message": f"template not found: {template_id}"}
+        result = self.create(template["yaml"], overwrite=overwrite)
+        if result.get("status") == "ok":
+            result["template"] = template_id
+        return result
 
     def export(self, name: str) -> dict[str, Any]:
         text = self.store.read_text(name)
@@ -139,6 +161,31 @@ class WorkflowManager:
             "yaml": render_workflow(workflow),
             "workflow": workflow.to_dict(include_steps=False),
             "diagnostics": diagnostics,
+        }
+
+    def render_steps(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Render a workflow from structured fields (used by the visual editor)."""
+        from .parser import _parse_inputs, _parse_steps
+
+        diagnostics: list[str] = []
+        steps = _parse_steps(payload.get("steps") or [], diagnostics, "steps")
+        workflow = Workflow(
+            name=str(payload.get("name") or ""),
+            description=str(payload.get("description") or ""),
+            steps=steps,
+            version=int(payload.get("version") or 1),
+            platform=str(payload.get("platform") or ""),
+            inputs=_parse_inputs(payload.get("inputs")),
+            triggers=[str(t) for t in (payload.get("triggers") or ["manual"])],
+            status=str(payload.get("status") or "active"),
+            source="user",
+        )
+        errors = list(diagnostics) + validate(workflow)
+        return {
+            "status": "ok" if not errors else "error",
+            "yaml": render_workflow(workflow),
+            "errors": errors,
+            "workflow": workflow.to_dict(),
         }
 
     def validate(self, content: str) -> dict[str, Any]:
@@ -204,7 +251,11 @@ class WorkflowManager:
         else:
             version = workflow.version or 1
             source = "agent"
-        workflow = replace(workflow, version=version, status="active", source=source)
+        from .fingerprint import current_fingerprint
+
+        workflow = replace(
+            workflow, version=version, status="active", source=source, fingerprint=current_fingerprint()
+        )
         saved = self.store.save(workflow)
         self.store.remove_draft(name)
         if workflow.name != name:
@@ -248,10 +299,55 @@ class WorkflowManager:
             trigger=trigger,
             on_patch=on_patch or self._default_patch,
         )
+        if run.status in ("failed", "needs_human") and trigger != "agent":
+            try:
+                from coworker.notifications import notify
+
+                notify(
+                    self.store.root.parent,
+                    kind=f"workflow_{run.status}",
+                    title=name,
+                    detail=run.error,
+                    ref=run.run_id,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         return {"status": run.status, "run": run.to_dict()}
+
+    def resume(
+        self,
+        run_id: str,
+        decisions: dict[str, Any] | None = None,
+        *,
+        env: StepEnvironment | None = None,
+    ) -> dict[str, Any]:
+        """Resume a ``needs_human`` run with the human's decisions (W22/W37)."""
+        from .env import DecisionEnvironment, StepEnvironment
+
+        run = self.store.load_run(run_id)
+        if run is None:
+            return {"status": "error", "message": f"no run: {run_id}"}
+        workflow = self.store.get(run.workflow)
+        if workflow is None:
+            return {"status": "error", "message": f"workflow not found: {run.workflow}"}
+        base = env or StepEnvironment()
+        resumed = self.executor.run(
+            workflow,
+            run_id=run_id,
+            resume=True,
+            env=DecisionEnvironment(base, decisions or {}),
+            trigger=run.trigger or "manual",
+            on_patch=self._default_patch,
+        )
+        return {"status": resumed.status, "run": resumed.to_dict()}
 
     def list_runs(self, name: str = "", limit: int = 50) -> list[dict[str, Any]]:
         return self.store.list_runs(workflow=name, limit=limit)
+
+    def read_evidence(self, run_id: str) -> list[dict[str, Any]]:
+        from .evidence import read_index
+
+        return read_index(self.store.root.parent, run_id)
 
     def get_run(self, run_id: str) -> dict[str, Any] | None:
         run = self.store.load_run(run_id)

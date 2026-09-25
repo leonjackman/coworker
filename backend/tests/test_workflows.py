@@ -321,6 +321,246 @@ steps:
     assert result["status"] == "needs_human"
 
 
+class AgenticEnv(FakeEnv):
+    """Fake environment that advertises and performs agent takeover."""
+
+    def __init__(self, verdict="VERDICT: DONE", **kwargs):
+        super().__init__(**kwargs)
+        self._verdict = verdict
+        self.agentic_calls = []
+
+    def supports_agentic(self):
+        return True
+
+    def agentic(self, prompt, step):
+        self.agentic_calls.append((step.id, prompt))
+        return {"output": f"handled by agent\n{self._verdict}"}
+
+
+def test_assertion_vocabulary(tmp_path):
+    from coworker.workflows.assertions import evaluate
+
+    target = tmp_path / "out.txt"
+    target.write_text("hello world", encoding="utf-8")
+    ctx = {"inputs": {"n": 3}}
+    assert evaluate(f"file_exists {target}", None, ctx)[0] is True
+    assert evaluate("file_exists /nope/missing.txt", None, ctx)[0] is False
+    assert evaluate(f"file_contains {target} hello", None, ctx)[0] is True
+    assert evaluate(f"file_contains {target} goodbye", None, ctx)[0] is False
+    assert evaluate("exit_code 0", {"return_code": 0}, ctx)[0] is True
+    assert evaluate("exit_code 0", {"return_code": 1}, ctx)[0] is False
+    assert evaluate("exists inputs.n", None, ctx)[0] is True
+    assert evaluate("not_exists inputs.missing", None, ctx)[0] is True
+    assert evaluate("regex inputs.n ^3$", None, ctx)[0] is True
+
+
+def test_on_error_skip_policy(manager):
+    flow = """name: skip-flow
+description: skip a failing step
+steps:
+  - id: flaky
+    kind: tool
+    do: nope
+    on_error:
+      then: skip
+  - id: after
+    kind: set
+    name: reached
+    value: "yes"
+"""
+    manager.create(flow)
+    env = FakeEnv(tool=lambda n, a: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = manager.run("skip-flow", env=env)
+    assert result["status"] == "ok"
+    assert result["run"]["context"]["steps"]["flaky"]["skipped"] is True
+    assert result["run"]["context"]["vars"]["reached"] == "yes"
+
+
+def test_on_error_human_policy(manager):
+    flow = """name: human-flow
+description: escalate to human
+steps:
+  - id: flaky
+    kind: tool
+    do: nope
+    on_error:
+      then: human
+"""
+    manager.create(flow)
+    env = FakeEnv(tool=lambda n, a: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = manager.run("human-flow", env=env)
+    assert result["status"] == "needs_human"
+    assert result["run"]["pending_step"] == "flaky"
+
+
+def test_on_error_goto_policy(manager):
+    flow = """name: goto-flow
+description: jump to a recovery step
+steps:
+  - id: start
+    kind: tool
+    do: nope
+    on_error:
+      then: "goto:recover"
+  - id: skipped_middle
+    kind: set
+    name: wrong
+    value: "no"
+  - id: recover
+    kind: set
+    name: recovered
+    value: "yes"
+"""
+    manager.create(flow)
+    env = FakeEnv(tool=lambda n, a: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = manager.run("goto-flow", env=env)
+    assert result["status"] == "ok"
+    assert result["run"]["context"]["vars"]["recovered"] == "yes"
+    assert "skipped_middle" not in result["run"]["completed"]
+
+
+def test_agent_takeover_recovers_failed_step(manager):
+    flow = """name: takeover-flow
+description: agent recovers a failing step
+steps:
+  - id: act
+    kind: tool
+    do: nope
+    goal: publish the article
+"""
+    manager.create(flow)
+    env = AgenticEnv(tool=lambda n, a: (_ for _ in ()).throw(RuntimeError("flaky ui")))
+    result = manager.run("takeover-flow", env=env)
+    assert result["status"] == "ok"
+    assert result["run"]["context"]["steps"]["act"]["takeover"] is True
+    assert env.agentic_calls and env.agentic_calls[0][0] == "act"
+
+
+def test_agent_takeover_blocked_escalates_to_human(manager):
+    flow = """name: blocked-flow
+description: agent cannot complete
+steps:
+  - id: act
+    kind: tool
+    do: nope
+"""
+    manager.create(flow)
+    env = AgenticEnv(verdict="VERDICT: BLOCKED", tool=lambda n, a: (_ for _ in ()).throw(RuntimeError("x")))
+    result = manager.run("blocked-flow", env=env)
+    assert result["status"] == "needs_human"
+
+
+def test_mode_agent_step(manager):
+    flow = """name: agent-mode
+description: explicit agent step
+steps:
+  - id: think
+    kind: agentic
+    mode: agent
+    goal: write a summary
+"""
+    manager.create(flow)
+    env = AgenticEnv()
+    result = manager.run("agent-mode", env=env)
+    assert result["status"] == "ok"
+    assert result["run"]["context"]["steps"]["think"]["takeover"] is True
+
+
+def test_success_contract_merged(manager):
+    flow = """name: success-flow
+description: success spec gates the step
+steps:
+  - id: act
+    kind: tool
+    do: produce
+    success:
+      - "contains NEEDLE"
+"""
+    manager.create(flow)
+    env = FakeEnv(tool=lambda n, a: {"ok": True, "text": "no needle here"})
+    result = manager.run("success-flow", env=env)
+    # Default policy with no agent capability -> abort/fail.
+    assert result["status"] == "failed"
+
+
+def test_human_approval_resume(manager):
+    flow = """name: resume-approval
+description: approval then resume
+steps:
+  - id: gate
+    kind: set
+    approval: true
+    params:
+      name: approved
+      value: "yes"
+"""
+    manager.create(flow)
+    # No interactive human channel -> the run pauses.
+    blocked = FakeEnv(human=lambda s, q, o: (_ for _ in ()).throw(NotImplementedError()))
+    first = manager.run("resume-approval", env=blocked)
+    assert first["status"] == "needs_human"
+    assert first["run"]["pending_step"] == "gate"
+    # Resume with an approval decision.
+    resumed = manager.resume(first["run"]["run_id"], {"gate": True}, env=FakeEnv())
+    assert resumed["status"] == "ok"
+    assert resumed["run"]["context"]["vars"]["approved"] == "yes"
+
+
+def test_evidence_persistence():
+    with tempfile.TemporaryDirectory() as tmp:
+        from coworker.workflows.env import build_tool_environment
+        from coworker.workflows.evidence import read_index
+        from coworker.workspace import Workspace
+
+        wsroot = Path(tmp) / "ws"
+        wsroot.mkdir()
+        env = build_tool_environment(workspace=Workspace(wsroot), tools=[], data_dir=Path(tmp))
+        env.evidence("run123:stepA", {"hello": "world"})
+        env.evidence("run123:stepB", "data:image/png;base64," + "aGVsbG8=")
+        index = read_index(Path(tmp), "run123")
+        kinds = {e["step_id"]: e["kind"] for e in index}
+        assert kinds.get("stepA") == "json"
+        assert kinds.get("stepB") == "image"
+
+
+def test_llm_self_heal_plumbing():
+    class _Resp:
+        def __init__(self, content):
+            self.content = content
+
+    class _LLM:
+        def invoke(self, messages):
+            return _Resp('{"locator": {"role": "button", "name": "New"}}')
+
+    with tempfile.TemporaryDirectory() as tmp:
+        from coworker.workflows.env import build_tool_environment
+        from coworker.workflows.model import Step
+        from coworker.workspace import Workspace
+
+        wsroot = Path(tmp) / "ws"
+        wsroot.mkdir()
+        env = build_tool_environment(workspace=Workspace(wsroot), tools=[], llm=_LLM(), data_dir=Path(tmp))
+        repaired = env.self_heal(Step(id="s", kind="app", do="click"), "no element", {})
+        assert repaired == {"locator": {"role": "button", "name": "New"}}
+
+
+def test_agentic_step_plumbing(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        from coworker.agent import headless
+        from coworker.workflows.env import build_tool_environment
+        from coworker.workflows.model import Step
+        from coworker.workspace import Workspace
+
+        monkeypatch.setattr(
+            headless, "run_agent_task_sync", lambda **kwargs: {"status": "ok", "output": "agent done"}
+        )
+        wsroot = Path(tmp) / "ws"
+        wsroot.mkdir()
+        env = build_tool_environment(workspace=Workspace(wsroot), tools=[], llm=object(), data_dir=Path(tmp))
+        result = env.agentic("do the thing", Step(id="a", kind="agentic"))
+        assert result["output"] == "agent done"
+
+
 def test_draft_lifecycle(manager):
     draft = """name: agent-made
 description: generated by the agent
@@ -354,6 +594,79 @@ def test_rollback_and_export(manager):
     assert rolled["status"] == "ok"
     assert manager.get("hello-flow")["version"] == 3
     assert "A trivial test workflow" in manager.export("hello-flow")["yaml"]
+
+
+def test_store_multi_root_project_scope():
+    from coworker.workflows import WorkflowStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        primary = Path(tmp) / "user" / "workflows"
+        project = Path(tmp) / "proj" / ".coworker" / "workflows"
+        project.mkdir(parents=True)
+        (project / "proj-flow.yaml").write_text(
+            """name: proj-flow
+description: project-scoped workflow
+steps:
+  - id: a
+    kind: set
+    name: k
+    value: v
+""",
+            encoding="utf-8",
+        )
+        store = WorkflowStore(primary, lambda: [project])
+        # list sees the project workflow
+        names = {w.name for w in store.list_active()}
+        assert "proj-flow" in names
+        # get resolves it from the project root
+        wf = store.get("proj-flow")
+        assert wf is not None
+        # saving writes back into the project root, not the primary root
+        from dataclasses import replace
+
+        store.save(replace(wf, description="project-scoped workflow v2"))
+        assert (project / "proj-flow.yaml").is_file()
+        assert not (primary / "proj-flow.yaml").exists()
+        # a brand-new workflow goes to the primary root
+        store.save(
+            parse_workflow(
+                "name: user-flow\ndescription: user scope\nsteps:\n  - id: a\n    kind: set\n    name: k\n    value: v\n"
+            )[0]
+        )
+        assert (primary / "user-flow.yaml").is_file()
+
+
+def test_render_steps_structured(manager):
+    result = manager.render_steps(
+        {
+            "name": "viz-flow",
+            "description": "visual",
+            "steps": [
+                {"id": "open", "kind": "set", "params": {"name": "k", "value": "v"}},
+                {"id": "check", "kind": "assert", "do": "equals vars.k v"},
+            ],
+        }
+    )
+    assert result["status"] == "ok"
+    assert "viz-flow" in result["yaml"]
+    assert len(result["workflow"]["steps"]) == 2
+
+
+def test_feedback_revision_plumbing():
+    import asyncio
+
+    from coworker.workflows.feedback import run_workflow_revision
+
+    class _Resp:
+        content = "name: my-flow\ndescription: revised\nsteps:\n  - id: a\n    kind: set\n    name: k\n    value: v\n"
+
+    class _LLM:
+        async def ainvoke(self, messages):
+            return _Resp()
+
+    result = asyncio.run(run_workflow_revision(_LLM(), "name: my-flow\ndescription: old\n", "make it better"))
+    assert result["status"] == "ok"
+    assert "revised" in result["yaml"]
 
 
 def test_prompt_block_lists_active(manager):

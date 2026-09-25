@@ -913,6 +913,9 @@ export interface WorkflowStep {
   locator?: Record<string, unknown>;
   pre?: string[];
   post?: string[];
+  goal?: string;
+  success?: string[];
+  mode?: string;
   on_error?: Record<string, unknown>;
   timeout?: number;
   approval?: boolean;
@@ -943,6 +946,19 @@ export interface WorkflowEntry {
   steps?: WorkflowStep[];
   yaml?: string;
   history?: Array<{ version: number; file_path: string; updated_at: string }>;
+}
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  platform: string;
+}
+
+export interface WorkflowTemplatesResponse {
+  status: string;
+  templates: WorkflowTemplate[];
 }
 
 export interface WorkflowsListResponse {
@@ -986,9 +1002,33 @@ export interface WorkflowRun {
   completed: string[];
   outputs: Record<string, unknown>;
   error: string;
+  pending_step?: string;
   started_at: string;
   ended_at: string;
   trigger: string;
+}
+
+export interface WorkflowEvidence {
+  step_id: string;
+  at: string;
+  kind: string;
+  path: string;
+}
+
+export interface NotificationRecord {
+  id: string;
+  at: string;
+  kind: string;
+  title: string;
+  detail: string;
+  ref: string;
+  read: boolean;
+}
+
+export interface NotificationsResponse {
+  status: string;
+  notifications: NotificationRecord[];
+  unread: number;
 }
 
 export interface WorkflowRunResponse {

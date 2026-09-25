@@ -108,8 +108,68 @@ def evaluate(spec: str, result: Any, context: dict[str, Any]) -> AssertionResult
                 return False, f"assertion '{spec}' failed: {ref}={actual!r} (expected {expected!r})"
             return True, ""
 
-    if low.startswith("matches "):
-        rest = token[len("matches ") :].strip()
+    if low.startswith("exit_code "):
+        expected = token[len("exit_code ") :].strip()
+        actual = None
+        if isinstance(result, dict):
+            actual = result.get("return_code", result.get("exit_code"))
+        if str(actual) != str(expected):
+            return False, f"assertion '{spec}' failed: exit code {actual!r} != {expected!r}"
+        return True, ""
+
+    if low.startswith("file_exists ") or low.startswith("not_file_exists "):
+        invert = low.startswith("not_file_exists ")
+        prefix = "not_file_exists " if invert else "file_exists "
+        raw_path = token[len(prefix) :].strip()
+        try:
+            path = str(resolve_string(raw_path, context)) if "{{" in raw_path else raw_path
+        except TemplateError as exc:
+            return False, f"assertion '{spec}' failed: {exc}"
+        import os
+        from pathlib import Path
+
+        exists = Path(os.path.expanduser(path)).exists()
+        if exists == invert:
+            return False, f"assertion '{spec}' failed: file {'exists' if invert else 'missing'}: {path}"
+        return True, ""
+
+    if low.startswith("file_contains "):
+        rest = token[len("file_contains ") :].strip()
+        parts = rest.split(None, 1)
+        if len(parts) != 2:
+            return False, f"assertion '{spec}' failed: expected 'file_contains <path> <text>'"
+        raw_path, raw_text = parts
+        try:
+            path = str(resolve_string(raw_path, context)) if "{{" in raw_path else raw_path
+            needle = str(resolve_string(raw_text, context)) if "{{" in raw_text else raw_text
+        except TemplateError as exc:
+            return False, f"assertion '{spec}' failed: {exc}"
+        import os
+        from pathlib import Path
+
+        try:
+            content = Path(os.path.expanduser(path)).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False, f"assertion '{spec}' failed: cannot read {path}"
+        if needle not in content:
+            return False, f"assertion '{spec}' failed: '{needle}' not in {path}"
+        return True, ""
+
+    if low.startswith("exists ") or low.startswith("not_exists "):
+        invert = low.startswith("not_exists ")
+        ref = token[len("not_exists ") if invert else len("exists ") :].strip()
+        try:
+            value = _lookup_ref(ref, result, context)
+        except (KeyError, IndexError, TemplateError):
+            value = None
+        present = value is not None and value != "" and value != [] and value != {}
+        if present == invert:
+            return False, f"assertion '{spec}' failed: ref {ref} is {'set' if invert else 'unset'}"
+        return True, ""
+
+    if low.startswith("matches ") or low.startswith("regex "):
+        prefix = "matches " if low.startswith("matches ") else "regex "
+        rest = token[len(prefix) :].strip()
         parts = rest.split(None, 1)
         if len(parts) != 2:
             return False, f"assertion '{spec}' failed: expected 'matches <ref> <regex>'"

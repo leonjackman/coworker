@@ -10,7 +10,7 @@ Public surface:
     StepEnvironment, CallbackEnvironment
 """
 
-from .env import CallbackEnvironment, StepEnvironment
+from .env import CallbackEnvironment, DecisionEnvironment, StepEnvironment
 from .executor import WorkflowExecutor
 from .manager import WorkflowManager
 from .model import (
@@ -39,6 +39,7 @@ __all__ = [
     "CONTROL_KINDS",
     "VALID_KINDS",
     "CallbackEnvironment",
+    "DecisionEnvironment",
     "Locator",
     "NeedsHuman",
     "Run",

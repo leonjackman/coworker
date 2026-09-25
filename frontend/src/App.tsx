@@ -4303,7 +4303,7 @@ function App() {
                   onPendingCountChange={() => void refreshPendingSkillCount()}
                 />
               ) : activeView === 'workflows' ? (
-                <WorkflowsPanel />
+                <WorkflowsPanel sessionId={sessionId} />
               ) : activeView === 'schedules' ? (
                 <SchedulesPanel />
               ) : activeView === 'memory' ? (

@@ -6,6 +6,7 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlparse
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -193,13 +194,34 @@ config_controller = AppConfigController(settings, provider_manager)
 mcp_manager = McpManager(settings.data_dir / "mcp_servers.json")
 mcp_sessions = McpSessionManager(settings.data_dir, mcp_manager)
 skill_manager = SkillManager(settings.data_dir, settings.workspace_dir)
-workflow_manager = WorkflowManager(settings.data_dir)
 project_store = ProjectStore(settings.data_dir / "projects.json")
+
+
+def _project_workflow_roots() -> list[Path]:
+    """Extra workflow roots: each project's ``.coworker/workflows`` (project scope)."""
+    try:
+        roots: list[Path] = []
+        for project in project_store.list_projects():
+            workspace_path = getattr(project, "workspace_path", "")
+            if workspace_path:
+                roots.append(Path(workspace_path) / ".coworker" / "workflows")
+        return roots
+    except Exception:  # noqa: BLE001 - a bad project list must never break the catalog
+        return []
+
+
+workflow_manager = WorkflowManager(settings.data_dir, roots_provider=_project_workflow_roots)
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
 schedule_runner = ScheduleRunner(
     workflow_manager=workflow_manager,
-    env_factory=lambda: build_server_environment(settings.data_dir, settings.data_dir / "scheduled"),
+    env_factory=lambda: build_server_environment(
+        settings.data_dir,
+        settings.data_dir / "scheduled",
+        provider_manager=provider_manager,
+        approval_store=command_approval_store,
+        skill_manager=skill_manager,
+    ),
     provider_manager=provider_manager,
     data_dir=settings.data_dir,
     workspace_root=settings.data_dir / "scheduled",

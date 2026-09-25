@@ -85,13 +85,8 @@ class ScheduleRunner:
 
     async def _run_agent(self, schedule: Schedule) -> dict[str, Any]:
         from coworker.agent.graph import build_workspace_tools
-        from coworker.workers.worker import WorkerAgent
-        from coworker.workers.worker_config import TaskBrief, WorkerConfig
+        from coworker.agent.headless import run_agent_task
         from coworker.workspace import Workspace
-
-        llm = self._build_default_llm()
-        if llm is None:
-            return {"status": "failed", "error": "no enabled provider configured"}
 
         workspace_root = Path(self.workspace_root)
         workspace_root.mkdir(parents=True, exist_ok=True)
@@ -112,55 +107,29 @@ class ScheduleRunner:
                 readonly=False,
             )
         )
-
-        brief = TaskBrief(task=schedule.prompt)
-        config = WorkerConfig.for_single_agent(max_concurrent=1, timeout=schedule.timeout_seconds or 600)
-        worker = WorkerAgent(
-            llm=llm,
-            brief=brief,
-            config=config,
+        return await run_agent_task(
+            prompt=schedule.prompt,
             workspace=workspace,
             tools=tools,
-            approval_store=self.approval_store,
-            change_store=None,
-            session_store=None,
+            provider_manager=self.provider_manager,
             data_dir=self.data_dir,
-            mcp_session_manager=None,
+            approval_store=self.approval_store,
             skill_manager=self.skill_manager,
-            provider_name="",
             session_id=f"schedule-{schedule.id}",
-            work_mode="build",
-            autonomy="guarded",
+            timeout=schedule.timeout_seconds or 600,
             readonly=False,
             depth=1,
         )
-        result = await worker.arun()
-        if result.success:
-            return {"status": "ok", "output": (result.content or "")[:MAX_OUTPUT_PREVIEW]}
-        return {"status": "failed", "error": result.error or "agent task failed"}
-
-    def _build_default_llm(self) -> Any | None:
-        if self.provider_manager is None:
-            return None
-        try:
-            provider = self.provider_manager.default_provider()
-        except Exception:  # noqa: BLE001
-            return None
-        if provider is None:
-            return None
-        try:
-            from coworker.agent.model_defaults import ReasonPreservingChatOpenAI, provider_llm_kwargs
-
-            llm_cls = ReasonPreservingChatOpenAI.create
-            return llm_cls(
-                **provider_llm_kwargs(provider.model, provider, provider.base_url or None, data_dir=self.data_dir)
-            )
-        except Exception as exc:  # noqa: BLE001 - unavailable provider is a run failure, not a crash
-            logger.warning("scheduled agent llm unavailable: %s", exc)
-            return None
 
 
-def build_server_environment(data_dir: Path, workspace_root: Path) -> Any:
+def build_server_environment(
+    data_dir: Path,
+    workspace_root: Path,
+    *,
+    provider_manager: Any | None = None,
+    approval_store: Any | None = None,
+    skill_manager: Any | None = None,
+) -> Any:
     """Server-side StepEnvironment (command + web/browser/computer tools)."""
     from coworker.browser.bridge_client import resolve_browser_tool
     from coworker.computer.bridge_client import resolve_computer_tools
@@ -186,4 +155,11 @@ def build_server_environment(data_dir: Path, workspace_root: Path) -> Any:
     root = Path(workspace_root)
     root.mkdir(parents=True, exist_ok=True)
     workspace = Workspace(root)
-    return build_tool_environment(workspace=workspace, tools=tools)
+    return build_tool_environment(
+        workspace=workspace,
+        tools=tools,
+        skill_manager=skill_manager,
+        provider_manager=provider_manager,
+        data_dir=data_dir,
+        approval_store=approval_store,
+    )

@@ -167,6 +167,68 @@ def test_api_record_stages_generalized_draft():
     assert "{{inputs.q}}" in draft["content"]
 
 
+def test_api_resume_needs_human():
+    client = _client()
+    client.delete("/workflows/gate-flow")
+    flow = """name: gate-flow
+description: pauses for approval
+steps:
+  - id: gate
+    kind: set
+    approval: true
+    params:
+      name: ok
+      value: "yes"
+"""
+    assert client.post("/workflows", json={"content": flow}).status_code == 200
+    run = client.post("/workflows/gate-flow/run", json={})
+    body = run.json()
+    assert body["status"] == "needs_human"
+    run_id = body["run"]["run_id"]
+    assert body["run"]["pending_step"] == "gate"
+    resumed = client.post(f"/workflows/runs/{run_id}/resume", json={"decisions": {"gate": True}})
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "ok"
+
+
+def test_workflow_templates_install():
+    client = _client()
+    listed = client.get("/workflows/templates")
+    assert listed.status_code == 200
+    templates = listed.json()["templates"]
+    assert len(templates) >= 3
+    ids = {tpl["id"] for tpl in templates}
+    assert "browser-publish-generic" in ids
+
+    client.delete("/workflows/web-research-report")
+    installed = client.post("/workflows/templates/web-research-report/install")
+    assert installed.status_code == 200, installed.text
+    assert installed.json()["status"] == "ok"
+    assert client.get("/workflows/web-research-report").status_code == 200
+    client.delete("/workflows/web-research-report")
+
+
+def test_api_render_steps_for_visual_editor():
+    client = _client()
+    result = client.post(
+        "/workflows/render/steps",
+        json={
+            "name": "viz-api-flow",
+            "description": "rendered from nodes",
+            "steps": [
+                {"id": "open", "kind": "set", "params": {"name": "k", "value": "v"}},
+                {"id": "act", "kind": "tool", "do": "web_fetch", "mode": "agent", "goal": "do it",
+                 "success": ["ok"], "on_error": {"then": "human"}},
+            ],
+        },
+    )
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["status"] == "ok"
+    assert "mode: agent" in body["yaml"]
+    assert "goal: do it" in body["yaml"]
+
+
 def test_agent_prompt_block_present():
     block = main.workflow_manager.prompt_block()
     assert "available_workflows" in block or block == ""

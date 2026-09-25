@@ -1,4 +1,4 @@
-import { Clock, Loader2, Play, Plus, RefreshCw, Trash2, History } from 'lucide-react';
+import { ArrowLeft, Clock, Loader2, Play, Plus, RefreshCw, Trash2, History } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -7,7 +7,7 @@ import { Switch } from './ui/switch';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import { WorkspacePage } from './ui/workspace-page';
-import { DetailModal } from './ui/detail-modal';
+import { usePageNavPublish } from '../nav/PageNav';
 import type { CronSchedule, ScheduleRunRecord, WorkflowEntry } from '../types';
 
 const COMMON_TIMEZONES = [
@@ -127,6 +127,7 @@ export function SchedulesPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [messageType, setMessageType] = useState<'ok' | 'error'>('ok');
 
+  const [subPage, setSubPage] = useState<'list' | 'editor' | 'history'>('list');
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
   const [preview, setPreview] = useState<{ description: string; runs: string[] } | null>(null);
@@ -189,9 +190,13 @@ export function SchedulesPanel() {
     const base = emptyEditor();
     if (workflows.length > 0) base.workflow = workflows[0]?.name ?? '';
     setEditor(base);
+    setSubPage('editor');
   };
 
-  const openEdit = (schedule: CronSchedule) => setEditor(toEditor(schedule));
+  const openEdit = (schedule: CronSchedule) => {
+    setEditor(toEditor(schedule));
+    setSubPage('editor');
+  };
 
   const saveEditor = useCallback(async () => {
     if (!editor) return;
@@ -228,6 +233,7 @@ export function SchedulesPanel() {
       setMessageType('ok');
       setMessage(t('schedules.saved'));
       setEditor(null);
+      setSubPage('list');
       await refresh();
     } catch (error) {
       setMessageType('error');
@@ -280,6 +286,7 @@ export function SchedulesPanel() {
   );
 
   const openHistory = useCallback(async (schedule: CronSchedule) => {
+    setSubPage('history');
     setHistoryFor(schedule);
     setHistoryRuns([]);
     try {
@@ -296,98 +303,41 @@ export function SchedulesPanel() {
     return Array.from(set);
   }, [editor?.timezone]);
 
-  return (
-    <WorkspacePage
-      eyebrow={t('settings.eyebrow')}
-      title={t('schedules.title')}
-      description={t('schedules.subtitle')}
-      action={
-        <Button variant="primary" onClick={openNew} disabled={loading}>
-          <Plus size={14} />
-          {t('schedules.new')}
-        </Button>
-      }
-    >
-      <div className="workspace-page__content">
-        {message && <div className={`skill-message ${messageType === 'error' ? 'skill-message--error' : ''}`}>{message}</div>}
+  const publishNav = usePageNavPublish();
+  useEffect(() => {
+    if (subPage === 'list') {
+      publishNav({ viewLabel: t('schedules.title') });
+    } else {
+      const leaf =
+        subPage === 'editor'
+          ? (editor?.id ? t('schedules.edit') : t('schedules.new'))
+          : `${t('schedules.history')}: ${historyFor?.name ?? ''}`;
+      publishNav({ viewLabel: t('schedules.title'), leafLabel: leaf, onBackToRoot: () => setSubPage('list') });
+    }
+    return () => publishNav(null);
+  }, [publishNav, subPage, editor, historyFor]);
 
-        <div className="skills-header__actions" style={{ marginBottom: 12 }}>
-          <span className="settings-chip">
-            {t('schedules.master_hint')}
-          </span>
-          <Button variant="secondary" size="sm" onClick={() => void refresh()} aria-label={t('schedules.refresh')}>
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          </Button>
-        </div>
+  const backButton = (
+    <Button variant="ghost" onClick={() => setSubPage('list')}>
+      <ArrowLeft size={15} />
+      {t('settings.back')}
+    </Button>
+  );
 
-        {schedules.length === 0 ? (
-          <div className="skill-empty">
-            <Clock size={18} />
-            <p>{t('schedules.empty')}</p>
+  if (subPage === 'editor') {
+    return (
+      <WorkspacePage
+        eyebrow={t('schedules.title')}
+        title={editor?.id ? t('schedules.edit') : t('schedules.new')}
+        action={backButton}
+      >
+        <div className="workspace-page__content">
+          <div className="skills-pending__actions" style={{ marginBottom: 10 }}>
+            <Button variant="primary" onClick={() => void saveEditor()} disabled={editorBusy}>
+              {editorBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+              {t('schedules.save')}
+            </Button>
           </div>
-        ) : (
-          <div className="skills-pending__list">
-            {schedules.map((schedule) => (
-              <div key={schedule.id} className="skills-pending__card">
-                <div className="skills-pending__head">
-                  <span className="skills-pending__name">{schedule.name}</span>
-                  <span className="settings-chip">{schedule.cron}</span>
-                  <span className="settings-chip">{schedule.timezone}</span>
-                  {schedule.last_status !== 'idle' && (
-                    <span className="settings-chip">
-                      {t('schedules.last')}: {schedule.last_status}
-                    </span>
-                  )}
-                </div>
-                <p className="skills-pending__desc">
-                  {targetSummary(schedule)} · {t('schedules.next')}: {relativeTime(schedule.next_run_at)}
-                </p>
-                <div className="skills-pending__actions">
-                  <Switch
-                    id={`sched-${schedule.id}`}
-                    checked={schedule.enabled}
-                    onChange={(e) => void toggleEnabled(schedule, e.target.checked)}
-                    aria-label={t('schedules.enabled')}
-                  />
-                  <Button variant="primary" size="sm" onClick={() => void runNow(schedule)}>
-                    <Play size={14} />
-                    {t('schedules.run_now')}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => openEdit(schedule)}>
-                    {t('schedules.edit')}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => void openHistory(schedule)}>
-                    <History size={14} />
-                    {t('schedules.history')}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => void remove(schedule)}>
-                    <Trash2 size={14} />
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Editor */}
-        <DetailModal
-          open={editor !== null}
-          onClose={() => setEditor(null)}
-          title={editor?.id ? t('schedules.edit') : t('schedules.new')}
-          footer={
-            editor && (
-              <>
-                <Button variant="ghost" onClick={() => setEditor(null)} disabled={editorBusy}>
-                  {t('common.cancel')}
-                </Button>
-                <Button variant="primary" onClick={() => void saveEditor()} disabled={editorBusy}>
-                  {editorBusy ? <Loader2 size={14} className="animate-spin" /> : null}
-                  {t('schedules.save')}
-                </Button>
-              </>
-            )
-          }
-        >
           {editor && (
             <div className="schedule-editor">
               <label className="add-skill-page__field">
@@ -556,14 +506,19 @@ export function SchedulesPanel() {
               />
             </div>
           )}
-        </DetailModal>
+        </div>
+      </WorkspacePage>
+    );
+  }
 
-        {/* History */}
-        <DetailModal
-          open={historyFor !== null}
-          onClose={() => setHistoryFor(null)}
-          title={`${t('schedules.history')}: ${historyFor?.name ?? ''}`}
-        >
+  if (subPage === 'history') {
+    return (
+      <WorkspacePage
+        eyebrow={t('schedules.title')}
+        title={`${t('schedules.history')}: ${historyFor?.name ?? ''}`}
+        action={backButton}
+      >
+        <div className="workspace-page__content">
           {historyRuns.length === 0 ? (
             <p className="skill-empty">{t('schedules.no_history')}</p>
           ) : (
@@ -578,7 +533,81 @@ export function SchedulesPanel() {
               ))}
             </div>
           )}
-        </DetailModal>
+        </div>
+      </WorkspacePage>
+    );
+  }
+
+  return (
+    <WorkspacePage
+      eyebrow={t('settings.eyebrow')}
+      title={t('schedules.title')}
+      description={t('schedules.subtitle')}
+      action={
+        <Button variant="primary" onClick={openNew} disabled={loading}>
+          <Plus size={14} />
+          {t('schedules.new')}
+        </Button>
+      }
+    >
+      <div className="workspace-page__content">
+        {message && <div className={`skill-message ${messageType === 'error' ? 'skill-message--error' : ''}`}>{message}</div>}
+
+        <div className="skills-header__actions" style={{ marginBottom: 12 }}>
+          <span className="settings-chip">{t('schedules.master_hint')}</span>
+          <Button variant="secondary" size="sm" onClick={() => void refresh()} aria-label={t('schedules.refresh')}>
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </Button>
+        </div>
+
+        {schedules.length === 0 ? (
+          <div className="skill-empty">
+            <Clock size={18} />
+            <p>{t('schedules.empty')}</p>
+          </div>
+        ) : (
+          <div className="skills-pending__list">
+            {schedules.map((schedule) => (
+              <div key={schedule.id} className="skills-pending__card">
+                <div className="skills-pending__head">
+                  <span className="skills-pending__name">{schedule.name}</span>
+                  <span className="settings-chip">{schedule.cron}</span>
+                  <span className="settings-chip">{schedule.timezone}</span>
+                  {schedule.last_status !== 'idle' && (
+                    <span className="settings-chip">
+                      {t('schedules.last')}: {schedule.last_status}
+                    </span>
+                  )}
+                </div>
+                <p className="skills-pending__desc">
+                  {targetSummary(schedule)} · {t('schedules.next')}: {relativeTime(schedule.next_run_at)}
+                </p>
+                <div className="skills-pending__actions">
+                  <Switch
+                    id={`sched-${schedule.id}`}
+                    checked={schedule.enabled}
+                    onChange={(e) => void toggleEnabled(schedule, e.target.checked)}
+                    aria-label={t('schedules.enabled')}
+                  />
+                  <Button variant="primary" size="sm" onClick={() => void runNow(schedule)}>
+                    <Play size={14} />
+                    {t('schedules.run_now')}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => openEdit(schedule)}>
+                    {t('schedules.edit')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => void openHistory(schedule)}>
+                    <History size={14} />
+                    {t('schedules.history')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => void remove(schedule)}>
+                    <Trash2 size={14} />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </WorkspacePage>
   );

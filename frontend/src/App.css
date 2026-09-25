@@ -14,5 +14,6 @@
 @import "./styles/07-skills.css";
 @import "./styles/08-memory.css";
 @import "./styles/09-goal-todo-org-dashboard.css";
+@import "./styles/10-workflows.css";
 
 /* App.css is an @import hub; per-domain styles live in ./styles/*.css. App.tsx keeps `import './App.css'` unchanged. */

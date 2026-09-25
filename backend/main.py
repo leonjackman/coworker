@@ -460,6 +460,7 @@ from coworker.api.skills import (
 from coworker import api as _api
 from coworker.api import workflows as _workflows_api
 from coworker.api import schedules as _schedules_api
+from coworker.api import notifications as _notifications_api
 
 # Register routers in the order the endpoints used to appear in this file so
 # FastAPI's route matching order is preserved.
@@ -475,6 +476,7 @@ app.include_router(_api.terminal.router)
 app.include_router(_api.skills.router)
 app.include_router(_workflows_api.router)
 app.include_router(_schedules_api.router)
+app.include_router(_notifications_api.router)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=9527)

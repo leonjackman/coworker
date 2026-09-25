@@ -94,6 +94,10 @@ import type {
   ScheduleRunsResponse,
   SchedulePreviewResponse,
   ScheduleValidateResponse,
+  WorkflowEvidence,
+  WorkflowRunEvent,
+  NotificationsResponse,
+  WorkflowTemplatesResponse,
 } from '../types';
 import { getLanguage } from '../lib/i18n';
 
@@ -238,6 +242,16 @@ export interface ChatService {
   rejectPendingWorkflow: (name: string) => Promise<{ status: string }>;
   validateWorkflow: (content: string) => Promise<WorkflowValidateResponse>;
   renderWorkflow: (content: string) => Promise<{ status: string; yaml: string; message?: string }>;
+  renderWorkflowSteps: (payload: Record<string, unknown>) => Promise<{ status: string; yaml: string; errors: string[] }>;
+  submitWorkflowFeedback: (name: string, feedback: string, stepId?: string, runId?: string, apply?: boolean) => Promise<{ status: string; applied: boolean; yaml?: string; message?: string }>;
+  resumeWorkflowRun: (runId: string, decisions: Record<string, unknown>) => Promise<WorkflowRunResponse>;
+  getRunEvidence: (runId: string) => Promise<{ status: string; evidence: WorkflowEvidence[] }>;
+  getRunEvents: (runId: string) => Promise<{ status: string; events: WorkflowRunEvent[] }>;
+  recordFromSession: (sessionId: string) => Promise<{ status: string; review: Record<string, unknown> }>;
+  listWorkflowTemplates: () => Promise<WorkflowTemplatesResponse>;
+  installWorkflowTemplate: (templateId: string) => Promise<{ status: string; message?: string; workflow?: unknown }>;
+  listNotifications: () => Promise<NotificationsResponse>;
+  clearNotifications: () => Promise<{ status: string; removed: number }>;
   listSchedules: () => Promise<SchedulesListResponse>;
   getSchedule: (id: string) => Promise<ScheduleDetailResponse>;
   createSchedule: (payload: Record<string, unknown>) => Promise<ScheduleDetailResponse>;
@@ -681,6 +695,64 @@ class ElectronChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     });
+  }
+
+  async renderWorkflowSteps(payload: Record<string, unknown>): Promise<{ status: string; yaml: string; errors: string[] }> {
+    return this._workflowRequest('/workflows/render/steps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async submitWorkflowFeedback(name: string, feedback: string, stepId = '', runId = '', apply = false): Promise<{ status: string; applied: boolean; yaml?: string; message?: string }> {
+    return this._workflowRequest(`/workflows/${encodeURIComponent(name)}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback, step_id: stepId, run_id: runId, apply }),
+    });
+  }
+
+  async resumeWorkflowRun(runId: string, decisions: Record<string, unknown>): Promise<WorkflowRunResponse> {
+    return this._workflowRequest<WorkflowRunResponse>(`/workflows/runs/${encodeURIComponent(runId)}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decisions }),
+    });
+  }
+
+  async getRunEvidence(runId: string): Promise<{ status: string; evidence: WorkflowEvidence[] }> {
+    return this._workflowRequest(`/workflows/runs/${encodeURIComponent(runId)}/evidence`);
+  }
+
+  async getRunEvents(runId: string): Promise<{ status: string; events: WorkflowRunEvent[] }> {
+    return this._workflowRequest(`/workflows/runs/${encodeURIComponent(runId)}/events.json`);
+  }
+
+  async recordFromSession(sessionId: string): Promise<{ status: string; review: Record<string, unknown> }> {
+    return this._workflowRequest('/workflows/record/from-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  async listWorkflowTemplates(): Promise<WorkflowTemplatesResponse> {
+    return this._workflowRequest<WorkflowTemplatesResponse>('/workflows/templates');
+  }
+
+  async installWorkflowTemplate(templateId: string): Promise<{ status: string; message?: string }> {
+    return this._workflowRequest(`/workflows/templates/${encodeURIComponent(templateId)}/install`, {
+      method: 'POST',
+    });
+  }
+
+  async listNotifications(): Promise<NotificationsResponse> {
+    return this._workflowRequest<NotificationsResponse>('/notifications');
+  }
+
+  async clearNotifications(): Promise<{ status: string; removed: number }> {
+    return this._workflowRequest('/notifications/clear', { method: 'POST' });
   }
 
   async listSchedules(): Promise<SchedulesListResponse> {
@@ -2133,6 +2205,62 @@ class HttpChatService implements ChatService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
     });
+  }
+
+  async renderWorkflowSteps(payload: Record<string, unknown>): Promise<{ status: string; yaml: string; errors: string[] }> {
+    return this.request('/workflows/render/steps', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async submitWorkflowFeedback(name: string, feedback: string, stepId = '', runId = '', apply = false): Promise<{ status: string; applied: boolean; yaml?: string; message?: string }> {
+    return this.request(`/workflows/${encodeURIComponent(name)}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback, step_id: stepId, run_id: runId, apply }),
+    });
+  }
+
+  async resumeWorkflowRun(runId: string, decisions: Record<string, unknown>): Promise<WorkflowRunResponse> {
+    return this.request<WorkflowRunResponse>(`/workflows/runs/${encodeURIComponent(runId)}/resume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decisions }),
+    });
+  }
+
+  async getRunEvidence(runId: string): Promise<{ status: string; evidence: WorkflowEvidence[] }> {
+    return this.request(`/workflows/runs/${encodeURIComponent(runId)}/evidence`);
+  }
+
+  async getRunEvents(runId: string): Promise<{ status: string; events: WorkflowRunEvent[] }> {
+    return this.request(`/workflows/runs/${encodeURIComponent(runId)}/events.json`);
+  }
+
+  async recordFromSession(sessionId: string): Promise<{ status: string; review: Record<string, unknown> }> {
+    return this.request('/workflows/record/from-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  }
+
+  async listWorkflowTemplates(): Promise<WorkflowTemplatesResponse> {
+    return this.request<WorkflowTemplatesResponse>('/workflows/templates');
+  }
+
+  async installWorkflowTemplate(templateId: string): Promise<{ status: string; message?: string }> {
+    return this.request(`/workflows/templates/${encodeURIComponent(templateId)}/install`, { method: 'POST' });
+  }
+
+  async listNotifications(): Promise<NotificationsResponse> {
+    return this.request<NotificationsResponse>('/notifications');
+  }
+
+  async clearNotifications(): Promise<{ status: string; removed: number }> {
+    return this.request('/notifications/clear', { method: 'POST' });
   }
 
   async listSchedules(): Promise<SchedulesListResponse> {

@@ -378,6 +378,9 @@ def build_workspace_tools(
             tools=tools,
             skill_manager=skill_manager,
             audit_context=audit_context,
+            llm=worker_llm,
+            data_dir=worker_data_dir,
+            approval_store=worker_approval_store,
         )
 
     @tool(args_schema=WorkflowArgs)

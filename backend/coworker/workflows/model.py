@@ -29,6 +29,8 @@ VALID_KINDS = ACTION_KINDS | CONTROL_KINDS
 # Input value types.
 VALID_INPUT_TYPES = frozenset({"string", "number", "boolean", "list", "object", "secret"})
 
+VALID_STEP_MODES = frozenset({"auto", "agent"})
+
 WORKFLOW_STATUSES = frozenset({"draft", "active", "deprecated"})
 WORKFLOW_SOURCES = frozenset({"user", "project", "agent", "market"})
 
@@ -73,7 +75,14 @@ class Step:
     locator: dict[str, Any] | None = None
     pre: list[str] = field(default_factory=list)
     post: list[str] = field(default_factory=list)
-    on_error: dict[str, Any] = field(default_factory=DEFAULT_ON_ERROR)
+    # Step contract (P0): what the step is for and what "done" means beyond the
+    # action's own ok. ``success`` is merged with ``post`` at verification time.
+    goal: str = ""
+    success: list[str] = field(default_factory=list)
+    # Execution mode: "auto" = deterministic first, agent takes over on failure;
+    # "agent" = hand this step straight to the agent (which must self-assess).
+    mode: str = "auto"
+    on_error: dict[str, Any] = field(default_factory=dict)
     timeout: int = 30
     approval: bool = False
     when: str = ""
@@ -101,7 +110,13 @@ class Step:
             data["pre"] = list(self.pre)
         if self.post:
             data["post"] = list(self.post)
-        if self.on_error and self.on_error != DEFAULT_ON_ERROR:
+        if self.goal:
+            data["goal"] = self.goal
+        if self.success:
+            data["success"] = list(self.success)
+        if self.mode and self.mode != "auto":
+            data["mode"] = self.mode
+        if self.on_error:
             data["on_error"] = dict(self.on_error)
         if self.timeout != 30:
             data["timeout"] = self.timeout
@@ -137,6 +152,7 @@ class Workflow:
     outputs: dict[str, str] = field(default_factory=dict)
     triggers: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
+    fingerprint: str = ""
     status: str = "active"
     source: str = "user"
     file_path: Path | None = None
@@ -167,6 +183,7 @@ class Workflow:
             "outputs": dict(self.outputs),
             "triggers": list(self.triggers),
             "provenance": dict(self.provenance),
+            "fingerprint": self.fingerprint,
             "status": self.status,
             "source": self.source,
             "step_count": len(self.steps),
@@ -253,6 +270,7 @@ class Run:
     completed: list[str] = field(default_factory=list)
     outputs: dict[str, Any] = field(default_factory=dict)
     error: str = ""
+    pending_step: str = ""
     started_at: str = ""
     ended_at: str = ""
     trigger: str = "manual"
@@ -266,6 +284,7 @@ class Run:
             "completed": list(self.completed),
             "outputs": self.outputs,
             "error": self.error,
+            "pending_step": self.pending_step,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "trigger": self.trigger,
@@ -281,6 +300,7 @@ class Run:
             completed=[str(x) for x in (data.get("completed") or [])],
             outputs=dict(data.get("outputs") or {}),
             error=str(data.get("error") or ""),
+            pending_step=str(data.get("pending_step") or ""),
             started_at=str(data.get("started_at") or ""),
             ended_at=str(data.get("ended_at") or ""),
             trigger=str(data.get("trigger") or "manual"),
@@ -314,3 +334,23 @@ class NeedsHuman(WorkflowError):
     def __init__(self, step_id: str, message: str = ""):
         super().__init__(message or f"step '{step_id}' needs human input")
         self.step_id = step_id
+
+
+class GotoStep(WorkflowError):
+    """Control-flow jump requested by an ``on_error.then: goto:<id>`` policy."""
+
+    def __init__(self, step_id: str, target: str):
+        super().__init__(f"goto {target} from {step_id}")
+        self.step_id = step_id
+        self.target = target
+
+
+class SkippedStep:
+    """Sentinel result recorded when an ``on_error.then: skip`` policy fires."""
+
+    def __init__(self, step_id: str, error: str = ""):
+        self.step_id = step_id
+        self.error = error
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"skipped": True, "step_id": self.step_id, "error": self.error}

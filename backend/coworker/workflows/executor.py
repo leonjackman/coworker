@@ -27,8 +27,10 @@ from .assertions import evaluate, evaluate_all
 from .env import StepEnvironment
 from .events import RunEventEmitter
 from .model import (
+    GotoStep,
     NeedsHuman,
     Run,
+    SkippedStep,
     Step,
     StepFailed,
     Workflow,
@@ -88,11 +90,26 @@ class WorkflowExecutor:
                 trigger=trigger,
             )
 
+        run.status = "running"
+        run.pending_step = ""
         emitter.emit(
             "run_start",
             status="running",
             data={"workflow": workflow.name, "resume": resume, "trigger": trigger},
         )
+        try:
+            from .fingerprint import current_fingerprint
+
+            current_fp = current_fingerprint()
+            if workflow.fingerprint and workflow.fingerprint != current_fp:
+                emitter.emit(
+                    "drift",
+                    status="warning",
+                    message="environment fingerprint changed since this workflow was saved",
+                    data={"stored": workflow.fingerprint, "current": current_fp},
+                )
+        except Exception:  # noqa: BLE001 - fingerprinting is advisory only
+            pass
         executor_state = _State(
             emitter=emitter, store=self.store, env=env, on_patch=on_patch, workflow=workflow
         )
@@ -100,10 +117,18 @@ class WorkflowExecutor:
             self._exec_steps(workflow, workflow.steps, run, executor_state)
             run.outputs = self._resolve_outputs(workflow, run.context)
             run.status = "ok"
+            run.pending_step = ""
         except NeedsHuman as exc:
             run.status = "needs_human"
             run.error = str(exc)
-            emitter.emit("needs_human", step_id=exc.step_id, status="needs_human", message=str(exc))
+            run.pending_step = exc.step_id
+            emitter.emit(
+                "needs_human",
+                step_id=exc.step_id,
+                status="needs_human",
+                message=str(exc),
+                data={"pending_step": exc.step_id},
+            )
         except StepFailed as exc:
             run.status = "failed"
             run.error = str(exc)
@@ -159,25 +184,44 @@ class WorkflowExecutor:
         run: Run,
         state: "_State",
     ) -> None:
-        for step in steps:
+        index = 0
+        while index < len(steps):
+            step = steps[index]
             if step.id in run.completed:
+                index += 1
                 continue
             state.guard()
             if step.when:
                 try:
                     if not resolve_bool(step.when, run.context, self.secrets):
                         state.emitter.emit("step_end", step_id=step.id, status="skipped")
+                        index += 1
                         continue
                 except TemplateError as exc:
                     raise StepFailed(step.id, f"bad when-condition: {exc}") from exc
 
-            if step.foreach:
-                self._exec_loop_body(workflow, step, run, state)
-            else:
-                result = self._exec_step(workflow, step, run, state)
-                run.context.setdefault("steps", {})[step.bind] = result
+            try:
+                if step.foreach:
+                    self._exec_loop_body(workflow, step, run, state)
+                else:
+                    result = self._exec_step(workflow, step, run, state)
+                    if isinstance(result, SkippedStep):
+                        result = result.to_dict()
+                    run.context.setdefault("steps", {})[step.bind] = result
+            except GotoStep as jump:
+                target = next((i for i, s in enumerate(steps) if s.id == jump.target), None)
+                if target is None:
+                    raise StepFailed(step.id, f"goto target not found: {jump.target}") from jump
+                state.emitter.emit(
+                    "step_end", step_id=step.id, status="goto", message=f"goto {jump.target}"
+                )
+                if jump.target in run.completed:
+                    run.completed.remove(jump.target)
+                index = target
+                continue
             run.completed.append(step.id)
             self._checkpoint(run)
+            index += 1
 
     def _exec_loop_body(self, workflow: Workflow, step: Step, run: Run, state: "_State") -> None:
         try:
@@ -223,16 +267,32 @@ class WorkflowExecutor:
             if not gate:
                 raise NeedsHuman(step.id, f"approval denied for '{step.id}'")
 
+        specs = self._success_specs(step)
+
+        # mode=agent: skip the deterministic path entirely and let the agent do
+        # the step (it must self-assess; failure escalates to a human gate).
+        if step.mode == "agent":
+            taken = self._takeover(step, "", run, state)
+            if taken is None:
+                raise NeedsHuman(step.id, f"agent step '{step.id}' could not complete")
+            self._emit_success(step, run, state, taken)
+            return taken
+
         attempts = int(step.on_error.get("retry", 0) or 0) + 1
         last_error = ""
         patched_step = step
-        healed = False
+        result: Any = None
         for attempt in range(attempts):
             try:
                 result = self._dispatch(workflow, patched_step, run, state)
                 break
-            except (StepFailed, NeedsHuman):
+            except (NeedsHuman, GotoStep):
+                # Control-flow signals are never treated as failures.
                 raise
+            except StepFailed as exc:
+                # Semantic/verification failure → recovery (policy engine).
+                result = self._recover(workflow, step, exc.message, run, state, patched_step)
+                break
             except TemplateError as exc:
                 raise StepFailed(step.id, f"template error: {exc}") from exc
             except Exception as exc:  # noqa: BLE001 - convert adapter errors into step failures
@@ -240,29 +300,14 @@ class WorkflowExecutor:
                 if attempt < attempts - 1:
                     time.sleep(min(2 ** attempt * 0.25, 2.0))
                     continue
+                result = self._recover(workflow, step, last_error, run, state, patched_step)
+                break
 
-                # Exhausted retries → self-heal (W15).
-                if not healed:
-                    repaired = self._try_heal(patched_step, last_error, run, state)
-                    if repaired is not None:
-                        healed = True
-                        patched_step = _apply_repair(patched_step, repaired)
-                        try:
-                            result = self._dispatch(workflow, patched_step, run, state)
-                            self._record_patch(workflow, step, patched_step, state)
-                            break
-                        except Exception as exc2:  # noqa: BLE001
-                            last_error = f"{type(exc2).__name__}: {exc2}"
-                raise StepFailed(step.id, last_error or "step failed")
-
-        # Post-conditions gate success (W14).
-        specs = list(step.post)
-        if step.kind == "assert" and step.do:
-            specs = [step.do, *specs]
-        if specs:
+        # Post-conditions gate success (W14), unless the step was skipped.
+        if not isinstance(result, SkippedStep) and specs:
             ok, message = evaluate_all(specs, result, run.context)
             if not ok:
-                raise StepFailed(step.id, message)
+                result = self._recover(workflow, step, message, run, state, patched_step)
 
         if isinstance(result, dict):
             shot = result.get("screenshot") or result.get("data_url")
@@ -272,13 +317,110 @@ class WorkflowExecutor:
                 except Exception:  # noqa: BLE001
                     pass
 
+        self._emit_success(step, run, state, result)
+        return result
+
+    @staticmethod
+    def _success_specs(step: Step) -> list[str]:
+        specs = list(step.post) + list(step.success)
+        if step.kind == "assert" and step.do:
+            specs = [step.do, *specs]
+        return specs
+
+    def _emit_success(self, step: Step, run: Run, state: "_State", result: Any) -> None:
+        payload = result.to_dict() if isinstance(result, SkippedStep) else result
         state.emitter.emit(
             "step_end",
             step_id=step.id,
-            status="ok",
-            data={"preview": _preview(result)},
+            status="skipped" if isinstance(result, SkippedStep) else "ok",
+            data={"preview": _preview(payload)},
         )
-        return result
+
+    # ── error policy engine (P2) ────────────────────────────────────────
+
+    def _recover(
+        self,
+        workflow: Workflow,
+        step: Step,
+        error: str,
+        run: Run,
+        state: "_State",
+        patched_step: Step,
+    ) -> Any:
+        """Route a failure per ``on_error.then``; may return a result or raise.
+
+        Order: locator self-heal (drift) → explicit policy. The default policy
+        is ``agent`` when the environment can run an agent, else ``abort``.
+        """
+        # 1) Locator drift: try an LLM/fallback repair once, then re-dispatch.
+        if step.locator and step.kind in ("browser", "app", "computer") and not state.healed.get(step.id):
+            repaired = self._try_heal(patched_step, error, run, state)
+            if repaired is not None:
+                state.healed[step.id] = True
+                healed_step = _apply_repair(patched_step, repaired)
+                try:
+                    result = self._dispatch(workflow, healed_step, run, state)
+                    self._record_patch(workflow, step, healed_step, state)
+                    return result
+                except Exception as exc:  # noqa: BLE001
+                    error = f"{type(exc).__name__}: {exc}"
+
+        policy = str(step.on_error.get("then") or "").strip().lower()
+        if not policy:
+            policy = "agent" if state.env.supports_agentic() else "abort"
+        if policy == "agent" and not state.env.supports_agentic():
+            policy = "abort"
+
+        state.emitter.emit(
+            "recover",
+            step_id=step.id,
+            status=policy,
+            message=error,
+        )
+
+        if policy in ("abort", "fail"):
+            raise StepFailed(step.id, error or "step failed")
+        if policy == "skip":
+            return SkippedStep(step.id, error)
+        if policy == "human":
+            raise NeedsHuman(step.id, error or f"step '{step.id}' needs human input")
+        if policy.startswith("goto:"):
+            raise GotoStep(step.id, policy.split(":", 1)[1].strip())
+        if policy == "self_heal":
+            raise StepFailed(step.id, error or "step failed")
+        # policy == "agent"
+        taken = self._takeover(step, error, run, state)
+        if taken is not None:
+            return taken
+        raise NeedsHuman(step.id, f"agent takeover could not complete '{step.id}': {error}")
+
+    def _takeover(self, step: Step, error: str, run: Run, state: "_State") -> dict[str, Any] | None:
+        """Hand a step to the agent (full tools); it must self-assess (P3)."""
+        if not state.env.supports_agentic():
+            return None
+        goal = step.goal or f"{step.kind} step '{step.id}'" + (f": {step.do}" if step.do else "")
+        specs = self._success_specs(step)
+        prompt = _takeover_prompt(step, goal, error, run.context, specs)
+        try:
+            result = state.env.agentic(prompt, step)
+        except Exception as exc:  # noqa: BLE001 - takeover failure falls back to human
+            state.emitter.emit("agent_takeover", step_id=step.id, status="failed", message=str(exc))
+            return None
+        output = ""
+        if isinstance(result, dict):
+            output = str(result.get("output", ""))
+        else:
+            output = str(result)
+        blocked = "VERDICT: BLOCKED" in output.upper()
+        state.emitter.emit(
+            "agent_takeover",
+            step_id=step.id,
+            status="blocked" if blocked else "done",
+            message=(output or "")[-400:],
+        )
+        if blocked:
+            return None
+        return {"agentic": True, "takeover": True, "output": output, "recovered_from": error}
 
     def _dispatch(self, workflow: Workflow, step: Step, run: Run, state: "_State") -> Any:
         context = run.context
@@ -513,6 +655,7 @@ class _State:
         self.on_patch = on_patch
         self.workflow = workflow
         self.total_steps = 0
+        self.healed: dict[str, bool] = {}
         import threading
 
         self.lock = threading.RLock()
@@ -521,6 +664,41 @@ class _State:
         self.total_steps += 1
         if self.total_steps > MAX_TOTAL_STEPS:
             raise StepFailed("guard", f"run exceeded {MAX_TOTAL_STEPS} steps")
+
+
+def _takeover_prompt(
+    step: Step,
+    goal: str,
+    error: str,
+    context: dict[str, Any],
+    specs: list[str],
+) -> str:
+    inputs = context.get("inputs", {})
+    try:
+        inputs_text = json.dumps(inputs, ensure_ascii=False)[:1500]
+    except (TypeError, ValueError):
+        inputs_text = str(inputs)[:1500]
+    lines = [
+        f"A fixed workflow is executing and the step '{step.id}' did not succeed.",
+        "Take over this ONE step and complete it, then hand control back.",
+        "",
+        f"STEP GOAL: {goal}",
+        f"STEP KIND: {step.kind}" + (f" / action: {step.do}" if step.do else ""),
+    ]
+    if error:
+        lines.append(f"FAILURE: {error}")
+    if step.locator:
+        lines.append(f"TARGET LOCATOR: {json.dumps(step.locator, ensure_ascii=False)}")
+    if specs:
+        lines.append(f"SUCCESS CRITERIA: {'; '.join(specs)}")
+    lines += [
+        f"CURRENT INPUTS: {inputs_text}",
+        "",
+        "Use any tools you need. When finished, end your reply with a final line:",
+        "VERDICT: DONE   (if the step is complete)",
+        "VERDICT: BLOCKED (if you cannot complete it)",
+    ]
+    return "\n".join(lines)
 
 
 def _promote_locator(locator: dict[str, Any] | None, descriptor: dict[str, Any]) -> dict[str, Any]:
