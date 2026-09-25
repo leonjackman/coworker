@@ -1427,5 +1427,7 @@
   "workflows.edge_style": "Edge style",
   "workflows.edge_default": "Intuitive",
   "workflows.edge_straight": "Straight",
-  "workflows.edge_curve": "Curved"
+  "workflows.edge_curve": "Curved",
+  "workflows.fullscreen": "Open in a separate window",
+  "workflows.loading": "Loading…"
 }

@@ -36,8 +36,9 @@ export function WorkflowFlowGraph({ steps, triggers, outputs }: Props) {
     const marker = { type: MarkerType.ArrowClosed } as const;
     const allEdges: Edge[] = [...stepEdges];
     if (steps.length > 0) {
-      allEdges.push({ id: 'to-first', source: triggerId, target: '0', type: 'smoothstep', markerEnd: marker });
-      allEdges.push({ id: 'to-out', source: String(steps.length - 1), target: outputId, type: 'smoothstep', markerEnd: marker });
+      // Top-level node ids are the step ids (stable, not path keys).
+      allEdges.push({ id: 'to-first', source: triggerId, target: steps[0]!.id, type: 'smoothstep', markerEnd: marker });
+      allEdges.push({ id: 'to-out', source: steps[steps.length - 1]!.id, target: outputId, type: 'smoothstep', markerEnd: marker });
     } else {
       allEdges.push({ id: 'trig-out', source: triggerId, target: outputId, type: 'smoothstep', markerEnd: marker });
     }

@@ -72,51 +72,68 @@ export function PillNode({ data }: NodeProps) {
 
 export const nodeTypes = { step: StepNode, pill: PillNode };
 
+/**
+ * Stable node id for a step. Based on the user-facing step id namespaced by its
+ * parent, NOT the list index — so reordering/rewiring keeps a node's identity
+ * (and thus its canvas position).
+ */
+function nodeKey(parentKey: string, slot: string | undefined, stepId: string): string {
+  return parentKey ? `${parentKey}/${slot}/${stepId}` : stepId;
+}
+
+export interface CollectedGraph {
+  nodes: Node[];
+  edges: Edge[];
+  /** node id -> data path (for locating/editing the underlying step). */
+  nodeIdToPath: Map<string, string>;
+}
+
 /** Collect step nodes/edges (no positions) for a workflow's step tree. */
 export function collectStepGraph(
   steps: WorkflowStep[],
   status: Record<string, string> = {},
-): { nodes: Node[]; edges: Edge[] } {
+): CollectedGraph {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
-  const walk = (list: WorkflowStep[], listPath: Array<number | string>, parentId?: string, slot?: string) => {
+  const nodeIdToPath = new Map<string, string>();
+  const walk = (
+    list: WorkflowStep[],
+    listPath: Array<number | string>,
+    parentKey: string,
+    parentId: string | undefined,
+    slot: string | undefined,
+  ) => {
+    const idToKey = new Map(list.map((step) => [step.id, nodeKey(parentKey, slot, step.id)]));
     list.forEach((step, index) => {
-      const path = [...listPath, index];
-      const id = path.join('.');
+      const id = nodeKey(parentKey, slot, step.id);
+      const path = [...listPath, index].join('.');
+      nodeIdToPath.set(id, path);
       nodes.push({
         id,
         type: 'step',
         position: { x: 0, y: 0 },
-        data: { step, ...(slot ? { slot } : {}), ...(status[step.id] ? { status: status[step.id] } : {}) },
+        data: { step, path, ...(slot ? { slot } : {}), ...(status[step.id] ? { status: status[step.id] } : {}) },
       });
       if (parentId) {
         edges.push({ id: `e-${parentId}-${id}`, source: parentId, target: id, label: slot, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } });
       }
       SLOTS.forEach((s) => {
         const children = step[s] as WorkflowStep[] | undefined;
-        if (children?.length) walk(children, [...path, s], id, s);
+        if (children?.length) walk(children, [...listPath, index, s], id, id, s);
       });
     });
-    // Within a list: use explicit ``next`` wiring when present, else sequential.
-    // NOTE: node ids are path keys ("0","2.then.1"), but ``next`` stores step
-    // ids ("open"), so map step id -> node (path) id for the edge target.
+    // Within a list: explicit ``next`` wiring when present, else sequential.
     const wired = list.some((step) => step.next);
-    const idToNode = new Map(list.map((step, i) => [step.id, [...listPath, i].join('.')]));
     list.forEach((step, index) => {
-      const from = [...listPath, index].join('.');
-      const nextNode = wired
-        ? step.next
-          ? idToNode.get(step.next) ?? ''
-          : ''
-        : index + 1 < list.length
-          ? [...listPath, index + 1].join('.')
-          : '';
-      if (!nextNode) return;
-      edges.push({ id: `seq-${from}-${nextNode}`, source: from, target: nextNode, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } });
+      const from = idToKey.get(step.id);
+      const nextLocal = wired ? step.next ?? '' : index + 1 < list.length ? list[index + 1]!.id : '';
+      const to = nextLocal ? idToKey.get(nextLocal) : undefined;
+      if (!from || !to) return;
+      edges.push({ id: `seq-${from}-${to}`, source: from, target: to, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } });
     });
   };
-  walk(steps, []);
-  return { nodes, edges };
+  walk(steps, [], '', undefined, undefined);
+  return { nodes, edges, nodeIdToPath };
 }
 
 /** dagre top-to-bottom layout for an arbitrary node/edge set. */
@@ -133,7 +150,30 @@ export function layoutGraph(nodes: Node[], edges: Edge[]): Node[] {
   });
 }
 
-export function buildGraph(steps: WorkflowStep[], status: Record<string, string> = {}): { nodes: Node[]; edges: Edge[] } {
-  const { nodes, edges } = collectStepGraph(steps, status);
-  return { nodes: layoutGraph(nodes, edges), edges };
+export interface BuiltGraph {
+  nodes: Node[];
+  edges: Edge[];
+  nodeIdToPath: Map<string, string>;
+}
+
+/**
+ * Build the graph using stored positions (by node id). Nodes without a stored
+ * position get a simple default offset — never an automatic re-layout, so
+ * connecting/reordering keeps everything where the user put it. Call
+ * ``layoutGraph`` explicitly for the "auto layout" action.
+ */
+export function buildGraph(
+  steps: WorkflowStep[],
+  status: Record<string, string> = {},
+  positions?: Map<string, { x: number; y: number }>,
+): BuiltGraph {
+  const { nodes, edges, nodeIdToPath } = collectStepGraph(steps, status);
+  const positioned = nodes.map((node, index) => {
+    const stored = positions?.get(node.id);
+    if (stored) return { ...node, position: stored };
+    const fallback = { x: 80 + (index % 3) * 260, y: 60 + Math.floor(index / 3) * 120 };
+    positions?.set(node.id, fallback);
+    return { ...node, position: fallback };
+  });
+  return { nodes: positioned, edges, nodeIdToPath };
 }

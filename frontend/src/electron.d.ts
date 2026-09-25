@@ -82,6 +82,7 @@ declare global {
       clipboardReadText: () => Promise<string>;
       clipboardWriteText: (text: string) => Promise<void>;
       getRuntimeConfig: () => Promise<RuntimeConfig>;
+      openCanvasWindow?: (payload: { name: string; title?: string }) => Promise<boolean>;
       updateRuntimeConfig: (payload: RuntimeConfigUpdate) => Promise<RuntimeConfig>;
       streamChatMessage: (requestId: string, payload: ChatRequest, onEvent: StreamEventCallback) => Promise<void>;
       abortChatStream: (requestId: string) => void;

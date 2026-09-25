@@ -1415,5 +1415,7 @@
   "workflows.edge_style": "连线样式",
   "workflows.edge_default": "直觉线",
   "workflows.edge_straight": "直线",
-  "workflows.edge_curve": "曲线"
+  "workflows.edge_curve": "曲线",
+  "workflows.fullscreen": "在新窗口打开",
+  "workflows.loading": "加载中…"
 }

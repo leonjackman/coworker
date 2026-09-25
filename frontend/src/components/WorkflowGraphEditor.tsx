@@ -11,14 +11,15 @@ import {
   type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowDown, ArrowUp, Loader2, Plus, Redo2, Save, Sparkles, Spline, Trash2, Undo2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Loader2, Maximize2, Plus, Redo2, Save, Sparkles, Spline, Trash2, Undo2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { t, translateError } from '../lib/i18n';
 import { isEditableTarget } from '../lib/dom';
 import { chatService } from '../services/chatService';
-import { buildGraph, nodeTypes } from './workflows/flowGraph';
+import { buildGraph, collectStepGraph, layoutGraph, nodeTypes } from './workflows/flowGraph';
 import { edgeTypes } from './workflows/EditableEdge';
 import { DO_KINDS, DO_SUGGESTIONS, KIND_GROUPS, KIND_META, LOCATOR_KINDS, PARAM_KINDS, kindDescKey, kindFamily, kindLabelKey, kindStripe } from './workflows/kinds';
 import type { WorkflowStep, WorkflowVersion } from '../types';
@@ -172,9 +173,11 @@ interface Props {
   target: GraphEditorTarget | null;
   onClose: () => void;
   onSaved: () => void;
+  /** When hosted in its own window, hide the "open in window" button. */
+  standalone?: boolean;
 }
 
-export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
+export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = false }: Props) {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -193,10 +196,17 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const [versionBusy, setVersionBusy] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
+  const [canvasWindow, setCanvasWindow] = useState<Window | null>(null);
+  const [popupRoot, setPopupRoot] = useState<HTMLElement | null>(null);
+  const [inlineFullscreen, setInlineFullscreen] = useState(false);
   const [edgeType, setEdgeType] = useState<'default' | 'straight' | 'smoothstep'>('default');
   const reconnectHandledRef = useRef(false);
   const edgesRef = useRef<Edge[]>([]);
   const deleteEdgeRef = useRef<(id: string) => void>(() => {});
+  // Stored node positions keyed by stable node id (survive connect/reorder).
+  const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  // Stable node id -> step path, for locating steps from edge endpoints.
+  const idToPathRef = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
@@ -231,7 +241,8 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const applyGraph = useCallback(
     (next: WorkflowStep[], status: Record<string, string> = runStatus) => {
       setSteps(next);
-      const built = buildGraph(next, status);
+      const built = buildGraph(next, status, positionsRef.current);
+      idToPathRef.current = built.nodeIdToPath;
       setNodes(built.nodes);
       setEdges(decorateEdges(built.edges));
     },
@@ -240,7 +251,8 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
 
   const rebuild = useCallback(
     (next: WorkflowStep[]) => {
-      const built = buildGraph(next, runStatus);
+      const built = buildGraph(next, runStatus, positionsRef.current);
+      idToPathRef.current = built.nodeIdToPath;
       setSteps(next);
       setNodes(built.nodes);
       setEdges(decorateEdges(built.edges));
@@ -257,6 +269,52 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
     });
   }, [setEdges]);
 
+  // Open the canvas in a separate native window (Electron) when available.
+  const openFullscreen = useCallback(() => {
+    const api = window.electronAPI;
+    if (api?.openCanvasWindow) {
+      void api.openCanvasWindow({ name: name || 'workflow', title: name || 'Workflow' });
+      return;
+    }
+    if (canvasWindow && !canvasWindow.closed) {
+      canvasWindow.focus();
+      return;
+    }
+    const win = window.open('', 'cw-workflow-canvas', 'width=1280,height=860');
+    if (!win) {
+      // Popup blocked (e.g. Electron): fall back to an in-app full-screen overlay.
+      setInlineFullscreen(true);
+      return;
+    }
+    win.document.title = name || 'Workflow';
+    win.document.body.style.margin = '0';
+    win.document.body.style.height = '100vh';
+    win.document.body.style.overflow = 'hidden';
+    // Copy the app's stylesheets so the portaled editor is styled correctly.
+    document.querySelectorAll('link[rel="stylesheet"], style').forEach((node) => {
+      win.document.head.appendChild(node.cloneNode(true));
+    });
+    const root = win.document.createElement('div');
+    root.className = 'wf-popup-root';
+    win.document.body.appendChild(root);
+    setPopupRoot(root);
+    setCanvasWindow(win);
+  }, [canvasWindow, name]);
+
+  useEffect(() => {
+    if (!canvasWindow) return;
+    const reset = () => {
+      setCanvasWindow(null);
+      setPopupRoot(null);
+    };
+    canvasWindow.addEventListener('pagehide', reset);
+    canvasWindow.addEventListener('beforeunload', reset);
+    return () => {
+      canvasWindow.removeEventListener('pagehide', reset);
+      canvasWindow.removeEventListener('beforeunload', reset);
+    };
+  }, [canvasWindow]);
+
   useEffect(() => {
     if (!target) return;
     const initial = target.steps.length > 0 ? target.steps : [defaultStep(0)];
@@ -269,10 +327,15 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
     setBaseline(JSON.stringify({ name: target.name, description: target.description, steps: initial }));
     setSelectedVersion(target.version ?? 1);
     resetHistory(initial, target.name, target.description);
-    const built = buildGraph(initial, {});
+    // Seed initial positions with one dagre pass; afterwards positions are
+    // preserved and only change on explicit "auto layout" or drag.
+    const collected = collectStepGraph(initial, {});
+    const laid = layoutGraph(collected.nodes, collected.edges);
+    positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
+    idToPathRef.current = collected.nodeIdToPath;
     setSteps(initial);
-    setNodes(built.nodes);
-    setEdges(built.edges);
+    setNodes(laid);
+    setEdges(decorateEdges(collected.edges));
     // Load versions (edit mode only).
     if (!target.isNew && target.name) {
       void (async () => {
@@ -506,7 +569,17 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
     [selectedPath, rebuild],
   );
 
-  const relayout = useCallback(() => rebuild(steps), [steps, rebuild]);
+  // Auto layout: the ONLY action that repositions nodes.
+  const relayout = useCallback(() => {
+    const collected = collectStepGraph(steps, runStatus);
+    const laid = layoutGraph(collected.nodes, collected.edges);
+    positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
+    rebuild(steps);
+  }, [steps, runStatus, rebuild]);
+
+  const onNodeDragStop = useCallback((_event: unknown, node: Node) => {
+    positionsRef.current.set(node.id, node.position);
+  }, []);
 
   // Connect two sibling nodes: set the source's explicit ``next``.
   const connectSiblings = useCallback(
@@ -539,9 +612,10 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (connection.source && connection.target) {
-        connectSiblings(connection.source, connection.target);
-      }
+      if (!connection.source || !connection.target) return;
+      const sourcePath = idToPathRef.current.get(connection.source);
+      const targetPath = idToPathRef.current.get(connection.target);
+      if (sourcePath && targetPath) connectSiblings(sourcePath, targetPath);
     },
     [connectSiblings],
   );
@@ -553,8 +627,12 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
       setSteps((current) => {
         let next = current;
         for (const edge of list) {
-          const sourcePath = parsePath(edge.source);
-          const targetPath = parsePath(edge.target);
+          // Edge endpoints are stable node ids; resolve to step paths.
+          const sourcePathStr = idToPathRef.current.get(edge.source);
+          const targetPathStr = idToPathRef.current.get(edge.target);
+          if (!sourcePathStr || !targetPathStr) continue;
+          const sourcePath = parsePath(sourcePathStr);
+          const targetPath = parsePath(targetPathStr);
           const listPath = sourcePath.slice(0, -1);
           if (pathKey(listPath) !== pathKey(targetPath.slice(0, -1))) continue; // structural edge
           const stepsInList = getList(next, listPath).slice();
@@ -593,7 +671,9 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const onConnectEnd = useCallback(
     (_event: unknown, state: { toNode?: unknown; fromNode?: { id: string } | null }) => {
       if (state.toNode || !state.fromNode) return;
-      const fromPath = parsePath(state.fromNode.id);
+      const fromPathStr = idToPathRef.current.get(state.fromNode.id);
+      if (!fromPathStr) return;
+      const fromPath = parsePath(fromPathStr);
       if (fromPath.length !== 1) return; // top-level only
       const fromIndex = fromPath[0];
       if (typeof fromIndex !== 'number') return;
@@ -623,8 +703,12 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
       const source = 'source' in connection ? connection.source : '';
       const target2 = 'target' in connection ? connection.target : '';
       if (!source || !target2 || source === target2) return false;
-      const sourceList = parsePath(source).slice(0, -1);
-      const targetList = parsePath(target2).slice(0, -1);
+      // Endpoints are stable node ids; only same-list siblings may connect.
+      const sourcePath = idToPathRef.current.get(source);
+      const targetPath = idToPathRef.current.get(target2);
+      if (!sourcePath || !targetPath) return false;
+      const sourceList = parsePath(sourcePath).slice(0, -1);
+      const targetList = parsePath(targetPath).slice(0, -1);
       return pathKey(sourceList) === pathKey(targetList);
     },
     [],
@@ -700,7 +784,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const kind = selected?.kind ?? '';
   const family = kindStripe(kind);
 
-  return (
+  const editor = (
     <div className="wf-graph">
       {/* Meta card */}
       <div className="wf-meta">
@@ -751,6 +835,16 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
           <Spline size={14} />
           {t(edgeType === 'straight' ? 'workflows.edge_straight' : edgeType === 'smoothstep' ? 'workflows.edge_curve' : 'workflows.edge_default')}
         </Button>
+        {!standalone ? (
+          <Button
+            variant={canvasWindow || inlineFullscreen ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => (inlineFullscreen ? setInlineFullscreen(false) : openFullscreen())}
+            title={t('workflows.fullscreen')}
+          >
+            <Maximize2 size={14} />
+          </Button>
+        ) : null}
         {!target.isNew && versions.length > 0 ? (
           <>
             <span className="wf-toolbar__sep" />
@@ -813,7 +907,8 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
               edges={edges}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
-              onNodeClick={(_e, node) => setSelectedId(node.id)}
+              onNodeClick={(_e, node) => setSelectedId((node.data.path as string) ?? '')}
+              onNodeDragStop={onNodeDragStop}
               onConnect={onConnect}
               onConnectEnd={onConnectEnd}
               onEdgesDelete={onEdgesDelete}
@@ -1075,4 +1170,25 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
       </div>
     </div>
   );
+
+  if (canvasWindow && popupRoot) {
+    return createPortal(<div className="wf-popup-shell">{editor}</div>, popupRoot);
+  }
+  if (inlineFullscreen) {
+    return (
+      <div className="wf-fullscreen-overlay">
+        <div className="wf-popup-shell">{editor}</div>
+        <Button
+          className="wf-fullscreen-close"
+          variant="secondary"
+          size="sm"
+          onClick={() => setInlineFullscreen(false)}
+          title={t('common.cancel')}
+        >
+          ✕
+        </Button>
+      </div>
+    );
+  }
+  return editor;
 }

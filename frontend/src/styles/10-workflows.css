@@ -594,3 +594,50 @@
   box-shadow: 0 1px 3px var(--material-shadow);
 }
 .wf-edge-del:hover { background: var(--destructive-bg); }
+
+/* Full-screen (separate window) canvas host */
+.wf-popup-root {
+  height: 100vh;
+  overflow: hidden;
+  background: var(--background);
+}
+.wf-popup-shell {
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+}
+.wf-popup-shell .wf-graph {
+  flex: 1;
+  min-height: 0;
+}
+.wf-popup-shell .wf-body {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+.wf-popup-shell .wf-canvas {
+  height: auto;
+  min-height: 0;
+}
+.wf-popup-shell .wf-inspector {
+  max-height: none;
+  overflow-y: auto;
+}
+
+.wf-fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: var(--background);
+}
+.wf-fullscreen-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 2001;
+}
