@@ -184,6 +184,7 @@ class WorkflowExecutor:
         run: Run,
         state: "_State",
     ) -> None:
+        steps = _order_steps(steps)
         index = 0
         while index < len(steps):
             step = steps[index]
@@ -664,6 +665,34 @@ class _State:
         self.total_steps += 1
         if self.total_steps > MAX_TOTAL_STEPS:
             raise StepFailed("guard", f"run exceeded {MAX_TOTAL_STEPS} steps")
+
+
+def _order_steps(steps: list[Step]) -> list[Step]:
+    """Linearise a sibling list following explicit ``next`` links.
+
+    If no step declares ``next`` (legacy list-based workflows) the list order is
+    used unchanged. With explicit links, execution starts from each head (a step
+    not targeted by another) and follows the chain; any unreached steps are
+    appended in their original order so nothing is silently dropped.
+    """
+    if not any(getattr(step, "next", "") for step in steps):
+        return steps
+    by_id = {step.id: step for step in steps}
+    targets = {step.next for step in steps if step.next}
+    ordered: list[Step] = []
+    seen: set[str] = set()
+    for step in steps:
+        if step.id in targets:
+            continue
+        cursor: Step | None = step
+        while cursor is not None and cursor.id not in seen:
+            ordered.append(cursor)
+            seen.add(cursor.id)
+            cursor = by_id.get(cursor.next) if cursor.next else None
+    for step in steps:
+        if step.id not in seen:
+            ordered.append(step)
+    return ordered
 
 
 def _takeover_prompt(

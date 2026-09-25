@@ -167,7 +167,25 @@ class WorkflowManager:
         return {"status": "ok", "name": name, "yaml": text}
 
     def versions(self, name: str) -> list[dict[str, Any]]:
-        return self.store.history(name)
+        return self.store.list_versions(name)
+
+    def version_detail(self, name: str, version: int) -> dict[str, Any]:
+        workflow, is_current = self.store.read_version(name, version)
+        if workflow is None:
+            return {"status": "error", "message": f"no version {version} for {name}"}
+        data = workflow.to_dict(include_steps=True)
+        data["is_current"] = is_current
+        data["yaml"] = render_workflow(workflow)
+        return {"status": "ok", "workflow": data}
+
+    def delete_version(self, name: str, version: int) -> dict[str, Any]:
+        current = self.store.get(name)
+        if current is not None and current.version == version:
+            return {"status": "error", "message": "cannot delete the in-use version"}
+        removed = self.store.delete_version(name, version)
+        if not removed:
+            return {"status": "error", "message": f"no version {version} for {name}"}
+        return {"status": "ok", "version": version, "removed": True}
 
     def rollback(self, name: str, version: int) -> dict[str, Any]:
         """Restore a historical version as a NEW version (forward-only history)."""

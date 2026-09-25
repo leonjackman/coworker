@@ -385,6 +385,23 @@ def list_workflow_versions(name: str):
     return {"status": "ok", "versions": workflow_manager.versions(name)}
 
 
+@router.get("/workflows/{name}/versions/{version}")
+def get_workflow_version(name: str, version: int):
+    result = workflow_manager.version_detail(name, version)
+    if result.get("status") != "ok":
+        raise HTTPException(status_code=404, detail=result.get("message", "no version"))
+    return result
+
+
+@router.delete("/workflows/{name}/versions/{version}")
+def delete_workflow_version(name: str, version: int):
+    result = workflow_manager.delete_version(name, version)
+    if result.get("status") != "ok":
+        code = 400 if "in-use" in (result.get("message") or "") else 404
+        raise HTTPException(status_code=code, detail=result.get("message", "delete failed"))
+    return result
+
+
 @router.post("/workflows/{name}/rollback")
 def rollback_workflow(name: str, payload: WorkflowRollbackPayload):
     result = workflow_manager.rollback(name, payload.version)

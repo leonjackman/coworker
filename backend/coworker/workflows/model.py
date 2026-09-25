@@ -88,6 +88,8 @@ class Step:
     when: str = ""
     foreach: str = ""
     as_name: str = ""
+    # Explicit successor (id) for edge-driven canvas wiring. Empty = unset.
+    next: str = ""
     then: list["Step"] = field(default_factory=list)
     else_: list["Step"] = field(default_factory=list)
     body: list["Step"] = field(default_factory=list)
@@ -128,6 +130,8 @@ class Step:
             data["foreach"] = self.foreach
         if self.as_name:
             data["as_name"] = self.as_name
+        if self.next:
+            data["next"] = self.next
         if self.description:
             data["description"] = self.description
         if self.then:

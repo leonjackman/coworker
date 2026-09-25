@@ -2,31 +2,27 @@ import {
   Background,
   BackgroundVariant,
   Controls,
-  Handle,
-  MarkerType,
   MiniMap,
-  Position,
   ReactFlow,
   useEdgesState,
   useNodesState,
   type Connection,
   type Edge,
   type Node,
-  type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import dagre from 'dagre';
-import { ArrowDown, ArrowUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, Loader2, Plus, Redo2, Save, Sparkles, Spline, Trash2, Undo2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { t, translateError } from '../lib/i18n';
+import { isEditableTarget } from '../lib/dom';
 import { chatService } from '../services/chatService';
-import { DO_KINDS, KIND_OPTIONS, KIND_META, LOCATOR_KINDS, PARAM_KINDS, kindFamily, kindIcon, kindStripe } from './workflows/kinds';
-import type { WorkflowStep } from '../types';
+import { buildGraph, nodeTypes } from './workflows/flowGraph';
+import { edgeTypes } from './workflows/EditableEdge';
+import { DO_KINDS, DO_SUGGESTIONS, KIND_GROUPS, KIND_META, LOCATOR_KINDS, PARAM_KINDS, kindDescKey, kindFamily, kindLabelKey, kindStripe } from './workflows/kinds';
+import type { WorkflowStep, WorkflowVersion } from '../types';
 
-const NODE_W = 214;
-const NODE_H = 58;
 
 // ── step tree helpers ───────────────────────────────────────────────────
 type PathPart = number | 'then' | 'else' | 'body';
@@ -90,6 +86,26 @@ function setList(steps: WorkflowStep[], listPath: StepPath, next: WorkflowStep[]
   const slot = listPath[listPath.length - 1] as 'then' | 'else' | 'body';
   return updateLeaf(steps, listPath.slice(0, -1), { [slot]: next } as Partial<WorkflowStep>);
 }
+function uniqueStep(list: WorkflowStep[]): WorkflowStep {
+  const ids = new Set(list.map((s) => s.id));
+  let i = list.length + 1;
+  while (ids.has(`step${i}`)) i += 1;
+  return { id: `step${i}`, kind: 'tool', do: '', params: {}, mode: 'auto' };
+}
+
+/**
+ * Materialise an explicit ``next`` chain ONLY when the list isn't wired yet.
+ * Once wired (any step has ``next``), existing links are preserved so adding a
+ * node or connecting/disconnecting one edge never rewires the others.
+ */
+function wireList(list: WorkflowStep[]): WorkflowStep[] {
+  if (list.some((step) => step.next)) return list;
+  return list.map((step, index) => ({
+    ...step,
+    next: index + 1 < list.length ? list[index + 1]!.id : '',
+  }));
+}
+
 function defaultStep(index: number): WorkflowStep {
   return { id: `step${index + 1}`, kind: 'tool', do: '', params: {}, mode: 'auto' };
 }
@@ -142,86 +158,6 @@ function rowsToParams(rows: KVRow[]): Record<string, unknown> {
   return out;
 }
 
-interface StepNodeData extends Record<string, unknown> {
-  step: WorkflowStep;
-  slot?: string;
-  status?: string;
-}
-
-function StepNode({ data, selected }: NodeProps) {
-  const d = data as StepNodeData;
-  const step = d.step;
-  const Icon = kindIcon(step.kind);
-  const badge = d.status;
-  return (
-    <div
-      className={`wf-node${selected ? ' wf-node--selected' : ''}${badge ? ` wf-node--${badge}` : ''}`}
-      style={{ ['--wf-stripe' as string]: kindStripe(step.kind) }}
-    >
-      <Handle type="target" position={Position.Top} className="wf-handle" />
-      <div className="wf-node__head">
-        <span className="wf-node__icon">
-          <Icon size={14} />
-        </span>
-        <span className="wf-node__id">{step.id}</span>
-        {badge ? <span className={`settings-chip wf-node__status settings-chip--${badge === 'failed' ? 'bad' : badge === 'ok' ? 'ok' : 'dim'}`}>{badge}</span> : null}
-      </div>
-      <div className="wf-node__meta">
-        {d.slot ? `${d.slot} · ` : ''}
-        {step.kind}
-        {step.do ? ` · ${step.do}` : ''}
-      </div>
-      <div className="wf-node__badges">
-        {step.mode === 'agent' ? <span className="wf-badge wf-badge--agent">agent</span> : null}
-        {step.approval ? <span className="wf-badge wf-badge--human">approval</span> : null}
-        {step.on_error && (step.on_error as { then?: string }).then ? <span className="wf-badge">on_error: {(step.on_error as { then?: string }).then}</span> : null}
-        {(step.success ?? []).length > 0 ? <span className="wf-badge">success</span> : null}
-      </div>
-      <Handle type="source" position={Position.Bottom} className="wf-handle" />
-    </div>
-  );
-}
-
-const nodeTypes = { step: StepNode };
-
-function buildGraph(steps: WorkflowStep[], status: Record<string, string>): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
-  const rawNodes: Node<StepNodeData>[] = [];
-  const rawEdges: Edge[] = [];
-  const walk = (list: WorkflowStep[], listPath: StepPath, parentId?: string, slot?: string) => {
-    list.forEach((step, index) => {
-      const path: StepPath = [...listPath, index];
-      const id = pathKey(path);
-      rawNodes.push({
-        id,
-        type: 'step',
-        position: { x: 0, y: 0 },
-        data: { step, ...(slot ? { slot } : {}), ...(status[step.id] ? { status: status[step.id] } : {}) },
-      });
-      if (parentId) {
-        rawEdges.push({ id: `e-${parentId}-${id}`, source: parentId, target: id, label: slot, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } });
-      }
-      SLOTS.forEach((s) => {
-        const children = step[s] as WorkflowStep[] | undefined;
-        if (children?.length) walk(children, [...path, s], id, s);
-      });
-    });
-    for (let i = 0; i < list.length - 1; i += 1) {
-      rawEdges.push({ id: `seq-${pathKey([...listPath, i])}-${pathKey([...listPath, i + 1])}`, source: pathKey([...listPath, i]), target: pathKey([...listPath, i + 1]), type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } });
-    }
-  };
-  walk(steps, []);
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: 'TB', nodesep: 40, ranksep: 70, marginx: 20, marginy: 20 });
-  g.setDefaultEdgeLabel(() => ({}));
-  rawNodes.forEach((n) => g.setNode(n.id, { width: NODE_W, height: NODE_H }));
-  rawEdges.forEach((e) => g.setEdge(e.source, e.target));
-  dagre.layout(g);
-  const nodes = rawNodes.map((n) => {
-    const pos = g.node(n.id);
-    return { ...n, position: { x: (pos?.x ?? 0) - NODE_W / 2, y: (pos?.y ?? 0) - NODE_H / 2 } };
-  });
-  return { nodes, edges: rawEdges };
-}
 
 export interface GraphEditorTarget {
   name: string;
@@ -243,7 +179,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [selectedId, setSelectedId] = useState('');
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<StepNodeData>>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [runStatus, setRunStatus] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<string[]>([]);
@@ -251,16 +187,75 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const [baseline, setBaseline] = useState('');
   const [paramsJson, setParamsJson] = useState(false);
   const [fallbackJson, setFallbackJson] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [versions, setVersions] = useState<WorkflowVersion[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<number>(1);
+  const [versionBusy, setVersionBusy] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [edgeType, setEdgeType] = useState<'default' | 'straight' | 'smoothstep'>('default');
+  const reconnectHandledRef = useRef(false);
+  const edgesRef = useRef<Edge[]>([]);
+  const deleteEdgeRef = useRef<(id: string) => void>(() => {});
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+  const decorateEdges = useCallback(
+    (list: Edge[]) =>
+      list.map((e) => ({
+        ...e,
+        type: 'editable',
+        data: { ...e.data, edgeType, onDelete: (id: string) => deleteEdgeRef.current(id) },
+      })),
+    [edgeType],
+  );
+
+  // Undo/redo history (max 50 snapshots). Cleared after save.
+  const historyRef = useRef<{ snaps: string[]; index: number }>({ snaps: [], index: -1 });
+  const suspendHistoryRef = useRef(false);
+  const snapshotOf = (s: WorkflowStep[], n: string, d: string) => JSON.stringify({ s, n, d });
+  const syncHistoryFlags = useCallback(() => {
+    const h = historyRef.current;
+    setCanUndo(h.index > 0);
+    setCanRedo(h.index >= 0 && h.index < h.snaps.length - 1);
+  }, []);
+  const resetHistory = useCallback(
+    (s: WorkflowStep[], n: string, d: string) => {
+      suspendHistoryRef.current = true;
+      historyRef.current = { snaps: [snapshotOf(s, n, d)], index: 0 };
+      syncHistoryFlags();
+    },
+    [syncHistoryFlags],
+  );
 
   const applyGraph = useCallback(
     (next: WorkflowStep[], status: Record<string, string> = runStatus) => {
       setSteps(next);
       const built = buildGraph(next, status);
       setNodes(built.nodes);
-      setEdges(built.edges);
+      setEdges(decorateEdges(built.edges));
     },
-    [runStatus, setNodes, setEdges],
+    [runStatus, setNodes, setEdges, decorateEdges],
   );
+
+  const rebuild = useCallback(
+    (next: WorkflowStep[]) => {
+      const built = buildGraph(next, runStatus);
+      setSteps(next);
+      setNodes(built.nodes);
+      setEdges(decorateEdges(built.edges));
+    },
+    [runStatus, setNodes, setEdges, decorateEdges],
+  );
+
+  const cycleEdgeType = useCallback(() => {
+    setEdgeType((current) => {
+      const order = ['default', 'straight', 'smoothstep'] as const;
+      const nextType = order[(order.indexOf(current) + 1) % order.length] as (typeof order)[number];
+      setEdges((cur) => cur.map((e) => ({ ...e, data: { ...e.data, edgeType: nextType } })));
+      return nextType;
+    });
+  }, [setEdges]);
 
   useEffect(() => {
     if (!target) return;
@@ -272,10 +267,23 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
     setSelectedId(pathKey([0]));
     setParamsJson(false);
     setBaseline(JSON.stringify({ name: target.name, description: target.description, steps: initial }));
+    setSelectedVersion(target.version ?? 1);
+    resetHistory(initial, target.name, target.description);
     const built = buildGraph(initial, {});
     setSteps(initial);
     setNodes(built.nodes);
     setEdges(built.edges);
+    // Load versions (edit mode only).
+    if (!target.isNew && target.name) {
+      void (async () => {
+        try {
+          const list = await chatService.listWorkflowVersions(target.name);
+          setVersions(list.versions);
+        } catch {
+          /* versions are best-effort */
+        }
+      })();
+    }
     // Load the latest run's per-step status for the overlay (edit mode only).
     if (!target.isNew && target.name) {
       void (async () => {
@@ -300,6 +308,120 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
 
+  // Record every edit into the undo history (coalesced by identical snapshots).
+  useEffect(() => {
+    if (!target) return;
+    if (suspendHistoryRef.current) {
+      suspendHistoryRef.current = false;
+      return;
+    }
+    const snap = snapshotOf(steps, name, description);
+    const h = historyRef.current;
+    if (h.index >= 0 && h.snaps[h.index] === snap) return;
+    const trimmed = h.snaps.slice(0, h.index + 1);
+    trimmed.push(snap);
+    const limited = trimmed.slice(-50);
+    historyRef.current = { snaps: limited, index: limited.length - 1 };
+    syncHistoryFlags();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steps, name, description, target]);
+
+  const applySnapshot = useCallback(
+    (snap: string) => {
+      const parsed = JSON.parse(snap) as { s: WorkflowStep[]; n: string; d: string };
+      suspendHistoryRef.current = true;
+      setName(parsed.n);
+      setDescription(parsed.d);
+      rebuild(parsed.s);
+      setSelectedId((cur) => (cur && locate(parsed.s, parsePath(cur)) ? cur : ''));
+    },
+    // rebuild is defined below; referenced lazily via ref-safe closure
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    if (h.index <= 0) return;
+    const idx = h.index - 1;
+    historyRef.current = { ...h, index: idx };
+    applySnapshot(h.snaps[idx] as string);
+    syncHistoryFlags();
+  }, [applySnapshot, syncHistoryFlags]);
+
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    if (h.index < 0 || h.index >= h.snaps.length - 1) return;
+    const idx = h.index + 1;
+    historyRef.current = { ...h, index: idx };
+    applySnapshot(h.snaps[idx] as string);
+    syncHistoryFlags();
+  }, [applySnapshot, syncHistoryFlags]);
+
+  useEffect(() => {
+    if (!target) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const key = event.key.toLowerCase();
+      if (key !== 'z' && key !== 'y') return;
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+      if (key === 'y' || (key === 'z' && event.shiftKey)) redo();
+      else undo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [target, undo, redo]);
+
+  const loadVersion = useCallback(
+    async (version: number) => {
+      if (!target) return;
+      setVersionBusy(true);
+      try {
+        const result = await chatService.getWorkflowVersion(target.name, version);
+        const wf = result.workflow;
+        const nextSteps = wf.steps ?? [];
+        suspendHistoryRef.current = true;
+        setName(wf.name);
+        setDescription(wf.description);
+        rebuild(nextSteps);
+        setSelectedId(nextSteps.length > 0 ? pathKey([0]) : '');
+        setBaseline(JSON.stringify({ name: wf.name, description: wf.description, steps: nextSteps }));
+        historyRef.current = { snaps: [snapshotOf(nextSteps, wf.name, wf.description)], index: 0 };
+        syncHistoryFlags();
+        setSelectedVersion(version);
+        setErrors([]);
+      } catch (error) {
+        setErrors([translateError(error)]);
+      } finally {
+        setVersionBusy(false);
+      }
+    },
+    [target, rebuild, syncHistoryFlags],
+  );
+
+  const removeVersion = useCallback(
+    async (version: number) => {
+      if (!target) return;
+      setVersionBusy(true);
+      try {
+        const result = await chatService.deleteWorkflowVersion(target.name, version);
+        if (result.status !== 'ok') throw new Error(t('workflows.version_delete_blocked'));
+        const list = await chatService.listWorkflowVersions(target.name);
+        setVersions(list.versions);
+        if (selectedVersion === version) {
+          const current = list.versions.find((v) => v.is_current);
+          if (current) setSelectedVersion(current.version);
+        }
+      } catch (error) {
+        setErrors([translateError(error)]);
+      } finally {
+        setVersionBusy(false);
+      }
+    },
+    [target, selectedVersion],
+  );
+
   const selectedPath = useMemo<StepPath>(() => (selectedId ? parsePath(selectedId) : []), [selectedId]);
   const selected = useMemo(() => locate(steps, selectedPath), [steps, selectedPath]);
   const validation = useMemo(() => validateTree(steps), [steps]);
@@ -312,26 +434,25 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
     (patch: Partial<WorkflowStep>) => {
       setSteps((current) => {
         const next = updateLeaf(current, selectedPath, patch);
-        setNodes((cur) => cur.map((n) => (n.id === selectedId ? { ...n, data: { ...n.data, step: { ...n.data.step, ...patch } } } : n)));
+        setNodes((cur) =>
+          cur.map((n) =>
+            n.id === selectedId
+              ? { ...n, data: { ...n.data, step: { ...(n.data.step as WorkflowStep), ...patch } } }
+              : n,
+          ),
+        );
         return next;
       });
     },
     [selectedPath, selectedId, setNodes],
   );
 
-  const rebuild = useCallback(
-    (next: WorkflowStep[]) => {
-      const built = buildGraph(next, runStatus);
-      setSteps(next);
-      setNodes(built.nodes);
-      setEdges(built.edges);
-    },
-    [runStatus, setNodes, setEdges],
-  );
-
+  // Add an empty, unconnected node (the user wires it up afterwards).
   const addTopStep = useCallback(() => {
     setSteps((current) => {
-      const next = [...current, defaultStep(current.length)];
+      const wired = wireList(current);
+      const step = uniqueStep(wired);
+      const next = [...wired, step];
       rebuild(next);
       setSelectedId(pathKey([next.length - 1]));
       return next;
@@ -387,34 +508,115 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
 
   const relayout = useCallback(() => rebuild(steps), [steps, rebuild]);
 
-  // onConnect: rewiring sibling nodes adjusts their shared list order.
-  const onConnect = useCallback(
-    (connection: Connection) => {
-      const { source, target: targetId } = connection;
-      if (!source || !targetId) return;
+  // Connect two sibling nodes: set the source's explicit ``next``.
+  const connectSiblings = useCallback(
+    (source: string, target: string) => {
       const sourcePath = parsePath(source);
-      const targetPath = parsePath(targetId);
-      const sourceList = sourcePath.slice(0, -1);
-      const targetList = targetPath.slice(0, -1);
-      if (pathKey(sourceList) !== pathKey(targetList)) return;
-      const sourceIndex = sourcePath[sourcePath.length - 1];
-      const targetIndex = targetPath[targetPath.length - 1];
-      if (typeof sourceIndex !== 'number' || typeof targetIndex !== 'number') return;
+      const targetPath = parsePath(target);
+      const listPath = sourcePath.slice(0, -1);
+      if (pathKey(listPath) !== pathKey(targetPath.slice(0, -1))) return;
+      const si = sourcePath[sourcePath.length - 1];
+      const ti = targetPath[targetPath.length - 1];
+      if (typeof si !== 'number' || typeof ti !== 'number') return;
       setSteps((current) => {
-        const list = getList(current, sourceList).slice();
-        const sourceStep = list[sourceIndex];
-        if (!sourceStep) return current;
-        const [item] = list.splice(targetIndex, 1);
-        if (!item) return current;
-        const anchorIndex = list.indexOf(sourceStep);
-        list.splice(anchorIndex + 1, 0, item);
-        const next = setList(current, sourceList, list);
+        const list = wireList(getList(current, listPath).slice());
+        const sourceStep = list[si];
+        const targetStep = list[ti];
+        if (!sourceStep || !targetStep) return current;
+        // single incoming edge per node: clear any other step pointing at target
+        const resolved = list.map((s) =>
+          s.next === targetStep.id && s.id !== sourceStep.id ? { ...s, next: '' } : s,
+        );
+        const idx = resolved.findIndex((s) => s.id === sourceStep.id);
+        resolved[idx] = { ...resolved[idx]!, next: targetStep.id };
+        const next = setList(current, listPath, resolved);
         rebuild(next);
         return next;
       });
     },
     [rebuild],
   );
+
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (connection.source && connection.target) {
+        connectSiblings(connection.source, connection.target);
+      }
+    },
+    [connectSiblings],
+  );
+
+  // Clear a sibling edge (disconnect): drop the source's ``next`` link.
+  const detachEdges = useCallback(
+    (list: Edge[]) => {
+      if (list.length === 0) return;
+      setSteps((current) => {
+        let next = current;
+        for (const edge of list) {
+          const sourcePath = parsePath(edge.source);
+          const targetPath = parsePath(edge.target);
+          const listPath = sourcePath.slice(0, -1);
+          if (pathKey(listPath) !== pathKey(targetPath.slice(0, -1))) continue; // structural edge
+          const stepsInList = getList(next, listPath).slice();
+          const ti = targetPath[targetPath.length - 1];
+          const targetStep = typeof ti === 'number' ? stepsInList[ti] : undefined;
+          const si = sourcePath[sourcePath.length - 1];
+          if (!targetStep || typeof si !== 'number' || !stepsInList[si]) continue;
+          stepsInList[si] = { ...stepsInList[si]!, next: '' };
+          next = setList(next, listPath, stepsInList);
+        }
+        rebuild(next);
+        return next;
+      });
+    },
+    [rebuild],
+  );
+
+  const onEdgesDelete = useCallback((deleted: Edge[]) => detachEdges(deleted), [detachEdges]);
+  const onReconnectStart = useCallback(() => { reconnectHandledRef.current = false; }, []);
+  const onReconnect = useCallback(
+    (oldEdge: Edge, connection: Connection) => {
+      reconnectHandledRef.current = true;
+      onConnect(connection);
+    },
+    [onConnect],
+  );
+  const onReconnectEnd = useCallback(
+    (_event: unknown, edge: Edge) => {
+      if (reconnectHandledRef.current) return;
+      detachEdges([edge]);
+    },
+    [detachEdges],
+  );
+
+  // Drag a connection out and release on empty canvas → add an empty node.
+  const onConnectEnd = useCallback(
+    (_event: unknown, state: { toNode?: unknown; fromNode?: { id: string } | null }) => {
+      if (state.toNode || !state.fromNode) return;
+      const fromPath = parsePath(state.fromNode.id);
+      if (fromPath.length !== 1) return; // top-level only
+      const fromIndex = fromPath[0];
+      if (typeof fromIndex !== 'number') return;
+      setSteps((current) => {
+        const wired = wireList(current);
+        const step = uniqueStep(wired);
+        const next = [...wired, step];
+        if (next[fromIndex]) next[fromIndex] = { ...next[fromIndex]!, next: step.id };
+        rebuild(next);
+        setSelectedId(pathKey([next.length - 1]));
+        return next;
+      });
+    },
+    [rebuild],
+  );
+
+  // Route the edge ✕ button to detachEdges using the latest edges.
+  useEffect(() => {
+    deleteEdgeRef.current = (id: string) => {
+      const edge = edgesRef.current.find((e) => e.id === id);
+      if (edge) detachEdges([edge]);
+    };
+  }, [detachEdges]);
 
   const isValidConnection = useCallback(
     (connection: Connection | Edge) => {
@@ -455,6 +657,19 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
         if (result.status !== 'ok') throw new Error(result.message || t('workflows.save_failed'));
       }
       setBaseline(JSON.stringify({ name: name.trim(), description, steps }));
+      // Saved state is a new clean point: clear the undo history.
+      historyRef.current = { snaps: [snapshotOf(steps, name.trim(), description)], index: 0 };
+      syncHistoryFlags();
+      if (!target?.isNew && target?.name) {
+        try {
+          const list = await chatService.listWorkflowVersions(target.name);
+          setVersions(list.versions);
+          const current = list.versions.find((v) => v.is_current);
+          if (current) setSelectedVersion(current.version);
+        } catch {
+          /* best-effort */
+        }
+      }
       onSaved();
       onClose();
     } catch (error) {
@@ -462,7 +677,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [steps, name, description, target, onSaved, onClose]);
+  }, [steps, name, description, target, onSaved, onClose, syncHistoryFlags]);
 
   const cancel = useCallback(() => {
     if (dirty && !window.confirm(t('workflows.unsaved_confirm'))) return;
@@ -508,6 +723,13 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
 
       {/* Toolbar */}
       <div className="wf-toolbar">
+        <Button variant="ghost" size="sm" onClick={undo} disabled={!canUndo} title={`${t('workflows.undo')} (⌘Z)`}>
+          <Undo2 size={14} />
+        </Button>
+        <Button variant="ghost" size="sm" onClick={redo} disabled={!canRedo} title={`${t('workflows.redo')} (⇧⌘Z)`}>
+          <Redo2 size={14} />
+        </Button>
+        <span className="wf-toolbar__sep" />
         <Button variant="secondary" size="sm" onClick={addTopStep}>
           <Plus size={14} />
           {t('workflows.add_step')}
@@ -525,6 +747,39 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
           <Sparkles size={14} />
           {t('workflows.auto_layout')}
         </Button>
+        <Button variant="ghost" size="sm" onClick={cycleEdgeType} title={t('workflows.edge_style')}>
+          <Spline size={14} />
+          {t(edgeType === 'straight' ? 'workflows.edge_straight' : edgeType === 'smoothstep' ? 'workflows.edge_curve' : 'workflows.edge_default')}
+        </Button>
+        {!target.isNew && versions.length > 0 ? (
+          <>
+            <span className="wf-toolbar__sep" />
+            <span className="wf-version-picker">
+              <select
+                className="input"
+                value={selectedVersion}
+                onChange={(e) => void loadVersion(Number(e.target.value))}
+                disabled={versionBusy}
+                aria-label={t('workflows.version')}
+              >
+                {versions.map((v) => (
+                  <option key={v.version} value={v.version}>
+                    v{v.version}{v.is_current ? ` · ${t('workflows.version_current')}` : ''}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => void removeVersion(selectedVersion)}
+                disabled={versionBusy || (versions.find((v) => v.version === selectedVersion)?.is_current ?? true)}
+                title={t('workflows.version_delete')}
+              >
+                <Trash2 size={13} />
+              </Button>
+            </span>
+          </>
+        ) : null}
         <span className="wf-toolbar__spacer" />
         {dirty ? <span className="wf-toolbar__dirty">{t('workflows.unsaved')}</span> : null}
         <Button variant="ghost" size="sm" onClick={cancel} disabled={busy}>
@@ -560,8 +815,16 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
               onEdgesChange={onEdgesChange}
               onNodeClick={(_e, node) => setSelectedId(node.id)}
               onConnect={onConnect}
+              onConnectEnd={onConnectEnd}
+              onEdgesDelete={onEdgesDelete}
+              onReconnect={onReconnect}
+              onReconnectStart={onReconnectStart}
+              onReconnectEnd={onReconnectEnd}
+              edgesReconnectable
+              deleteKeyCode={['Backspace', 'Delete']}
               isValidConnection={isValidConnection}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               fitView
               minZoom={0.2}
               maxZoom={2}
@@ -576,81 +839,86 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
 
         {selected && (
           <aside className="wf-inspector">
-            {/* Basic */}
+            {/* Step type (friendly picker) */}
             <div className="wf-section">
               <div className="wf-section__title">{t('workflows.section_basic')}</div>
               <label className="add-skill-page__field">
-                <span>{t('workflows.step_id')}</span>
-                <Input value={selected.id} onChange={(e) => afterIdChange(e.target.value)} />
-              </label>
-              <label className="add-skill-page__field">
                 <span>{t('workflows.step_kind')}</span>
                 <select className="input" value={kind} onChange={(e) => patchSelected({ kind: e.target.value })}>
-                  {KIND_OPTIONS.map((k) => <option key={k} value={k}>{k}</option>)}
+                  {KIND_GROUPS.map((group) => (
+                    <optgroup key={group.id} label={t(group.labelKey)}>
+                      {group.kinds.map((k) => (
+                        <option key={k} value={k}>{t(kindLabelKey(k))}</option>
+                      ))}
+                    </optgroup>
+                  ))}
                 </select>
               </label>
-              {DO_KINDS.has(kind) && (
+              <p className="wf-help">{t(kindDescKey(kind))}</p>
+              {DO_KINDS.has(kind) ? (
                 <label className="add-skill-page__field">
                   <span>{t('workflows.step_do')}</span>
-                  <Input value={selected.do ?? ''} onChange={(e) => patchSelected({ do: e.target.value })} />
+                  <Input
+                    list="wf-do-options"
+                    value={selected.do ?? ''}
+                    onChange={(e) => patchSelected({ do: e.target.value })}
+                    placeholder={t('workflows.step_do_placeholder')}
+                  />
+                  <datalist id="wf-do-options">
+                    {(DO_SUGGESTIONS[kind] ?? []).map((option) => (
+                      <option key={option} value={option} />
+                    ))}
+                  </datalist>
                 </label>
-              )}
+              ) : null}
               <label className="add-skill-page__field">
                 <span>{t('workflows.goal')}</span>
-                <Input value={selected.goal ?? ''} onChange={(e) => patchSelected({ goal: e.target.value })} />
+                <Input value={selected.goal ?? ''} onChange={(e) => patchSelected({ goal: e.target.value })} placeholder={t('workflows.goal_placeholder')} />
               </label>
             </div>
 
-            {/* Execution */}
+            {/* How it runs */}
             <div className="wf-section">
               <div className="wf-section__title">{t('workflows.section_exec')}</div>
-              <div className="wf-row">
-                <label className="add-skill-page__field">
-                  <span>{t('workflows.mode')}</span>
-                  <select className="input" value={selected.mode ?? 'auto'} onChange={(e) => patchSelected({ mode: e.target.value })}>
-                    <option value="auto">auto</option>
-                    <option value="agent">agent</option>
-                  </select>
-                </label>
-                <label className="add-skill-page__field">
-                  <span>{t('workflows.on_error')}</span>
-                  <select
-                    className="input"
-                    value={String((selected.on_error as { then?: string } | undefined)?.then ?? '')}
-                    onChange={(e) => patchSelected({ on_error: e.target.value ? { then: e.target.value } : {} })}
-                  >
-                    <option value="">(default)</option>
-                    {['agent', 'human', 'skip', 'abort', 'self_heal'].map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="wf-row">
-                <label className="add-skill-page__field">
-                  <span>{t('workflows.step_when')}</span>
-                  <Input value={selected.when ?? ''} onChange={(e) => patchSelected({ when: e.target.value })} />
-                </label>
-                <label className="add-skill-page__field">
-                  <span>{t('workflows.step_foreach')}</span>
-                  <Input value={selected.foreach ?? ''} onChange={(e) => patchSelected({ foreach: e.target.value })} disabled={kind !== 'loop'} />
-                </label>
-              </div>
+              <label className="add-skill-page__field">
+                <span>{t('workflows.mode')}</span>
+                <select className="input" value={selected.mode ?? 'auto'} onChange={(e) => patchSelected({ mode: e.target.value })}>
+                  <option value="auto">{t('workflows.mode_auto')}</option>
+                  <option value="agent">{t('workflows.mode_agent')}</option>
+                </select>
+              </label>
+              <label className="add-skill-page__field">
+                <span>{t('workflows.on_error')}</span>
+                <select
+                  className="input"
+                  value={String((selected.on_error as { then?: string } | undefined)?.then ?? '')}
+                  onChange={(e) => patchSelected({ on_error: e.target.value ? { then: e.target.value } : {} })}
+                >
+                  <option value="">{t('workflows.onerror_default')}</option>
+                  <option value="agent">{t('workflows.onerror_agent')}</option>
+                  <option value="human">{t('workflows.onerror_human')}</option>
+                  <option value="skip">{t('workflows.onerror_skip')}</option>
+                  <option value="abort">{t('workflows.onerror_abort')}</option>
+                  <option value="self_heal">{t('workflows.onerror_self_heal')}</option>
+                </select>
+              </label>
               <label className="wf-checkbox">
                 <input type="checkbox" checked={!!selected.approval} onChange={(e) => patchSelected({ approval: e.target.checked })} />
                 <span>{t('workflows.step_approval')}</span>
               </label>
-              {kind === 'branch' && (
+              {kind === 'branch' ? (
                 <div className="wf-row">
-                  <Button variant="outline" size="sm" onClick={() => addChild('then')}>+ then</Button>
-                  <Button variant="outline" size="sm" onClick={() => addChild('else')}>+ else</Button>
+                  <Button variant="outline" size="sm" onClick={() => addChild('then')}>{t('workflows.add_then')}</Button>
+                  <Button variant="outline" size="sm" onClick={() => addChild('else')}>{t('workflows.add_else')}</Button>
                 </div>
-              )}
-              {(kind === 'loop' || kind === 'parallel') && (
-                <Button variant="outline" size="sm" onClick={() => addChild('body')}>+ body</Button>
-              )}
+              ) : null}
+              {kind === 'loop' || kind === 'parallel' ? (
+                <Button variant="outline" size="sm" onClick={() => addChild('body')}>{t('workflows.add_body')}</Button>
+              ) : null}
             </div>
 
             {/* Params */}
-            {PARAM_KINDS.has(kind) && (
+            {PARAM_KINDS.has(kind) ? (
               <div className="wf-section">
                 <div className="wf-section__title">
                   {t('workflows.step_params')}
@@ -678,7 +946,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
                       <div className="wf-kv__row" key={`${row.key}-${index}`}>
                         <Input
                           value={row.key}
-                          placeholder="key"
+                          placeholder={t('workflows.param_key')}
                           onChange={(e) => {
                             const rows = paramsToRows(params);
                             rows[index] = { ...rows[index], key: e.target.value } as KVRow;
@@ -687,7 +955,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
                         />
                         <Input
                           value={row.value}
-                          placeholder="value"
+                          placeholder={t('workflows.param_value')}
                           onChange={(e) => {
                             const rows = paramsToRows(params);
                             rows[index] = { ...rows[index], value: e.target.value } as KVRow;
@@ -722,75 +990,78 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
                   </div>
                 )}
               </div>
-            )}
+            ) : null}
 
-            {/* Locator */}
-            {LOCATOR_KINDS.has(kind) && (
-              <div className="wf-section">
-                <div className="wf-section__title">{t('workflows.section_locator')}</div>
-                <div className="wf-row">
-                  <label className="add-skill-page__field">
-                    <span>role</span>
-                    <Input value={String(locator.role ?? '')} onChange={(e) => patchSelected({ locator: { ...locator, role: e.target.value } })} />
-                  </label>
-                  <label className="add-skill-page__field">
-                    <span>name</span>
-                    <Input value={String(locator.name ?? '')} onChange={(e) => patchSelected({ locator: { ...locator, name: e.target.value } })} />
-                  </label>
-                </div>
-                <label className="add-skill-page__field">
-                  <span>selector</span>
-                  <Input value={String(locator.selector ?? '')} onChange={(e) => patchSelected({ locator: { ...locator, selector: e.target.value } })} />
-                </label>
-                <Button variant="ghost" size="xs" onClick={() => setFallbackJson((v) => !v)}>
-                  {fallbackJson ? t('workflows.hide_advanced') : t('workflows.show_advanced')}
-                </Button>
-                {fallbackJson && (
-                  <textarea
-                    className="skills-pending__editor"
-                    style={{ minHeight: 70 }}
-                    spellCheck={false}
-                    value={JSON.stringify(locator.fallback ?? [], null, 2)}
-                    onChange={(e) => {
-                      try {
-                        patchSelected({ locator: { ...locator, fallback: JSON.parse(e.target.value) } });
-                      } catch {
-                        /* keep typing */
-                      }
-                    }}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Success checks */}
+            {/* Advanced (collapsed) */}
             <div className="wf-section">
-              <div className="wf-section__title">{t('workflows.step_success')}</div>
-              {successList.map((spec, index) => (
-                <div className="wf-kv__row" key={`${spec}-${index}`}>
-                  <Input
-                    value={spec}
-                    placeholder={t('workflows.success_placeholder')}
-                    onChange={(e) => {
-                      const next = [...successList];
-                      next[index] = e.target.value;
-                      patchSelected({ success: next });
-                    }}
-                    style={{ gridColumn: 'span 2' }}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => patchSelected({ success: successList.filter((_, i) => i !== index) })}
-                  >
-                    <Trash2 size={13} />
+              <button type="button" className="wf-adv-toggle" onClick={() => setShowAdvanced((v) => !v)}>
+                {showAdvanced ? t('workflows.hide_advanced') : t('workflows.show_advanced')}
+              </button>
+              {showAdvanced ? (
+                <>
+                  <label className="add-skill-page__field">
+                    <span>{t('workflows.step_id')}</span>
+                    <Input value={selected.id} onChange={(e) => afterIdChange(e.target.value)} />
+                  </label>
+                  <div className="wf-row">
+                    <label className="add-skill-page__field">
+                      <span>{t('workflows.step_when')}</span>
+                      <Input value={selected.when ?? ''} onChange={(e) => patchSelected({ when: e.target.value })} />
+                    </label>
+                    <label className="add-skill-page__field">
+                      <span>{t('workflows.step_foreach')}</span>
+                      <Input value={selected.foreach ?? ''} onChange={(e) => patchSelected({ foreach: e.target.value })} disabled={kind !== 'loop'} />
+                    </label>
+                  </div>
+
+                  {LOCATOR_KINDS.has(kind) ? (
+                    <>
+                      <div className="wf-section__title">{t('workflows.section_locator')}</div>
+                      <div className="wf-row">
+                        <label className="add-skill-page__field">
+                          <span>role</span>
+                          <Input value={String(locator.role ?? '')} onChange={(e) => patchSelected({ locator: { ...locator, role: e.target.value } })} />
+                        </label>
+                        <label className="add-skill-page__field">
+                          <span>name</span>
+                          <Input value={String(locator.name ?? '')} onChange={(e) => patchSelected({ locator: { ...locator, name: e.target.value } })} />
+                        </label>
+                      </div>
+                      <label className="add-skill-page__field">
+                        <span>selector</span>
+                        <Input value={String(locator.selector ?? '')} onChange={(e) => patchSelected({ locator: { ...locator, selector: e.target.value } })} />
+                      </label>
+                    </>
+                  ) : null}
+
+                  <div className="wf-section__title">{t('workflows.step_success')}</div>
+                  {successList.map((spec, index) => (
+                    <div className="wf-kv__row" key={`${spec}-${index}`}>
+                      <Input
+                        value={spec}
+                        placeholder={t('workflows.success_placeholder')}
+                        onChange={(e) => {
+                          const next = [...successList];
+                          next[index] = e.target.value;
+                          patchSelected({ success: next });
+                        }}
+                        style={{ gridColumn: 'span 2' }}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => patchSelected({ success: successList.filter((_, i) => i !== index) })}
+                      >
+                        <Trash2 size={13} />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button variant="outline" size="sm" onClick={() => patchSelected({ success: [...successList, ''] })}>
+                    <Plus size={13} />
+                    {t('workflows.add_success')}
                   </Button>
-                </div>
-              ))}
-              <Button variant="outline" size="sm" onClick={() => patchSelected({ success: [...successList, ''] })}>
-                <Plus size={13} />
-                {t('workflows.add_success')}
-              </Button>
+                </>
+              ) : null}
             </div>
 
             <div className="wf-section">

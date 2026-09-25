@@ -155,6 +155,56 @@ class WorkflowStore:
                 return False
             return True
 
+    # ── versions (list / read / delete) ─────────────────────────────────
+
+    def list_versions(self, name: str) -> list[dict[str, Any]]:
+        """All versions incl. the current one (newest first)."""
+        items: list[dict[str, Any]] = []
+        current = self.get(name)
+        if current is not None:
+            items.append(
+                {"version": current.version, "is_current": True, "updated_at": current.updated_at or ""}
+            )
+        for archived in self.history(name):
+            items.append(
+                {
+                    "version": archived["version"],
+                    "is_current": False,
+                    "updated_at": archived.get("updated_at", ""),
+                }
+            )
+        # De-duplicate by version (current wins) and sort desc.
+        by_version: dict[int, dict[str, Any]] = {}
+        for item in items:
+            existing = by_version.get(item["version"])
+            if existing is None or item["is_current"]:
+                by_version[item["version"]] = item
+        return sorted(by_version.values(), key=lambda v: v["version"], reverse=True)
+
+    def read_version(self, name: str, version: int) -> tuple[Workflow | None, bool]:
+        current = self.get(name)
+        if current is not None and current.version == version:
+            return current, True
+        path = self.history_dir / name / f"v{version}.yaml"
+        if not path.is_file():
+            return None, False
+        workflow, _ = load_workflow_file(path)
+        return workflow, False
+
+    def delete_version(self, name: str, version: int) -> bool:
+        """Delete an archived version. The active (current) version is protected."""
+        current = self.get(name)
+        if current is not None and current.version == version:
+            return False
+        path = self.history_dir / name / f"v{version}.yaml"
+        if not path.is_file():
+            return False
+        try:
+            path.unlink()
+        except OSError:
+            return False
+        return True
+
     def history(self, name: str) -> list[dict[str, Any]]:
         target_dir = self.history_dir / name
         if not target_dir.is_dir():

@@ -262,88 +262,6 @@
   height: 15px;
 }
 
-/* ── Read-only step list (detail) ──────────────────────────────────── */
-.wf-steplist {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.wf-step {
-  display: flex;
-  gap: 10px;
-}
-
-.wf-step__rail {
-  flex: 0 0 6px;
-  border-radius: 3px;
-  opacity: 0.9;
-}
-
-.wf-step__card {
-  flex: 1;
-  min-width: 0;
-  border: 1px solid var(--material-border);
-  border-radius: var(--radius);
-  background: var(--material-panel);
-  box-shadow: 0 1px 2px var(--material-shadow);
-  padding: 10px 12px;
-}
-
-.wf-step__head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.wf-step__icon {
-  display: inline-flex;
-}
-
-.wf-step__id {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.wf-step__meta {
-  margin-top: 4px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: baseline;
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-
-.wf-step__meta code {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
-  color: var(--foreground);
-  background: var(--control);
-  padding: 1px 5px;
-  border-radius: 5px;
-}
-
-.wf-step__goal {
-  color: var(--foreground);
-}
-
-.wf-step__cond {
-  color: var(--muted-foreground);
-}
-
-.wf-step__slot {
-  align-self: flex-start;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted-foreground);
-}
-
 /* ── Detail tabs / sections ─────────────────────────────────────────── */
 .wf-detail-actions {
   display: flex;
@@ -423,3 +341,256 @@
   font-size: 12px;
 }
 .wf-timeline__msg { color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.wf-help {
+  margin: -2px 0 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+.wf-adv-toggle {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wf-adv-toggle:hover { opacity: 0.85; }
+
+/* ── Flow (detail hero) ────────────────────────────────────────────── */
+.wf-flow-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.wf-detail-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.wf-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+}
+.wf-detail-row + .wf-detail-row { border-top: 1px solid color-mix(in oklch, var(--material-border) 55%, transparent); }
+.wf-detail-row__label { color: var(--muted-foreground); font-size: 12px; font-weight: 600; flex: 0 0 auto; }
+.wf-detail-row__value { display: flex; align-items: center; gap: 8px; text-align: right; color: var(--foreground); font-size: 13px; }
+.wf-detail-row code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  background: var(--control);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+.wf-flow-toggle {
+  display: inline-flex;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.wf-seg {
+  padding: 5px 12px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.wf-seg + .wf-seg { border-left: 1px solid var(--material-border); }
+.wf-seg--active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+.wf-flow {
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius);
+  background: var(--material-panel);
+  box-shadow: 0 1px 2px var(--material-shadow);
+  overflow: hidden;
+}
+
+.wf-flow__endpoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--foreground);
+}
+.wf-flow__endpoint svg { color: var(--accent); }
+.wf-flow__endpoint--trigger { border-bottom: 1px solid var(--material-border); background: var(--accent-soft); }
+.wf-flow__endpoint--output { border-top: 1px solid var(--material-border); }
+.wf-flow__endpoint-label { font-weight: 600; }
+
+.wf-flow__steps { padding: 4px 0; }
+
+.wf-steplist { list-style: none; margin: 0; padding: 0; }
+
+.wf-flow-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  border-left: 3px solid transparent;
+}
+.wf-flow-row + .wf-flow-row { border-top: 1px solid color-mix(in oklch, var(--material-border) 60%, transparent); }
+.wf-flow-row__rail {
+  width: 4px;
+  align-self: stretch;
+  min-height: 16px;
+  border-radius: 2px;
+  flex: 0 0 4px;
+}
+.wf-flow-row__icon { display: inline-flex; flex: 0 0 auto; }
+.wf-flow-row__id { font-weight: 600; }
+.wf-flow-row__action {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  background: var(--control);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+.wf-flow-row__goal { color: var(--muted-foreground); }
+.wf-flow-row__badges { display: flex; gap: 5px; flex-wrap: wrap; margin-left: auto; }
+
+.wf-flow-slot {
+  list-style: none;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  padding: 4px 0 2px;
+}
+
+/* Graph endpoint pills */
+.wf-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--material-border);
+  background: var(--material-panel);
+  color: var(--foreground);
+}
+.wf-pill--trigger { border-color: color-mix(in oklch, var(--accent) 45%, transparent); background: var(--accent-soft); color: var(--accent); }
+.wf-pill--output { border-color: color-mix(in oklch, var(--success) 45%, transparent); color: var(--success); }
+
+.wf-canvas--readonly { height: 440px; }
+
+
+/* ── Overview tables (clearly ruled) ───────────────────────────────── */
+.wf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.wf-table th,
+.wf-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid var(--material-border);
+  vertical-align: top;
+}
+.wf-table th {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  background: var(--control);
+  white-space: nowrap;
+}
+.wf-table__key {
+  width: 132px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font-weight: 600;
+  background: var(--control);
+}
+.wf-table code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  background: var(--control);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+.wf-table__req { color: var(--danger); }
+.wf-table__muted { color: var(--muted-foreground); }
+
+.wf-subhead {
+  margin: 18px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--material-border);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+/* Detail action bar (independent buttons; delete group right-aligned) */
+.wf-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.wf-action-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wf-action-bar__group--end { margin-left: auto; }
+
+.wf-toolbar__sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--material-border);
+  margin: 2px 2px;
+}
+.wf-version-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.wf-version-picker select.input {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+/* Edge disconnect button */
+.wf-edge-del {
+  pointer-events: all;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--material-border);
+  background: var(--material-panel-solid);
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 1px 3px var(--material-shadow);
+}
+.wf-edge-del:hover { background: var(--destructive-bg); }

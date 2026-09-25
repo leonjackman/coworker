@@ -14,10 +14,20 @@ import { t } from '../lib/i18n';
 export interface CrumbNav {
   /** Label of the top-level page, e.g. t('providers.title'). */
   viewLabel: ReactNode;
-  /** When present, the view is showing a second-level page (form/catalog/…). */
+  /** Optional middle crumb (third level: e.g. a detail page under the view). */
+  midLabel?: ReactNode | undefined;
+  /** Called to leave the middle page and return to the view root. */
+  onBackToMid?: (() => void) | undefined;
+  /** When present, the view is showing a second/third-level page. */
   leafLabel?: ReactNode | undefined;
   /** Called to leave the leaf page and return to the view root. */
   onBackToRoot?: (() => void) | undefined;
+  /**
+   * Called by Escape to go up exactly ONE level from the current page
+   * (3-level: leaf → middle; 2-level: leaf → view root). Falls back to
+   * ``onBackToRoot`` when omitted.
+   */
+  onBack?: (() => void) | undefined;
 }
 
 type Publish = (nav: CrumbNav | null) => void;
@@ -46,6 +56,7 @@ export function PageCrumbsBar({ nav, onHome }: PageCrumbsBarProps) {
     { key: 'home', label: t('nav.home'), onClick: onHome },
     { key: 'view', label: nav.viewLabel, onClick: nav.onBackToRoot },
   ];
+  if (nav.midLabel) items.push({ key: 'mid', label: nav.midLabel, onClick: nav.onBackToMid });
   if (nav.leafLabel) items.push({ key: 'leaf', label: nav.leafLabel });
   const lastIndex = items.length - 1;
   return (

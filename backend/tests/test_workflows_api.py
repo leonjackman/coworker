@@ -242,6 +242,35 @@ def test_api_duplicate_workflow():
     client.delete("/workflows/api-flow-copy")
 
 
+def test_api_versions_list_read_delete():
+    client = _client()
+    client.delete("/workflows/ver-flow")
+    client.post("/workflows", json={"content": FLOW.replace("api-flow", "ver-flow")})
+    # bump to v2, v3
+    client.put("/workflows/ver-flow", json={"content": FLOW.replace("api-flow", "ver-flow").replace("hi api", "hi v2")})
+    client.put("/workflows/ver-flow", json={"content": FLOW.replace("api-flow", "ver-flow").replace("hi api", "hi v3")})
+
+    versions = client.get("/workflows/ver-flow/versions").json()["versions"]
+    numbers = {v["version"]: v["is_current"] for v in versions}
+    assert numbers.get(3) is True  # current
+    assert numbers.get(1) is False and numbers.get(2) is False
+
+    one = client.get("/workflows/ver-flow/versions/1")
+    assert one.status_code == 200
+    assert one.json()["workflow"]["is_current"] is False
+    assert "hi api" in one.json()["workflow"]["yaml"]
+
+    # cannot delete the in-use version
+    blocked = client.delete("/workflows/ver-flow/versions/3")
+    assert blocked.status_code == 400
+    # can delete an archived one
+    removed = client.delete("/workflows/ver-flow/versions/1")
+    assert removed.status_code == 200
+    assert removed.json()["removed"] is True
+
+    client.delete("/workflows/ver-flow")
+
+
 def test_agent_prompt_block_present():
     block = main.workflow_manager.prompt_block()
     assert "available_workflows" in block or block == ""

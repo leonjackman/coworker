@@ -636,6 +636,34 @@ steps:
         assert (primary / "user-flow.yaml").is_file()
 
 
+def test_next_chain_ordering(manager):
+    flow = """name: chain-flow
+description: explicit next ordering
+steps:
+  - id: s1
+    kind: set
+    next: s3
+    params:
+      name: a
+      value: "1"
+  - id: s2
+    kind: set
+    params:
+      name: b
+      value: "2"
+  - id: s3
+    kind: set
+    next: s2
+    params:
+      name: c
+      value: "3"
+"""
+    manager.create(flow)
+    result = manager.run("chain-flow", env=FakeEnv())
+    assert result["status"] == "ok"
+    assert result["run"]["completed"] == ["s1", "s3", "s2"]
+
+
 def test_render_steps_structured(manager):
     result = manager.render_steps(
         {

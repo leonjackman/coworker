@@ -98,6 +98,7 @@ import type {
   WorkflowRunEvent,
   NotificationsResponse,
   WorkflowTemplatesResponse,
+  WorkflowVersionsResponse,
 } from '../types';
 import { getLanguage } from '../lib/i18n';
 
@@ -252,6 +253,9 @@ export interface ChatService {
   installWorkflowTemplate: (templateId: string) => Promise<{ status: string; message?: string; workflow?: unknown }>;
   duplicateWorkflow: (name: string, newName?: string) => Promise<{ status: string; name: string }>;
   exportWorkflow: (name: string) => Promise<{ status: string; name: string; yaml: string }>;
+  listWorkflowVersions: (name: string) => Promise<WorkflowVersionsResponse>;
+  getWorkflowVersion: (name: string, version: number) => Promise<WorkflowDetailResponse>;
+  deleteWorkflowVersion: (name: string, version: number) => Promise<{ status: string; removed: boolean }>;
   listNotifications: () => Promise<NotificationsResponse>;
   clearNotifications: () => Promise<{ status: string; removed: number }>;
   listSchedules: () => Promise<SchedulesListResponse>;
@@ -759,6 +763,18 @@ class ElectronChatService implements ChatService {
 
   async exportWorkflow(name: string): Promise<{ status: string; name: string; yaml: string }> {
     return this._workflowRequest(`/workflows/${encodeURIComponent(name)}/export`);
+  }
+
+  async listWorkflowVersions(name: string): Promise<WorkflowVersionsResponse> {
+    return this._workflowRequest<WorkflowVersionsResponse>(`/workflows/${encodeURIComponent(name)}/versions`);
+  }
+
+  async getWorkflowVersion(name: string, version: number): Promise<WorkflowDetailResponse> {
+    return this._workflowRequest<WorkflowDetailResponse>(`/workflows/${encodeURIComponent(name)}/versions/${version}`);
+  }
+
+  async deleteWorkflowVersion(name: string, version: number): Promise<{ status: string; removed: boolean }> {
+    return this._workflowRequest(`/workflows/${encodeURIComponent(name)}/versions/${version}`, { method: 'DELETE' });
   }
 
   async listNotifications(): Promise<NotificationsResponse> {
@@ -2279,6 +2295,18 @@ class HttpChatService implements ChatService {
 
   async exportWorkflow(name: string): Promise<{ status: string; name: string; yaml: string }> {
     return this.request(`/workflows/${encodeURIComponent(name)}/export`);
+  }
+
+  async listWorkflowVersions(name: string): Promise<WorkflowVersionsResponse> {
+    return this.request<WorkflowVersionsResponse>(`/workflows/${encodeURIComponent(name)}/versions`);
+  }
+
+  async getWorkflowVersion(name: string, version: number): Promise<WorkflowDetailResponse> {
+    return this.request<WorkflowDetailResponse>(`/workflows/${encodeURIComponent(name)}/versions/${version}`);
+  }
+
+  async deleteWorkflowVersion(name: string, version: number): Promise<{ status: string; removed: boolean }> {
+    return this.request(`/workflows/${encodeURIComponent(name)}/versions/${version}`, { method: 'DELETE' });
   }
 
   async listNotifications(): Promise<NotificationsResponse> {

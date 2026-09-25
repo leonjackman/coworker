@@ -922,6 +922,7 @@ export interface WorkflowStep {
   when?: string;
   foreach?: string;
   as_name?: string;
+  next?: string;
   description?: string;
   then?: WorkflowStep[];
   else?: WorkflowStep[];
@@ -946,6 +947,17 @@ export interface WorkflowEntry {
   steps?: WorkflowStep[];
   yaml?: string;
   history?: Array<{ version: number; file_path: string; updated_at: string }>;
+}
+
+export interface WorkflowVersion {
+  version: number;
+  is_current: boolean;
+  updated_at: string;
+}
+
+export interface WorkflowVersionsResponse {
+  status: string;
+  versions: WorkflowVersion[];
 }
 
 export interface WorkflowTemplate {

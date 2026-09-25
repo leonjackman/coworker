@@ -345,8 +345,10 @@ function App() {
         (event.target as HTMLElement).blur();
         return true;
       }
-      if (crumbNav?.leafLabel && crumbNav.onBackToRoot) {
-        crumbNav.onBackToRoot();
+      // Go up exactly one breadcrumb level (no skipping).
+      const goUpLevel = crumbNav?.onBack ?? (crumbNav?.leafLabel ? crumbNav.onBackToRoot : undefined);
+      if (goUpLevel) {
+        goUpLevel();
         return true;
       }
       if (activeView !== 'chat') {
