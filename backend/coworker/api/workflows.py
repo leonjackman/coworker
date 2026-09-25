@@ -357,6 +357,19 @@ async def workflow_feedback(name: str, payload: WorkflowFeedbackPayload):
     return {"status": "ok", "applied": bool(payload.apply), "result": result, "yaml": revision["yaml"]}
 
 
+class WorkflowDuplicatePayload(BaseModel):
+    new_name: str = ""
+
+
+@router.post("/workflows/{name}/duplicate")
+def duplicate_workflow(name: str, payload: WorkflowDuplicatePayload):
+    result = workflow_manager.duplicate(name, payload.new_name)
+    if result.get("status") != "ok":
+        code = 404 if "not found" in (result.get("message") or "") else 400
+        raise HTTPException(status_code=code, detail=result.get("message", "duplicate failed"))
+    return result
+
+
 @router.get("/workflows/{name}/export")
 def export_workflow(name: str):
     result = workflow_manager.export(name)

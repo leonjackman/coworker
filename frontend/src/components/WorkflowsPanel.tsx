@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Loader2, Play, Plus, RefreshCw, Trash2, Bot, Eye, Bell, CheckCircle2, XCircle, Wand2 } from 'lucide-react';
+import { ArrowLeft, Check, Copy, Download, Eye, FileText, Loader2, MoreHorizontal, Play, Plus, RefreshCw, Trash2, Bot, Bell, CheckCircle2, XCircle, Wand2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from './ui/button';
 import { t, translateError } from '../lib/i18n';
@@ -8,10 +8,10 @@ import { CategoryTabs, type CategoryTabItem } from './ui/category-tabs';
 import { GridCard } from './ui/grid-card';
 import { usePageNavPublish } from '../nav/PageNav';
 import { WorkflowGraphEditor, type GraphEditorTarget } from './WorkflowGraphEditor';
+import { WorkflowStepList } from './workflows/WorkflowStepList';
 import type {
   WorkflowEntry,
   WorkflowDraft,
-  WorkflowStep,
   WorkflowRun,
   WorkflowRunEvent,
   WorkflowEvidence,
@@ -37,18 +37,25 @@ const STEP_EMOJI: Record<string, string> = {
   subworkflow: '🧩',
 };
 
-function stepSummary(step: WorkflowStep, depth = 0): string {
-  const icon = STEP_EMOJI[step.kind] ?? '•';
-  const target = step.do || (step.locator ? JSON.stringify(step.locator) : '');
-  const indent = '  '.repeat(depth);
-  let line = `${indent}${icon} ${step.id}  ·  ${step.kind}${target ? `  →  ${target}` : ''}`;
-  if (step.when) line += `  [when ${step.when}]`;
-  if (step.foreach) line += `  [each ${step.foreach}]`;
-  const children: string[] = [];
-  for (const child of step.then ?? []) children.push(stepSummary(child, depth + 1));
-  for (const child of step.else ?? []) children.push(stepSummary(child, depth + 1));
-  for (const child of step.body ?? []) children.push(stepSummary(child, depth + 1));
-  return [line, ...children].join('\n');
+function relTime(value: string): string {
+  if (!value) return '—';
+  const ts = Date.parse(value);
+  if (Number.isNaN(ts)) return value;
+  const diff = Date.now() - ts;
+  const mins = Math.round(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
+}
+
+function runDuration(start: string, end: string): string {
+  const a = Date.parse(start);
+  const b = Date.parse(end);
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return '—';
+  const ms = b - a;
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function statusClass(status: string): string {
@@ -75,6 +82,8 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
   const [detail, setDetail] = useState<WorkflowEntry | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRuns, setDetailRuns] = useState<WorkflowRun[]>([]);
+  const [detailTab, setDetailTab] = useState<'overview' | 'steps' | 'runs' | 'feedback'>('overview');
+  const [overflowOpen, setOverflowOpen] = useState(false);
 
   const [editor, setEditor] = useState<{ name: string; isNew: boolean; content: string } | null>(null);
   const [editorBusy, setEditorBusy] = useState(false);
@@ -210,6 +219,44 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
     [refresh],
   );
 
+  const duplicateWorkflow = useCallback(
+    async (wf: WorkflowEntry) => {
+      const suggested = `${wf.name}-copy`;
+      const newName = window.prompt(t('workflows.duplicate_prompt'), suggested);
+      if (newName === null) return;
+      try {
+        const result = await chatService.duplicateWorkflow(wf.name, newName.trim());
+        if (result.status !== 'ok') throw new Error(t('workflows.save_failed'));
+        setSubPage('list');
+        setMessageType('ok');
+        setMessage(t('workflows.duplicated'));
+        await refresh();
+      } catch (error) {
+        setMessageType('error');
+        setMessage(translateError(error));
+      }
+    },
+    [refresh],
+  );
+
+  const exportWorkflow = useCallback(async (wf: WorkflowEntry) => {
+    try {
+      const result = await chatService.exportWorkflow(wf.name);
+      const blob = new Blob([result.yaml], { type: 'text/yaml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${wf.name}.yaml`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setMessageType('error');
+      setMessage(translateError(error));
+    }
+  }, []);
+
   const openRun = useCallback((wf: WorkflowEntry) => {
     setSubPage('run');
     setRunTarget(wf);
@@ -317,6 +364,30 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       }
     },
     [refresh, loadRunDetail],
+  );
+
+  const openGraph = useCallback((wf: WorkflowEntry) => {
+    setGraphTarget({
+      name: wf.name,
+      description: wf.description,
+      version: wf.version,
+      inputs: wf.inputs,
+      steps: wf.steps ?? [],
+      isNew: false,
+    });
+    setSubPage('graph');
+  }, []);
+
+  const openRunDetail = useCallback(
+    (run: WorkflowRun) => {
+      if (detail) setRunTarget(detail);
+      setRunResult(run);
+      setRunEvents([]);
+      setRunEvidence([]);
+      setSubPage('run');
+      void loadRunDetail(run.run_id);
+    },
+    [loadRunDetail, detail],
   );
 
   const openPending = useCallback(async (name: string) => {
@@ -499,75 +570,91 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       <WorkspacePage
         eyebrow={t('workflows.title')}
         title={`${t('workflows.run')}: ${runTarget?.name ?? ''}`}
+        description={runResult ? <span className="wf-meta__status"><span className={`settings-chip settings-chip--${runResult.status === 'ok' ? 'ok' : runResult.status === 'failed' ? 'bad' : 'dim'}`}>{runResult.status}</span></span> : undefined}
         action={backButton}
       >
         <div className="workspace-page__content">
-          <div className="skills-pending__actions" style={{ marginBottom: 10 }}>
-            <Button variant="primary" onClick={() => void executeRun()} disabled={runBusy}>
-              {runBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-              {t('workflows.run')}
-            </Button>
-          </div>
-          <label className="add-skill-page__field">
-            <span>{t('workflows.run_inputs')}</span>
+          <div className="settings-card" style={{ padding: 14 }}>
+            <div className="settings-row__copy" style={{ marginBottom: 8 }}>
+              <label>{t('workflows.run_inputs')}</label>
+            </div>
             <textarea
               className="skills-pending__editor"
-              style={{ minHeight: 120 }}
+              style={{ minHeight: 110 }}
               value={runInputs}
               onChange={(e) => setRunInputs(e.target.value)}
               spellCheck={false}
             />
-          </label>
-          {runResult && (
-            <div className="skill-detail__section">
-              <div className="skill-detail__label">{t('workflows.result')}</div>
-              <div className={`add-skill-page__msg ${statusClass(runResult.status)}`}>
-                {runResult.status}
-                {runResult.error ? ` — ${runResult.error}` : ''}
+            <div className="skills-pending__actions" style={{ marginTop: 8 }}>
+              <Button variant="primary" onClick={() => void executeRun()} disabled={runBusy}>
+                {runBusy ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                {t('workflows.run')}
+              </Button>
+            </div>
+          </div>
+
+          {runResult ? (
+            <>
+              <div className="settings-card">
+                <div className="settings-row">
+                  <div className="settings-row__copy"><label>{t('workflows.result')}</label>{runResult.error ? <p>{runResult.error}</p> : null}</div>
+                  <div className="settings-row__control">
+                    <span className={`settings-chip settings-chip--${runResult.status === 'ok' ? 'ok' : runResult.status === 'failed' ? 'bad' : 'warn'}`}>{runResult.status}</span>
+                  </div>
+                </div>
+                {runResult.status === 'needs_human' && runResult.pending_step ? (
+                  <div className="settings-row">
+                    <div className="settings-row__copy"><label>{runResult.pending_step}</label></div>
+                    <div className="settings-row__control skills-pending__actions">
+                      <Button variant="primary" size="sm" onClick={() => void resolveHuman(runResult.run_id, runResult.pending_step || '', true)}>
+                        <CheckCircle2 size={14} /> {t('workflows.approve_step')}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => void resolveHuman(runResult.run_id, runResult.pending_step || '', false)}>
+                        <XCircle size={14} /> {t('workflows.reject_step')}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
-              {runResult.status === 'needs_human' && runResult.pending_step ? (
-                <div className="skills-pending__actions">
-                  <Button variant="primary" size="sm" onClick={() => void resolveHuman(runResult.run_id, runResult.pending_step || '', true)}>
-                    <CheckCircle2 size={14} />
-                    {t('workflows.approve_step')}
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => void resolveHuman(runResult.run_id, runResult.pending_step || '', false)}>
-                    <XCircle size={14} />
-                    {t('workflows.reject_step')}
-                  </Button>
+
+              {Object.keys(runResult.context?.vars ?? {}).length > 0 ? (
+                <div className="settings-card" style={{ padding: 14 }}>
+                  <div className="settings-row__copy" style={{ marginBottom: 8 }}><label>{t('workflows.outputs')}</label></div>
+                  <pre className="skill-detail__pre">{JSON.stringify(runResult.context?.vars ?? {}, null, 2)}</pre>
                 </div>
               ) : null}
-              <pre className="skill-detail__pre">{JSON.stringify(runResult.context?.vars ?? {}, null, 2)}</pre>
-              {runEvents.length > 0 && (
-                <div style={{ marginTop: 8 }}>
-                  <div className="skill-detail__label">{t('workflows.timeline')}</div>
-                  <div className="schedule-history__row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+
+              {runEvents.length > 0 ? (
+                <div className="settings-card" style={{ padding: 14 }}>
+                  <div className="settings-row__copy" style={{ marginBottom: 8 }}><label>{t('workflows.timeline')}</label></div>
+                  <div className="wf-timeline">
                     {runEvents.map((event) => (
-                      <div key={event.seq} className="schedule-history__row">
-                        <span className={`settings-chip ${event.status === 'failed' ? 'settings-chip--error' : ''}`}>{event.type}</span>
+                      <div className="wf-timeline__row" key={event.seq}>
+                        <span className={`settings-chip settings-chip--${event.status === 'failed' ? 'bad' : event.status === 'ok' ? 'ok' : 'dim'}`}>{event.type}</span>
                         <span>{event.step_id || '—'}</span>
-                        <span className="schedule-history__trigger">{event.message}</span>
+                        <span className="wf-timeline__msg">{event.message}</span>
                       </div>
                     ))}
                   </div>
                 </div>
-              )}
-              {runEvidence.length > 0 && (
-                <div style={{ marginTop: 8 }}>
-                  <div className="skill-detail__label">{t('workflows.evidence')}</div>
-                  <div className="schedule-history__row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+              ) : null}
+
+              {runEvidence.length > 0 ? (
+                <div className="settings-card" style={{ padding: 14 }}>
+                  <div className="settings-row__copy" style={{ marginBottom: 8 }}><label>{t('workflows.evidence')}</label></div>
+                  <div className="wf-timeline">
                     {runEvidence.map((item) => (
-                      <div key={`${item.step_id}-${item.at}`} className="schedule-history__row">
+                      <div className="wf-timeline__row" key={`${item.step_id}-${item.at}`}>
                         <span className="settings-chip">{item.kind}</span>
                         <span>{item.step_id}</span>
-                        <span className="schedule-history__trigger">{item.path}</span>
+                        <span className="wf-timeline__msg">{item.path}</span>
                       </div>
                     ))}
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+              ) : null}
+            </>
+          ) : null}
         </div>
       </WorkspacePage>
     );
@@ -578,91 +665,185 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       <WorkspacePage
         eyebrow={t('workflows.title')}
         title={detail?.name || t('workflows.title')}
-        description={detail ? `v${detail.version} · ${detail.step_count} ${t('workflows.steps')}` : undefined}
-        action={backButton}
-      >
-        <div className="workspace-page__content">
-          {detail && (
-            <div className="skills-pending__actions" style={{ marginBottom: 12 }}>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setGraphTarget({
-                    name: detail.name,
-                    description: detail.description,
-                    version: detail.version,
-                    inputs: detail.inputs,
-                    steps: detail.steps ?? [],
-                    isNew: false,
-                  });
-                  setSubPage('graph');
-                }}
-              >
-                {t('workflows.visual_edit')}
-              </Button>
-              <Button variant="ghost" onClick={() => { setEditor({ name: detail.name, isNew: false, content: detail.yaml || '' }); setSubPage('editor'); }}>
-                {t('workflows.edit_yaml')}
-              </Button>
+        description={
+          detail ? (
+            <span className="wf-meta__status">
+              <span className="settings-chip">v{detail.version}</span>
+              <span className="settings-chip">{detail.status}</span>
+              <span className="settings-chip">{detail.step_count} {t('workflows.steps')}</span>
+              {(detail.triggers.length ? detail.triggers : ['manual']).map((tr) => (
+                <span key={tr} className="settings-chip">{tr}</span>
+              ))}
+              <span className="settings-chip">{detail.source}</span>
+            </span>
+          ) : undefined
+        }
+        action={
+          detail ? (
+            <div className="wf-detail-actions">
+              {backButton}
               <Button variant="primary" onClick={() => openRun(detail)}>
                 <Play size={14} />
                 {t('workflows.run')}
               </Button>
-              <Button variant="destructive" onClick={() => void removeWorkflow(detail)}>
-                <Trash2 size={14} />
-                {t('workflows.delete')}
-              </Button>
+              <div className="wf-overflow">
+                <Button variant="secondary" size="icon" onClick={() => setOverflowOpen((v) => !v)} aria-label={t('workflows.more')}>
+                  <MoreHorizontal size={16} />
+                </Button>
+                {overflowOpen ? (
+                  <div className="wf-overflow__menu" onMouseLeave={() => setOverflowOpen(false)}>
+                    <button type="button" onClick={() => { setOverflowOpen(false); openGraph(detail); }}>
+                      <Wand2 size={14} /> {t('workflows.visual_edit')}
+                    </button>
+                    <button type="button" onClick={() => { setOverflowOpen(false); setEditor({ name: detail.name, isNew: false, content: detail.yaml || '' }); setSubPage('editor'); }}>
+                      <FileText size={14} /> {t('workflows.edit_yaml')}
+                    </button>
+                    <button type="button" onClick={() => { setOverflowOpen(false); void duplicateWorkflow(detail); }}>
+                      <Copy size={14} /> {t('workflows.duplicate')}
+                    </button>
+                    <button type="button" onClick={() => { setOverflowOpen(false); void exportWorkflow(detail); }}>
+                      <Download size={14} /> {t('workflows.export')}
+                    </button>
+                    <button type="button" className="wf-danger" onClick={() => { setOverflowOpen(false); void removeWorkflow(detail); }}>
+                      <Trash2 size={14} /> {t('workflows.delete')}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
-          )}
+          ) : backButton
+        }
+      >
+        <div className="workspace-page__content">
           {detailLoading ? (
             <div className="skill-empty">
               <Loader2 size={16} className="animate-spin" />
             </div>
           ) : detail ? (
-            <div className="skill-detail">
-              <div className="skill-detail__section">
-                <div className="skill-detail__label">{t('workflows.description')}</div>
-                <div className="skill-detail__value">{detail.description}</div>
-              </div>
-              {detail.inputs.length > 0 && (
-                <div className="skill-detail__section">
-                  <div className="skill-detail__label">{t('workflows.inputs')}</div>
-                  <div className="skill-detail__value">
-                    {detail.inputs.map((i) => `${i.name}:${i.type}${i.required ? '*' : ''}`).join('  ')}
+            <>
+              <CategoryTabs
+                categories={[
+                  { id: 'overview', label: t('workflows.tab_overview') },
+                  { id: 'steps', label: t('workflows.tab_steps'), count: detail.step_count },
+                  { id: 'runs', label: t('workflows.tab_runs'), count: detailRuns.length },
+                  { id: 'feedback', label: t('workflows.tab_feedback') },
+                ]}
+                value={detailTab}
+                onChange={(id) => setDetailTab(id as typeof detailTab)}
+              />
+
+              {detailTab === 'overview' ? (
+                <>
+                  <div className="settings-card">
+                    <div className="settings-row">
+                      <div className="settings-row__copy"><label>{t('workflows.triggers')}</label></div>
+                      <div className="settings-row__control">
+                        <span className="settings-chip">{(detail.triggers.length ? detail.triggers : ['manual']).join(', ')}</span>
+                      </div>
+                    </div>
+                    <div className="settings-row">
+                      <div className="settings-row__copy"><label>{t('workflows.source')}</label></div>
+                      <div className="settings-row__control"><span className="settings-chip">{detail.source}</span></div>
+                    </div>
+                    <div className="settings-row">
+                      <div className="settings-row__copy"><label>{t('workflows.updated')}</label></div>
+                      <div className="settings-row__control">{relTime(detail.updated_at)}</div>
+                    </div>
+                    <div className="settings-row">
+                      <div className="settings-row__copy"><label>{t('workflows.last_run')}</label></div>
+                      <div className="settings-row__control">
+                        {detailRuns[0] ? (
+                          <button
+                            type="button"
+                            className={`settings-chip settings-chip--${detailRuns[0].status === 'ok' ? 'ok' : detailRuns[0].status === 'failed' ? 'bad' : 'dim'}`}
+                            onClick={() => openRunDetail(detailRuns[0] as WorkflowRun)}
+                          >
+                            {detailRuns[0].status} · {relTime(detailRuns[0].started_at)}
+                          </button>
+                        ) : (
+                          <span className="settings-chip settings-chip--dim">{t('workflows.never_run')}</span>
+                        )}
+                      </div>
+                    </div>
+                    {detail.description ? (
+                      <div className="settings-row">
+                        <div className="settings-row__copy"><label>{t('workflows.description')}</label><p>{detail.description}</p></div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {detail.inputs.length > 0 ? (
+                    <div className="settings-card">
+                      {detail.inputs.map((input) => (
+                        <div className="settings-row" key={input.name}>
+                          <div className="settings-row__copy">
+                            <label>{input.name}</label>
+                            <p>{input.description || `${input.type}${input.required ? ` · ${t('workflows.required')}` : ''}`}</p>
+                          </div>
+                          <div className="settings-row__control">
+                            <span className="settings-chip">{input.type}{input.required ? ' *' : ''}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {Object.keys(detail.outputs ?? {}).length > 0 ? (
+                    <div className="settings-card">
+                      {Object.entries(detail.outputs).map(([key, value]) => (
+                        <div className="settings-row" key={key}>
+                          <div className="settings-row__copy"><label>{key}</label></div>
+                          <div className="settings-row__control"><code>{value}</code></div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+
+              {detailTab === 'steps' ? <WorkflowStepList steps={detail.steps ?? []} /> : null}
+
+              {detailTab === 'runs' ? (
+                detailRuns.length === 0 ? (
+                  <p className="skill-empty">{t('workflows.no_runs')}</p>
+                ) : (
+                  <div className="settings-card">
+                    {detailRuns.map((run) => (
+                      <button type="button" className="wf-run-row" key={run.run_id} onClick={() => openRunDetail(run)} style={{ width: '100%', background: 'transparent', border: 'none', textAlign: 'left', cursor: 'pointer' }}>
+                        <span className={`settings-chip settings-chip--${run.status === 'ok' ? 'ok' : run.status === 'failed' ? 'bad' : 'dim'}`}>{run.status}</span>
+                        <span className="settings-chip">{run.trigger}</span>
+                        <span className="wf-run-row__time">{relTime(run.started_at)}</span>
+                        <span className="wf-run-row__time">{runDuration(run.started_at, run.ended_at)}</span>
+                        <span className="wf-run-row__time">{run.completed.length} {t('workflows.steps')}</span>
+                        {run.error ? <span className="wf-run-row__error">{run.error}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : null}
+
+              {detailTab === 'feedback' ? (
+                <div className="settings-card" style={{ padding: 14 }}>
+                  <div className="settings-row__copy" style={{ marginBottom: 10 }}>
+                    <label>{t('workflows.feedback')}</label>
+                    <p>{t('workflows.feedback_hint')}</p>
+                  </div>
+                  <textarea
+                    className="skills-pending__editor"
+                    style={{ minHeight: 100 }}
+                    value={feedbackText}
+                    onChange={(e) => setFeedbackText(e.target.value)}
+                    placeholder={t('workflows.feedback_placeholder')}
+                  />
+                  <div className="skills-pending__actions" style={{ marginTop: 8 }}>
+                    <Button variant="primary" size="sm" disabled={feedbackBusy || !feedbackText.trim()} onClick={() => void submitFeedback()}>
+                      {feedbackBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+                      {t('workflows.feedback_submit')}
+                    </Button>
                   </div>
                 </div>
-              )}
-              <div className="skill-detail__section">
-                <div className="skill-detail__label">{t('workflows.step_plan')}</div>
-                <pre className="skill-detail__pre">{(detail.steps ?? []).map((s) => stepSummary(s)).join('\n')}</pre>
-              </div>
-              {detailRuns.length > 0 && (
-                <div className="skill-detail__section">
-                  <div className="skill-detail__label">{t('workflows.run_history')}</div>
-                  {detailRuns.slice(0, 8).map((run) => (
-                    <div key={run.run_id} className={`add-skill-page__msg ${statusClass(run.status)}`} style={{ marginBottom: 4 }}>
-                      {run.status} · {run.trigger} · {run.completed.length} {t('workflows.steps')}
-                      {run.error ? ` — ${run.error}` : ''}
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="skill-detail__section">
-                <div className="skill-detail__label">{t('workflows.feedback')}</div>
-                <textarea
-                  className="skills-pending__editor"
-                  style={{ minHeight: 80 }}
-                  value={feedbackText}
-                  onChange={(e) => setFeedbackText(e.target.value)}
-                  placeholder={t('workflows.feedback_placeholder')}
-                />
-                <div className="skills-pending__actions" style={{ marginTop: 6 }}>
-                  <Button variant="primary" size="sm" disabled={feedbackBusy || !feedbackText.trim()} onClick={() => void submitFeedback()}>
-                    {feedbackBusy ? <Loader2 size={14} className="animate-spin" /> : null}
-                    {t('workflows.feedback_submit')}
-                  </Button>
-                </div>
-              </div>
-            </div>
+              ) : null}
+            </>
           ) : null}
         </div>
       </WorkspacePage>

@@ -339,7 +339,7 @@ export function SchedulesPanel() {
             </Button>
           </div>
           {editor && (
-            <div className="schedule-editor">
+            <div className="schedule-editor settings-card" style={{ padding: 14 }}>
               <label className="add-skill-page__field">
                 <span>{t('schedules.name')}</span>
                 <Input value={editor.name} onChange={(e) => setEditor({ ...editor, name: e.target.value })} />
@@ -522,13 +522,13 @@ export function SchedulesPanel() {
           {historyRuns.length === 0 ? (
             <p className="skill-empty">{t('schedules.no_history')}</p>
           ) : (
-            <div className="skills-pending__list">
+            <div className="settings-card">
               {historyRuns.map((run, index) => (
-                <div key={`${run.at}-${index}`} className="schedule-history__row">
-                  <span className={`settings-chip ${run.status === 'ok' ? '' : 'settings-chip--error'}`}>{run.status}</span>
-                  <span>{run.at}</span>
-                  <span className="schedule-history__trigger">{run.trigger}</span>
-                  {run.error ? <span className="schedule-history__error">{run.error}</span> : null}
+                <div key={`${run.at}-${index}`} className="wf-run-row">
+                  <span className={`settings-chip settings-chip--${run.status === 'ok' ? 'ok' : run.status === 'failed' ? 'bad' : 'dim'}`}>{run.status}</span>
+                  <span className="settings-chip">{run.trigger}</span>
+                  <span className="wf-run-row__time">{run.at}</span>
+                  {run.error ? <span className="wf-run-row__error">{run.error}</span> : null}
                 </div>
               ))}
             </div>

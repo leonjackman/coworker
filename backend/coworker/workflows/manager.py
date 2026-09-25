@@ -7,6 +7,7 @@ render them directly.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +29,12 @@ from .store import WorkflowStore
 logger = get_logger(__name__)
 
 VALID_PENDING_ACTIONS = {"create", "update"}
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 class WorkflowManager:
@@ -118,6 +125,40 @@ class WorkflowManager:
         if result.get("status") == "ok":
             result["template"] = template_id
         return result
+
+    def duplicate(self, name: str, new_name: str = "") -> dict[str, Any]:
+        """Copy a workflow under a new name (new, independent definition)."""
+        from dataclasses import replace
+
+        from .fingerprint import current_fingerprint
+
+        source = self.store.get(name)
+        if source is None:
+            return {"status": "error", "message": f"workflow not found: {name}"}
+        candidate = (new_name or f"{name}-copy").strip() or f"{name}-copy"
+        if candidate == name or not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", candidate):
+            candidate = re.sub(r"[^a-z0-9]+", "-", candidate.lower()).strip("-")
+        if not candidate:
+            candidate = f"{name}-copy"
+        unique = candidate
+        index = 2
+        while self.store.exists(unique):
+            unique = f"{candidate}-{index}"
+            index += 1
+        now = _now()
+        copy_wf = replace(
+            source,
+            name=unique,
+            version=1,
+            status="active",
+            source="user",
+            fingerprint=current_fingerprint(),
+            provenance={**source.provenance, "duplicated_from": name},
+            created_at=now,
+            updated_at=now,
+        )
+        saved = self.store.save(copy_wf, archive=False)
+        return {"status": "ok", "workflow": saved.to_dict(include_steps=False), "name": unique}
 
     def export(self, name: str) -> dict[str, Any]:
         text = self.store.read_text(name)

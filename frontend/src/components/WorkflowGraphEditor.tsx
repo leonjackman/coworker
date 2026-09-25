@@ -16,75 +16,17 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
-import {
-  ArrowDown,
-  ArrowUp,
-  Bot,
-  Boxes,
-  Brain,
-  Globe,
-  GitBranch,
-  LayoutGrid,
-  Loader2,
-  Monitor,
-  Pin,
-  Plus,
-  Repeat,
-  Save,
-  ShieldCheck,
-  Sparkles,
-  Terminal,
-  Timer,
-  Trash2,
-  UserCheck,
-  Wrench,
-  type LucideIcon,
-} from 'lucide-react';
+import { ArrowDown, ArrowUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
+import { DO_KINDS, KIND_OPTIONS, KIND_META, LOCATOR_KINDS, PARAM_KINDS, kindFamily, kindIcon, kindStripe } from './workflows/kinds';
 import type { WorkflowStep } from '../types';
 
 const NODE_W = 214;
 const NODE_H = 58;
-
-type Family = 'action' | 'control' | 'verify' | 'agent' | 'human';
-const FAMILY_VAR: Record<Family, string> = {
-  action: 'var(--info)',
-  control: 'var(--warning)',
-  verify: 'var(--success)',
-  agent: 'var(--accent)',
-  human: 'var(--warning)',
-};
-
-const KIND_META: Record<string, { family: Family; icon: LucideIcon }> = {
-  command: { family: 'action', icon: Terminal },
-  tool: { family: 'action', icon: Wrench },
-  browser: { family: 'action', icon: Globe },
-  app: { family: 'action', icon: Monitor },
-  computer: { family: 'action', icon: Monitor },
-  skill: { family: 'agent', icon: Brain },
-  agentic: { family: 'agent', icon: Bot },
-  human: { family: 'human', icon: UserCheck },
-  set: { family: 'verify', icon: Pin },
-  assert: { family: 'verify', icon: ShieldCheck },
-  wait: { family: 'verify', icon: Timer },
-  branch: { family: 'control', icon: GitBranch },
-  loop: { family: 'control', icon: Repeat },
-  parallel: { family: 'control', icon: LayoutGrid },
-  subworkflow: { family: 'control', icon: Boxes },
-};
-
-const KIND_OPTIONS = Object.keys(KIND_META);
-const ACTION_KINDS = new Set(['command', 'tool', 'browser', 'app', 'computer', 'skill', 'human', 'agentic']);
-const DO_KINDS = new Set([...ACTION_KINDS, 'subworkflow', 'assert']);
-const PARAM_KINDS = new Set([...ACTION_KINDS, 'set', 'wait', 'subworkflow']);
-const LOCATOR_KINDS = new Set(['browser', 'app', 'computer']);
-
-const kindFamily = (kind: string): Family => KIND_META[kind]?.family ?? 'action';
-const kindStripe = (kind: string): string => FAMILY_VAR[kindFamily(kind)];
 
 // ── step tree helpers ───────────────────────────────────────────────────
 type PathPart = number | 'then' | 'else' | 'body';
@@ -209,8 +151,7 @@ interface StepNodeData extends Record<string, unknown> {
 function StepNode({ data, selected }: NodeProps) {
   const d = data as StepNodeData;
   const step = d.step;
-  const meta = KIND_META[step.kind] ?? { family: 'action' as Family, icon: Wrench };
-  const Icon = meta.icon;
+  const Icon = kindIcon(step.kind);
   const badge = d.status;
   return (
     <div

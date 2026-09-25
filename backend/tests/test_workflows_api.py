@@ -229,6 +229,19 @@ def test_api_render_steps_for_visual_editor():
     assert "goal: do it" in body["yaml"]
 
 
+def test_api_duplicate_workflow():
+    client = _client()
+    client.delete("/workflows/api-flow")
+    client.delete("/workflows/api-flow-copy")
+    client.post("/workflows", json={"content": FLOW})
+    dup = client.post("/workflows/api-flow/duplicate", json={"new_name": "api-flow-copy"})
+    assert dup.status_code == 200, dup.text
+    assert dup.json()["name"] == "api-flow-copy"
+    assert client.get("/workflows/api-flow-copy").status_code == 200
+    client.delete("/workflows/api-flow")
+    client.delete("/workflows/api-flow-copy")
+
+
 def test_agent_prompt_block_present():
     block = main.workflow_manager.prompt_block()
     assert "available_workflows" in block or block == ""

@@ -250,6 +250,8 @@ export interface ChatService {
   recordFromSession: (sessionId: string) => Promise<{ status: string; review: Record<string, unknown> }>;
   listWorkflowTemplates: () => Promise<WorkflowTemplatesResponse>;
   installWorkflowTemplate: (templateId: string) => Promise<{ status: string; message?: string; workflow?: unknown }>;
+  duplicateWorkflow: (name: string, newName?: string) => Promise<{ status: string; name: string }>;
+  exportWorkflow: (name: string) => Promise<{ status: string; name: string; yaml: string }>;
   listNotifications: () => Promise<NotificationsResponse>;
   clearNotifications: () => Promise<{ status: string; removed: number }>;
   listSchedules: () => Promise<SchedulesListResponse>;
@@ -745,6 +747,18 @@ class ElectronChatService implements ChatService {
     return this._workflowRequest(`/workflows/templates/${encodeURIComponent(templateId)}/install`, {
       method: 'POST',
     });
+  }
+
+  async duplicateWorkflow(name: string, newName = ''): Promise<{ status: string; name: string }> {
+    return this._workflowRequest(`/workflows/${encodeURIComponent(name)}/duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_name: newName }),
+    });
+  }
+
+  async exportWorkflow(name: string): Promise<{ status: string; name: string; yaml: string }> {
+    return this._workflowRequest(`/workflows/${encodeURIComponent(name)}/export`);
   }
 
   async listNotifications(): Promise<NotificationsResponse> {
@@ -2253,6 +2267,18 @@ class HttpChatService implements ChatService {
 
   async installWorkflowTemplate(templateId: string): Promise<{ status: string; message?: string }> {
     return this.request(`/workflows/templates/${encodeURIComponent(templateId)}/install`, { method: 'POST' });
+  }
+
+  async duplicateWorkflow(name: string, newName = ''): Promise<{ status: string; name: string }> {
+    return this.request(`/workflows/${encodeURIComponent(name)}/duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_name: newName }),
+    });
+  }
+
+  async exportWorkflow(name: string): Promise<{ status: string; name: string; yaml: string }> {
+    return this.request(`/workflows/${encodeURIComponent(name)}/export`);
   }
 
   async listNotifications(): Promise<NotificationsResponse> {
