@@ -525,8 +525,8 @@ class WorkflowExecutor:
         raise StepFailed(step.id, f"unsupported step kind: {kind}")
 
     def _run_parallel(self, workflow: Workflow, step: Step, run: Run, state: "_State") -> Any:
-        # Steps run on fresh child contexts to avoid cross-thread context races;
-        # their bindings are merged back after completion.
+        # Children share the run context but execute under the executor lock, so
+        # their bindings are written safely and merged after each completes.
         results: dict[str, Any] = {}
 
         def _run_child(child: Step) -> tuple[str, Any]:

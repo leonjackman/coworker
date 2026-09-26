@@ -1488,6 +1488,18 @@ export interface SkillReviewSettingsPatch {
   approval_required?: boolean;
 }
 
+export interface WorkflowReviewSettings {
+  enabled: boolean;
+  aggressiveness: SkillReviewAggressiveness;
+  approval_required: boolean;
+}
+
+export interface WorkflowReviewSettingsPatch {
+  enabled?: boolean;
+  aggressiveness?: SkillReviewAggressiveness;
+  approval_required?: boolean;
+}
+
 export type MemorySettingsPatch = Partial<Pick<MemorySettings, 'enabled' | 'auto_extract'>>;
 
 // ── Web search / fetch (multi-provider) ─────────────────────────────────

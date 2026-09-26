@@ -192,9 +192,12 @@ export function renumberWorkflowSteps(steps: WorkflowStep[]): WorkflowStep[] {
 
   const remap = (value: unknown): unknown => {
     if (typeof value === 'string') {
-      return value.replace(/\{\{\s*steps\.([A-Za-z0-9_:-]+)/g, (match, id: string) =>
-        idMap.has(id) ? match.replace(id, idMap.get(id) as string) : match,
-      );
+      return value.replace(/\{\{\s*steps\.([A-Za-z0-9_:-]+)/g, (match, id: string) => {
+        const mapped = idMap.get(id);
+        if (mapped === undefined) return match;
+        // Replace only the captured id, not substrings in the "{{steps." prefix.
+        return match.slice(0, match.length - id.length) + mapped;
+      });
     }
     if (Array.isArray(value)) return value.map(remap);
     if (value && typeof value === 'object') {

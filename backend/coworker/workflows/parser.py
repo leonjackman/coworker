@@ -424,11 +424,17 @@ def renumber_steps(steps: list[Step]) -> list[Step]:
 
     assign(steps)
 
+    def _repl(match: "re.Match[str]") -> str:
+        old = match.group(1)
+        new = id_map.get(old, old)
+        # Replace only the captured id, not substrings that appear in the prefix
+        # (e.g. id "s" must not corrupt "{{steps.s").
+        prefix = match.group(0)[: len(match.group(0)) - len(old)]
+        return prefix + new
+
     def remap(value: Any) -> Any:
         if isinstance(value, str):
-            return _STEP_REF_RE.sub(
-                lambda m: m.group(0).replace(m.group(1), id_map.get(m.group(1), m.group(1))), value
-            )
+            return _STEP_REF_RE.sub(_repl, value)
         if isinstance(value, list):
             return [remap(item) for item in value]
         if isinstance(value, dict):

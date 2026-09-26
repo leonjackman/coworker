@@ -2,7 +2,7 @@ import { ArrowLeft, RefreshCw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getLanguage, setLanguage, t, type Language } from '../../lib/i18n';
 import { THEME_PRESETS, type ThemeMode, type ThemeSettings } from '../../lib/theme';
-import type { Autonomy, MemorySettings, MemorySettingsPatch, SkillReviewSettings, SkillReviewSettingsPatch, WebSettings } from '../../types';
+import type { Autonomy, MemorySettings, MemorySettingsPatch, SkillReviewSettings, SkillReviewSettingsPatch, WebSettings, WorkflowReviewSettings, WorkflowReviewSettingsPatch } from '../../types';
 import type { UpdateCenter } from '../../lib/useUpdateCenter';
 import { useSound } from '../sound-provider';
 import { chatService } from '../../services/chatService';
@@ -37,6 +37,8 @@ interface SettingsViewProps {
   onMemorySettingsChange: (patch: MemorySettingsPatch) => void;
   skillReviewSettings: SkillReviewSettings | null;
   onSkillReviewSettingsChange: (patch: SkillReviewSettingsPatch) => void;
+  workflowReviewSettings: WorkflowReviewSettings | null;
+  onWorkflowReviewSettingsChange: (patch: WorkflowReviewSettingsPatch) => void;
   modelOptions: { id: string; label: string; provider: string }[];
   updateCenter: UpdateCenter;
   onLanguageChange?: () => void;
@@ -137,6 +139,8 @@ export function SettingsView({
   onMemorySettingsChange,
   skillReviewSettings,
   onSkillReviewSettingsChange,
+  workflowReviewSettings,
+  onWorkflowReviewSettingsChange,
   modelOptions,
   updateCenter,
   onLanguageChange,
@@ -511,6 +515,45 @@ export function SettingsView({
                   { value: 'false', label: t('memory.disabled') },
                 ],
                 onChange: (value) => onSkillReviewSettingsChange({ approval_required: value === 'true' }),
+              },
+              {
+                id: 'workflow_review_enabled',
+                type: 'toggle',
+                label: t('settings.workflow_review_enabled'),
+                description: t('settings.workflow_review_enabled_desc'),
+                value: workflowReviewSettings?.enabled ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onWorkflowReviewSettingsChange({ enabled: value === 'true' }),
+              },
+              {
+                id: 'workflow_review_aggressiveness',
+                type: 'select',
+                label: t('settings.workflow_review_aggressiveness'),
+                description: t('settings.workflow_review_aggressiveness_desc'),
+                value: workflowReviewSettings?.aggressiveness ?? 'cautious',
+                options: [
+                  { value: 'active', label: t('settings.skill_review_level_active') },
+                  { value: 'cautious', label: t('settings.skill_review_level_cautious') },
+                  { value: 'passive', label: t('settings.skill_review_level_passive') },
+                ],
+                onChange: (value) => onWorkflowReviewSettingsChange({ aggressiveness: value as WorkflowReviewSettings['aggressiveness'] }),
+              },
+              {
+                id: 'workflow_review_approval',
+                type: 'toggle',
+                label: t('settings.workflow_review_approval'),
+                description: workflowReviewSettings?.approval_required
+                  ? t('settings.workflow_review_approval_desc')
+                  : t('settings.workflow_review_approval_off_desc'),
+                value: workflowReviewSettings?.approval_required ? 'true' : 'false',
+                options: [
+                  { value: 'true', label: t('memory.enabled') },
+                  { value: 'false', label: t('memory.disabled') },
+                ],
+                onChange: (value) => onWorkflowReviewSettingsChange({ approval_required: value === 'true' }),
               },
             ],
           },

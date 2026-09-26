@@ -169,6 +169,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveMemorySettings: (payload) => ipcRenderer.invoke('save-memory-settings', payload),
   getSkillReviewSettings: () => ipcRenderer.invoke('get-skill-review-settings'),
   saveSkillReviewSettings: (payload) => ipcRenderer.invoke('save-skill-review-settings', payload),
+  getWorkflowReviewSettings: () => ipcRenderer.invoke('get-workflow-review-settings'),
+  saveWorkflowReviewSettings: (payload) => ipcRenderer.invoke('save-workflow-review-settings', payload),
   getWebSettings: () => ipcRenderer.invoke('get-web-settings'),
   saveWebSettings: (payload) => ipcRenderer.invoke('save-web-settings', payload),
   setWebTavilyKey: (apiKey) => ipcRenderer.invoke('set-web-tavily-key', apiKey),

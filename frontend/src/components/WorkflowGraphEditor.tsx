@@ -987,7 +987,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
                 fitView
                 minZoom={0.2}
                 maxZoom={2}
-                proOptions={{ hideAttribution: false }}
+                proOptions={{ hideAttribution: true }}
               >
                 <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
               </ReactFlow>

@@ -70,6 +70,8 @@ import type {
   MemorySettings,
   SkillReviewSettings,
   SkillReviewSettingsPatch,
+  WorkflowReviewSettings,
+  WorkflowReviewSettingsPatch,
   MemorySettingsPatch,
   WebSettings,
   WebConfigPatch,
@@ -290,6 +292,8 @@ export interface ChatService {
   saveMemorySettings: (settings: MemorySettingsPatch) => Promise<MemorySettings>;
   getSkillReviewSettings: () => Promise<SkillReviewSettings>;
   saveSkillReviewSettings: (patch: SkillReviewSettingsPatch) => Promise<SkillReviewSettings>;
+  getWorkflowReviewSettings: () => Promise<WorkflowReviewSettings>;
+  saveWorkflowReviewSettings: (patch: WorkflowReviewSettingsPatch) => Promise<WorkflowReviewSettings>;
   getWebSettings: () => Promise<WebSettings>;
   saveWebSettings: (patch: WebConfigPatch) => Promise<WebSettings>;
   setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;
@@ -952,6 +956,16 @@ class ElectronChatService implements ChatService {
   async saveSkillReviewSettings(patch: SkillReviewSettingsPatch): Promise<SkillReviewSettings> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     return window.electronAPI.saveSkillReviewSettings(patch);
+  }
+
+  async getWorkflowReviewSettings(): Promise<WorkflowReviewSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.getWorkflowReviewSettings();
+  }
+
+  async saveWorkflowReviewSettings(patch: WorkflowReviewSettingsPatch): Promise<WorkflowReviewSettings> {
+    if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    return window.electronAPI.saveWorkflowReviewSettings(patch);
   }
 
   async getWebSettings(): Promise<WebSettings> {
@@ -2502,6 +2516,18 @@ class HttpChatService implements ChatService {
 
   async getSkillReviewSettings(): Promise<SkillReviewSettings> {
     return this.request<SkillReviewSettings>('/api/skill-review/settings');
+  }
+
+  async getWorkflowReviewSettings(): Promise<WorkflowReviewSettings> {
+    return this.request<WorkflowReviewSettings>('/api/workflow-review/settings');
+  }
+
+  async saveWorkflowReviewSettings(patch: WorkflowReviewSettingsPatch): Promise<WorkflowReviewSettings> {
+    return this.request<WorkflowReviewSettings>('/api/workflow-review/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
   }
 
   async saveSkillReviewSettings(patch: SkillReviewSettingsPatch): Promise<SkillReviewSettings> {

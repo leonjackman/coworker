@@ -96,8 +96,20 @@ def resolve(value: Any, context: dict[str, Any], secrets: SecretResolver | None 
     return value
 
 
+def _unquote(text: str) -> str:
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1]
+    return text
+
+
 def resolve_bool(value: Any, context: dict[str, Any], secrets: SecretResolver | None = None) -> bool:
-    """Resolve a value and coerce it to bool (for ``when`` conditions)."""
+    """Resolve a value and coerce it to bool (for ``when`` conditions).
+
+    Supports a minimal comparison after interpolation (``<lhs> == <rhs>`` /
+    ``<lhs> != <rhs>``) so natural conditions like
+    ``"{{inputs.url}} != ''"`` behave correctly; everything else is truthiness.
+    """
     if isinstance(value, bool):
         return value
     if value is None or value == "":
@@ -109,4 +121,10 @@ def resolve_bool(value: Any, context: dict[str, Any], secrets: SecretResolver | 
         return resolved != 0
     if isinstance(resolved, (list, dict)):
         return len(resolved) > 0
-    return str(resolved).strip().lower() not in {"", "0", "false", "no", "off", "none", "null"}
+    text = str(resolved)
+    for op in (" != ", " == "):
+        if op in text:
+            lhs, rhs = text.split(op, 1)
+            a, b = _unquote(lhs), _unquote(rhs)
+            return (a != b) if op.strip() == "!=" else (a == b)
+    return text.strip().lower() not in {"", "0", "false", "no", "off", "none", "null"}

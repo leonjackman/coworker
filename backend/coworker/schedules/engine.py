@@ -196,13 +196,23 @@ class ScheduleEngine:
         """Run due schedules; return seconds until the next one is due."""
         now = now or datetime.now(timezone.utc)
         schedules = self.store.list()
+        master = self._master_enabled()
+        if not master:
+            # Keep next_run_at warm, but don't spin: without firing we can't
+            # advance overdue times, so cap the sleep instead of looping at 1s.
+            for schedule in schedules:
+                if schedule.enabled and cronlib.cron_ok(schedule.cron):
+                    before = schedule.next_run_at
+                    self.ensure_next(schedule, now)
+                    if schedule.next_run_at != before:
+                        self.store.save(schedule)
+            return float(self.tick_cap_seconds)
         next_times: list[datetime] = []
         for schedule in schedules:
             if not schedule.enabled or not cronlib.cron_ok(schedule.cron):
                 continue
             self.ensure_next(schedule, now)
-            if self._master_enabled():
-                await self._process(schedule, now)
+            await self._process(schedule, now)
             refreshed = self.store.get(schedule.id)
             if refreshed is not None:
                 schedule = refreshed

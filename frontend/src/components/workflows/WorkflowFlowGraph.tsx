@@ -60,6 +60,7 @@ export function WorkflowFlowGraph({ steps, triggers, outputs }: Props) {
         elementsSelectable={false}
         minZoom={0.2}
         maxZoom={2}
+        proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
         <Controls showInteractive={false} />

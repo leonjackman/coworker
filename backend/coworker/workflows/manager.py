@@ -197,7 +197,9 @@ class WorkflowManager:
 
     def rollback(self, name: str, version: int) -> dict[str, Any]:
         """Restore a historical version as a NEW version (forward-only history)."""
-        target = self.store.history_dir / name / f"v{int(version)}.yaml"
+        from .store import safe_filename
+
+        target = self.store.history_dir / safe_filename(name) / f"v{int(version)}.yaml"
         if not target.is_file():
             return {"status": "error", "message": f"no version {version} for {name}"}
         try:
@@ -285,7 +287,9 @@ class WorkflowManager:
         if action not in VALID_PENDING_ACTIONS:
             action = "create"
         provenance = dict(workflow.provenance)
-        provenance.setdefault("action", action)
+        # Override (not setdefault): recorded drafts pre-seed action="create",
+        # which must not win over an explicit "update".
+        provenance["action"] = action
         provenance.setdefault("sources", sources or [])
         from dataclasses import replace
 
@@ -452,6 +456,7 @@ class WorkflowManager:
         inputs: list[dict[str, Any]] | None = None,
         triggers: list[str] | None = None,
         sources: list[str] | None = None,
+        action: str = "create",
     ) -> dict[str, Any]:
         draft = record_draft(
             name,
@@ -461,7 +466,30 @@ class WorkflowManager:
             triggers=triggers,
             sources=sources,
         )
-        return self.stage_draft(name, draft, sources=sources)
+        return self.stage_draft(name, draft, sources=sources, action=action)
+
+    def apply_agent_workflow(
+        self,
+        action: str,
+        name: str,
+        steps: list[dict[str, Any]],
+        *,
+        description: str = "",
+        sources: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Directly create/update a workflow (used when approval is disabled)."""
+        content = record_draft(
+            name,
+            steps,
+            description=description or name,
+            sources=sources,
+        )
+        exists = self.store.exists(name)
+        if action == "update" or exists:
+            if exists:
+                return self.update(name, content)
+            return self.create(content)
+        return self.create(content)
 
     # ── helpers ─────────────────────────────────────────────────────────
 

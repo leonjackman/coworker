@@ -1426,5 +1426,12 @@
   "workflows.lock_canvas": "锁定画布（禁止编辑）",
   "workflows.unlock_canvas": "解锁画布",
   "workflows.minimap": "小地图",
-  "workflows.edge_right_angle": "直角线"
+  "workflows.edge_right_angle": "直角线",
+  "settings.workflow_review_enabled": "自动创建流程",
+  "settings.workflow_review_enabled_desc": "当一轮任务完成了可复用的多步流程时，自动生成工作流草稿。默认关闭。",
+  "settings.workflow_review_aggressiveness": "流程捕获严格度",
+  "settings.workflow_review_aggressiveness_desc": "agent 提出工作流的积极程度。",
+  "settings.workflow_review_approval": "需要人工批准工作流",
+  "settings.workflow_review_approval_desc": "新工作流进入草稿队列等待你批准。",
+  "settings.workflow_review_approval_off_desc": "新工作流将自动应用（无需批准）。"
 }

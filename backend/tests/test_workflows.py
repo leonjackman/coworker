@@ -735,6 +735,80 @@ steps:
     assert steps[1].params["command"][1] == "{{steps.id:1}}"
 
 
+def test_when_comparison_expression(manager):
+    flow = """name: cond-flow
+description: branch on comparison
+inputs:
+  url:
+    type: string
+    default: ""
+steps:
+  - id: check
+    kind: branch
+    when: "{{inputs.url}} != ''"
+    then:
+      - id: inner
+        kind: set
+        params:
+          name: took
+          value: "yes"
+"""
+    manager.create(flow)
+    empty = manager.run("cond-flow", env=FakeEnv())
+    assert empty["status"] == "ok"
+    assert "took" not in empty["run"]["context"].get("vars", {})
+    filled = manager.run("cond-flow", {"url": "https://x"}, env=FakeEnv())
+    assert filled["status"] == "ok"
+    assert filled["run"]["context"]["vars"]["took"] == "yes"
+
+
+def test_renumber_does_not_corrupt_short_ids():
+    from coworker.workflows.parser import parse_workflow, renumber_steps
+
+    # Ids that are substrings of the "{{steps." prefix must not be corrupted.
+    text = """name: short
+description: x
+steps:
+  - id: s
+    kind: set
+    next: st
+    params:
+      name: k
+      value: "{{steps.s}}"
+  - id: st
+    kind: command
+    params:
+      command:
+        - echo
+        - "{{steps.s}}"
+"""
+    workflow, _ = parse_workflow(text)
+    steps = renumber_steps(workflow.steps)
+    assert [s.id for s in steps] == ["id:1", "id:2"]
+    assert steps[0].next == "id:2"
+    assert steps[0].params["value"] == "{{steps.id:1}}"
+    assert steps[1].params["command"][1] == "{{steps.id:1}}"
+
+
+def test_rollback_non_ascii_name(manager):
+    flow = '''name: 回滚测试
+description: x
+steps:
+  - id: a
+    kind: set
+    params:
+      name: k
+      value: v
+'''
+    manager.create(flow)
+    # Create a second version so v1 is archived.
+    manager.update("回滚测试", flow.replace("value: v", "value: v2"))
+    assert manager.get("回滚测试")["version"] == 2
+    rolled = manager.rollback("回滚测试", 1)
+    assert rolled["status"] == "ok", rolled
+    assert manager.get("回滚测试")["version"] == 3
+
+
 def test_renumber_level_first_with_branches():
     from coworker.workflows.parser import parse_workflow, renumber_steps
 
@@ -762,6 +836,62 @@ steps:
     assert [s.id for s in steps] == ["id:1", "id:2"]  # siblings first
     assert steps[0].next == "id:2"
     assert [c.id for c in steps[0].then] == ["id:3"]  # children after the level
+
+
+def test_workflow_review_settings_default_off(tmp_path):
+    from coworker.config import read_workflow_review_settings
+
+    cfg = read_workflow_review_settings(tmp_path)
+    assert cfg["enabled"] is False
+    assert cfg["aggressiveness"] == "cautious"
+    assert cfg["approval_required"] is True
+
+
+def test_apply_agent_workflow_create_and_update(manager):
+    steps = [{"kind": "set", "params": {"name": "k", "value": "v"}}]
+    created = manager.apply_agent_workflow("create", "auto-flow", steps, description="d")
+    assert created["status"] == "ok"
+    assert manager.get("auto-flow") is not None
+    assert manager.get("auto-flow")["version"] == 1
+    updated = manager.apply_agent_workflow("update", "auto-flow", steps, description="d2")
+    assert updated["status"] == "ok"
+    assert manager.get("auto-flow")["version"] == 2
+
+
+def test_run_workflow_review_stage_then_apply(manager):
+    import asyncio
+    import json
+
+    from coworker.workflows.review import run_workflow_review
+
+    verdict = {
+        "action": "create",
+        "name": "auto-reviewed",
+        "description": "auto",
+        "steps": [{"kind": "set", "params": {"name": "k", "value": "v"}}],
+    }
+
+    class _Resp:
+        content = json.dumps(verdict)
+
+    class _LLM:
+        async def ainvoke(self, messages):
+            return _Resp()
+
+    parts = [{"type": "tool_start", "name": "run_command"}]
+    staged = asyncio.run(
+        run_workflow_review(_LLM(), manager, session_id="s1", messages=[], parts=parts)
+    )
+    assert staged.get("staged") is True
+    assert any(d["name"] == "auto-reviewed" for d in manager.list_pending())
+
+    applied = asyncio.run(
+        run_workflow_review(
+            _LLM(), manager, session_id="s1", messages=[], parts=parts, approval_required=False
+        )
+    )
+    assert applied.get("applied") is True
+    assert manager.get("auto-reviewed") is not None
 
 
 def test_render_steps_structured(manager):

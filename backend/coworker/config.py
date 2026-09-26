@@ -155,3 +155,53 @@ def skill_auto_apply_enabled(data_dir: Path | None) -> bool:
         return not bool(read_skill_review_settings(data_dir).get("approval_required", True))
     except Exception:  # noqa: BLE001 - a broken settings file must not auto-apply
         return False
+
+
+# Aggressiveness levels for the automatic workflow authoring review.
+WORKFLOW_REVIEW_AGGRESSIVENESS = frozenset({"active", "cautious", "passive"})
+
+
+def default_workflow_review_settings() -> dict:
+    """Product defaults for the auto-workflow review (OFF by default)."""
+    return {
+        "enabled": False,
+        "aggressiveness": "cautious",  # active | cautious | passive
+        "approval_required": True,
+    }
+
+
+def read_workflow_review_settings(data_dir: Path) -> dict:
+    """Read the user's auto-workflow review settings from ``.coworker_settings.json``.
+
+    Mirrors :func:`read_skill_review_settings`; absent/malformed values fall back
+    to the product defaults (disabled).
+    """
+    import json
+
+    defaults = default_workflow_review_settings()
+    try:
+        raw = json.loads((data_dir / ".coworker_settings.json").read_text() or "{}")
+    except Exception:  # noqa: BLE001 - a broken settings file must never crash
+        return dict(defaults)
+    stored = raw.get("workflow_review")
+    if not isinstance(stored, dict):
+        return dict(defaults)
+    out = dict(defaults)
+    if isinstance(stored.get("enabled"), bool):
+        out["enabled"] = stored["enabled"]
+    aggr = stored.get("aggressiveness")
+    if isinstance(aggr, str) and aggr in WORKFLOW_REVIEW_AGGRESSIVENESS:
+        out["aggressiveness"] = aggr
+    if isinstance(stored.get("approval_required"), bool):
+        out["approval_required"] = stored["approval_required"]
+    return out
+
+
+def workflow_auto_apply_enabled(data_dir: Path | None) -> bool:
+    """True when the user disabled workflow approval (direct apply)."""
+    if data_dir is None:
+        return False
+    try:
+        return not bool(read_workflow_review_settings(data_dir).get("approval_required", True))
+    except Exception:  # noqa: BLE001 - a broken settings file must not auto-apply
+        return False

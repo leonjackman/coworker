@@ -407,11 +407,24 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             logger.warning("skill review scheduling failed", exc_info=True)
 
     def _maybe_review_workflow(self, session_id: str, messages: list[Any] | None, parts: list[Any]) -> None:
-        """Fire-and-forget workflow authoring review after a settled turn (W24)."""
+        """Fire-and-forget workflow authoring review after a settled turn (W24).
+
+        Disabled by default; gated on the user's ``workflow_review`` settings
+        (mirrors skill review). ``COWORKER_WORKFLOW_REVIEW=0`` forces off and
+        ``=1`` forces on.
+        """
         try:
             if self.workflow_manager is None or self.llm is None:
                 return
-            if os.getenv("COWORKER_WORKFLOW_REVIEW", "1") not in ("1", "true", "True"):
+            env = os.getenv("COWORKER_WORKFLOW_REVIEW")
+            env_val = env.strip().lower() if env is not None else None
+            if env_val in ("0", "false", "no", "off"):
+                return
+            from coworker.config import read_workflow_review_settings
+
+            cfg = read_workflow_review_settings(self.data_dir)
+            enabled = bool(cfg.get("enabled", False)) or env_val in ("1", "true", "on", "yes")
+            if not enabled or cfg.get("aggressiveness") == "passive":
                 return
             used_tools = any(
                 isinstance(p, dict)
@@ -432,6 +445,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     session_id=session_id,
                     messages=messages or [],
                     parts=parts,
+                    aggressiveness=str(cfg.get("aggressiveness") or "cautious"),
+                    approval_required=bool(cfg.get("approval_required", True)),
                 )
             )
         except Exception:  # noqa: BLE001 - review scheduling must never break a turn

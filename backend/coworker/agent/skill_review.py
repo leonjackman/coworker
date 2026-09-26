@@ -38,6 +38,12 @@ Capture when (priority order):
 2. The agent worked out a non-trivial multi-step procedure worth repeating.
 3. The agent hit errors/dead-ends and found the working path.
 
+Scope — skill vs workflow:
+- A skill is KNOWLEDGE / SOP for doing ONE thing (how-to guidance the agent reads and applies).
+- Do NOT capture a repeatable, ordered, multi-step BUSINESS PROCESS (something that should be
+  replayed the same way every run, with parameters/verification) — that is a Workflow, not a skill.
+  If the session is clearly such a process, respond with action=none so the workflow reviewer handles it.
+
 Rules:
 - If an existing skill in <catalog> already covers this, respond with action=update using THAT skill's exact name.
   Otherwise action=create with a new lowercase-hyphen name.

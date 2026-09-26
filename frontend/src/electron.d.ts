@@ -62,6 +62,8 @@ import type {
   MemorySettings,
   SkillReviewSettings,
   SkillReviewSettingsPatch,
+  WorkflowReviewSettings,
+  WorkflowReviewSettingsPatch,
   MemorySettingsPatch,
   BrowserCaptureResult,
   BrowserContextMenuPayload,
@@ -190,6 +192,8 @@ declare global {
       saveMemorySettings: (payload: MemorySettingsPatch) => Promise<MemorySettings>;
       getSkillReviewSettings: () => Promise<SkillReviewSettings>;
       saveSkillReviewSettings: (payload: SkillReviewSettingsPatch) => Promise<SkillReviewSettings>;
+      getWorkflowReviewSettings: () => Promise<WorkflowReviewSettings>;
+      saveWorkflowReviewSettings: (payload: WorkflowReviewSettingsPatch) => Promise<WorkflowReviewSettings>;
       getWebSettings: () => Promise<WebSettings>;
       saveWebSettings: (payload: WebConfigPatch) => Promise<WebSettings>;
       setWebTavilyKey: (apiKey: string) => Promise<{ status: string; api_key_configured?: boolean; detail?: string }>;

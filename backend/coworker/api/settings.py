@@ -127,6 +127,54 @@ async def save_skill_review_settings(request: SkillReviewSettingsUpdate):
         logger.warning("Failed to persist skill-review settings: %s", exc)
         return read_user_skill_review_settings()
     return merged
+class WorkflowReviewSettingsUpdate(BaseModel):
+    """Request body for updating the auto-workflow review settings (partial patch)."""
+    enabled: bool | None = None
+    aggressiveness: str | None = None
+    approval_required: bool | None = None
+def read_user_workflow_review_settings() -> dict:
+    """Read auto-workflow review settings from .coworker_settings.json (defaults fallback)."""
+    from coworker.config import read_workflow_review_settings
+
+    return read_workflow_review_settings(settings.data_dir)
+def save_user_workflow_review_settings(patch: dict) -> dict:
+    """Merge auto-workflow review settings into .coworker_settings.json."""
+    from coworker.config import WORKFLOW_REVIEW_AGGRESSIVENESS, default_workflow_review_settings
+
+    existing = _load_user_settings_file()
+    current = existing.get("workflow_review")
+    if not isinstance(current, dict):
+        current = default_workflow_review_settings()
+    merged = dict(current)
+    if "enabled" in patch and isinstance(patch["enabled"], bool):
+        merged["enabled"] = patch["enabled"]
+    if "aggressiveness" in patch and patch["aggressiveness"] in WORKFLOW_REVIEW_AGGRESSIVENESS:
+        merged["aggressiveness"] = patch["aggressiveness"]
+    if "approval_required" in patch and isinstance(patch["approval_required"], bool):
+        merged["approval_required"] = patch["approval_required"]
+    existing["workflow_review"] = merged
+    _save_user_settings_file(existing)
+    return merged
+@router.get("/api/workflow-review/settings")
+async def get_workflow_review_settings():
+    """Auto-workflow review settings (the Settings page surface)."""
+    return read_user_workflow_review_settings()
+@router.post("/api/workflow-review/settings")
+async def save_workflow_review_settings(request: WorkflowReviewSettingsUpdate):
+    """Persist auto-workflow review settings and apply at runtime."""
+    patch = {}
+    if request.enabled is not None:
+        patch["enabled"] = request.enabled
+    if request.aggressiveness is not None:
+        patch["aggressiveness"] = request.aggressiveness
+    if request.approval_required is not None:
+        patch["approval_required"] = request.approval_required
+    try:
+        merged = save_user_workflow_review_settings(patch)
+    except OSError as exc:  # noqa: BLE001 - settings persistence must not fail the request
+        logger.warning("Failed to persist workflow-review settings: %s", exc)
+        return read_user_workflow_review_settings()
+    return merged
 class SettingsUpdate(BaseModel):
     max_attachment_mb: int = 25
     revert_code: Optional[bool] = None

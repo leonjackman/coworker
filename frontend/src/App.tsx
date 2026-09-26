@@ -43,7 +43,7 @@ import { displayProjectName } from './lib/projectName';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
-import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, CommandApproval, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SessionBadgeMap, SessionBadges, SkillDiagnostic, SkillEntry, SkillReviewSettings, SkillReviewSettingsPatch, StreamEvent, Todo, WorkMode } from './types';
+import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, CommandApproval, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SessionBadgeMap, SessionBadges, SkillDiagnostic, SkillEntry, SkillReviewSettings, SkillReviewSettingsPatch, WorkflowReviewSettings, WorkflowReviewSettingsPatch, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
 
 function App() {
@@ -132,6 +132,7 @@ function App() {
   });
   const [memorySettings, setMemorySettings] = useState<MemorySettings | null>(null);
   const [skillReviewSettings, setSkillReviewSettings] = useState<SkillReviewSettings | null>(null);
+  const [workflowReviewSettings, setWorkflowReviewSettings] = useState<WorkflowReviewSettings | null>(null);
   const [pendingSkillCount, setPendingSkillCount] = useState(0);
   const [skillDraftNote, setSkillDraftNote] = useState<{ count: number; sessionId: string } | null>(null);
   const skillCountRef = useRef(0);
@@ -1115,6 +1116,10 @@ function App() {
         try {
           const skillSettings = await chatService.getSkillReviewSettings();
           if (mounted) setSkillReviewSettings(skillSettings);
+        } catch { /* ignore */ }
+        try {
+          const workflowSettings = await chatService.getWorkflowReviewSettings();
+          if (mounted) setWorkflowReviewSettings(workflowSettings);
         } catch { /* ignore */ }
         try {
           const count = await refreshPendingSkillCount();
@@ -3981,6 +3986,11 @@ function App() {
     chatService.saveMemorySettings(patch).catch(() => { /* ignore */ });
   };
 
+  const changeWorkflowReviewSettings = (patch: WorkflowReviewSettingsPatch) => {
+    setWorkflowReviewSettings((current) => (current ? { ...current, ...patch } : current));
+    chatService.saveWorkflowReviewSettings(patch).then((next) => setWorkflowReviewSettings(next)).catch(() => { /* ignore */ });
+  };
+
   const changeSkillReviewSettings = (patch: SkillReviewSettingsPatch) => {
     setSkillReviewSettings((current) => (current ? { ...current, ...patch } : current));
     chatService.saveSkillReviewSettings(patch).catch(() => { /* ignore */ });
@@ -4349,6 +4359,8 @@ function App() {
                   onMemorySettingsChange={changeMemorySettings}
                   skillReviewSettings={skillReviewSettings}
                   onSkillReviewSettingsChange={changeSkillReviewSettings}
+                  workflowReviewSettings={workflowReviewSettings}
+                  onWorkflowReviewSettingsChange={changeWorkflowReviewSettings}
                   modelOptions={modelOptions}
                   updateCenter={updateCenter}
                   onClose={() => {

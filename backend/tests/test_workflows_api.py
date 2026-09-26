@@ -273,6 +273,25 @@ def test_api_versions_list_read_delete():
     client.delete("/workflows/ver-flow")
 
 
+def test_api_workflow_review_settings():
+    client = _client()
+    initial = client.get("/api/workflow-review/settings").json()
+    assert initial.get("enabled") is False
+    saved = client.post(
+        "/api/workflow-review/settings",
+        json={"enabled": True, "aggressiveness": "active", "approval_required": False},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["enabled"] is True
+    assert saved.json()["aggressiveness"] == "active"
+    assert saved.json()["approval_required"] is False
+    # reset to defaults
+    client.post(
+        "/api/workflow-review/settings",
+        json={"enabled": False, "aggressiveness": "cautious", "approval_required": True},
+    )
+
+
 def test_agent_prompt_block_present():
     block = main.workflow_manager.prompt_block()
     assert "available_workflows" in block or block == ""

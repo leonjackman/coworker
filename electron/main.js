@@ -2610,6 +2610,8 @@ ipcMain.handle('get-memory-settings', () => requestBackend('/api/memory/settings
 ipcMain.handle('save-memory-settings', (event, payload = {}) => requestBackend('/api/memory/settings', 'POST', payload));
 ipcMain.handle('get-skill-review-settings', () => requestBackend('/api/skill-review/settings', 'GET'));
 ipcMain.handle('save-skill-review-settings', (event, payload = {}) => requestBackend('/api/skill-review/settings', 'POST', payload));
+ipcMain.handle('get-workflow-review-settings', () => requestBackend('/api/workflow-review/settings', 'GET'));
+ipcMain.handle('save-workflow-review-settings', (event, payload = {}) => requestBackend('/api/workflow-review/settings', 'POST', payload));
 ipcMain.handle('reveal-in-folder', async (event, filePath) => {
   if (typeof filePath === 'string' && filePath) {
     shell.showItemInFolder(filePath);

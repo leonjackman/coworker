@@ -103,8 +103,9 @@ class WorkflowStore:
         return self._find_path(name) is not None
 
     def read_text(self, name: str) -> str | None:
-        path = self.path_for(name)
-        if not path.is_file():
+        # Search every root so project-scoped workflows resolve too.
+        path = self._find_path(name)
+        if path is None:
             return None
         try:
             return path.read_text(encoding="utf-8")
