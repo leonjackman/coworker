@@ -698,3 +698,11 @@
   border-radius: 8px;
   cursor: pointer;
 }
+
+/* Workflow list header: tabs left, search + refresh right */
+.wf-header__right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

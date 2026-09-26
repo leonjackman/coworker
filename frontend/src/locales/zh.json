@@ -1341,7 +1341,7 @@
   "workflows.duplicate": "复制",
   "workflows.duplicate_prompt": "副本名称",
   "workflows.duplicated": "工作流已复制。",
-  "workflows.export": "导出 YAML",
+  "workflows.export": "导出工作流",
   "workflows.more": "更多",
   "workflows.kind_browser": "操作网页",
   "workflows.kind_app": "操作软件",
@@ -1433,5 +1433,8 @@
   "settings.workflow_review_aggressiveness_desc": "agent 提出工作流的积极程度。",
   "settings.workflow_review_approval": "需要人工批准工作流",
   "settings.workflow_review_approval_desc": "新工作流进入草稿队列等待你批准。",
-  "settings.workflow_review_approval_off_desc": "新工作流将自动应用（无需批准）。"
+  "settings.workflow_review_approval_off_desc": "新工作流将自动应用（无需批准）。",
+  "workflows.import": "导入工作流",
+  "workflows.import_overwrite": "已存在同名工作流，是否覆盖？",
+  "workflows.imported": "工作流已导入。"
 }

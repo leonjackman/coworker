@@ -15,7 +15,7 @@ export function PageHeading({ eyebrow, title, description, action }: PageHeading
         <h1>{title}</h1>
         {description && <p>{description}</p>}
       </div>
-      {action}
+      {action ? <div className="panel-heading__actions">{action}</div> : null}
     </div>
   );
 }

@@ -1,5 +1,5 @@
-import { ArrowLeft, Check, CopyPlus, Download, Eye, FileText, Loader2, Play, Plus, RefreshCw, Trash2, Bot, Bell, CheckCircle2, XCircle, Wand2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Check, CopyPlus, Download, Eye, FileText, Loader2, Play, Plus, RefreshCw, Trash2, Bot, Bell, CheckCircle2, Upload, XCircle, Wand2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './ui/button';
 import { t, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
@@ -7,6 +7,7 @@ import { WorkspacePage } from './ui/workspace-page';
 import { CategoryTabs, type CategoryTabItem } from './ui/category-tabs';
 import { GridCard } from './ui/grid-card';
 import { usePageNavPublish } from '../nav/PageNav';
+import { SearchInput } from './ui/search-input';
 import { WorkflowGraphEditor, type GraphEditorTarget } from './WorkflowGraphEditor';
 import { WorkflowStepList } from './workflows/WorkflowStepList';
 import { WorkflowFlowGraph } from './workflows/WorkflowFlowGraph';
@@ -66,6 +67,8 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageType, setMessageType] = useState<'ok' | 'error'>('ok');
   const [search, setSearch] = useState('');
@@ -231,6 +234,35 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       } catch (error) {
         setMessageType('error');
         setMessage(translateError(error));
+      }
+    },
+    [refresh],
+  );
+
+  const importWorkflowFile = useCallback(
+    async (file: File) => {
+      setImportBusy(true);
+      try {
+        const text = await file.text();
+        let result = await chatService.createWorkflow(text, false);
+        if (result.status !== 'ok') {
+          const msg = result.message || '';
+          if (msg.includes('already exists')) {
+            if (!window.confirm(t('workflows.import_overwrite'))) return;
+            result = await chatService.createWorkflow(text, true);
+          } else {
+            throw new Error(msg || t('workflows.save_failed'));
+          }
+        }
+        if (result.status !== 'ok') throw new Error(result.message || t('workflows.save_failed'));
+        setMessageType('ok');
+        setMessage(t('workflows.imported'));
+        await refresh();
+      } catch (error) {
+        setMessageType('error');
+        setMessage(translateError(error));
+      } finally {
+        setImportBusy(false);
       }
     },
     [refresh],
@@ -710,7 +742,7 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
                     <FileText size={14} /> {t('workflows.edit_yaml')}
                   </Button>
                   <Button variant="secondary" onClick={() => void exportWorkflow(detail)}>
-                    <Download size={14} /> {t('workflows.export')}
+                    <Upload size={14} /> {t('workflows.export')}
                   </Button>
                 </div>
                 <div className="wf-action-bar__group wf-action-bar__group--end">
@@ -873,6 +905,25 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
             {t('workflows.from_template')}
           </Button>
           <Button
+            variant="secondary"
+            onClick={() => importInputRef.current?.click()}
+            disabled={loading || importBusy}
+          >
+            {importBusy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            {t('workflows.import')}
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".yaml,.yml,.json,text/yaml,application/x-yaml"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void importWorkflowFile(file);
+              e.target.value = '';
+            }}
+          />
+          <Button
             variant="primary"
             onClick={() => { setGraphTarget({ name: '', description: '', steps: [], isNew: true }); setSubPage('graph'); }}
             disabled={loading}
@@ -949,15 +1000,17 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
 
         <div className="skills-header__actions" style={{ marginBottom: 12 }}>
           <CategoryTabs categories={categories} value={filter} onChange={setFilter} />
-          <input
-            className="tag-bar__search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('workflows.search_placeholder')}
-          />
-          <Button variant="secondary" size="sm" onClick={() => void refresh()} aria-label={t('workflows.refresh')}>
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          </Button>
+          <div className="wf-header__right">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder={t('workflows.search_placeholder')}
+              className="skill-toolbar__search"
+            />
+            <Button variant="secondary" size="sm" onClick={() => void refresh()} aria-label={t('workflows.refresh')}>
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </Button>
+          </div>
         </div>
 
         {visible.length === 0 ? (

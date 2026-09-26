@@ -1341,7 +1341,7 @@
   "workflows.duplicate": "Duplicate",
   "workflows.duplicate_prompt": "Name for the copy",
   "workflows.duplicated": "Workflow duplicated.",
-  "workflows.export": "Export YAML",
+  "workflows.export": "Export workflow",
   "workflows.more": "More",
   "workflows.kind_browser": "Operation web page",
   "workflows.kind_app": "Operation software",
@@ -1433,5 +1433,8 @@
   "settings.workflow_review_aggressiveness_desc": "How eagerly the agent proposes a workflow.",
   "settings.workflow_review_approval": "Require workflow approval",
   "settings.workflow_review_approval_desc": "New workflows wait in the draft queue for your approval.",
-  "settings.workflow_review_approval_off_desc": "New workflows are applied automatically (no approval)."
+  "settings.workflow_review_approval_off_desc": "New workflows are applied automatically (no approval).",
+  "workflows.import": "Import workflow",
+  "workflows.import_overwrite": "A workflow with this name already exists. Overwrite it?",
+  "workflows.imported": "Workflow imported."
 }

@@ -72,6 +72,13 @@
   line-height: 1.55;
 }
 
+.panel-heading__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .panel-heading__eyebrow {
   margin: 0 0 9px !important;
   color: var(--accent) !important;
