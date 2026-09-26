@@ -510,3 +510,30 @@
   font-size: 13px;
   margin-bottom: 4px;
 }
+
+/* Generic form control used by `<select className="input">` etc. */
+.input {
+  height: 40px;
+  width: 100%;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  padding: 0 11px;
+  color: var(--foreground);
+  background: var(--material-control);
+  outline: none;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.input:focus {
+  border-color: var(--ring);
+}
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 18px, calc(100% - 11px) 18px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}

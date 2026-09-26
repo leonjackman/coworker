@@ -1416,6 +1416,15 @@
   "workflows.edge_default": "直觉线",
   "workflows.edge_straight": "直线",
   "workflows.edge_curve": "曲线",
-  "workflows.fullscreen": "在新窗口打开",
-  "workflows.loading": "加载中…"
+  "workflows.fullscreen": "全屏",
+  "workflows.loading": "加载中…",
+  "workflows.not_found": "未找到该工作流。",
+  "workflows.step_id_hint": "用于连线的内部标识，通常无需修改。",
+  "workflows.zoom_in": "放大",
+  "workflows.zoom_out": "缩小",
+  "workflows.fit_view": "适应画布",
+  "workflows.lock_canvas": "锁定画布（禁止编辑）",
+  "workflows.unlock_canvas": "解锁画布",
+  "workflows.minimap": "小地图",
+  "workflows.edge_right_angle": "直角线"
 }

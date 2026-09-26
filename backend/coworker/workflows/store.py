@@ -14,7 +14,9 @@ parse.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +34,22 @@ logger = get_logger(__name__)
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_ASCII_SAFE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def safe_filename(name: str) -> str:
+    """Map a (possibly non-ASCII) workflow name to a filesystem-safe stem.
+
+    ASCII slug names are kept verbatim (backward compatible); anything else
+    (e.g. Chinese) becomes a short deterministic hash so the real name never
+    touches the filesystem and can contain no path separators.
+    """
+    if _ASCII_SAFE_RE.match(name or ""):
+        return name
+    digest = hashlib.sha1((name or "").encode("utf-8")).hexdigest()[:20]
+    return f"wf-{digest}"
 
 
 class WorkflowStore:
@@ -71,11 +89,12 @@ class WorkflowStore:
         return out
 
     def path_for(self, name: str) -> Path:
-        return self.root / f"{name}.yaml"
+        return self.root / f"{safe_filename(name)}.yaml"
 
     def _find_path(self, name: str) -> Path | None:
+        stem = safe_filename(name)
         for root in [self.root, *self._extra_roots()]:
-            candidate = root / f"{name}.yaml"
+            candidate = root / f"{stem}.yaml"
             if candidate.is_file():
                 return candidate
         return None
@@ -129,7 +148,7 @@ class WorkflowStore:
 
     def _snapshot(self, workflow: Workflow) -> None:
         try:
-            target_dir = self.history_dir / workflow.name
+            target_dir = self.history_dir / safe_filename(workflow.name)
             target_dir.mkdir(parents=True, exist_ok=True)
             target = target_dir / f"v{workflow.version}.yaml"
             if not target.exists():
@@ -185,7 +204,7 @@ class WorkflowStore:
         current = self.get(name)
         if current is not None and current.version == version:
             return current, True
-        path = self.history_dir / name / f"v{version}.yaml"
+        path = self.history_dir / safe_filename(name) / f"v{version}.yaml"
         if not path.is_file():
             return None, False
         workflow, _ = load_workflow_file(path)
@@ -196,7 +215,7 @@ class WorkflowStore:
         current = self.get(name)
         if current is not None and current.version == version:
             return False
-        path = self.history_dir / name / f"v{version}.yaml"
+        path = self.history_dir / safe_filename(name) / f"v{version}.yaml"
         if not path.is_file():
             return False
         try:
@@ -206,7 +225,7 @@ class WorkflowStore:
         return True
 
     def history(self, name: str) -> list[dict[str, Any]]:
-        target_dir = self.history_dir / name
+        target_dir = self.history_dir / safe_filename(name)
         if not target_dir.is_dir():
             return []
         versions: list[dict[str, Any]] = []
@@ -225,7 +244,7 @@ class WorkflowStore:
     # ── drafts ──────────────────────────────────────────────────────────
 
     def draft_path(self, name: str) -> Path:
-        return self.drafts_dir / f"{name}.yaml"
+        return self.drafts_dir / f"{safe_filename(name)}.yaml"
 
     def write_draft(self, name: str, content: str) -> None:
         with self._lock:
@@ -248,7 +267,8 @@ class WorkflowStore:
                 continue
             workflow, _ = parse_workflow(content, name_hint=path.stem, source="agent")
             entry: dict[str, Any] = {
-                "name": path.stem,
+                # Prefer the real (possibly non-ASCII) name from the draft body.
+                "name": workflow.name if workflow is not None and workflow.name else path.stem,
                 "created_at": _mtime(path),
                 "content": content,
             }

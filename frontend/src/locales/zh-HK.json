@@ -1426,6 +1426,15 @@
   "workflows.edge_default": "直覺線",
   "workflows.edge_straight": "直線",
   "workflows.edge_curve": "曲線",
-  "workflows.fullscreen": "在新視窗開啟",
-  "workflows.loading": "載入中…"
+  "workflows.fullscreen": "全螢幕",
+  "workflows.loading": "載入中…",
+  "workflows.not_found": "找不到該工作流。",
+  "workflows.step_id_hint": "用於連線的內部標識，通常無需修改。",
+  "workflows.zoom_in": "放大",
+  "workflows.zoom_out": "縮小",
+  "workflows.fit_view": "適應畫布",
+  "workflows.lock_canvas": "鎖定畫布（禁止編輯）",
+  "workflows.unlock_canvas": "解鎖畫布",
+  "workflows.minimap": "小地圖",
+  "workflows.edge_right_angle": "直角線"
 }

@@ -11,7 +11,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useMemo } from 'react';
 import { t } from '../../lib/i18n';
-import { collectStepGraph, layoutGraph, nodeTypes } from './flowGraph';
+import { collectStepGraph, flowEndpoints, layoutGraph, nodeTypes } from './flowGraph';
 import type { WorkflowStep } from '../../types';
 
 interface Props {
@@ -35,11 +35,14 @@ export function WorkflowFlowGraph({ steps, triggers, outputs }: Props) {
     ];
     const marker = { type: MarkerType.ArrowClosed } as const;
     const allEdges: Edge[] = [...stepEdges];
-    if (steps.length > 0) {
-      // Top-level node ids are the step ids (stable, not path keys).
-      allEdges.push({ id: 'to-first', source: triggerId, target: steps[0]!.id, type: 'smoothstep', markerEnd: marker });
-      allEdges.push({ id: 'to-out', source: steps[steps.length - 1]!.id, target: outputId, type: 'smoothstep', markerEnd: marker });
-    } else {
+    const { inputTarget, outputSource } = flowEndpoints(steps);
+    if (inputTarget) {
+      allEdges.push({ id: 'to-first', source: triggerId, target: inputTarget, type: 'smoothstep', markerEnd: marker });
+    }
+    if (outputSource) {
+      allEdges.push({ id: 'to-out', source: outputSource, target: outputId, type: 'smoothstep', markerEnd: marker });
+    }
+    if (!inputTarget && !outputSource) {
       allEdges.push({ id: 'trig-out', source: triggerId, target: outputId, type: 'smoothstep', markerEnd: marker });
     }
     return { nodes: layoutGraph(allNodes, allEdges), edges: allEdges };

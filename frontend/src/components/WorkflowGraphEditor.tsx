@@ -1,8 +1,7 @@
 import {
   Background,
   BackgroundVariant,
-  Controls,
-  MiniMap,
+  MarkerType,
   ReactFlow,
   useEdgesState,
   useNodesState,
@@ -11,17 +10,37 @@ import {
   type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowDown, ArrowUp, Loader2, Maximize2, Plus, Redo2, Save, Sparkles, Spline, Trash2, Undo2 } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  Frame,
+  Loader2,
+  Lock,
+  Map as MapIcon,
+  Maximize2,
+  Minus,
+  Plus,
+  Redo2,
+  Save,
+  Sparkles,
+  Spline,
+  Trash2,
+  Undo2,
+  Unlock,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
 import { t, translateError } from '../lib/i18n';
 import { isEditableTarget } from '../lib/dom';
 import { chatService } from '../services/chatService';
-import { buildGraph, collectStepGraph, layoutGraph, nodeTypes } from './workflows/flowGraph';
+import { buildGraph, collectStepGraph, flowEndpoints, layoutGraph, nodeTypes, renumberWorkflowSteps } from './workflows/flowGraph';
+import { WorkflowMiniMap } from './workflows/WorkflowMiniMap';
 import { edgeTypes } from './workflows/EditableEdge';
-import { DO_KINDS, DO_SUGGESTIONS, KIND_GROUPS, KIND_META, LOCATOR_KINDS, PARAM_KINDS, kindDescKey, kindFamily, kindLabelKey, kindStripe } from './workflows/kinds';
+import { DO_KINDS, DO_SUGGESTIONS, KIND_GROUPS, KIND_META, LOCATOR_KINDS, PARAM_KINDS, kindLabelKey } from './workflows/kinds';
 import type { WorkflowStep, WorkflowVersion } from '../types';
 
 
@@ -87,11 +106,25 @@ function setList(steps: WorkflowStep[], listPath: StepPath, next: WorkflowStep[]
   const slot = listPath[listPath.length - 1] as 'then' | 'else' | 'body';
   return updateLeaf(steps, listPath.slice(0, -1), { [slot]: next } as Partial<WorkflowStep>);
 }
-function uniqueStep(list: WorkflowStep[]): WorkflowStep {
-  const ids = new Set(list.map((s) => s.id));
-  let i = list.length + 1;
-  while (ids.has(`step${i}`)) i += 1;
-  return { id: `step${i}`, kind: 'tool', do: '', params: {}, mode: 'auto' };
+function collectAllIds(steps: WorkflowStep[], out: Set<string> = new Set()): Set<string> {
+  for (const step of steps) {
+    out.add(step.id);
+    for (const slot of SLOTS) {
+      const kids = step[slot] as WorkflowStep[] | undefined;
+      if (kids?.length) collectAllIds(kids, out);
+    }
+  }
+  return out;
+}
+
+/** Next system id in the ``id:N`` scheme (scans the whole tree). */
+function newStep(steps: WorkflowStep[]): WorkflowStep {
+  let max = 0;
+  for (const id of collectAllIds(steps)) {
+    const match = /^id:(\d+)$/.exec(id);
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  return { id: `id:${max + 1}`, kind: 'tool', do: '', params: {}, mode: 'auto' };
 }
 
 /**
@@ -107,9 +140,7 @@ function wireList(list: WorkflowStep[]): WorkflowStep[] {
   }));
 }
 
-function defaultStep(index: number): WorkflowStep {
-  return { id: `step${index + 1}`, kind: 'tool', do: '', params: {}, mode: 'auto' };
-}
+
 
 /** Validate the whole tree; returns human-readable errors with a step path. */
 function validateTree(steps: WorkflowStep[]): string[] {
@@ -173,11 +204,9 @@ interface Props {
   target: GraphEditorTarget | null;
   onClose: () => void;
   onSaved: () => void;
-  /** When hosted in its own window, hide the "open in window" button. */
-  standalone?: boolean;
 }
 
-export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = false }: Props) {
+export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -189,6 +218,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
   const [busy, setBusy] = useState(false);
   const [baseline, setBaseline] = useState('');
   const [paramsJson, setParamsJson] = useState(false);
+  const [paramRows, setParamRows] = useState<KVRow[]>([]);
   const [fallbackJson, setFallbackJson] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [versions, setVersions] = useState<WorkflowVersion[]>([]);
@@ -196,10 +226,20 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
   const [versionBusy, setVersionBusy] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
-  const [canvasWindow, setCanvasWindow] = useState<Window | null>(null);
-  const [popupRoot, setPopupRoot] = useState<HTMLElement | null>(null);
   const [inlineFullscreen, setInlineFullscreen] = useState(false);
-  const [edgeType, setEdgeType] = useState<'default' | 'straight' | 'smoothstep'>('default');
+  const [edgeType, setEdgeType] = useState<'smoothstep' | 'straight' | 'default'>('smoothstep');
+  const [showMinimap, setShowMinimap] = useState(true);
+  const [interactive, setInteractive] = useState(true);
+  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const rfRef = useRef<{
+    zoomIn: () => void;
+    zoomOut: () => void;
+    fitView: () => void;
+    getViewport: () => { x: number; y: number; zoom: number };
+    setCenter: (x: number, y: number, options?: { zoom?: number; duration?: number }) => void;
+  } | null>(null);
   const reconnectHandledRef = useRef(false);
   const edgesRef = useRef<Edge[]>([]);
   const deleteEdgeRef = useRef<(id: string) => void>(() => {});
@@ -215,7 +255,12 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
       list.map((e) => ({
         ...e,
         type: 'editable',
-        data: { ...e.data, edgeType, onDelete: (id: string) => deleteEdgeRef.current(id) },
+        data: {
+          ...e.data,
+          edgeType,
+          // Endpoint (input/output) edges are structural — no disconnect button.
+          ...(e.id.startsWith('endpoint-') ? {} : { onDelete: (id: string) => deleteEdgeRef.current(id) }),
+        },
       })),
     [edgeType],
   );
@@ -238,86 +283,72 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
     [syncHistoryFlags],
   );
 
+  // Build the graph including the input/output endpoint (pill) nodes.
+  const withEndpoints = useCallback(
+    (next: WorkflowStep[], status: Record<string, string>, positions: Map<string, { x: number; y: number }>) => {
+      const built = buildGraph(next, status, positions);
+      const ys = built.nodes.map((n) => n.position.y);
+      const minY = ys.length ? Math.min(...ys) : 0;
+      const maxY = ys.length ? Math.max(...ys) : 0;
+      if (!positions.has('__input__')) positions.set('__input__', { x: 40, y: minY - 130 });
+      if (!positions.has('__output__')) positions.set('__output__', { x: 40, y: maxY + 130 });
+      const nodes = [
+        { id: '__input__', type: 'pill', position: positions.get('__input__')!, data: { label: t('workflows.trigger_node'), kind: 'trigger' } },
+        ...built.nodes,
+        { id: '__output__', type: 'pill', position: positions.get('__output__')!, data: { label: t('workflows.output_node'), kind: 'output' } },
+      ];
+      const marker = { type: MarkerType.ArrowClosed } as const;
+      const edges = [...built.edges];
+      const { inputTarget, outputSource } = flowEndpoints(next);
+      if (inputTarget) edges.unshift({ id: 'endpoint-in', source: '__input__', target: inputTarget, type: 'smoothstep', markerEnd: marker });
+      if (outputSource) edges.push({ id: 'endpoint-out', source: outputSource, target: '__output__', type: 'smoothstep', markerEnd: marker });
+      return { nodes, edges, nodeIdToPath: built.nodeIdToPath };
+    },
+    [],
+  );
+
   const applyGraph = useCallback(
     (next: WorkflowStep[], status: Record<string, string> = runStatus) => {
       setSteps(next);
-      const built = buildGraph(next, status, positionsRef.current);
+      const built = withEndpoints(next, status, positionsRef.current);
       idToPathRef.current = built.nodeIdToPath;
       setNodes(built.nodes);
       setEdges(decorateEdges(built.edges));
     },
-    [runStatus, setNodes, setEdges, decorateEdges],
+    [runStatus, setNodes, setEdges, decorateEdges, withEndpoints],
   );
 
   const rebuild = useCallback(
     (next: WorkflowStep[]) => {
-      const built = buildGraph(next, runStatus, positionsRef.current);
+      const built = withEndpoints(next, runStatus, positionsRef.current);
       idToPathRef.current = built.nodeIdToPath;
       setSteps(next);
       setNodes(built.nodes);
       setEdges(decorateEdges(built.edges));
     },
-    [runStatus, setNodes, setEdges, decorateEdges],
+    [runStatus, setNodes, setEdges, decorateEdges, withEndpoints],
   );
 
+  const EDGE_LABEL: Record<string, string> = {
+    smoothstep: 'workflows.edge_right_angle',
+    straight: 'workflows.edge_straight',
+    default: 'workflows.edge_curve',
+  };
   const cycleEdgeType = useCallback(() => {
     setEdgeType((current) => {
-      const order = ['default', 'straight', 'smoothstep'] as const;
+      const order = ['smoothstep', 'straight', 'default'] as const;
       const nextType = order[(order.indexOf(current) + 1) % order.length] as (typeof order)[number];
       setEdges((cur) => cur.map((e) => ({ ...e, data: { ...e.data, edgeType: nextType } })));
       return nextType;
     });
   }, [setEdges]);
 
-  // Open the canvas in a separate native window (Electron) when available.
-  const openFullscreen = useCallback(() => {
-    const api = window.electronAPI;
-    if (api?.openCanvasWindow) {
-      void api.openCanvasWindow({ name: name || 'workflow', title: name || 'Workflow' });
-      return;
-    }
-    if (canvasWindow && !canvasWindow.closed) {
-      canvasWindow.focus();
-      return;
-    }
-    const win = window.open('', 'cw-workflow-canvas', 'width=1280,height=860');
-    if (!win) {
-      // Popup blocked (e.g. Electron): fall back to an in-app full-screen overlay.
-      setInlineFullscreen(true);
-      return;
-    }
-    win.document.title = name || 'Workflow';
-    win.document.body.style.margin = '0';
-    win.document.body.style.height = '100vh';
-    win.document.body.style.overflow = 'hidden';
-    // Copy the app's stylesheets so the portaled editor is styled correctly.
-    document.querySelectorAll('link[rel="stylesheet"], style').forEach((node) => {
-      win.document.head.appendChild(node.cloneNode(true));
-    });
-    const root = win.document.createElement('div');
-    root.className = 'wf-popup-root';
-    win.document.body.appendChild(root);
-    setPopupRoot(root);
-    setCanvasWindow(win);
-  }, [canvasWindow, name]);
-
-  useEffect(() => {
-    if (!canvasWindow) return;
-    const reset = () => {
-      setCanvasWindow(null);
-      setPopupRoot(null);
-    };
-    canvasWindow.addEventListener('pagehide', reset);
-    canvasWindow.addEventListener('beforeunload', reset);
-    return () => {
-      canvasWindow.removeEventListener('pagehide', reset);
-      canvasWindow.removeEventListener('beforeunload', reset);
-    };
-  }, [canvasWindow]);
+  // Toggle full-screen editing inside the main window.
+  const toggleFullscreen = useCallback(() => setInlineFullscreen((v) => !v), []);
 
   useEffect(() => {
     if (!target) return;
-    const initial = target.steps.length > 0 ? target.steps : [defaultStep(0)];
+    const initial = target.steps.length > 0 ? target.steps : [newStep([])];
     setName(target.name);
     setDescription(target.description);
     setRunStatus({});
@@ -332,10 +363,11 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
     const collected = collectStepGraph(initial, {});
     const laid = layoutGraph(collected.nodes, collected.edges);
     positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
-    idToPathRef.current = collected.nodeIdToPath;
+    const built = withEndpoints(initial, {}, positionsRef.current);
+    idToPathRef.current = built.nodeIdToPath;
     setSteps(initial);
-    setNodes(laid);
-    setEdges(decorateEdges(collected.edges));
+    setNodes(built.nodes);
+    setEdges(decorateEdges(built.edges));
     // Load versions (edit mode only).
     if (!target.isNew && target.name) {
       void (async () => {
@@ -436,6 +468,17 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
     return () => window.removeEventListener('keydown', onKey);
   }, [target, undo, redo]);
 
+  // Track the canvas size for the sidebar navigator.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const update = () => setCanvasSize({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [target]);
+
   const loadVersion = useCallback(
     async (version: number) => {
       if (!target) return;
@@ -487,6 +530,14 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
 
   const selectedPath = useMemo<StepPath>(() => (selectedId ? parsePath(selectedId) : []), [selectedId]);
   const selected = useMemo(() => locate(steps, selectedPath), [steps, selectedPath]);
+
+  // Keep the key/value rows as local state while editing so an empty row can
+  // stay visible until the user types a key (params only store non-empty keys).
+  useEffect(() => {
+    if (paramsJson) return;
+    setParamRows(paramsToRows((selected?.params ?? {}) as Record<string, unknown>));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, paramsJson]);
   const validation = useMemo(() => validateTree(steps), [steps]);
   const dirty = useMemo(
     () => JSON.stringify({ name, description, steps }) !== baseline,
@@ -510,11 +561,19 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
     [selectedPath, selectedId, setNodes],
   );
 
+  const commitParamRows = useCallback(
+    (rows: KVRow[]) => {
+      setParamRows(rows);
+      patchSelected({ params: rowsToParams(rows) });
+    },
+    [patchSelected],
+  );
+
   // Add an empty, unconnected node (the user wires it up afterwards).
   const addTopStep = useCallback(() => {
     setSteps((current) => {
       const wired = wireList(current);
-      const step = uniqueStep(wired);
+      const step = newStep(wired);
       const next = [...wired, step];
       rebuild(next);
       setSelectedId(pathKey([next.length - 1]));
@@ -529,7 +588,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
         const parent = locate(current, selectedPath);
         if (!parent) return current;
         const children = ((parent[slot] as WorkflowStep[]) ?? []).slice();
-        children.push(defaultStep(children.length));
+        children.push(newStep(current));
         const next = updateLeaf(current, selectedPath, { [slot]: children } as Partial<WorkflowStep>);
         rebuild(next);
         setSelectedId(pathKey([...selectedPath, slot, children.length - 1]));
@@ -574,6 +633,9 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
     const collected = collectStepGraph(steps, runStatus);
     const laid = layoutGraph(collected.nodes, collected.edges);
     positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
+    // Let the endpoint pills be repositioned relative to the new layout.
+    positionsRef.current.delete('__input__');
+    positionsRef.current.delete('__output__');
     rebuild(steps);
   }, [steps, runStatus, rebuild]);
 
@@ -679,7 +741,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
       if (typeof fromIndex !== 'number') return;
       setSteps((current) => {
         const wired = wireList(current);
-        const step = uniqueStep(wired);
+        const step = newStep(wired);
         const next = [...wired, step];
         if (next[fromIndex]) next[fromIndex] = { ...next[fromIndex]!, next: step.id };
         rebuild(next);
@@ -727,7 +789,9 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
     }
     setBusy(true);
     try {
-      const payload = { name: name.trim(), description, version: target?.version ?? 1, inputs: target?.inputs ?? [], steps, triggers: ['manual'] };
+      // Normalise ids to the system scheme (id:1, id:2, …) before saving.
+      const finalSteps = renumberWorkflowSteps(steps);
+      const payload = { name: name.trim(), description, version: target?.version ?? 1, inputs: target?.inputs ?? [], steps: finalSteps, triggers: ['manual'] };
       const rendered = await chatService.renderWorkflowSteps(payload);
       if (rendered.errors.length > 0 || !rendered.yaml) {
         setErrors(rendered.errors.length ? rendered.errors : [t('workflows.graph_render_failed')]);
@@ -782,22 +846,24 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
   const successList = selected?.success ?? [];
   const locator = (selected?.locator ?? {}) as Record<string, unknown>;
   const kind = selected?.kind ?? '';
-  const family = kindStripe(kind);
 
   const editor = (
     <div className="wf-graph">
       {/* Meta card */}
       <div className="wf-meta">
-        <div className="wf-meta__row">
-          <label className="add-skill-page__field">
-            <span>{t('workflows.name')}</span>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('workflows.name_placeholder')} />
-          </label>
-          <label className="add-skill-page__field">
-            <span>{t('workflows.description')}</span>
-            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('workflows.description')} />
-          </label>
-        </div>
+        <label className="add-skill-page__field">
+          <span>{t('workflows.name')}</span>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('workflows.name_placeholder')} />
+        </label>
+        <label className="add-skill-page__field">
+          <span>{t('workflows.description')}</span>
+          <Textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={t('workflows.description')}
+            rows={2}
+          />
+        </label>
         <div className="wf-meta__status">
           <span className="settings-chip">v{target.version ?? 1}</span>
           <span className="settings-chip">{steps.length} {t('workflows.steps')}</span>
@@ -833,18 +899,8 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
         </Button>
         <Button variant="ghost" size="sm" onClick={cycleEdgeType} title={t('workflows.edge_style')}>
           <Spline size={14} />
-          {t(edgeType === 'straight' ? 'workflows.edge_straight' : edgeType === 'smoothstep' ? 'workflows.edge_curve' : 'workflows.edge_default')}
+          {t(EDGE_LABEL[edgeType] ?? 'workflows.edge_curve')}
         </Button>
-        {!standalone ? (
-          <Button
-            variant={canvasWindow || inlineFullscreen ? 'secondary' : 'ghost'}
-            size="sm"
-            onClick={() => (inlineFullscreen ? setInlineFullscreen(false) : openFullscreen())}
-            title={t('workflows.fullscreen')}
-          >
-            <Maximize2 size={14} />
-          </Button>
-        ) : null}
         {!target.isNew && versions.length > 0 ? (
           <>
             <span className="wf-toolbar__sep" />
@@ -892,7 +948,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
       )}
 
       <div className="wf-body">
-        <div className="wf-canvas">
+        <div className="wf-canvas" ref={canvasRef}>
           {steps.length === 0 ? (
             <div className="wf-empty">
               <p>{t('workflows.empty_canvas')}</p>
@@ -902,38 +958,91 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
               </Button>
             </div>
           ) : (
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeClick={(_e, node) => setSelectedId((node.data.path as string) ?? '')}
-              onNodeDragStop={onNodeDragStop}
-              onConnect={onConnect}
-              onConnectEnd={onConnectEnd}
-              onEdgesDelete={onEdgesDelete}
-              onReconnect={onReconnect}
-              onReconnectStart={onReconnectStart}
-              onReconnectEnd={onReconnectEnd}
-              edgesReconnectable
-              deleteKeyCode={['Backspace', 'Delete']}
-              isValidConnection={isValidConnection}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
-              fitView
-              minZoom={0.2}
-              maxZoom={2}
-              proOptions={{ hideAttribution: false }}
-            >
-              <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
-              <Controls />
-              <MiniMap pannable zoomable />
-            </ReactFlow>
+            <>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onInit={(instance) => {
+                  rfRef.current = instance as unknown as typeof rfRef.current;
+                  setViewport(instance.getViewport());
+                }}
+                onMove={(_e, vp) => setViewport(vp)}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={(_e, node) => setSelectedId((node.data.path as string) ?? '')}
+                onNodeDragStop={onNodeDragStop}
+                onConnect={onConnect}
+                onConnectEnd={onConnectEnd}
+                onEdgesDelete={onEdgesDelete}
+                onReconnect={onReconnect}
+                onReconnectStart={onReconnectStart}
+                onReconnectEnd={onReconnectEnd}
+                edgesReconnectable
+                nodesDraggable={interactive}
+                nodesConnectable={interactive}
+                deleteKeyCode={['Backspace', 'Delete']}
+                isValidConnection={isValidConnection}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                fitView
+                minZoom={0.2}
+                maxZoom={2}
+                proOptions={{ hideAttribution: false }}
+              >
+                <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+              </ReactFlow>
+              {/* Bottom-left canvas controls (fullscreen is second-to-last) */}
+              <div className="wf-controls">
+                <button type="button" className="wf-controls__btn" onClick={() => rfRef.current?.zoomIn()} title={t('workflows.zoom_in')}>
+                  <Plus size={14} />
+                </button>
+                <button type="button" className="wf-controls__btn" onClick={() => rfRef.current?.zoomOut()} title={t('workflows.zoom_out')}>
+                  <Minus size={14} />
+                </button>
+                <button type="button" className="wf-controls__btn" onClick={() => rfRef.current?.fitView()} title={t('workflows.fit_view')}>
+                  <Frame size={14} />
+                </button>
+                <button
+                  type="button"
+                  className={`wf-controls__btn${inlineFullscreen ? ' wf-controls__btn--active' : ''}`}
+                  onClick={toggleFullscreen}
+                  title={t('workflows.fullscreen')}
+                >
+                  <Maximize2 size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="wf-controls__btn"
+                  onClick={() => setInteractive((v) => !v)}
+                  title={interactive ? t('workflows.lock_canvas') : t('workflows.unlock_canvas')}
+                >
+                  {interactive ? <Unlock size={14} /> : <Lock size={14} />}
+                </button>
+              </div>
+            </>
           )}
         </div>
 
-        {selected && (
-          <aside className="wf-inspector">
+        <aside className="wf-inspector">
+            {/* Navigator (collapsible, Photoshop-style) */}
+            <div className="wf-section">
+              <button type="button" className="wf-adv-toggle wf-minimap-toggle" onClick={() => setShowMinimap((v) => !v)}>
+                {showMinimap ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                <MapIcon size={13} />
+                {t('workflows.minimap')}
+              </button>
+              {showMinimap ? (
+                <WorkflowMiniMap
+                  nodes={nodes}
+                  viewport={viewport}
+                  canvas={canvasSize}
+                  onNavigate={(fx, fy) => rfRef.current?.setCenter(fx, fy, { zoom: viewport.zoom, duration: 200 })}
+                />
+              ) : null}
+            </div>
+
+            {selected ? (
+            <>
             {/* Step type (friendly picker) */}
             <div className="wf-section">
               <div className="wf-section__title">{t('workflows.section_basic')}</div>
@@ -949,7 +1058,6 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
                   ))}
                 </select>
               </label>
-              <p className="wf-help">{t(kindDescKey(kind))}</p>
               {DO_KINDS.has(kind) ? (
                 <label className="add-skill-page__field">
                   <span>{t('workflows.step_do')}</span>
@@ -1037,34 +1145,30 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
                   />
                 ) : (
                   <div className="wf-kv">
-                    {paramsToRows(params).map((row, index) => (
-                      <div className="wf-kv__row" key={`${row.key}-${index}`}>
+                    {paramRows.map((row, index) => (
+                      <div className="wf-kv__row" key={index}>
                         <Input
                           value={row.key}
                           placeholder={t('workflows.param_key')}
                           onChange={(e) => {
-                            const rows = paramsToRows(params);
-                            rows[index] = { ...rows[index], key: e.target.value } as KVRow;
-                            patchSelected({ params: rowsToParams(rows) });
+                            const rows = [...paramRows];
+                            rows[index] = { ...rows[index]!, key: e.target.value };
+                            commitParamRows(rows);
                           }}
                         />
                         <Input
                           value={row.value}
                           placeholder={t('workflows.param_value')}
                           onChange={(e) => {
-                            const rows = paramsToRows(params);
-                            rows[index] = { ...rows[index], value: e.target.value } as KVRow;
-                            patchSelected({ params: rowsToParams(rows) });
+                            const rows = [...paramRows];
+                            rows[index] = { ...rows[index]!, value: e.target.value };
+                            commitParamRows(rows);
                           }}
                         />
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          onClick={() => {
-                            const rows = paramsToRows(params);
-                            rows.splice(index, 1);
-                            patchSelected({ params: rowsToParams(rows) });
-                          }}
+                          onClick={() => commitParamRows(paramRows.filter((_, i) => i !== index))}
                         >
                           <Trash2 size={13} />
                         </Button>
@@ -1073,11 +1177,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        const rows = paramsToRows(params);
-                        rows.push({ key: '', value: '' });
-                        patchSelected({ params: rowsToParams(rows) });
-                      }}
+                      onClick={() => setParamRows([...paramRows, { key: '', value: '' }])}
                     >
                       <Plus size={13} />
                       {t('workflows.add_param')}
@@ -1097,6 +1197,7 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
                   <label className="add-skill-page__field">
                     <span>{t('workflows.step_id')}</span>
                     <Input value={selected.id} onChange={(e) => afterIdChange(e.target.value)} />
+                    <span className="wf-help">{t('workflows.step_id_hint')}</span>
                   </label>
                   <div className="wf-row">
                     <label className="add-skill-page__field">
@@ -1158,22 +1259,13 @@ export function WorkflowGraphEditor({ target, onClose, onSaved, standalone = fal
                 </>
               ) : null}
             </div>
-
-            <div className="wf-section">
-              <div style={{ display: 'flex', gap: 6 }}>
-                <span className="settings-chip" style={{ color: family }}>{kindFamily(kind)}</span>
-                <span className="settings-chip">{selectedPath.join(' › ')}</span>
-              </div>
-            </div>
+            </>
+            ) : null}
           </aside>
-        )}
       </div>
     </div>
   );
 
-  if (canvasWindow && popupRoot) {
-    return createPortal(<div className="wf-popup-shell">{editor}</div>, popupRoot);
-  }
   if (inlineFullscreen) {
     return (
       <div className="wf-fullscreen-overlay">

@@ -1,6 +1,7 @@
 import { Handle, MarkerType, Position, type Edge, type Node, type NodeProps } from '@xyflow/react';
 import dagre from 'dagre';
-import { kindIcon, kindStripe } from './kinds';
+import { kindIcon, kindLabelKey, kindStripe } from './kinds';
+import { t } from '../../lib/i18n';
 import type { WorkflowStep } from '../../types';
 
 export const NODE_W = 214;
@@ -29,7 +30,10 @@ export function StepNode({ data, selected }: NodeProps) {
         <span className="wf-node__icon">
           <Icon size={14} />
         </span>
-        <span className="wf-node__id">{step.id}</span>
+        {/* Node identity is capability-based (system-defined); the raw id is a
+            muted tag for wiring/debug only. */}
+        <span className="wf-node__cap">{t(kindLabelKey(step.kind))}</span>
+        <span className="wf-node__idtag">#{step.id}</span>
         {badge ? (
           <span className={`settings-chip wf-node__status settings-chip--${badge === 'failed' ? 'bad' : badge === 'ok' ? 'ok' : 'dim'}`}>
             {badge}
@@ -38,8 +42,7 @@ export function StepNode({ data, selected }: NodeProps) {
       </div>
       <div className="wf-node__meta">
         {d.slot ? `${d.slot} · ` : ''}
-        {step.kind}
-        {step.do ? ` · ${step.do}` : ''}
+        {step.do || step.goal || ''}
       </div>
       <div className="wf-node__badges">
         {step.mode === 'agent' ? <span className="wf-badge wf-badge--agent">agent</span> : null}
@@ -134,6 +137,123 @@ export function collectStepGraph(
   };
   walk(steps, [], '', undefined, undefined);
   return { nodes, edges, nodeIdToPath };
+}
+
+/**
+ * Order a sibling list by execution: follow the explicit ``next`` chain from
+ * each head (falling back to list order when unwired); unreached steps keep
+ * their original order at the end. Used to render the step list in the same
+ * order the executor will run it — NOT array/id order.
+ */
+export function orderSteps(steps: WorkflowStep[]): WorkflowStep[] {
+  if (!steps.some((step) => step.next)) return steps;
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const incoming = new Set(steps.filter((step) => step.next).map((step) => step.next));
+  const ordered: WorkflowStep[] = [];
+  const seen = new Set<string>();
+  for (const start of steps) {
+    if (incoming.has(start.id)) continue;
+    let cursor: WorkflowStep | undefined = start;
+    while (cursor && !seen.has(cursor.id)) {
+      ordered.push(cursor);
+      seen.add(cursor.id);
+      cursor = cursor.next ? byId.get(cursor.next) : undefined;
+    }
+  }
+  for (const step of steps) {
+    if (!seen.has(step.id)) ordered.push(step);
+  }
+  return ordered;
+}
+
+/**
+ * Assign system ids ``id:1, id:2, …`` to every step (execution order, depth
+ * first), rewriting ``next`` links and ``{{steps.<id>}}`` template references so
+ * wiring stays correct. Applied on save so all workflows share one id scheme.
+ */
+export function renumberWorkflowSteps(steps: WorkflowStep[]): WorkflowStep[] {
+  const idMap = new Map<string, string>();
+  let counter = 0;
+  const assign = (list: WorkflowStep[]) => {
+    const ordered = orderSteps(list);
+    // Level-first: number all siblings before descending into children.
+    for (const step of ordered) {
+      counter += 1;
+      idMap.set(step.id, `id:${counter}`);
+    }
+    for (const step of ordered) {
+      for (const slot of SLOTS) {
+        const kids = step[slot] as WorkflowStep[] | undefined;
+        if (kids?.length) assign(kids);
+      }
+    }
+  };
+  assign(steps);
+
+  const remap = (value: unknown): unknown => {
+    if (typeof value === 'string') {
+      return value.replace(/\{\{\s*steps\.([A-Za-z0-9_:-]+)/g, (match, id: string) =>
+        idMap.has(id) ? match.replace(id, idMap.get(id) as string) : match,
+      );
+    }
+    if (Array.isArray(value)) return value.map(remap);
+    if (value && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(value as Record<string, unknown>)) out[key] = remap(val);
+      return out;
+    }
+    return value;
+  };
+
+  const walk = (list: WorkflowStep[]): WorkflowStep[] =>
+    orderSteps(list).map((step) => {
+      const out: WorkflowStep = { ...step, id: idMap.get(step.id) ?? step.id };
+      if (step.next) out.next = idMap.get(step.next) ?? step.next;
+      out.params = (remap(step.params ?? {}) as Record<string, unknown>) ?? {};
+      out.pre = (step.pre ?? []).map((s) => remap(s) as string);
+      out.post = (step.post ?? []).map((s) => remap(s) as string);
+      out.success = (step.success ?? []).map((s) => remap(s) as string);
+      if (step.when) out.when = remap(step.when) as string;
+      if (step.foreach) out.foreach = remap(step.foreach) as string;
+      if (step.then?.length) out.then = walk(step.then);
+      if (step.else?.length) out.else = walk(step.else);
+      if (step.body?.length) out.body = walk(step.body);
+      return out;
+    });
+
+  return walk(steps);
+}
+
+/**
+ * The main chain's entry/exit step ids, for wiring the input/output endpoint
+ * nodes. Uses the explicit ``next`` chain when wired; otherwise list order.
+ * Isolated (unconnected) steps are excluded so a newly-added empty node does
+ * NOT steal the output connection.
+ */
+export function flowEndpoints(steps: WorkflowStep[]): { inputTarget: string; outputSource: string } {
+  if (steps.length === 0) return { inputTarget: '', outputSource: '' };
+  const wired = steps.some((step) => step.next);
+  if (!wired) {
+    return { inputTarget: steps[0]!.id, outputSource: steps[steps.length - 1]!.id };
+  }
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  const incoming = new Set(steps.filter((step) => step.next).map((step) => step.next));
+  const heads = steps.filter((step) => !incoming.has(step.id));
+  let best: { head: string; tail: string; len: number } | null = null;
+  for (const head of heads) {
+    let cursor: WorkflowStep | undefined = head;
+    let tail = head.id;
+    let len = 0;
+    const seen = new Set<string>();
+    while (cursor && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      tail = cursor.id;
+      len += 1;
+      cursor = cursor.next ? byId.get(cursor.next) : undefined;
+    }
+    if (!best || len > best.len) best = { head: head.id, tail, len };
+  }
+  return best ? { inputTarget: best.head, outputSource: best.tail } : { inputTarget: '', outputSource: '' };
 }
 
 /** dagre top-to-bottom layout for an arbitrary node/edge set. */

@@ -8,6 +8,8 @@ on a step are folded into ``params`` for ergonomic authoring.
 from __future__ import annotations
 
 import re
+import unicodedata
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -24,8 +26,26 @@ from .model import (
     Step,
 )
 
-_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# Names may be any language/script: letters, combining marks (needed for e.g.
+# Devanagari/Thai/Arabic vowel signs), numbers, spaces, hyphens and underscores.
+# Path separators, punctuation and emoji are rejected. The store maps non-ASCII
+# names to a safe filename, so names never touch the filesystem.
+_ALLOWED_LITERAL = frozenset(" -_")
 MAX_NAME_LENGTH = 64
+
+
+def is_valid_name(name: str) -> bool:
+    candidate = (name or "").strip()
+    if not candidate or len(candidate) > MAX_NAME_LENGTH:
+        return False
+    for char in candidate:
+        if char in _ALLOWED_LITERAL:
+            continue
+        category = unicodedata.category(char)
+        if category[0] in ("L", "M", "N"):  # letter, mark, number
+            continue
+        return False
+    return True
 MAX_DESCRIPTION_LENGTH = 1024
 
 # Keys with dedicated handling on a Step (everything else becomes a param).
@@ -304,8 +324,8 @@ def validate(workflow: Workflow) -> list[str]:
         errors.append("name is required")
     elif len(workflow.name) > MAX_NAME_LENGTH:
         errors.append(f"name exceeds {MAX_NAME_LENGTH} characters")
-    elif not _NAME_RE.match(workflow.name):
-        errors.append("name must be lowercase alphanumeric with single hyphen separators")
+    elif not is_valid_name(workflow.name):
+        errors.append("name may only contain letters, numbers, spaces, hyphens and underscores")
     if not workflow.description.strip():
         errors.append("description is required")
     elif len(workflow.description) > MAX_DESCRIPTION_LENGTH:
@@ -355,6 +375,93 @@ def raise_on_errors(workflow: Workflow, diagnostics: list[str] | None = None) ->
         raise WorkflowValidationError("; ".join(problems))
 
 
+_STEP_REF_RE = re.compile(r"\{\{\s*steps\.([A-Za-z0-9_:-]+)")
+
+
+def _execution_order(steps: list[Step]) -> list[Step]:
+    if not any(step.next for step in steps):
+        return steps
+    by_id = {step.id: step for step in steps}
+    incoming = {step.next for step in steps if step.next}
+    ordered: list[Step] = []
+    seen: set[str] = set()
+    for step in steps:
+        if step.id in incoming:
+            continue
+        cursor: Step | None = step
+        while cursor is not None and cursor.id not in seen:
+            ordered.append(cursor)
+            seen.add(cursor.id)
+            cursor = by_id.get(cursor.next) if cursor.next else None
+    for step in steps:
+        if step.id not in seen:
+            ordered.append(step)
+    return ordered
+
+
+def renumber_steps(steps: list[Step]) -> list[Step]:
+    """Assign system ids ``id:1, id:2, …`` (execution order, depth first).
+
+    Rewrites ``next`` links and ``{{steps.<id>}}`` references so wiring stays
+    correct. Used to normalise templates/recorded drafts onto the same scheme
+    the visual editor uses.
+    """
+    id_map: dict[str, str] = {}
+    counter = 0
+
+    def assign(seq: list[Step]) -> None:
+        nonlocal counter
+        ordered = _execution_order(seq)
+        # Level-first: number all siblings before descending into children.
+        for step in ordered:
+            counter += 1
+            id_map[step.id] = f"id:{counter}"
+        for step in ordered:
+            for slot in ("then", "else_", "body"):
+                children = getattr(step, slot, None)
+                if children:
+                    assign(children)
+
+    assign(steps)
+
+    def remap(value: Any) -> Any:
+        if isinstance(value, str):
+            return _STEP_REF_RE.sub(
+                lambda m: m.group(0).replace(m.group(1), id_map.get(m.group(1), m.group(1))), value
+            )
+        if isinstance(value, list):
+            return [remap(item) for item in value]
+        if isinstance(value, dict):
+            return {key: remap(item) for key, item in value.items()}
+        return value
+
+    def walk(seq: list[Step]) -> list[Step]:
+        out: list[Step] = []
+        for step in _execution_order(seq):
+            fields: dict[str, Any] = {
+                "id": id_map.get(step.id, step.id),
+                "params": remap(step.params or {}),
+                "pre": [remap(x) for x in step.pre],
+                "post": [remap(x) for x in step.post],
+                "success": [remap(x) for x in step.success],
+            }
+            if step.next:
+                fields["next"] = id_map.get(step.next, step.next)
+            if step.when:
+                fields["when"] = remap(step.when)
+            if step.foreach:
+                fields["foreach"] = remap(step.foreach)
+            new_step = replace(step, **fields)
+            for slot in ("then", "else_", "body"):
+                children = getattr(new_step, slot, None)
+                if children:
+                    new_step = replace(new_step, **{slot: walk(children)})
+            out.append(new_step)
+        return out
+
+    return walk(steps)
+
+
 def render_workflow(workflow: Workflow) -> str:
     """Render a workflow back to YAML (single source of truth)."""
     data: dict[str, Any] = {
@@ -378,6 +485,8 @@ def render_workflow(workflow: Workflow) -> str:
         data["status"] = workflow.status
     if workflow.created_at:
         data["created_at"] = workflow.created_at
+    if workflow.updated_at:
+        data["updated_at"] = workflow.updated_at
     data["steps"] = [step.to_dict() for step in workflow.steps]
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
 

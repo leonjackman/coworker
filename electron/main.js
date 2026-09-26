@@ -604,39 +604,6 @@ function createTray() {
   tray.on('click', showMainWindow);
 }
 
-const canvasWindows = new Set();
-
-// Open the workflow canvas in a separate native window (its own renderer route).
-function openCanvasWindow(payload = {}) {
-  const name = String(payload.name || '');
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 800,
-    minHeight: 600,
-    show: false,
-    title: payload.title ? String(payload.title) : 'Workflow',
-    backgroundColor: '#111417',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      enableRemoteModule: false,
-      sandbox: true,
-      nodeIntegration: false,
-    },
-  });
-  const hash = `canvas=${encodeURIComponent(name)}`;
-  if (FRONTEND_URL) {
-    win.loadURL(`${FRONTEND_URL}#${hash}`);
-  } else {
-    win.loadFile(FRONTEND_DIST_ENTRY, { hash });
-  }
-  win.once('ready-to-show', () => win.show());
-  canvasWindows.add(win);
-  win.on('closed', () => canvasWindows.delete(win));
-  return true;
-}
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -1828,15 +1795,6 @@ async function requestBackendOr(pathname, fallback, { method = 'GET', payload = 
     throw err;
   }
 }
-
-ipcMain.handle('open-canvas-window', async (_event, payload) => {
-  try {
-    return openCanvasWindow(payload || {});
-  } catch (error) {
-    console.error('open-canvas-window failed:', error);
-    return false;
-  }
-});
 
 ipcMain.handle('get-runtime-config', async () => {
   return requestBackend('/config');

@@ -105,8 +105,11 @@ def test_parse_and_validate():
 
 
 def test_parse_rejects_bad_name():
-    workflow, _ = parse_workflow("name: Bad Name\ndescription: x\nsteps:\n  - id: a\n    kind: set\n")
+    workflow, _ = parse_workflow("name: bad/name\ndescription: x\nsteps:\n  - id: a\n    kind: set\n")
     assert validate(workflow) != []
+    # Non-English / spaced names are allowed.
+    ok, _ = parse_workflow("name: 我的 流程\ndescription: x\nsteps:\n  - id: a\n    kind: set\n")
+    assert validate(ok) == []
 
 
 def test_template_resolution():
@@ -636,6 +639,49 @@ steps:
         assert (primary / "user-flow.yaml").is_file()
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "测试流程",
+        "日本語のフロー",
+        "한국어 흐름",
+        "Русский поток",
+        "تدفق عربي",
+        "हिंदी प्रवाह",
+        "ขั้นตอนภาษาไทย",
+        "Ελληνική ροή",
+        "תהליך עברי",
+        "Luồng tiếng Việt",
+        "Flux français",
+    ],
+)
+def test_non_ascii_workflow_name(manager, name):
+    flow = f'''name: {name}
+description: localized name
+steps:
+  - id: a
+    kind: set
+    params:
+      name: k
+      value: v
+'''
+    created = manager.create(flow)
+    assert created["status"] == "ok", created
+    assert manager.get(name) is not None
+    assert name in {w["name"] for w in manager.list()}
+    assert manager.run(name, env=FakeEnv())["status"] == "ok"
+    assert manager.version_detail(name, 1)["status"] == "ok"
+    assert manager.delete(name)["status"] == "ok"
+
+
+def test_reject_name_with_path_separator(manager):
+    from coworker.workflows import WorkflowValidationError
+
+    flow = "name: bad/name\ndescription: x\nsteps:\n  - id: a\n    kind: set\n"
+    with pytest.raises(WorkflowValidationError):
+        manager.create(flow)
+
+
 def test_next_chain_ordering(manager):
     flow = """name: chain-flow
 description: explicit next ordering
@@ -662,6 +708,60 @@ steps:
     result = manager.run("chain-flow", env=FakeEnv())
     assert result["status"] == "ok"
     assert result["run"]["completed"] == ["s1", "s3", "s2"]
+
+
+def test_renumber_steps_ids_and_refs():
+    from coworker.workflows.parser import parse_workflow, renumber_steps
+
+    text = """name: renum
+description: x
+steps:
+  - id: first
+    kind: tool
+    do: web_search
+  - id: second
+    kind: command
+    params:
+      command:
+        - echo
+        - "{{steps.first}}"
+  - id: third
+    kind: set
+    next: ''
+"""
+    workflow, _ = parse_workflow(text)
+    steps = renumber_steps(workflow.steps)
+    assert [s.id for s in steps] == ["id:1", "id:2", "id:3"]
+    assert steps[1].params["command"][1] == "{{steps.id:1}}"
+
+
+def test_renumber_level_first_with_branches():
+    from coworker.workflows.parser import parse_workflow, renumber_steps
+
+    text = """name: branched
+description: x
+steps:
+  - id: start
+    kind: branch
+    when: "{{inputs.go}}"
+    next: finish
+    then:
+      - id: inner
+        kind: set
+        params:
+          name: k
+          value: v
+  - id: finish
+    kind: set
+    params:
+      name: k
+      value: v
+"""
+    workflow, _ = parse_workflow(text)
+    steps = renumber_steps(workflow.steps)
+    assert [s.id for s in steps] == ["id:1", "id:2"]  # siblings first
+    assert steps[0].next == "id:2"
+    assert [c.id for c in steps[0].then] == ["id:3"]  # children after the level
 
 
 def test_render_steps_structured(manager):

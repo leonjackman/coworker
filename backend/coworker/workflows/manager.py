@@ -21,7 +21,7 @@ from .model import (
     WorkflowValidationError,
     Step,
 )
-from .parser import parse_workflow, render_workflow, validate
+from .parser import is_valid_name, parse_workflow, renumber_steps, render_workflow, validate
 from .recorder import record_draft
 from .registry import WorkflowRegistry
 from .store import WorkflowStore
@@ -118,10 +118,17 @@ class WorkflowManager:
     def install_template(self, template_id: str, *, overwrite: bool = False) -> dict[str, Any]:
         from .templates import get_template
 
+        from dataclasses import replace
+
         template = get_template(template_id)
         if template is None:
             return {"status": "error", "message": f"template not found: {template_id}"}
-        result = self.create(template["yaml"], overwrite=overwrite)
+        workflow, diagnostics = parse_workflow(template["yaml"], name_hint=template_id)
+        if workflow is None:
+            return {"status": "error", "message": "; ".join(diagnostics) or "invalid template"}
+        # Normalise node ids to the system scheme (id:1, id:2, …).
+        workflow = replace(workflow, steps=renumber_steps(workflow.steps))
+        result = self.create(render_workflow(workflow), overwrite=overwrite)
         if result.get("status") == "ok":
             result["template"] = template_id
         return result
@@ -136,10 +143,11 @@ class WorkflowManager:
         if source is None:
             return {"status": "error", "message": f"workflow not found: {name}"}
         candidate = (new_name or f"{name}-copy").strip() or f"{name}-copy"
-        if candidate == name or not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", candidate):
-            candidate = re.sub(r"[^a-z0-9]+", "-", candidate.lower()).strip("-")
-        if not candidate:
+        if candidate == name or not is_valid_name(candidate):
+            # Fall back to the default "<name>-copy" (valid for any language).
             candidate = f"{name}-copy"
+            if not is_valid_name(candidate):
+                candidate = "workflow-copy"
         unique = candidate
         index = 2
         while self.store.exists(unique):

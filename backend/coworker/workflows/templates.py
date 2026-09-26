@@ -4,6 +4,9 @@ A lightweight, off-line catalogue: parameterized workflows users can install and
 adapt. The platform "connectors" are browser-driven publish/interact recipes
 with human approval gates — the honest local-first substitute for closed
 platform APIs.
+
+Node ids use the system scheme (``id:1``, ``id:2``, …); installation renumbers
+anyway, but keeping the source consistent avoids surprises.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ inputs:
     type: string
     default: "research/{{{{inputs.topic}}}}.txt"
 steps:
-  - id: search
+  - id: "id:1"
     kind: tool
     do: web_search
     params:
@@ -44,7 +47,7 @@ steps:
     on_error:
       retry: 2
       then: abort
-  - id: save
+  - id: "id:2"
     kind: command
     params:
       command:
@@ -52,7 +55,7 @@ steps:
         - "-c"
         - "{_WRITE_SCRIPT}"
         - "{{{{inputs.path}}}}"
-        - "{{{{steps.search}}}}"
+        - "{{{{steps.id:1}}}}"
     post:
       - "equals result.return_code 0"
       - "contains SAVED"
@@ -74,14 +77,14 @@ inputs:
     type: string
     required: true
 steps:
-  - id: fetch
+  - id: "id:1"
     kind: tool
     do: web_fetch
     params:
       url: "{{inputs.url}}"
     post:
       - "not_error"
-  - id: check
+  - id: "id:2"
     kind: assert
     do: "contains {{inputs.keyword}}"
 """,
@@ -105,12 +108,12 @@ inputs:
     type: string
     default: ""
 steps:
-  - id: open
+  - id: "id:1"
     kind: browser
     do: navigate
     params:
       url: "{{inputs.compose_url}}"
-  - id: fill_title
+  - id: "id:2"
     kind: browser
     do: type
     locator:
@@ -120,7 +123,7 @@ steps:
         - selector: "input[placeholder*='标题'], input[placeholder*='title']"
     params:
       text: "{{inputs.title}}"
-  - id: fill_body
+  - id: "id:3"
     kind: browser
     do: type
     locator:
@@ -131,10 +134,10 @@ steps:
     params:
       text: "{{inputs.body}}"
     when: "{{inputs.body}}"
-  - id: review
+  - id: "id:4"
     kind: human
     do: "请检查页面内容后确认发布"
-  - id: publish
+  - id: "id:5"
     kind: browser
     do: click
     locator:
@@ -166,12 +169,12 @@ inputs:
     type: list
     required: true
 steps:
-  - id: open
+  - id: "id:1"
     kind: browser
     do: navigate
     params:
       url: https://creator.xiaohongshu.com/publish/publish
-  - id: upload
+  - id: "id:2"
     kind: browser
     do: set_files
     locator:
@@ -182,14 +185,14 @@ steps:
         - selector: "input[type='file']"
     params:
       files: "{{inputs.images}}"
-  - id: fill_title
+  - id: "id:3"
     kind: browser
     do: type
     locator:
       selector: "input[placeholder*='标题']"
     params:
       text: "{{inputs.title}}"
-  - id: fill_body
+  - id: "id:4"
     kind: browser
     do: type
     locator:
@@ -197,10 +200,10 @@ steps:
     params:
       text: "{{inputs.body}}"
     when: "{{inputs.body}}"
-  - id: review
+  - id: "id:5"
     kind: human
     do: "确认发布到小红书？"
-  - id: publish
+  - id: "id:6"
     kind: browser
     do: click
     locator:
@@ -228,19 +231,19 @@ inputs:
     type: string
     default: ""
 steps:
-  - id: open
+  - id: "id:1"
     kind: browser
     do: navigate
     params:
       url: https://mp.weixin.qq.com/
-  - id: fill_title
+  - id: "id:2"
     kind: browser
     do: type
     locator:
       selector: "input[placeholder*='标题']"
     params:
       text: "{{inputs.title}}"
-  - id: fill_body
+  - id: "id:3"
     kind: browser
     do: type
     locator:
@@ -248,10 +251,10 @@ steps:
     params:
       text: "{{inputs.body}}"
     when: "{{inputs.body}}"
-  - id: review
+  - id: "id:4"
     kind: human
     do: "确认保存公众号草稿？"
-  - id: save
+  - id: "id:5"
     kind: browser
     do: click
     locator:

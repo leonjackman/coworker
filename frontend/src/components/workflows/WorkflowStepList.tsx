@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
 import { CheckCircle2, Zap } from 'lucide-react';
+import { orderSteps } from './flowGraph';
 import { kindIcon, kindLabelKey, kindStripe } from './kinds';
 import { t } from '../../lib/i18n';
 import type { WorkflowStep } from '../../types';
@@ -17,9 +18,10 @@ function StepRow({ step, depth }: { step: WorkflowStep; depth: number }) {
       <span className="wf-flow-row__icon" style={{ color: kindStripe(step.kind) }}>
         <Icon size={14} />
       </span>
-      <span className="wf-flow-row__id">{step.id}</span>
-      <span className="settings-chip">{t(kindLabelKey(step.kind))}</span>
+      {/* Capability-based label (system-defined); raw id is a muted tag. */}
+      <span className="wf-flow-row__cap">{t(kindLabelKey(step.kind))}</span>
       {action ? <code className="wf-flow-row__action">{action}</code> : null}
+      <span className="wf-flow-row__id">#{step.id}</span>
       {step.goal ? <span className="wf-flow-row__goal">{step.goal}</span> : null}
       <span className="wf-flow-row__badges">
         {step.mode === 'agent' ? <span className="wf-badge wf-badge--agent">agent</span> : null}
@@ -51,7 +53,7 @@ export function WorkflowStepList({ steps, triggers = [], outputs = {} }: Props) 
             {slot}
           </li>,
         );
-        nodes.push(...render(kids, depth + 1));
+        nodes.push(...render(orderSteps(kids), depth + 1));
       }
       return <Fragment key={`${depth}-${index}-${step.id}`}>{nodes}</Fragment>;
     });
@@ -71,7 +73,7 @@ export function WorkflowStepList({ steps, triggers = [], outputs = {} }: Props) 
         {steps.length === 0 ? (
           <p className="skill-empty">{t('workflows.no_steps')}</p>
         ) : (
-          <ul className="wf-steplist">{render(steps, 0)}</ul>
+          <ul className="wf-steplist">{render(orderSteps(steps), 0)}</ul>
         )}
       </div>
 

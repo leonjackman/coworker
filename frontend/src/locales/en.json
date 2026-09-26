@@ -1416,6 +1416,15 @@
   "workflows.edge_default": "Intuitive",
   "workflows.edge_straight": "Straight",
   "workflows.edge_curve": "Curved",
-  "workflows.fullscreen": "Open in a separate window",
-  "workflows.loading": "Loading…"
+  "workflows.fullscreen": "Fullscreen",
+  "workflows.loading": "Loading…",
+  "workflows.not_found": "Workflow not found.",
+  "workflows.step_id_hint": "Internal id used for wiring; usually no need to change.",
+  "workflows.zoom_in": "Zoom in",
+  "workflows.zoom_out": "Zoom out",
+  "workflows.fit_view": "Fit view",
+  "workflows.lock_canvas": "Lock canvas (disable editing)",
+  "workflows.unlock_canvas": "Unlock canvas",
+  "workflows.minimap": "Mini-map",
+  "workflows.edge_right_angle": "Right-angle"
 }

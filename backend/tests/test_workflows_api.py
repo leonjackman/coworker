@@ -204,7 +204,9 @@ def test_workflow_templates_install():
     installed = client.post("/workflows/templates/web-research-report/install")
     assert installed.status_code == 200, installed.text
     assert installed.json()["status"] == "ok"
-    assert client.get("/workflows/web-research-report").status_code == 200
+    detail = client.get("/workflows/web-research-report").json()["workflow"]
+    # Installed template is renumbered to the system id scheme (id:1, id:2, …).
+    assert [s["id"] for s in detail["steps"]] == ["id:1", "id:2"]
     client.delete("/workflows/web-research-report")
 
 
