@@ -298,7 +298,12 @@ async def record_workflow_from_session(payload: WorkflowRecordSessionPayload):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=404, detail=f"session not available: {exc}") from exc
     result = await run_workflow_review(
-        llm, workflow_manager, session_id=payload.session_id, messages=messages, parts=[]
+        llm,
+        workflow_manager,
+        session_id=payload.session_id,
+        messages=messages,
+        parts=[],
+        skill_manager=skill_manager,
     )
     return {"status": "ok", "review": result}
 

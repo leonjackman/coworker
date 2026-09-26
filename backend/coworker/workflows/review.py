@@ -28,6 +28,11 @@ _SYSTEM = (
     "concrete MULTI-STEP procedure worth running the same way every time.\n\n"
     "Step kinds: command | browser | app | tool | skill | set | assert | human | branch | loop | wait. "
     "Use {{inputs.<name>}} placeholders for values that vary per run.\n\n"
+    "Skills: when a step is a REUSABLE, maintainable capability that an existing skill "
+    "already provides, use {\"kind\": \"skill\", \"do\": \"<exact skill name>\"} — the name MUST "
+    "match a skill in <skills>. NEVER invent a skill name (it is validated and will be "
+    "rejected). When a step is one-off or simple, inline it directly (command/browser/app/tool) "
+    "instead of creating a skill.\n\n"
     "Deduplication: if an existing workflow in <catalog> already covers this, respond with "
     "action=update using THAT exact name; otherwise action=create with a new lowercase, "
     "hyphen-separated, <=64 char name; if nothing is worth capturing, action=none.\n\n"
@@ -90,6 +95,23 @@ def _format_catalog(workflow_manager: Any) -> str:
     return "\n".join(f"- {w.get('name')}: {str(w.get('description') or '')[:120]}" for w in entries)
 
 
+def _format_skills(skill_manager: Any) -> str:
+    """The available-skills catalog, so reviewed workflows reuse real skills."""
+    if skill_manager is None:
+        return "(unavailable)"
+    try:
+        entries = skill_manager.injection_list()
+    except Exception:  # noqa: BLE001
+        return "(unavailable)"
+    names = []
+    for entry in entries[:CATALOG_MAX_ENTRIES]:
+        name = entry.get("name") if isinstance(entry, dict) else getattr(entry, "name", "")
+        desc = entry.get("description") if isinstance(entry, dict) else getattr(entry, "description", "")
+        if name:
+            names.append(f"- {name}: {str(desc or '')[:120]}")
+    return "\n".join(names) if names else "(none)"
+
+
 def _system_prompt(aggressiveness: str) -> str:
     return f"{_SYSTEM}\n\n{_AGGRESSIVENESS.get(aggressiveness, _AGGRESSIVENESS['cautious'])}"
 
@@ -112,6 +134,7 @@ async def run_workflow_review(
     parts: list[Any],
     aggressiveness: str = "cautious",
     approval_required: bool = True,
+    skill_manager: Any | None = None,
 ) -> dict[str, Any]:
     """Review a turn; stage a draft (or apply directly) when a workflow fits."""
     if llm is None or workflow_manager is None:
@@ -127,6 +150,8 @@ async def run_workflow_review(
         f"{_tool_summary(parts)}\n\n"
         "## Existing workflows (catalog)\n"
         f"{_format_catalog(workflow_manager)}\n\n"
+        "## Existing skills (catalog) — reference these by exact name for skill steps\n"
+        f"{_format_skills(skill_manager)}\n\n"
         "Decide whether to capture a workflow and respond with the JSON verdict."
     )
     try:

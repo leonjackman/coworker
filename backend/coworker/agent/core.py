@@ -693,7 +693,11 @@ _CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
 MAX_TOOL_DESCRIPTION_CHARS = 650
 
 # Tool sets for phase-driven tool gating (see PhaseToolGateMiddleware).
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "git_status", "web_search", "web_fetch", "browser", "computer_observe", "get_goal", "run_command_status"}
+# ``workflow`` is visibility-critical: the system prompt advertises it via
+# <available_workflows>, so it MUST be in the allowlist (both discuss + execute)
+# or the phase gate silently strips it and the model improvises (writes a .md
+# "workflow" file instead of calling the tool) — see the 166ff5ee regression.
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "workflow", "git_status", "web_search", "web_fetch", "browser", "computer_observe", "get_goal", "run_command_status"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
 _EXEC_TOOLS = {"run_command", "install_skill", "skill_manage", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal", "computer", "computer_script"}

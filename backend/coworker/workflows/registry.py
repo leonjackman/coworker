@@ -39,6 +39,11 @@ class WorkflowRegistry:
             "`run` (name + inputs) to execute one, or action `get` to inspect its steps. "
             "Prefer running an existing workflow over improvising when its description "
             "matches the task.",
+            "To CREATE or MODIFY a workflow, call the same `workflow` tool with "
+            "action `create`/`update` and the full YAML `content` (see the tool schema), "
+            "then confirm with action `get`/`list`. Never claim a workflow was created "
+            "unless the tool returned status ok; do not write a markdown file as a "
+            "substitute for a workflow.",
             "",
             "<available_workflows>",
         ]

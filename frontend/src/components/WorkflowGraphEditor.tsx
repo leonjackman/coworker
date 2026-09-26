@@ -40,7 +40,8 @@ import { chatService } from '../services/chatService';
 import { buildGraph, collectStepGraph, flowEndpoints, layoutGraph, nodeTypes, renumberWorkflowSteps } from './workflows/flowGraph';
 import { WorkflowMiniMap } from './workflows/WorkflowMiniMap';
 import { edgeTypes } from './workflows/EditableEdge';
-import { DO_KINDS, DO_SUGGESTIONS, KIND_GROUPS, KIND_META, LOCATOR_KINDS, PARAM_KINDS, kindLabelKey } from './workflows/kinds';
+import { KIND_GROUPS, KIND_META, LOCATOR_KINDS, kindLabelKey } from './workflows/kinds';
+import { actionsFor, actionDef, VALUE_KINDS, type ActionField } from './workflows/actions';
 import type { WorkflowStep, WorkflowVersion } from '../types';
 
 
@@ -846,6 +847,58 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
   const successList = selected?.success ?? [];
   const locator = (selected?.locator ?? {}) as Record<string, unknown>;
   const kind = selected?.kind ?? '';
+  const activeAction = actionDef(kind, selected?.do ?? '');
+
+  const readFieldValue = (field: ActionField): unknown => {
+    if (field.key === '$do') return selected?.do ?? '';
+    return params[field.key];
+  };
+  const writeFieldValue = (field: ActionField, value: unknown) => {
+    if (field.key === '$do') patchSelected({ do: String(value ?? '') });
+    else patchSelected({ params: { ...params, [field.key]: value } });
+  };
+  const renderActionField = (field: ActionField) => {
+    const value = readFieldValue(field);
+    if (field.type === 'boolean') {
+      return (
+        <label className="wf-checkbox" key={field.key}>
+          <input type="checkbox" checked={!!value} onChange={(e) => writeFieldValue(field, e.target.checked)} />
+          <span>{t(field.labelKey)}</span>
+        </label>
+      );
+    }
+    if (field.type === 'textarea') {
+      return (
+        <label className="add-skill-page__field" key={field.key}>
+          <span>{t(field.labelKey)}</span>
+          <Textarea value={String(value ?? '')} onChange={(e) => writeFieldValue(field, e.target.value)} />
+        </label>
+      );
+    }
+    if (field.type === 'number') {
+      return (
+        <label className="add-skill-page__field" key={field.key}>
+          <span>{t(field.labelKey)}</span>
+          <Input type="number" value={value === undefined || value === null ? '' : String(value)} onChange={(e) => writeFieldValue(field, e.target.value === '' ? '' : Number(e.target.value))} />
+        </label>
+      );
+    }
+    if (field.type === 'csv') {
+      const text = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+      return (
+        <label className="add-skill-page__field" key={field.key}>
+          <span>{t(field.labelKey)}</span>
+          <Input value={text} onChange={(e) => writeFieldValue(field, e.target.value.split(',').map((s) => s.trim()).filter(Boolean))} />
+        </label>
+      );
+    }
+    return (
+      <label className="add-skill-page__field" key={field.key}>
+        <span>{t(field.labelKey)}</span>
+        <Input value={String(value ?? '')} onChange={(e) => writeFieldValue(field, e.target.value)} />
+      </label>
+    );
+  };
 
   const editor = (
     <div className="wf-graph">
@@ -1048,7 +1101,9 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
               <div className="wf-section__title">{t('workflows.section_basic')}</div>
               <label className="add-skill-page__field">
                 <span>{t('workflows.step_kind')}</span>
-                <select className="input" value={kind} onChange={(e) => patchSelected({ kind: e.target.value })}>
+                {/* Switching the kind clears the action so the user re-picks for
+                    the new kind instead of keeping a stale action. */}
+                <select className="input" value={kind} onChange={(e) => patchSelected({ kind: e.target.value, do: '' })}>
                   {KIND_GROUPS.map((group) => (
                     <optgroup key={group.id} label={t(group.labelKey)}>
                       {group.kinds.map((k) => (
@@ -1058,25 +1113,36 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
                   ))}
                 </select>
               </label>
-              {DO_KINDS.has(kind) ? (
-                <label className="add-skill-page__field">
-                  <span>{t('workflows.step_do')}</span>
-                  <Input
-                    list="wf-do-options"
-                    value={selected.do ?? ''}
-                    onChange={(e) => patchSelected({ do: e.target.value })}
-                    placeholder={t('workflows.step_do_placeholder')}
-                  />
-                  <datalist id="wf-do-options">
-                    {(DO_SUGGESTIONS[kind] ?? []).map((option) => (
-                      <option key={option} value={option} />
-                    ))}
-                  </datalist>
-                </label>
+              {actionsFor(kind).length > 0 ? (
+                <>
+                  <label className="add-skill-page__field">
+                    <span>{t('workflows.step_action')}</span>
+                    <select
+                      className="input"
+                      value={selected.do ?? ''}
+                      onChange={(e) => patchSelected({ do: e.target.value })}
+                    >
+                      <option value="">{t('workflows.step_action_choose')}</option>
+                      {actionsFor(kind).map((action) => (
+                        <option key={action.action} value={action.action}>
+                          {t(action.labelKey)}
+                        </option>
+                      ))}
+                      {selected.do && !actionDef(kind, selected.do) ? (
+                        <option value={selected.do}>{`${t('workflows.action_custom')}: ${selected.do}`}</option>
+                      ) : null}
+                    </select>
+                  </label>
+                  {activeAction?.fields.map((field) => renderActionField(field))}
+                </>
               ) : null}
+              {actionsFor(kind).length === 0 && VALUE_KINDS[kind]
+                ? renderActionField({ key: '$do', type: VALUE_KINDS[kind]!.type, labelKey: VALUE_KINDS[kind]!.labelKey })
+                : null}
               <label className="add-skill-page__field">
                 <span>{t('workflows.goal')}</span>
                 <Input value={selected.goal ?? ''} onChange={(e) => patchSelected({ goal: e.target.value })} placeholder={t('workflows.goal_placeholder')} />
+                <span className="wf-help">{t('workflows.goal_hint')}</span>
               </label>
             </div>
 
@@ -1120,73 +1186,6 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
               ) : null}
             </div>
 
-            {/* Params */}
-            {PARAM_KINDS.has(kind) ? (
-              <div className="wf-section">
-                <div className="wf-section__title">
-                  {t('workflows.step_params')}
-                  <Button variant="ghost" size="xs" style={{ float: 'right' }} onClick={() => setParamsJson((v) => !v)}>
-                    {paramsJson ? t('workflows.params_kv') : t('workflows.params_json')}
-                  </Button>
-                </div>
-                {paramsJson ? (
-                  <textarea
-                    className="skills-pending__editor"
-                    style={{ minHeight: 100 }}
-                    spellCheck={false}
-                    value={JSON.stringify(params, null, 2)}
-                    onChange={(e) => {
-                      try {
-                        patchSelected({ params: JSON.parse(e.target.value) });
-                      } catch {
-                        /* keep typing */
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="wf-kv">
-                    {paramRows.map((row, index) => (
-                      <div className="wf-kv__row" key={index}>
-                        <Input
-                          value={row.key}
-                          placeholder={t('workflows.param_key')}
-                          onChange={(e) => {
-                            const rows = [...paramRows];
-                            rows[index] = { ...rows[index]!, key: e.target.value };
-                            commitParamRows(rows);
-                          }}
-                        />
-                        <Input
-                          value={row.value}
-                          placeholder={t('workflows.param_value')}
-                          onChange={(e) => {
-                            const rows = [...paramRows];
-                            rows[index] = { ...rows[index]!, value: e.target.value };
-                            commitParamRows(rows);
-                          }}
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => commitParamRows(paramRows.filter((_, i) => i !== index))}
-                        >
-                          <Trash2 size={13} />
-                        </Button>
-                      </div>
-                    ))}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setParamRows([...paramRows, { key: '', value: '' }])}
-                    >
-                      <Plus size={13} />
-                      {t('workflows.add_param')}
-                    </Button>
-                  </div>
-                )}
-              </div>
-            ) : null}
-
             {/* Advanced (collapsed) */}
             <div className="wf-section">
               <button type="button" className="wf-adv-toggle" onClick={() => setShowAdvanced((v) => !v)}>
@@ -1199,6 +1198,60 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
                     <Input value={selected.id} onChange={(e) => afterIdChange(e.target.value)} />
                     <span className="wf-help">{t('workflows.step_id_hint')}</span>
                   </label>
+                  {/* Extra/overriding params (advanced) */}
+                  <div className="wf-section__title">
+                    {t('workflows.step_params')}
+                    <Button variant="ghost" size="xs" style={{ float: 'right' }} onClick={() => setParamsJson((v) => !v)}>
+                      {paramsJson ? t('workflows.params_kv') : t('workflows.params_json')}
+                    </Button>
+                  </div>
+                  {paramsJson ? (
+                    <textarea
+                      className="skills-pending__editor"
+                      style={{ minHeight: 100 }}
+                      spellCheck={false}
+                      value={JSON.stringify(params, null, 2)}
+                      onChange={(e) => {
+                        try {
+                          patchSelected({ params: JSON.parse(e.target.value) });
+                        } catch {
+                          /* keep typing */
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className="wf-kv">
+                      {paramRows.map((row, index) => (
+                        <div className="wf-kv__row" key={index}>
+                          <Input
+                            value={row.key}
+                            placeholder={t('workflows.param_key')}
+                            onChange={(e) => {
+                              const rows = [...paramRows];
+                              rows[index] = { ...rows[index]!, key: e.target.value };
+                              commitParamRows(rows);
+                            }}
+                          />
+                          <Input
+                            value={row.value}
+                            placeholder={t('workflows.param_value')}
+                            onChange={(e) => {
+                              const rows = [...paramRows];
+                              rows[index] = { ...rows[index]!, value: e.target.value };
+                              commitParamRows(rows);
+                            }}
+                          />
+                          <Button variant="ghost" size="icon-xs" onClick={() => commitParamRows(paramRows.filter((_, i) => i !== index))}>
+                            <Trash2 size={13} />
+                          </Button>
+                        </div>
+                      ))}
+                      <Button variant="outline" size="sm" onClick={() => setParamRows([...paramRows, { key: '', value: '' }])}>
+                        <Plus size={13} />
+                        {t('workflows.add_param')}
+                      </Button>
+                    </div>
+                  )}
                   <div className="wf-row">
                     <label className="add-skill-page__field">
                       <span>{t('workflows.step_when')}</span>

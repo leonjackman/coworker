@@ -45,11 +45,14 @@ class WorkflowManager:
         secrets: Callable[[str], str | None] | None = None,
         listener: Callable[[Any], None] | None = None,
         roots_provider: Callable[[], list[Path]] | None = None,
+        skill_manager: Any | None = None,
     ):
         self.root = Path(data_dir) / "workflows"
         self.store = WorkflowStore(self.root, roots_provider)
         self.registry = WorkflowRegistry(self.store)
         self.executor = WorkflowExecutor(self.store, secrets=secrets, listener=listener)
+        # Used to validate that `skill` steps reference real skills (hard check).
+        self.skill_manager = skill_manager
 
     # ── catalog ─────────────────────────────────────────────────────────
 
@@ -249,7 +252,7 @@ class WorkflowManager:
             status=str(payload.get("status") or "active"),
             source="user",
         )
-        errors = list(diagnostics) + validate(workflow)
+        errors = list(diagnostics) + self._all_errors(workflow)
         return {
             "status": "ok" if not errors else "error",
             "yaml": render_workflow(workflow),
@@ -259,7 +262,7 @@ class WorkflowManager:
 
     def validate(self, content: str) -> dict[str, Any]:
         workflow, diagnostics = parse_workflow(content)
-        errors = validate(workflow) if workflow is not None else diagnostics
+        errors = self._all_errors(workflow) if workflow is not None else diagnostics
         return {"status": "ok" if not errors else "error", "errors": errors, "valid": not errors}
 
     # ── drafts ──────────────────────────────────────────────────────────
@@ -281,7 +284,7 @@ class WorkflowManager:
         workflow, diagnostics = parse_workflow(content, name_hint=name)
         if workflow is None:
             return {"status": "error", "message": "; ".join(diagnostics) or "invalid workflow"}
-        errors = validate(workflow)
+        errors = self._all_errors(workflow)
         if errors:
             return {"status": "error", "message": "; ".join(errors)}
         if action not in VALID_PENDING_ACTIONS:
@@ -313,6 +316,9 @@ class WorkflowManager:
         if workflow is None:
             return {"status": "error", "message": "; ".join(diagnostics)}
         action = str(workflow.provenance.get("action") or "create")
+        ref_errors = self._reference_errors(workflow)
+        if ref_errors:
+            return {"status": "error", "message": "; ".join(ref_errors)}
         existing = self.store.get(workflow.name)
         from dataclasses import replace
 
@@ -493,11 +499,54 @@ class WorkflowManager:
 
     # ── helpers ─────────────────────────────────────────────────────────
 
+    def _skill_available(self, name: str) -> bool:
+        """True when a skill of ``name`` exists (active or pending draft)."""
+        if self.skill_manager is None:
+            return True  # cannot validate -> don't block
+        try:
+            if self.skill_manager.get(name) is not None:
+                return True
+            for entry in self.skill_manager.pending():
+                entry_name = entry.get("name") if isinstance(entry, dict) else getattr(entry, "name", "")
+                if entry_name == name:
+                    return True
+        except Exception:  # noqa: BLE001 - a skill-system hiccup must not block
+            return True
+        return False
+
+    def _reference_errors(self, workflow: Workflow) -> list[str]:
+        """Hard validation: referenced skills / sub-workflows must exist."""
+        errors: list[str] = []
+
+        def walk(steps: list[Step]) -> None:
+            for step in steps:
+                if step.kind == "skill":
+                    name = step.do or str((step.params or {}).get("skill") or "")
+                    if not name:
+                        errors.append(f"step '{step.id}': skill step requires a skill name")
+                    elif not self._skill_available(name):
+                        errors.append(f"step '{step.id}': skill not found: {name}")
+                elif step.kind == "subworkflow":
+                    name = step.do or str((step.params or {}).get("workflow") or "")
+                    if not name:
+                        errors.append(f"step '{step.id}': subworkflow step requires a workflow name")
+                    elif self.store.get(name) is None:
+                        errors.append(f"step '{step.id}': workflow not found: {name}")
+                for slot in (step.then, step.else_, step.body):
+                    if slot:
+                        walk(slot)
+
+        walk(workflow.steps)
+        return errors
+
+    def _all_errors(self, workflow: Workflow) -> list[str]:
+        return validate(workflow) + self._reference_errors(workflow)
+
     def _parse_or_raise(self, content: str, *, name_hint: str = "") -> Workflow:
         workflow, diagnostics = parse_workflow(content, name_hint=name_hint)
         if workflow is None:
             raise WorkflowParseError("; ".join(diagnostics) or "invalid workflow")
-        errors = validate(workflow)
+        errors = self._all_errors(workflow)
         if errors:
             raise WorkflowValidationError("; ".join(errors))
         return workflow

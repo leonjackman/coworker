@@ -447,6 +447,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     parts=parts,
                     aggressiveness=str(cfg.get("aggressiveness") or "cautious"),
                     approval_required=bool(cfg.get("approval_required", True)),
+                    skill_manager=self.skill_manager,
                 )
             )
         except Exception:  # noqa: BLE001 - review scheduling must never break a turn

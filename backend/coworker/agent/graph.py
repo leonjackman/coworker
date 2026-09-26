@@ -398,7 +398,16 @@ def build_workspace_tools(
         browser/app actions in order). Prefer running an existing workflow from
         <available_workflows> over re-doing its steps by hand. Actions:
         list / get / run / create / update / delete / validate / render /
-        pending / approve / reject / runs.
+        pending / approve / reject / runs. Only say a workflow was created/updated
+        when this tool returned status ok; never write a markdown file as a
+        stand-in for a workflow.
+
+        Skills in a workflow: a step {"kind":"skill","do":"<name>"} runs an
+        EXISTING skill by exact name (must be in <available_skills>; a missing
+        skill is rejected on create/update). If a reusable capability has no
+        tool, create the skill first with `skill_manage` (action=create) and then
+        reference it. Prefer skills for reusable/maintainable capabilities; inline
+        simple one-off steps directly (command/browser/app/tool) instead.
         """
         if workflow_manager is None:
             return _error_result(ValueError("workflow system unavailable"), "workflow")

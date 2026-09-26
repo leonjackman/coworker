@@ -169,7 +169,9 @@ def _self_calibration_guidance(auto_apply: bool) -> str:
         "YAML frontmatter (name + description) and four body sections in order — "
         "## When to Use, ## Procedure (numbered steps), ## Pitfalls, ## Verification. "
         "Check <available_skills> first: if an existing skill already covers the "
-        "procedure, update it (same name) instead of creating a duplicate."
+        "procedure, update it (same name) instead of creating a duplicate. "
+        "Skills are also composable: a saved workflow can call this skill as a "
+        "'skill' step by its exact name, so keep the name and description clear."
     )
     if auto_apply:
         guidance += (

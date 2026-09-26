@@ -210,7 +210,9 @@ def _project_workflow_roots() -> list[Path]:
         return []
 
 
-workflow_manager = WorkflowManager(settings.data_dir, roots_provider=_project_workflow_roots)
+workflow_manager = WorkflowManager(
+    settings.data_dir, roots_provider=_project_workflow_roots, skill_manager=skill_manager
+)
 tool_audit_path = settings.data_dir / TOOL_AUDIT_FILENAME
 command_approval_store = CommandApprovalStore(settings.data_dir / COMMAND_APPROVAL_FILENAME)
 schedule_runner = ScheduleRunner(

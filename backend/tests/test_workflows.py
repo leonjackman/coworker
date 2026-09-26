@@ -894,6 +894,53 @@ def test_run_workflow_review_stage_then_apply(manager):
     assert manager.get("auto-reviewed") is not None
 
 
+class FakeSkillManager:
+    def __init__(self, names):
+        self._names = set(names)
+
+    def get(self, name):
+        return {"name": name} if name in self._names else None
+
+    def pending(self):
+        return []
+
+
+def test_skill_reference_validation(tmp_path):
+    from coworker.workflows import WorkflowManager
+    from coworker.workflows import WorkflowValidationError
+
+    mgr = WorkflowManager(tmp_path, skill_manager=FakeSkillManager({"my-skill"}))
+    ok = mgr.create(
+        "name: s-flow\ndescription: d\nsteps:\n  - id: a\n    kind: skill\n    do: my-skill\n"
+    )
+    assert ok["status"] == "ok"
+    with pytest.raises(WorkflowValidationError):
+        mgr.create(
+            "name: s-flow2\ndescription: d\nsteps:\n  - id: a\n    kind: skill\n    do: nope\n"
+        )
+    result = mgr.validate(
+        "name: s-flow3\ndescription: d\nsteps:\n  - id: a\n    kind: skill\n    do: nope\n"
+    )
+    assert result["valid"] is False
+    assert any("skill not found" in e for e in result["errors"])
+
+
+def test_subworkflow_reference_validation(tmp_path):
+    from coworker.workflows import WorkflowManager
+    from coworker.workflows import WorkflowValidationError
+
+    mgr = WorkflowManager(tmp_path)
+    mgr.create("name: base\ndescription: d\nsteps:\n  - id: a\n    kind: set\n    params:\n      name: k\n      value: v\n")
+    ok = mgr.create(
+        "name: parent\ndescription: d\nsteps:\n  - id: a\n    kind: subworkflow\n    do: base\n"
+    )
+    assert ok["status"] == "ok"
+    with pytest.raises(WorkflowValidationError):
+        mgr.create(
+            "name: parent2\ndescription: d\nsteps:\n  - id: a\n    kind: subworkflow\n    do: missing\n"
+        )
+
+
 def test_render_steps_structured(manager):
     result = manager.render_steps(
         {
