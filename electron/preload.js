@@ -220,4 +220,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app:update-state', listener);
     return () => ipcRenderer.removeListener('app:update-state', listener);
   },
+  // Standalone workflow editor: open a dedicated window and broadcast changes.
+  openWorkflowEditor: (payload) => ipcRenderer.invoke('workflow-editor-open', payload),
+  emitWorkflowChanged: () => ipcRenderer.send('workflow-editor-changed'),
+  onWorkflowChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('workflow-editor-changed', listener);
+    return () => ipcRenderer.removeListener('workflow-editor-changed', listener);
+  },
 });

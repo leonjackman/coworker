@@ -1,0 +1,552 @@
+/* Workflow Studio — a full editor shell (topbar / left dock / canvas / right
+ * inspector / bottom dock / status bar), built strictly on cw design tokens so
+ * it follows the app's light & dark themes. Scoped under `.wfs-root`. */
+
+.wfs-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: inherit;
+}
+
+.wfe-root .wfs-root {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Topbar ─────────────────────────────────────────────────────────── */
+.wfs-topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  flex: 0 0 44px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--material-border);
+  background: var(--material-panel);
+  user-select: none;
+}
+
+.wfs-topbar--window {
+  -webkit-app-region: drag;
+}
+
+.wfs-topbar--mac {
+  padding-left: 84px;
+}
+
+.wfs-topbar button,
+.wfs-topbar input,
+.wfs-topbar select,
+.wfs-topbar [role='button'] {
+  -webkit-app-region: no-drag;
+}
+
+.wfs-topbar__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid var(--material-border);
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 13px;
+}
+.wfs-topbar__back:hover { background: var(--panel-hover); }
+
+.wfs-doc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 4px;
+}
+.wfs-doc__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  flex: 0 0 8px;
+}
+.wfs-doc__name {
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wfs-doc__dirty { color: var(--warning); font-size: 14px; line-height: 1; }
+
+.wfs-menubar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.wfs-menu-trigger {
+  border: none;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.wfs-menu-trigger:hover,
+.wfs-menu-trigger[data-state='open'] {
+  background: var(--panel-hover);
+}
+.wfs-menu-pop { min-width: 220px; }
+
+.wfs-topbar__spacer { flex: 1; }
+
+.wfs-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--material-border);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+  cursor: pointer;
+}
+.wfs-toolbar-btn:hover { background: var(--panel-hover); }
+.wfs-toolbar-btn:disabled { opacity: 0.5; cursor: default; }
+.wfs-toolbar-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-foreground, #fff);
+}
+.wfs-toolbar-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  padding: 5px 7px;
+}
+.wfs-save-state { font-size: 12px; color: var(--muted-foreground); }
+.wfs-save-state--saving { color: var(--muted-foreground); }
+.wfs-save-state--saved { color: var(--success); }
+.wfs-save-state--error { color: var(--danger); }
+
+/* ── Main area: left dock | center | right dock ─────────────────────── */
+.wfs-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.wfs-dock {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--material-panel);
+}
+.wfs-dock--left { border-right: 1px solid var(--material-border); }
+.wfs-dock--right { border-left: 1px solid var(--material-border); }
+
+.wfs-resize {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+.wfs-resize:hover { background: color-mix(in oklch, var(--accent) 30%, transparent); }
+
+.wfs-dock__tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  padding: 6px 6px 0;
+  border-bottom: 1px solid var(--material-border);
+  overflow-x: auto;
+}
+.wfs-dock__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wfs-dock__tab:hover { color: var(--foreground); }
+.wfs-dock__tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.wfs-dock__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+/* ── Node palette ───────────────────────────────────────────────────── */
+.wfs-search {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--material-border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+}
+.wfs-palette__group + .wfs-palette__group { margin-top: 12px; }
+.wfs-palette__group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  margin-bottom: 6px;
+}
+.wfs-palette__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+  text-align: left;
+  cursor: grab;
+}
+.wfs-palette__item:hover {
+  background: var(--panel-hover);
+  border-color: var(--material-border);
+}
+.wfs-palette__item-icon { display: inline-flex; flex: 0 0 auto; }
+.wfs-palette__item-desc {
+  display: block;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-top: 1px;
+}
+
+/* ── Outline ────────────────────────────────────────────────────────── */
+.wfs-outline__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 7px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.wfs-outline__row:hover { background: var(--panel-hover); }
+.wfs-outline__row--active { background: var(--accent-soft); color: var(--accent); }
+.wfs-outline__slot {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  padding: 4px 0 2px 8px;
+}
+
+/* ── Center: canvas + bottom dock ───────────────────────────────────── */
+.wfs-center {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.wfs-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--material-panel);
+  overflow: hidden;
+}
+.wfs-canvas--code { padding: 0; display: flex; }
+
+.wfs-code-editor {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 14px 16px;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.wfs-bottom {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--material-border);
+  background: var(--material-panel);
+}
+.wfs-bottom--collapsed { flex: 0 0 34px; }
+.wfs-bottom__head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--material-border);
+}
+.wfs-bottom__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+.wfs-bottom__toggle {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+}
+.wfs-bottom__toggle:hover { color: var(--foreground); }
+.wfs-problem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.wfs-problem:hover { background: var(--panel-hover); }
+.wfs-problem__badge { color: var(--danger); flex: 0 0 auto; }
+.wfs-empty-note { color: var(--muted-foreground); font-size: 12px; padding: 6px; }
+
+/* ── Status bar ─────────────────────────────────────────────────────── */
+.wfs-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 0 12px;
+  border-top: 1px solid var(--material-border);
+  background: var(--material-panel);
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
+.wfs-status__item { display: inline-flex; align-items: center; gap: 5px; }
+.wfs-status__spacer { flex: 1; }
+.wfs-status__bad { color: var(--danger); }
+.wfs-status__ok { color: var(--success); }
+
+/* ── Inspector ──────────────────────────────────────────────────────── */
+.wfs-inspector { display: flex; flex-direction: column; min-height: 0; }
+.wfs-inspector__empty {
+  padding: 20px 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: center;
+}
+.wfs-field { display: grid; gap: 5px; margin-bottom: 9px; }
+.wfs-field > span {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+.wfs-field .input,
+.wfs-field input,
+.wfs-field select,
+.wfs-field textarea { width: 100%; }
+.wfs-subtabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--material-border);
+}
+.wfs-subtab {
+  padding: 6px 9px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.wfs-subtab--active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.wfs-divider { height: 1px; background: var(--material-border); margin: 10px 0; }
+
+/* ── Command palette ────────────────────────────────────────────────── */
+.wfs-cmdk-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 6000;
+  background: color-mix(in oklch, var(--background) 55%, transparent);
+  display: flex;
+  justify-content: center;
+  padding-top: 14vh;
+}
+.wfs-cmdk {
+  width: min(560px, 92vw);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius);
+  background: var(--material-panel-solid, var(--material-panel));
+  box-shadow: 0 20px 60px var(--material-shadow);
+  overflow: hidden;
+}
+.wfs-cmdk__input {
+  border: none;
+  border-bottom: 1px solid var(--material-border);
+  padding: 12px 14px;
+  font-size: 14px;
+  background: transparent;
+  color: var(--foreground);
+  outline: none;
+}
+.wfs-cmdk__list { overflow-y: auto; padding: 6px; }
+.wfs-cmdk__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.wfs-cmdk__item--active,
+.wfs-cmdk__item:hover { background: var(--panel-hover); }
+.wfs-cmdk__item-hint { margin-left: auto; color: var(--muted-foreground); font-size: 11px; }
+.wfs-cmdk__group { padding: 8px 10px 4px; font-size: 11px; text-transform: uppercase; color: var(--muted-foreground); }
+
+/* ── Context menu ───────────────────────────────────────────────────── */
+.wfs-context {
+  position: fixed;
+  z-index: 6500;
+  min-width: 180px;
+  padding: 5px;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius);
+  background: var(--material-panel-solid, var(--material-panel));
+  box-shadow: 0 10px 30px var(--material-shadow);
+}
+.wfs-context button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.wfs-context button:hover { background: var(--panel-hover); }
+.wfs-context button.wfs-danger { color: var(--danger); }
+
+/* ── Open dialog ────────────────────────────────────────────────────── */
+.wfs-open-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 6100;
+  background: color-mix(in oklch, var(--background) 55%, transparent);
+  display: flex;
+  justify-content: center;
+  padding-top: 12vh;
+}
+.wfs-open {
+  width: min(620px, 94vw);
+  max-height: 66vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius);
+  background: var(--material-panel-solid, var(--material-panel));
+  box-shadow: 0 20px 60px var(--material-shadow);
+  overflow: hidden;
+}
+.wfs-open__list { overflow-y: auto; padding: 8px; }
+.wfs-open__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  text-align: left;
+}
+.wfs-open__item:hover { background: var(--panel-hover); border-color: var(--material-border); }
+.wfs-open__name { font-size: 13px; font-weight: 600; }
+.wfs-open__desc {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wfs-open__meta { margin-left: auto; color: var(--muted-foreground); font-size: 11px; }
+
+/* Start screen (new workflow) */
+.wfs-start {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 40px;
+  text-align: center;
+}
+.wfs-start__title { font-size: 20px; font-weight: 700; }
+.wfs-start__sub { color: var(--muted-foreground); font-size: 13px; max-width: 460px; }
+.wfs-start__actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.wfs-start__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 200px;
+  padding: 14px;
+  border: 1px solid var(--material-border);
+  border-radius: var(--radius);
+  background: var(--material-panel);
+  cursor: pointer;
+  text-align: left;
+}
+.wfs-start__card:hover { border-color: var(--accent); }
+.wfs-start__card-name { font-weight: 600; font-size: 13px; }
+.wfs-start__card-desc { font-size: 11.5px; color: var(--muted-foreground); }

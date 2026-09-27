@@ -1920,6 +1920,73 @@ ipcMain.handle('get-runtime-config', async () => {
   return requestBackend('/config');
 });
 
+// ── Standalone workflow editor window ─────────────────────────────────────
+// A dedicated OS window that boots the same frontend bundle with
+// `?window=workflow-editor`, so the editor is a first-class surface rather than
+// an in-app page. Saving in it broadcasts `workflow-editor-changed` so the main
+// window refreshes in real time.
+let workflowEditorWindow = null;
+
+function openWorkflowEditorWindow(name, isNew) {
+  if (workflowEditorWindow && !workflowEditorWindow.isDestroyed()) {
+    workflowEditorWindow.focus();
+    return { ok: true, focused: true };
+  }
+  workflowEditorWindow = new BrowserWindow({
+    width: 1280,
+    height: 880,
+    minWidth: 960,
+    minHeight: 640,
+    show: false,
+    backgroundColor: '#111417',
+    icon: themedMonochromeAssetPath('cw-icon'),
+    // Same window chrome approach as the main window: a hidden-inset title bar
+    // with the traffic lights, so the renderer draws its own draggable top bar.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 } }
+      : {}),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      enableRemoteModule: false,
+      sandbox: true,
+      nodeIntegration: false,
+      webviewTag: false,
+    },
+  });
+  const query = { window: 'workflow-editor' };
+  if (name) query.name = String(name);
+  if (isNew) query.isNew = '1';
+  if (FRONTEND_URL) {
+    const qs = new URLSearchParams(query).toString();
+    const sep = FRONTEND_URL.includes('?') ? '&' : '?';
+    workflowEditorWindow.loadURL(`${FRONTEND_URL}${sep}${qs}`);
+  } else {
+    workflowEditorWindow.loadFile(FRONTEND_DIST_ENTRY, { query }).catch((error) => {
+      console.error('Failed to load workflow editor:', error);
+    });
+  }
+  workflowEditorWindow.once('ready-to-show', () => workflowEditorWindow.show());
+  workflowEditorWindow.on('closed', () => {
+    workflowEditorWindow = null;
+  });
+  return { ok: true };
+}
+
+ipcMain.handle('workflow-editor-open', (_event, payload) => {
+  return openWorkflowEditorWindow(payload?.name || '', Boolean(payload?.isNew));
+});
+
+ipcMain.on('workflow-editor-changed', () => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.webContents.send('workflow-editor-changed');
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
 // Clipboard read/write for the renderer's context-menu copy/paste slots.
 // The renderer runs sandboxed with contextIsolation, so it cannot reach the
 // Electron clipboard module directly — bridge it over IPC instead of relying

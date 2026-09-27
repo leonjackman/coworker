@@ -1,0 +1,117 @@
+/* Standalone Workflow Editor.
+ *
+ * A self-contained full-window surface hosted above the cw shell, using the
+ * SAME design language as cw (it inherits the app's design tokens, so it follows
+ * the light/dark theme). When it runs in its own Electron window it also draws
+ * the window's top bar (draggable region + traffic-light spacing).
+ */
+
+.wfe-root {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: inherit;
+}
+
+/* Window top bar (also the app header when embedded). */
+.wfe-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  flex: 0 0 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--material-border);
+  background: var(--material-panel);
+  /* The whole bar drags the OS window. */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+/* Leave room for the macOS traffic lights. */
+.wfe-root--mac .wfe-topbar {
+  padding-left: 84px;
+}
+
+.wfe-topbar__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.wfe-topbar__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--accent);
+  flex: 0 0 9px;
+}
+
+.wfe-topbar__meta {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfe-topbar__spacer {
+  flex: 1;
+}
+
+/* Interactive children must opt out of the drag region. */
+.wfe-topbar button,
+.wfe-topbar input,
+.wfe-topbar select,
+.wfe-topbar a {
+  -webkit-app-region: no-drag;
+}
+
+.wfe-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid var(--material-border);
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.wfe-close:hover {
+  background: var(--panel-hover);
+}
+
+.wfe-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Make the reused graph fill the standalone surface. */
+.wfe-root .wf-graph {
+  flex: 1;
+  min-height: 0;
+}
+
+.wfe-root .wf-body {
+  flex: 1;
+  min-height: 0;
+}
+
+.wfe-root .wf-canvas {
+  min-height: 0;
+}

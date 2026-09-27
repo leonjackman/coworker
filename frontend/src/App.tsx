@@ -19,6 +19,7 @@ import { ProvidersPanel } from './components/ProvidersPanel';
 import { MCPPanel } from './components/MCPPanel';
 import { SkillsPanel } from './components/SkillsPanel';
 import { WorkflowsPanel } from './components/WorkflowsPanel';
+import { WorkflowEditorApp } from './components/workflows/WorkflowEditorApp';
 import { SchedulesPanel } from './components/SchedulesPanel';
 import { MemoryPanel } from './components/MemoryPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
@@ -40,6 +41,7 @@ import { getLanguage, initLanguage, t, tOrDefault, translateError, useLanguage }
 import { useUpdateCenter } from './lib/useUpdateCenter';
 import { useSessionBadges } from './lib/useSessionBadges';
 import { displayProjectName } from './lib/projectName';
+import { emitWorkflowsChanged } from './lib/workflowEditorBus';
 import { applyTheme, getThemeSettings, setThemeSettings, type ThemeSettings } from './lib/theme';
 import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
@@ -89,6 +91,16 @@ function App() {
   const themeSettingsRef = useRef(themeSettings);
   themeSettingsRef.current = themeSettings;
   const [activeView, setActiveView] = useState<AppView>('chat');
+
+  // The standalone editor window broadcasts saves over IPC so cw refreshes in
+  // real time. Bridge that signal into the local workflow-editor event bus.
+  useEffect(() => {
+    const unsub = window.electronAPI?.onWorkflowChanged?.(() => emitWorkflowsChanged());
+    return () => {
+      if (typeof unsub === 'function') unsub();
+    };
+  }, []);
+
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(276);
   const [sidebarResizing, setSidebarResizing] = useState(false);
@@ -4437,6 +4449,7 @@ function App() {
         projects={projects}
       />
       <UpdateToastCard center={updateCenter} onOpenSettings={() => setActiveView('settings')} />
+      <WorkflowEditorApp />
     </main>
     </PageNavHost>
   );

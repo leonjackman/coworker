@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, CopyPlus, Download, Eye, FileText, Loader2, Play, Plus, RefreshCw, Trash2, Bot, Bell, CheckCircle2, Upload, XCircle, Wand2 } from 'lucide-react';
+import { ArrowLeft, Check, CopyPlus, Download, Eye, Loader2, Play, Plus, RefreshCw, Trash2, Bot, Bell, CheckCircle2, Upload, XCircle, Wand2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './ui/button';
 import { t, translateError } from '../lib/i18n';
@@ -8,7 +8,7 @@ import { CategoryTabs, type CategoryTabItem } from './ui/category-tabs';
 import { GridCard } from './ui/grid-card';
 import { usePageNavPublish } from '../nav/PageNav';
 import { SearchInput } from './ui/search-input';
-import { WorkflowGraphEditor, type GraphEditorTarget } from './WorkflowGraphEditor';
+import { openWorkflowEditor, subscribeWorkflowsChanged } from '../lib/workflowEditorBus';
 import { WorkflowStepList } from './workflows/WorkflowStepList';
 import { WorkflowFlowGraph } from './workflows/WorkflowFlowGraph';
 import { setCapabilities } from './workflows/actions';
@@ -63,8 +63,7 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
   const [pending, setPending] = useState<WorkflowDraft[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
-  const [graphTarget, setGraphTarget] = useState<GraphEditorTarget | null>(null);
-  const [subPage, setSubPage] = useState<'list' | 'detail' | 'editor' | 'graph' | 'templates' | 'run' | 'pending'>('list');
+  const [subPage, setSubPage] = useState<'list' | 'detail' | 'templates' | 'run' | 'pending'>('list');
   const [feedbackText, setFeedbackText] = useState('');
   const [feedbackBusy, setFeedbackBusy] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -78,9 +77,6 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
   const [detail, setDetail] = useState<WorkflowEntry | null>(null);
   const [flowView, setFlowView] = useState<'list' | 'graph'>('list');
   const [detailLoading, setDetailLoading] = useState(false);
-
-  const [editor, setEditor] = useState<{ name: string; isNew: boolean; content: string } | null>(null);
-  const [editorBusy, setEditorBusy] = useState(false);
 
   const [pendingReview, setPendingReview] = useState<{ name: string; content: string } | null>(null);
   const [pendingBusy, setPendingBusy] = useState<string | null>(null);
@@ -142,6 +138,15 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
     void refresh();
   }, [refresh]);
 
+  // Live sync: the standalone editor autosaves and emits this event, so the
+  // list/detail reflect edits immediately without a manual reload.
+  useEffect(() => {
+    return subscribeWorkflowsChanged(() => {
+      void refresh();
+      if (subPage === 'detail' && detail?.name) void reopenDetail(detail.name);
+    });
+  }, [refresh, reopenDetail, subPage, detail?.name]);;
+
   const categories = useMemo<CategoryTabItem[]>(() => {
     const items: CategoryTabItem[] = [{ id: 'all', label: t('workflows.cat_all'), count: workflows.length }];
     const sources = new Map<string, number>();
@@ -183,34 +188,6 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       setDetailLoading(false);
     }
   }, []);
-
-  const saveEditor = useCallback(async () => {
-    if (!editor) return;
-    setEditorBusy(true);
-    try {
-      const validation = await chatService.validateWorkflow(editor.content);
-      if (!validation.valid) {
-        throw new Error(validation.errors.join('; '));
-      }
-      const result = editor.isNew
-        ? await chatService.createWorkflow(editor.content, true)
-        : await chatService.updateWorkflow(editor.name, editor.content);
-      if (result.status !== 'ok') throw new Error(result.message || t('workflows.save_failed'));
-      setMessageType('ok');
-      setMessage(t('workflows.saved'));
-      const savedName = editor.name;
-      const wasNew = editor.isNew;
-      setEditor(null);
-      await refresh();
-      if (wasNew) setSubPage('list');
-      else void reopenDetail(savedName);
-    } catch (error) {
-      setMessageType('error');
-      setMessage(translateError(error));
-    } finally {
-      setEditorBusy(false);
-    }
-  }, [editor, refresh, reopenDetail]);
 
   const removeWorkflow = useCallback(
     async (wf: WorkflowEntry) => {
@@ -398,18 +375,6 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
     [refresh, loadRunDetail],
   );
 
-  const openGraph = useCallback((wf: WorkflowEntry) => {
-    setGraphTarget({
-      name: wf.name,
-      description: wf.description,
-      version: wf.version,
-      inputs: wf.inputs,
-      steps: wf.steps ?? [],
-      isNew: false,
-    });
-    setSubPage('graph');
-  }, []);
-
   const openPending = useCallback(async (name: string) => {
     setPendingBusy(name);
     try {
@@ -462,27 +427,12 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
 
   const publishNav = usePageNavPublish();
 
-  // The two edit pages are a level below the workflow detail (3-level crumbs).
-  const editUnderDetail = (subPage === 'editor' && !editor?.isNew) || (subPage === 'graph' && !graphTarget?.isNew);
-  const editParentName = (subPage === 'editor' ? editor?.name : graphTarget?.name) ?? '';
-
   useEffect(() => {
     if (subPage === 'list') {
       publishNav({ viewLabel: t('workflows.title') });
-    } else if (editUnderDetail) {
-      publishNav({
-        viewLabel: t('workflows.title'),
-        onBackToRoot: () => setSubPage('list'),
-        midLabel: detail?.name || editParentName || t('workflows.title'),
-        onBackToMid: () => void reopenDetail(editParentName),
-        leafLabel: subPage === 'editor' ? t('workflows.edit') : t('workflows.visual_edit'),
-        onBack: () => void reopenDetail(editParentName),
-      });
     } else {
       let leaf: string = t('workflows.title');
       if (subPage === 'detail') leaf = detail?.name || t('workflows.title');
-      else if (subPage === 'editor') leaf = t('workflows.new');
-      else if (subPage === 'graph') leaf = graphTarget?.isNew ? t('workflows.new') : t('workflows.visual_edit');
       else if (subPage === 'templates') leaf = t('workflows.templates');
       else if (subPage === 'run') leaf = `${t('workflows.run')}: ${runTarget?.name ?? ''}`;
       else if (subPage === 'pending') leaf = t('workflows.pending_review');
@@ -494,7 +444,7 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       });
     }
     return () => publishNav(null);
-  }, [publishNav, subPage, detail, editor, graphTarget, runTarget, editUnderDetail, editParentName, reopenDetail]);
+  }, [publishNav, subPage, detail, runTarget, reopenDetail]);
 
   const backButton = (
     <Button variant="ghost" onClick={() => setSubPage('list')}>
@@ -503,62 +453,7 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
     </Button>
   );
 
-  // Back from the edit pages: to the workflow detail (or list for a new one).
-  const goBackFromEdit = useCallback(() => {
-    if (subPage === 'graph' && graphTarget?.isNew) setSubPage('list');
-    else if (editParentName) void reopenDetail(editParentName);
-    else setSubPage('list');
-  }, [subPage, graphTarget, editParentName, reopenDetail]);
-
-  const editBackButton = (
-    <Button variant="ghost" onClick={goBackFromEdit}>
-      <ArrowLeft size={15} />
-      {t('settings.back')}
-    </Button>
-  );
-
   // ── second-level pages (breadcrumb) ─────────────────────────────────
-
-  if (subPage === 'graph') {
-    return (
-      <WorkspacePage
-        eyebrow={t('workflows.title')}
-        title={graphTarget?.isNew ? t('workflows.new') : t('workflows.visual_edit')}
-        action={editBackButton}
-      >
-        <div className="workspace-page__content">
-          <WorkflowGraphEditor target={graphTarget} onClose={goBackFromEdit} onSaved={() => void refresh()} />
-        </div>
-      </WorkspacePage>
-    );
-  }
-
-  if (subPage === 'editor') {
-    return (
-      <WorkspacePage
-        eyebrow={t('workflows.title')}
-        title={editor?.isNew ? t('workflows.new') : t('workflows.edit')}
-        action={editBackButton}
-      >
-        <div className="workspace-page__content">
-          <div className="skills-pending__actions" style={{ marginBottom: 10 }}>
-            <Button variant="primary" onClick={() => void saveEditor()} disabled={editorBusy}>
-              {editorBusy ? <Loader2 size={14} className="animate-spin" /> : null}
-              {t('workflows.save')}
-            </Button>
-          </div>
-          <textarea
-            className="skills-pending__editor"
-            style={{ minHeight: 460 }}
-            value={editor?.content ?? ''}
-            onChange={(e) => editor && setEditor({ ...editor, content: e.target.value })}
-            spellCheck={false}
-            placeholder={t('workflows.yaml_placeholder')}
-          />
-        </div>
-      </WorkspacePage>
-    );
-  }
 
   if (subPage === 'pending') {
     return (
@@ -738,11 +633,8 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
                   <Button variant="primary" onClick={() => openRun(detail)}>
                     <Play size={14} /> {t('workflows.run')}
                   </Button>
-                  <Button variant="secondary" onClick={() => openGraph(detail)}>
-                    <Wand2 size={14} /> {t('workflows.visual_edit')}
-                  </Button>
-                  <Button variant="secondary" onClick={() => { setEditor({ name: detail.name, isNew: false, content: detail.yaml || '' }); setSubPage('editor'); }}>
-                    <FileText size={14} /> {t('workflows.edit_yaml')}
+                  <Button variant="secondary" onClick={() => openWorkflowEditor({ name: detail.name, isNew: false })}>
+                    <Wand2 size={14} /> {t('workflows.open_in_studio')}
                   </Button>
                   <Button variant="secondary" onClick={() => void exportWorkflow(detail)}>
                     <Upload size={14} /> {t('workflows.export')}
@@ -928,7 +820,7 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
           />
           <Button
             variant="primary"
-            onClick={() => { setGraphTarget({ name: '', description: '', steps: [], isNew: true }); setSubPage('graph'); }}
+            onClick={() => openWorkflowEditor({ name: '', isNew: true })}
             disabled={loading}
           >
             <Plus size={14} />

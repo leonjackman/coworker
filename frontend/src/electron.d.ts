@@ -225,6 +225,9 @@ declare global {
       readLogFile: (start?: number, count?: number) => Promise<{ total_lines: number; lines: string[]; truncated: boolean }>;
       truncateLog: (maxBytes?: number) => Promise<{ status: string }>;
       onUpdateState: (callback: (state: UpdateStateSnapshot) => void) => () => void;
+      openWorkflowEditor: (payload: { name: string; isNew: boolean }) => Promise<{ ok: boolean }>;
+      emitWorkflowChanged: () => void;
+      onWorkflowChanged: (callback: () => void) => () => void;
     };
   }
 }
