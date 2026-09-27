@@ -205,7 +205,9 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const idToPathRef = useRef<Map<string, string>>(new Map());
   const historyRef = useRef<{ snaps: string[]; index: number }>({ snaps: [], index: -1 });
   const suspendHistoryRef = useRef(false);
-  const persistedRef = useRef(!target.isNew);
+  // Name this document was last SAVED as on the backend ('' = never saved).
+  // Renaming the doc keeps this as the update target so renames work.
+  const persistedNameRef = useRef(target.isNew ? '' : target.name);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -385,7 +387,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           outputs: wf.outputs,
           steps: wf.steps ?? [],
         });
-        persistedRef.current = true;
+        persistedNameRef.current = wf.name;
         // versions
         chatService.listWorkflowVersions(wf.name).then((v) => setVersions(v.versions)).catch(() => undefined);
         // latest run overlay
@@ -478,106 +480,87 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   }, [started, codeMode]);
 
   // ── mutations ───────────────────────────────────────────────────────
+  // NOTE: these deliberately compute the next tree from the current `steps`
+  // value and then call `rebuild` — they must NOT perform side effects inside a
+  // `setSteps(updater)` callback, because React StrictMode double-invokes
+  // updaters (which would add/delete nodes twice in development).
   const patchSelected = useCallback(
     (patch: Partial<WorkflowStep>) => {
-      setSteps((current) => {
-        const next = updateLeaf(current, selectedPath, patch);
-        setNodes((cur) =>
-          cur.map((n) =>
-            n.id === selectedId
-              ? { ...n, data: { ...n.data, step: { ...(n.data.step as WorkflowStep), ...patch } } }
-              : n,
-          ),
-        );
-        return next;
-      });
+      setSteps(updateLeaf(steps, selectedPath, patch));
+      setNodes((cur) =>
+        cur.map((n) =>
+          n.id === selectedId
+            ? { ...n, data: { ...n.data, step: { ...(n.data.step as WorkflowStep), ...patch } } }
+            : n,
+        ),
+      );
     },
-    [selectedPath, selectedId, setNodes],
+    [steps, selectedPath, selectedId, setNodes],
   );
 
   const addKind = useCallback(
     (kind: string, position?: { x: number; y: number }) => {
-      setSteps((current) => {
-        const wired = wireList(current);
-        const step = newStep(wired, kind);
-        const next = [...wired, step];
-        const key = step.id;
-        if (position) positionsRef.current.set(key, position);
-        rebuild(next);
-        setSelectedId(pathKey([next.length - 1]));
-        return next;
-      });
+      const wired = wireList(steps);
+      const step = newStep(wired, kind);
+      const next = [...wired, step];
+      if (position) positionsRef.current.set(step.id, position);
+      rebuild(next);
+      setSelectedId(pathKey([next.length - 1]));
     },
-    [rebuild],
+    [steps, rebuild],
   );
 
   const addChild = useCallback(
     (slot: 'then' | 'else' | 'body') => {
       if (!selected) return;
-      setSteps((current) => {
-        const parent = locate(current, selectedPath);
-        if (!parent) return current;
-        const children = ((parent[slot] as WorkflowStep[]) ?? []).slice();
-        children.push(newStep(current));
-        const next = updateLeaf(current, selectedPath, { [slot]: children } as Partial<WorkflowStep>);
-        rebuild(next);
-        setSelectedId(pathKey([...selectedPath, slot, children.length - 1]));
-        return next;
-      });
+      const parent = locate(steps, selectedPath);
+      if (!parent) return;
+      const children = ((parent[slot] as WorkflowStep[]) ?? []).slice();
+      children.push(newStep(steps));
+      rebuild(updateLeaf(steps, selectedPath, { [slot]: children } as Partial<WorkflowStep>));
+      setSelectedId(pathKey([...selectedPath, slot, children.length - 1]));
     },
-    [selected, selectedPath, rebuild],
+    [selected, steps, selectedPath, rebuild],
   );
 
   const deleteSelected = useCallback(() => {
     if (selectedPath.length === 0) return;
-    setSteps((current) => {
-      const next = removeLeaf(current, selectedPath);
-      rebuild(next);
-      setSelectedId('');
-      return next;
-    });
-  }, [selectedPath, rebuild]);
+    rebuild(removeLeaf(steps, selectedPath));
+    setSelectedId('');
+  }, [steps, selectedPath, rebuild]);
 
   const duplicateSelected = useCallback(() => {
     if (!selected || selectedPath.length === 0) return;
     const index = selectedPath[selectedPath.length - 1];
     if (typeof index !== 'number') return;
     const listPath = selectedPath.slice(0, -1);
-    setSteps((current) => {
-      const list = getList(current, listPath).slice();
-      const source = list[index];
-      if (!source) return current;
-      const clone: WorkflowStep = {
-        ...JSON.parse(JSON.stringify(source)),
-        id: newStep(current).id,
-        next: '',
-      };
-      list.splice(index + 1, 0, clone);
-      const next = setList(current, listPath, list);
-      rebuild(next);
-      setSelectedId(pathKey([...listPath, index + 1]));
-      return next;
-    });
-  }, [selected, selectedPath, rebuild]);
+    const list = getList(steps, listPath).slice();
+    const source = list[index];
+    if (!source) return;
+    const clone: WorkflowStep = {
+      ...JSON.parse(JSON.stringify(source)),
+      id: newStep(steps).id,
+      next: '',
+    };
+    list.splice(index + 1, 0, clone);
+    rebuild(setList(steps, listPath, list));
+    setSelectedId(pathKey([...listPath, index + 1]));
+  }, [selected, steps, selectedPath, rebuild]);
 
   const move = useCallback(
     (dir: -1 | 1) => {
       const index = selectedPath[selectedPath.length - 1];
       if (typeof index !== 'number') return;
       const listPath = selectedPath.slice(0, -1);
-      setSteps((current) => {
-        const list = getList(current, listPath).slice();
-        const target2 = index + dir;
-        if (target2 < 0 || target2 >= list.length) return current;
-        const [item] = list.splice(index, 1);
-        if (item) list.splice(target2, 0, item);
-        const next = setList(current, listPath, list);
-        rebuild(next);
-        setSelectedId(pathKey([...listPath, target2]));
-        return next;
-      });
+      const list = getList(steps, listPath).slice();
+      const target2 = index + dir;
+      if (target2 < 0 || target2 >= list.length) return;
+      const [item] = list.splice(index, 1);
+      if (item) list.splice(target2, 0, item);
+      rebuild(setList(steps, listPath, list));
+      setSelectedId(pathKey([...listPath, target2]));
     },
-    [selectedPath, rebuild],
+    [steps, selectedPath, rebuild],
   );
 
   const relayout = useCallback(() => {
@@ -602,22 +585,18 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       const si = sourcePath[sourcePath.length - 1];
       const ti = targetPath[targetPath.length - 1];
       if (typeof si !== 'number' || typeof ti !== 'number') return;
-      setSteps((current) => {
-        const list = wireList(getList(current, listPath).slice());
-        const sourceStep = list[si];
-        const targetStep = list[ti];
-        if (!sourceStep || !targetStep) return current;
-        const resolved = list.map((s) =>
-          s.next === targetStep.id && s.id !== sourceStep.id ? { ...s, next: '' } : s,
-        );
-        const idx = resolved.findIndex((s) => s.id === sourceStep.id);
-        resolved[idx] = { ...resolved[idx]!, next: targetStep.id };
-        const next = setList(current, listPath, resolved);
-        rebuild(next);
-        return next;
-      });
+      const list = wireList(getList(steps, listPath).slice());
+      const sourceStep = list[si];
+      const targetStep = list[ti];
+      if (!sourceStep || !targetStep) return;
+      const resolved = list.map((s) =>
+        s.next === targetStep.id && s.id !== sourceStep.id ? { ...s, next: '' } : s,
+      );
+      const idx = resolved.findIndex((s) => s.id === sourceStep.id);
+      resolved[idx] = { ...resolved[idx]!, next: targetStep.id };
+      rebuild(setList(steps, listPath, resolved));
     },
-    [rebuild],
+    [steps, rebuild],
   );
 
   const onConnect = useCallback(
@@ -633,29 +612,26 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const detachEdges = useCallback(
     (list: Edge[]) => {
       if (list.length === 0) return;
-      setSteps((current) => {
-        let next = current;
-        for (const edge of list) {
-          const sourcePathStr = idToPathRef.current.get(edge.source);
-          const targetPathStr = idToPathRef.current.get(edge.target);
-          if (!sourcePathStr || !targetPathStr) continue;
-          const sourcePath = parsePath(sourcePathStr);
-          const targetPath = parsePath(targetPathStr);
-          const listPath = sourcePath.slice(0, -1);
-          if (pathKey(listPath) !== pathKey(targetPath.slice(0, -1))) continue;
-          const stepsInList = getList(next, listPath).slice();
-          const ti = targetPath[targetPath.length - 1];
-          const targetStep = typeof ti === 'number' ? stepsInList[ti] : undefined;
-          const si = sourcePath[sourcePath.length - 1];
-          if (!targetStep || typeof si !== 'number' || !stepsInList[si]) continue;
-          stepsInList[si] = { ...stepsInList[si]!, next: '' };
-          next = setList(next, listPath, stepsInList);
-        }
-        rebuild(next);
-        return next;
-      });
+      let next = steps;
+      for (const edge of list) {
+        const sourcePathStr = idToPathRef.current.get(edge.source);
+        const targetPathStr = idToPathRef.current.get(edge.target);
+        if (!sourcePathStr || !targetPathStr) continue;
+        const sourcePath = parsePath(sourcePathStr);
+        const targetPath = parsePath(targetPathStr);
+        const listPath = sourcePath.slice(0, -1);
+        if (pathKey(listPath) !== pathKey(targetPath.slice(0, -1))) continue;
+        const stepsInList = getList(next, listPath).slice();
+        const ti = targetPath[targetPath.length - 1];
+        const targetStep = typeof ti === 'number' ? stepsInList[ti] : undefined;
+        const si = sourcePath[sourcePath.length - 1];
+        if (!targetStep || typeof si !== 'number' || !stepsInList[si]) continue;
+        stepsInList[si] = { ...stepsInList[si]!, next: '' };
+        next = setList(next, listPath, stepsInList);
+      }
+      rebuild(next);
     },
-    [rebuild],
+    [steps, rebuild],
   );
 
   const onEdgesDelete = useCallback((deleted: Edge[]) => detachEdges(deleted), [detachEdges]);
@@ -729,9 +705,13 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setSaveState('saving');
       try {
         const finalSteps = renumberWorkflowSteps(steps);
+        // The backend requires a non-empty description; fall back to the name so
+        // a brand-new workflow can always be saved without forcing the user to
+        // fill a description field first.
+        const finalDescription = description.trim() || finalName;
         const payload = {
           name: finalName,
-          description,
+          description: finalDescription,
           version: version ?? 1,
           inputs: inputs ?? [],
           steps: finalSteps,
@@ -743,12 +723,15 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           setSaveState('error');
           return false;
         }
-        const isExisting = persistedRef.current && finalName === name && !opts.asName;
+        // Update under the name it was last SAVED as (so renaming the document
+        // renames the backend workflow via update). Save As always creates.
+        const existingName = persistedNameRef.current;
+        const isExisting = !!existingName && !opts.asName;
         const result = isExisting
-          ? await chatService.updateWorkflow(finalName, rendered.yaml)
+          ? await chatService.updateWorkflow(existingName, rendered.yaml)
           : await chatService.createWorkflow(rendered.yaml, true);
         if (result.status !== 'ok') throw new Error(result.message || t('workflows.save_failed'));
-        persistedRef.current = true;
+        persistedNameRef.current = finalName;
         setName(finalName);
         setBaseline(JSON.stringify({ name: finalName, description, steps }));
         historyRef.current = { snaps: [snapshotOf(steps, finalName, description)], index: 0 };
@@ -802,7 +785,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           outputs: wf.outputs,
           steps: wf.steps ?? [],
         });
-        persistedRef.current = true;
+        persistedNameRef.current = wf.name;
         setVersions([]);
         setRuns([]);
         chatService.listWorkflowVersions(wf.name).then((v) => setVersions(v.versions)).catch(() => undefined);
@@ -818,6 +801,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     async (file: File) => {
       try {
         const text = await file.text();
+        // The workflow's real name lives inside the YAML, which may differ from
+        // the file basename; prefer it so we open the thing we just created.
+        const yamlName = /^\s*name:\s*["']?([^"'\n]+?)["']?\s*$/m.exec(text)?.[1]?.trim() ?? '';
+        const before = (await chatService.listWorkflows().catch(() => ({ workflows: [] }))).workflows.map((w) => w.name);
         let result = await chatService.createWorkflow(text, false);
         if (result.status !== 'ok') {
           const msg = result.message || '';
@@ -829,8 +816,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           }
         }
         if (result.status !== 'ok') throw new Error(result.message || t('workflows.save_failed'));
-        await openByName(file.name.replace(/\.(ya?ml|json)$/i, ''));
-        chatService.listWorkflows().then((r) => setLibrary(r.workflows)).catch(() => undefined);
+        const after = (await chatService.listWorkflows()).workflows.map((w) => w.name);
+        const created = yamlName || after.find((n) => !before.includes(n)) || file.name.replace(/\.(ya?ml|json)$/i, '');
+        setLibrary((await chatService.listWorkflows()).workflows);
+        await openByName(created);
       } catch (error) {
         setErrors([translateError(error)]);
       }
@@ -841,20 +830,33 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const exportDoc = useCallback(
     async (format: 'yaml' | 'json') => {
       try {
-        if (format === 'yaml' && persistedRef.current && name) {
+        const base = name || 'workflow';
+        if (format === 'json') {
+          const payload = {
+            name: base,
+            description: description.trim() || base,
+            version: version ?? 1,
+            inputs: inputs ?? [],
+            steps: renumberWorkflowSteps(steps),
+            triggers,
+          };
+          download(`${base}.json`, JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
+          return;
+        }
+        if (persistedNameRef.current && name) {
           const result = await chatService.exportWorkflow(name);
           download(`${name}.yaml`, result.yaml, 'text/yaml;charset=utf-8');
           return;
         }
         const rendered = await chatService.renderWorkflowSteps({
-          name: name || 'workflow',
-          description,
+          name: base,
+          description: description.trim() || base,
           version: version ?? 1,
           inputs: inputs ?? [],
           steps: renumberWorkflowSteps(steps),
           triggers,
         });
-        if (rendered.yaml) download(`${name || 'workflow'}.yaml`, rendered.yaml, 'text/yaml;charset=utf-8');
+        if (rendered.yaml) download(`${base}.yaml`, rendered.yaml, 'text/yaml;charset=utf-8');
       } catch (error) {
         setErrors([translateError(error)]);
       }
@@ -943,7 +945,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   }, []);
 
   const executeRun = useCallback(async () => {
-    if (!persistedRef.current || !name) {
+    if (!persistedNameRef.current || !name) {
       setErrors([t('workflows.run_requires_save')]);
       return;
     }
@@ -1015,7 +1017,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     try {
       const rendered = await chatService.renderWorkflowSteps({
         name: name || 'workflow',
-        description,
+        description: description.trim() || name || 'workflow',
         version: version ?? 1,
         inputs: inputs ?? [],
         steps: renumberWorkflowSteps(steps),
@@ -1074,11 +1076,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   // ── return to Studio home ───────────────────────────────────────────
   // Leaves the current document (confirming unsaved edits) and shows the
-  // start screen. Reset `persistedRef` so a subsequent blank/new document is
-  // treated as NEW and never overwrites the workflow we just left.
+  // start screen. Reset the persisted name so a subsequent blank/new document
+  // is treated as NEW and never overwrites the workflow we just left.
   const goHome = useCallback(() => {
     if (dirty && !window.confirm(t('workflows.unsaved_confirm'))) return;
-    persistedRef.current = false;
+    persistedNameRef.current = '';
     setStarted(false);
   }, [dirty]);
 
@@ -1207,7 +1209,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           templates={templates}
           busyId={templateBusy}
           onBlank={() => {
-            persistedRef.current = false;
+            persistedNameRef.current = '';
             loadDocument({ name: '', description: '', steps: [] });
           }}
           onOpen={() => setOpenDialog(true)}
@@ -1372,7 +1374,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                     versions={versions}
                     selectedVersion={selectedVersion}
                     busy={versionBusy}
-                    canDelete={persistedRef.current}
+                    canDelete={!!persistedNameRef.current}
                     onLoad={(v) => void loadVersion(v)}
                     onDelete={(v) => void removeVersion(v)}
                   />
@@ -1413,8 +1415,21 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                     {t('workflows.code_json')}
                   </span>
                   <div className="wfs-bottom__toggle" style={{ gap: 8 }}>
-                    <button type="button" className="wfs-toolbar-btn wfs-toolbar-btn--ghost" onClick={() => void renderYamlPreview()}>
+                    <button
+                      type="button"
+                      className="wfs-toolbar-btn wfs-toolbar-btn--ghost"
+                      onClick={() => (yamlPreview ? setYamlPreview('') : void renderYamlPreview())}
+                    >
                       <FileText size={13} /> {t('workflows.code_render_yaml')}
+                    </button>
+                    <button
+                      type="button"
+                      className="wfs-error-banner__close"
+                      onClick={() => setCodeMode(false)}
+                      title={t('common.close')}
+                      aria-label={t('common.close')}
+                    >
+                      <X size={14} />
                     </button>
                   </div>
                 </div>
@@ -1425,9 +1440,21 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                   onChange={(e) => applyCode(e.target.value)}
                 />
                 {yamlPreview ? (
-                  <pre className="skill-detail__pre" style={{ maxHeight: 160, overflow: 'auto', margin: 0 }}>
-                    {yamlPreview}
-                  </pre>
+                  <div className="wfs-yaml-preview">
+                    <div className="wfs-yaml-preview__head">
+                      <span className="wf-section__title">YAML</span>
+                      <button
+                        type="button"
+                        className="wfs-error-banner__close"
+                        onClick={() => setYamlPreview('')}
+                        title={t('common.close')}
+                        aria-label={t('common.close')}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <pre className="skill-detail__pre wfs-yaml-preview__code">{yamlPreview}</pre>
+                  </div>
                 ) : null}
               </div>
             ) : steps.length === 0 ? (
@@ -1454,6 +1481,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                     const path = node.data.path as string;
                     if (path) setSelectedId(path);
                   }}
+                  onPaneClick={() => setSelectedId('')}
                   onNodeContextMenu={(e, node) => {
                     const path = node.data.path as string;
                     if (!path) return;
@@ -1651,7 +1679,6 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         onCancel={() => setSaveAsOpen(false)}
         onConfirm={(value) => {
           setSaveAsOpen(false);
-          persistedRef.current = false;
           void persist({ asName: value });
         }}
       />

@@ -96,8 +96,14 @@ export function collectAllIds(steps: WorkflowStep[], out: Set<string> = new Set(
   return out;
 }
 
-/** Next system id in the ``id:N`` scheme (scans the whole tree). */
-export function newStep(steps: WorkflowStep[], kind = 'tool'): WorkflowStep {
+/**
+ * Next system id in the ``id:N`` scheme (scans the whole tree).
+ *
+ * Defaults to ``agentic`` ("Let AI do it"): it is valid with no extra params, so
+ * a brand-new blank workflow (and newly added branch/loop children) start in a
+ * saveable state instead of showing a validation error immediately.
+ */
+export function newStep(steps: WorkflowStep[], kind = 'agentic'): WorkflowStep {
   let max = 0;
   for (const id of collectAllIds(steps)) {
     const match = /^id:(\d+)$/.exec(id);

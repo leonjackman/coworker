@@ -334,6 +334,29 @@ body:has(.wfe-root) [data-radix-popper-content-wrapper] {
   tab-size: 2;
 }
 
+.wfs-yaml-preview {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  border-top: 1px solid var(--material-border);
+  background: var(--material-panel);
+}
+.wfs-yaml-preview__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--material-border);
+}
+.wfs-yaml-preview__code {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  overflow: auto;
+}
+
 .wfs-bottom {
   flex: 0 0 auto;
   display: flex;
