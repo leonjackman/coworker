@@ -18,11 +18,19 @@ class WorkerConfig:
 
     @classmethod
     def for_single_agent(
-        cls, language: str = "zh", max_concurrent: int | None = None
+        cls,
+        language: str = "zh",
+        max_concurrent: int | None = None,
+        timeout: int | None = None,
     ) -> "WorkerConfig":
-        """单 agent 模式的默认配置。"""
+        """单 agent 模式的默认配置。
+
+        ``timeout`` is accepted so agentic/handoff callers (e.g. the workflow
+        executor's step takeover) can pass a per-step timeout — omitting it here
+        previously raised ``TypeError`` and broke every agentic step.
+        """
         return cls(
-            timeout=600,
+            timeout=int(timeout or 600),
             max_output_chars=2000,
             max_concurrent=max_concurrent or 4,
             language=language,

@@ -1,7 +1,10 @@
 import {
+  Bell,
   Bot,
   Boxes,
   Brain,
+  Braces,
+  FileText,
   Globe,
   GitBranch,
   LayoutGrid,
@@ -36,7 +39,7 @@ export const FAMILY_LABEL: Record<KindFamily, string> = {
   human: 'human',
 };
 
-export type KindGroupId = 'web' | 'cmd' | 'ai' | 'human' | 'check' | 'control';
+export type KindGroupId = 'web' | 'cmd' | 'data' | 'ai' | 'human' | 'check' | 'control';
 
 export interface KindMeta {
   family: KindFamily;
@@ -50,6 +53,10 @@ export const KIND_META: Record<string, KindMeta> = {
   computer: { family: 'action', icon: Monitor, group: 'web' },
   command: { family: 'action', icon: Terminal, group: 'cmd' },
   tool: { family: 'action', icon: Wrench, group: 'cmd' },
+  http: { family: 'action', icon: Globe, group: 'data' },
+  file: { family: 'action', icon: FileText, group: 'data' },
+  transform: { family: 'action', icon: Braces, group: 'data' },
+  notify: { family: 'action', icon: Bell, group: 'data' },
   agentic: { family: 'agent', icon: Bot, group: 'ai' },
   skill: { family: 'agent', icon: Brain, group: 'ai' },
   human: { family: 'human', icon: UserCheck, group: 'human' },
@@ -68,6 +75,7 @@ export const KIND_OPTIONS = Object.keys(KIND_META);
 export const KIND_GROUPS: Array<{ id: KindGroupId; labelKey: string; kinds: string[] }> = [
   { id: 'web', labelKey: 'workflows.group_web', kinds: ['browser', 'app', 'computer'] },
   { id: 'cmd', labelKey: 'workflows.group_cmd', kinds: ['command', 'tool'] },
+  { id: 'data', labelKey: 'workflows.group_data', kinds: ['http', 'file', 'transform', 'notify'] },
   { id: 'ai', labelKey: 'workflows.group_ai', kinds: ['agentic', 'skill'] },
   { id: 'human', labelKey: 'workflows.group_human', kinds: ['human'] },
   { id: 'check', labelKey: 'workflows.group_check', kinds: ['assert', 'set', 'wait'] },
@@ -90,7 +98,7 @@ export function kindDescKey(kind: string): string {
   return `workflows.kinddesc_${kind}`;
 }
 
-export const ACTION_KINDS = new Set(['command', 'tool', 'browser', 'app', 'computer', 'skill', 'human', 'agentic']);
+export const ACTION_KINDS = new Set(['command', 'tool', 'browser', 'app', 'computer', 'http', 'file', 'transform', 'notify', 'skill', 'human', 'agentic']);
 export const DO_KINDS = new Set([...ACTION_KINDS, 'subworkflow', 'assert']);
 export const PARAM_KINDS = new Set([...ACTION_KINDS, 'set', 'wait', 'subworkflow']);
 export const LOCATOR_KINDS = new Set(['browser', 'app', 'computer']);

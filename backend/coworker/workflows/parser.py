@@ -277,11 +277,17 @@ def parse_workflow(
     created_at = str(data.get("created_at") or "")
     updated_at = str(data.get("updated_at") or "")
 
+    try:
+        schema_version = int(data.get("schema_version") or 1)
+    except (TypeError, ValueError):
+        schema_version = 1
+
     workflow = Workflow(
         name=name,
         description=description,
         steps=steps,
         version=version,
+        schema_version=schema_version,
         platform=str(data.get("platform") or "").strip(),
         inputs=_parse_inputs(data.get("inputs")),
         outputs=outputs,
@@ -470,10 +476,13 @@ def renumber_steps(steps: list[Step]) -> list[Step]:
 
 def render_workflow(workflow: Workflow) -> str:
     """Render a workflow back to YAML (single source of truth)."""
+    from .capabilities import DSL_VERSION
+
     data: dict[str, Any] = {
         "name": workflow.name,
         "description": workflow.description,
         "version": workflow.version,
+        "schema_version": DSL_VERSION,
     }
     if workflow.platform:
         data["platform"] = workflow.platform

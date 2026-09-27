@@ -199,7 +199,9 @@ class SystemAssembler(AgentMiddleware):
         if self.workflow_manager is None or is_discuss:
             return ""
         try:
-            return self.workflow_manager.prompt_block()
+            # Always inject the authoring spec (so the agent can write valid YAML),
+            # plus the catalog of existing workflows when there are any.
+            return self.workflow_manager.authoring_block() + self.workflow_manager.prompt_block()
         except Exception as exc:  # noqa: BLE001 - a catalog hiccup must never break chat
             logger.warning("workflow catalog unavailable: %s", exc)
             return ""

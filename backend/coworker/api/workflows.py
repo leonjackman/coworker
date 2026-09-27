@@ -248,6 +248,23 @@ def validate_workflow_route(payload: WorkflowContentPayload):
     return workflow_manager.validate(payload.content)
 
 
+@router.get("/workflows/capabilities")
+def workflow_capabilities():
+    """The capability registry (single source of truth for kinds/actions/params)."""
+    return workflow_manager.capabilities()
+
+
+class WorkflowSimulatePayload(BaseModel):
+    content: str = Field(description="Full workflow YAML.")
+    inputs: dict[str, Any] | None = None
+
+
+@router.post("/workflows/simulate")
+def simulate_workflow_route(payload: WorkflowSimulatePayload):
+    """Dry-run a workflow (no side effects) and report per-step resolution."""
+    return workflow_manager.simulate(payload.content, payload.inputs)
+
+
 @router.post("/workflows")
 def create_workflow(payload: WorkflowCreatePayload):
     try:

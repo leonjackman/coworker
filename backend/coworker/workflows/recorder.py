@@ -14,11 +14,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .model import Workflow, WorkflowInput, Step
+from .model import VALID_KINDS, Workflow, WorkflowInput, Step
 from .parser import render_workflow
 from .templating import resolve_string
-
-VALID_ACTION_KINDS = {"command", "tool", "browser", "app", "computer", "skill", "human", "agentic"}
 
 
 def normalize_capture(raw: dict[str, Any]) -> dict[str, Any]:
@@ -27,7 +25,11 @@ def normalize_capture(raw: dict[str, Any]) -> dict[str, Any]:
     if raw.get("id"):
         step["id"] = str(raw["id"])
     kind = str(raw.get("kind") or "").strip().lower()
-    if kind not in VALID_ACTION_KINDS:
+    # Accept EVERY valid DSL kind (control/verify included), not just actions;
+    # inferring from a missing kind must never rewrite "set" into "tool".
+    if not kind:
+        kind = _infer_kind(raw)
+    elif kind not in VALID_KINDS:
         kind = _infer_kind(raw)
     step["kind"] = kind
     for key in ("do", "params", "locator", "pre", "post", "on_error", "timeout", "approval"):
@@ -162,22 +164,41 @@ def extract_steps_from_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]
     return steps
 
 
+def _clean(params: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in params.items() if v is not None and v != ""}
+
+
+def _registry():
+    from .capabilities import CapabilityRegistry
+
+    return CapabilityRegistry.declared()
+
+
 def _tool_to_step(tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a real tool call to a REGISTRY-VALID step (or None if unsupported).
+
+    Grounding authoring in the trace only helps if the produced steps can run,
+    so unknown actions/tools are dropped rather than emitted as broken steps.
+    """
+    reg = _registry()
     if tool == "run_command":
-        return {"kind": "command", "do": "run", "params": {"command": args.get("command")}}
+        params = _clean({"command": args.get("command"), "cwd": args.get("cwd"), "timeout": args.get("timeout_seconds")})
+        return {"kind": "command", "do": "run", "params": params}
     if tool == "browser":
-        action = args.get("action") or "navigate"
-        params = {k: v for k, v in args.items() if k != "action"}
-        spec: dict[str, Any] = {"kind": "browser", "do": action, "params": params}
-        if args.get("selector"):
-            spec["locator"] = {"selector": args["selector"]}
-        return spec
-    if tool in ("computer", "computer_script"):
-        params = {k: v for k, v in args.items() if k not in ("action", "ref")}
-        spec = {"kind": "app", "do": args.get("action") or "script", "params": params}
+        action = str(args.get("action") or "navigate")
+        if reg.action("browser", action) is None:
+            return None
+        return {"kind": "browser", "do": action, "params": _clean({k: v for k, v in args.items() if k != "action"})}
+    if tool in ("computer", "app"):
+        action = str(args.get("action") or "")
+        if reg.action("computer", action) is None:
+            return None
+        spec: dict[str, Any] = {"kind": "computer", "do": action, "params": _clean({k: v for k, v in args.items() if k not in ("action", "ref")})}
         if args.get("ref"):
             spec["locator"] = {"ref": args["ref"]}
         return spec
-    if tool == "web_fetch":
-        return {"kind": "tool", "do": "web_fetch", "params": {"url": args.get("url")}}
+    if tool == "computer_observe":
+        return {"kind": "tool", "do": "computer_observe", "params": _clean(args)}
+    if tool in ("web_search", "web_fetch"):
+        return {"kind": "tool", "do": tool, "params": _clean(args)}
     return None

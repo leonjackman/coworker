@@ -983,6 +983,27 @@ export interface WorkflowDetailResponse {
   workflow: WorkflowEntry;
 }
 
+export interface WorkflowCapabilityParam {
+  name: string;
+  type: string;
+  required?: boolean;
+}
+
+export interface WorkflowCapabilityAction {
+  name: string;
+  params?: WorkflowCapabilityParam[];
+}
+
+export interface WorkflowCapabilityKind {
+  kind: string;
+  actions?: WorkflowCapabilityAction[];
+}
+
+export interface WorkflowCapabilitiesResponse {
+  dsl_version: number;
+  kinds: WorkflowCapabilityKind[];
+}
+
 export interface WorkflowDraft {
   name: string;
   description?: string;
@@ -1087,6 +1108,11 @@ export interface CronSchedule {
   inputs: Record<string, unknown>;
   cron: string;
   timezone: string;
+  trigger_type: 'cron' | 'webhook' | 'file_watch';
+  webhook_token: string;
+  watch_path: string;
+  watch_pattern: string;
+  watch_interval_seconds: number;
   enabled: boolean;
   overlap: ScheduleOverlap;
   misfire: ScheduleMisfire;

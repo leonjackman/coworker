@@ -395,12 +395,17 @@ def build_workspace_tools(
         """Author, inspect and deterministically run saved workflows.
 
         A workflow is a reusable, parameterized procedure (skills + commands +
-        browser/app actions in order). Prefer running an existing workflow from
-        <available_workflows> over re-doing its steps by hand. Actions:
-        list / get / run / create / update / delete / validate / render /
-        pending / approve / reject / runs. Only say a workflow was created/updated
-        when this tool returned status ok; never write a markdown file as a
-        stand-in for a workflow.
+        browser/app actions in order) written as YAML. Prefer running an existing
+        workflow from <available_workflows> over re-doing its steps by hand.
+        Actions: list / get / run / create / update / delete / validate / simulate /
+        render / capabilities / pending / approve / reject / runs. Only say a
+        workflow was created/updated when this tool returned status ok; never write
+        a markdown file as a stand-in for a workflow.
+
+        Authoring: the system prompt has the YAML skeleton + rules. Before writing a
+        non-trivial workflow, call action=capabilities for the valid kinds/actions/
+        params, then action=validate (static) and action=simulate (dry-run) before
+        trusting it. create/update reject any invalid YAML and return diagnostics.
 
         Skills in a workflow: a step {"kind":"skill","do":"<name>"} runs an
         EXISTING skill by exact name (must be in <available_skills>; a missing
@@ -429,6 +434,10 @@ def build_workspace_tools(
                 return json.dumps(workflow_manager.delete(name), ensure_ascii=False)
             if action == "validate":
                 return json.dumps(workflow_manager.validate(content), ensure_ascii=False)
+            if action == "simulate":
+                return json.dumps(workflow_manager.simulate(content, inputs), ensure_ascii=False)
+            if action == "capabilities":
+                return json.dumps(workflow_manager.capabilities(), ensure_ascii=False)
             if action == "render":
                 return json.dumps(workflow_manager.render(content), ensure_ascii=False)
             if action == "pending":
@@ -827,6 +836,12 @@ def build_workspace_tools(
         # must not recursively launch long-running workflows). Appended AFTER
         # worker_tools is derived so it never leaks into sub-agents.
         tools.append(workflow)
+        # Ground the capability registry in the ACTUAL tool schemas, so
+        # validation/authoring can never drift from what can really run.
+        try:
+            workflow_manager.use_tools({getattr(t, "name", ""): t for t in tools if getattr(t, "name", "")})
+        except Exception:  # noqa: BLE001 - registry grounding must never break a turn
+            logger.debug("workflow capability introspection skipped", exc_info=True)
     # Record the full registered tool-name set on the workspace so the phase gate
     # can tell the model a hallucinated tool (e.g. list_directory) does not exist
     # instead of a misleading "not available in the current phase/autonomy".

@@ -210,6 +210,40 @@ def test_workflow_templates_install():
     client.delete("/workflows/web-research-report")
 
 
+def test_all_builtin_templates_validate_and_install():
+    """Every shipped template must validate AND install (no drift)."""
+    client = _client()
+    templates = client.get("/workflows/templates").json()["templates"]
+    assert templates
+    for tpl in templates:
+        client.delete(f"/workflows/{tpl['id']}")
+        installed = client.post(f"/workflows/templates/{tpl['id']}/install")
+        assert installed.status_code == 200, f"{tpl['id']}: {installed.text}"
+        assert installed.json()["status"] == "ok", f"{tpl['id']}: {installed.json()}"
+        client.delete(f"/workflows/{tpl['id']}")
+
+
+def test_workflow_capabilities_endpoint():
+    client = _client()
+    body = client.get("/workflows/capabilities").json()
+    assert body["dsl_version"] == 2
+    kinds = {k["kind"]: k for k in body["kinds"]}
+    assert kinds["browser"]["actions"]
+    assert kinds["command"]["actions"]
+    assert any(a["name"] == "navigate" for a in kinds["browser"]["actions"])
+
+
+def test_api_simulate_reports_targets():
+    client = _client()
+    content = (
+        "name: sim-flow\ndescription: d\nsteps:\n"
+        "  - id: a\n    kind: command\n    do: run\n    params:\n      command: echo hi\n"
+    )
+    body = client.post("/workflows/simulate", json={"content": content}).json()
+    assert body["status"] == "ok", body
+    assert body["steps"][0]["target"] == "run_command"
+
+
 def test_api_render_steps_for_visual_editor():
     client = _client()
     result = client.post(

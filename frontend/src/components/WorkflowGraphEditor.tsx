@@ -41,7 +41,7 @@ import { buildGraph, collectStepGraph, flowEndpoints, layoutGraph, nodeTypes, re
 import { WorkflowMiniMap } from './workflows/WorkflowMiniMap';
 import { edgeTypes } from './workflows/EditableEdge';
 import { KIND_GROUPS, KIND_META, LOCATOR_KINDS, kindLabelKey } from './workflows/kinds';
-import { actionsFor, actionDef, VALUE_KINDS, type ActionField } from './workflows/actions';
+import { actionsFor, actionDef, outputsFor, VALUE_KINDS, type ActionField } from './workflows/actions';
 import type { WorkflowStep, WorkflowVersion } from '../types';
 
 
@@ -1139,6 +1139,14 @@ export function WorkflowGraphEditor({ target, onClose, onSaved }: Props) {
               {actionsFor(kind).length === 0 && VALUE_KINDS[kind]
                 ? renderActionField({ key: '$do', type: VALUE_KINDS[kind]!.type, labelKey: VALUE_KINDS[kind]!.labelKey })
                 : null}
+              {outputsFor(kind, selected.do ?? '').length > 0 ? (
+                <div className="wf-help">
+                  {t('workflows.outputs')}:{' '}
+                  {outputsFor(kind, selected.do ?? '')
+                    .map((o) => `{{steps.${selected.id}.${o}}}`)
+                    .join('  ')}
+                </div>
+              ) : null}
               <label className="add-skill-page__field">
                 <span>{t('workflows.goal')}</span>
                 <Input value={selected.goal ?? ''} onChange={(e) => patchSelected({ goal: e.target.value })} placeholder={t('workflows.goal_placeholder')} />

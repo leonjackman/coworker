@@ -1044,6 +1044,116 @@ class BrowserController {
     return { ok: true };
   }
 
+  // Resolve an element's viewport center by CSS selector or (visible) text, then
+  // click it. Lets a workflow target a semantic element without pixel coords.
+  async _locate(selector, text, exact) {
+    const sel = JSON.stringify(String(selector || ''));
+    const txt = JSON.stringify(String(text || ''));
+    const expr = `(() => {
+      const selector = ${sel};
+      const target = ${txt};
+      const exact = ${exact ? 'true' : 'false'};
+      let el = null;
+      if (selector) el = document.querySelector(selector);
+      if (!el && target) {
+        const sels = 'a,button,input,textarea,select,[role="button"],[role="link"],[onclick],[contenteditable],[tabindex],label,span,div,p';
+        el = Array.from(document.querySelectorAll(sels)).find((node) => {
+          const t = (node.innerText || node.value || node.getAttribute('aria-label') || '').trim();
+          return exact ? t === target : (t && t.includes(target));
+        });
+      }
+      if (!el) return { found: false };
+      el.scrollIntoView({ block: 'center', inline: 'center' });
+      const r = el.getBoundingClientRect();
+      return {
+        found: true,
+        x: Math.round(r.x + r.width / 2),
+        y: Math.round(r.y + r.height / 2),
+        text: (el.innerText || el.value || '').trim().slice(0, 80),
+      };
+    })()`;
+    return this._eval(expr);
+  }
+
+  async clickSelector(selector) {
+    if (!this.guest) throw new Error('browser_not_attached');
+    const info = await this._locate(selector, '', false);
+    if (!info || !info.found) throw new Error('element_not_found');
+    return this.click(info.x, info.y);
+  }
+
+  async clickText(text, exact = false) {
+    if (!this.guest) throw new Error('browser_not_attached');
+    const info = await this._locate('', text, exact);
+    if (!info || !info.found) throw new Error('text_not_found');
+    return this.click(info.x, info.y);
+  }
+
+  async scrollTo(selector, text) {
+    if (!this.guest) throw new Error('browser_not_attached');
+    const info = await this._locate(selector, text, false);
+    if (!info || !info.found) throw new Error('target_not_found');
+    return { ok: true, ...info };
+  }
+
+  async waitFor(selector, text, timeoutMs = 15000) {
+    const deadline = Date.now() + Math.max(0, Math.min(120000, Number(timeoutMs) || 15000));
+    const sel = JSON.stringify(String(selector || ''));
+    const txt = JSON.stringify(String(text || ''));
+    const expr = `(() => {
+      const selector = ${sel};
+      const target = ${txt};
+      if (selector && document.querySelector(selector)) return true;
+      if (target && document.body && document.body.innerText.includes(target)) return true;
+      return false;
+    })()`;
+    while (Date.now() < deadline) {
+      let hit = false;
+      try {
+        hit = await this._eval(expr);
+      } catch {
+        hit = false;
+      }
+      if (hit) return { found: true };
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    throw new Error('wait_timeout');
+  }
+
+  // Upload files into a file input. Uses the Chrome DevTools Protocol because a
+  // page cannot be given real local files from page JS; the debugger is attached
+  // only for this command and detached immediately.
+  async uploadFiles(selector, files) {
+    const g = this.guest;
+    if (!g) throw new Error('browser_not_attached');
+    const list = (Array.isArray(files) ? files : [files]).map((f) => String(f)).filter(Boolean);
+    if (!list.length) throw new Error('no_files');
+    const querySelector = selector || 'input[type=file]';
+    let attached = false;
+    try {
+      if (!g.debugger.isAttached()) {
+        g.debugger.attach('1.3');
+        attached = true;
+      }
+      const doc = await g.debugger.sendCommand('DOM.getDocument', { depth: -1 });
+      const node = await g.debugger.sendCommand('DOM.querySelector', {
+        nodeId: doc.root.nodeId,
+        selector: querySelector,
+      });
+      if (!node || !node.nodeId) throw new Error('file_input_not_found');
+      await g.debugger.sendCommand('DOM.setFileInputFiles', { files: list, nodeId: node.nodeId });
+      return { ok: true, count: list.length, selector: querySelector };
+    } finally {
+      if (attached) {
+        try {
+          g.debugger.detach();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+
   async evaluate(expression) {
     return this._capResult(await this._eval(String(expression)));
   }
@@ -1264,6 +1374,16 @@ async function handleBridgeRequest(method, url, payload) {
         default:
           throw new Error('unknown_act_type');
       }
+    case '/click_selector':
+      return browserController.clickSelector(payload.selector);
+    case '/click_text':
+      return browserController.clickText(payload.text, Boolean(payload.exact));
+    case '/scroll_to':
+      return browserController.scrollTo(payload.selector, payload.text);
+    case '/wait_for':
+      return browserController.waitFor(payload.selector, payload.text, payload.timeout_ms);
+    case '/upload':
+      return browserController.uploadFiles(payload.selector, payload.files);
     default:
       throw new Error('not_found');
   }

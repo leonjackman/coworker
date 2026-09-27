@@ -107,3 +107,22 @@ def test_schedule_workflow_target_runs():
     assert run.json()["result"]["run_id"]
 
     client.delete("/schedules/run-flow")
+
+
+def test_webhook_trigger_endpoint():
+    client = _client()
+    client.delete("/schedules/hook-job")
+    created = client.post(
+        "/schedules",
+        json={"name": "Hook Job", "target_type": "workflow", "workflow": "sched-flow", "trigger_type": "webhook"},
+    )
+    assert created.status_code == 200, created.text
+    sched = created.json()["schedule"]
+    assert sched["trigger_type"] == "webhook" and sched["webhook_token"]
+
+    bad = client.post(f"/schedules/webhook/hook-job", params={"token": "nope"})
+    assert bad.status_code == 403
+    ok = client.post(f"/schedules/webhook/hook-job", params={"token": sched["webhook_token"]})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "ok"
+    client.delete("/schedules/hook-job")

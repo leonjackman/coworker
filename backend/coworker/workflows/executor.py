@@ -24,6 +24,7 @@ from typing import Any, Callable
 from coworker.logger import get_logger
 
 from .assertions import evaluate, evaluate_all
+from .capabilities import CapabilityRegistry, check_success
 from .env import StepEnvironment
 from .events import RunEventEmitter
 from .model import (
@@ -57,6 +58,9 @@ class WorkflowExecutor:
         self.store = store
         self.secrets = secrets
         self.listener = listener
+        # Capability registry: drives success evaluation (fail-closed). The
+        # manager re-points this via ``use_tools`` when live schemas are known.
+        self.registry = CapabilityRegistry.declared()
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -111,7 +115,8 @@ class WorkflowExecutor:
         except Exception:  # noqa: BLE001 - fingerprinting is advisory only
             pass
         executor_state = _State(
-            emitter=emitter, store=self.store, env=env, on_patch=on_patch, workflow=workflow
+            emitter=emitter, store=self.store, env=env, on_patch=on_patch, workflow=workflow,
+            registry=self.registry,
         )
         try:
             self._exec_steps(workflow, workflow.steps, run, executor_state)
@@ -489,6 +494,7 @@ class WorkflowExecutor:
         env = state.env
         kind = step.kind
         action = step.do or str(payload.get("action") or "")
+        resolved_action = state.registry.action(kind, action) if action else None
 
         if kind == "command":
             argv = payload.get("command") or payload.get("run") or step.do
@@ -496,31 +502,45 @@ class WorkflowExecutor:
                 argv = _split_command(argv)
             cwd = str(payload.get("cwd") or "")
             timeout = int(payload.get("timeout") or step.timeout)
-            return env.command(list(argv), cwd=cwd, timeout=timeout)
+            if payload.get("shell"):
+                argv = ["sh", "-c", " ".join(argv) if isinstance(argv, list) else str(argv)]
+            result = env.command(list(argv), cwd=cwd, timeout=timeout)
+            return _enforce_success(step, resolved_action, result, payload, state)
         if kind == "tool":
             if not action:
                 raise StepFailed(step.id, "tool step requires a tool name in 'do'")
-            return env.tool(action, payload)
+            result = env.tool(action, payload)
+            return _enforce_success(step, resolved_action, result, payload, state)
         if kind == "browser":
             if not action:
                 raise StepFailed(step.id, "browser step requires an action in 'do'")
-            return env.browser(action, payload, locator)
+            result = env.browser(action, payload, locator)
+            return _enforce_success(step, resolved_action, result, payload, state)
         if kind in ("app", "computer"):
             if not action:
                 raise StepFailed(step.id, "app step requires an action in 'do'")
-            return env.app(action, payload, locator)
+            result = env.app(action, payload, locator)
+            return _enforce_success(step, resolved_action, result, payload, state)
+        if kind in ("http", "file", "transform", "notify"):
+            if not action:
+                raise StepFailed(step.id, f"{kind} step requires an action in 'do'")
+            result = env.action(kind, action, payload)
+            return _enforce_success(step, resolved_action, result, payload, state)
         if kind == "skill":
             if not action:
                 raise StepFailed(step.id, "skill step requires a skill name in 'do'")
-            return env.skill(action)
+            return env.skill(action, payload, step)
         if kind == "human":
             question = str(payload.get("question") or step.do or f"Approve step '{step.id}'?")
             options = payload.get("options") if isinstance(payload.get("options"), list) else None
             return env.human(step, question, options)
         if kind == "agentic":
-            prompt = step.do or str(payload.get("prompt") or "")
+            # Prefer the natural-language `goal` — that is the actual instruction;
+            # `do` is only a label (e.g. "browser-desktop-action") and must not be
+            # sent to the agent as the prompt.
+            prompt = str(getattr(step, "goal", "") or step.do or payload.get("prompt") or "")
             if not prompt:
-                raise StepFailed(step.id, "agentic step requires a prompt")
+                raise StepFailed(step.id, "agentic step requires a prompt (goal or do)")
             return env.agentic(prompt, step)
         raise StepFailed(step.id, f"unsupported step kind: {kind}")
 
@@ -649,12 +669,14 @@ class _State:
         env: StepEnvironment,
         on_patch: PatchCallback | None,
         workflow: Workflow,
+        registry: CapabilityRegistry | None = None,
     ):
         self.emitter = emitter
         self.store = store
         self.env = env
         self.on_patch = on_patch
         self.workflow = workflow
+        self.registry = registry or CapabilityRegistry.declared()
         self.total_steps = 0
         self.healed: dict[str, bool] = {}
         import threading
@@ -734,6 +756,24 @@ def _promote_locator(locator: dict[str, Any] | None, descriptor: dict[str, Any])
     from .locators import promote
 
     return promote(locator, descriptor)
+
+
+def _enforce_success(
+    step: Step,
+    resolved_action: Any,
+    result: Any,
+    payload: dict[str, Any],
+    state: "_State",
+) -> Any:
+    """Fail-closed: a step is only successful when its success rule passes.
+
+    This is the fix for the false-success class of bug (command exit codes were
+    ignored, so a run that did nothing still reported ``ok``).
+    """
+    rule = getattr(resolved_action, "success", "result_ok") if resolved_action is not None else "result_ok"
+    if not check_success(rule, result, payload):
+        raise StepFailed(step.id, f"{step.kind} step '{step.id}' did not succeed (rule: {rule})")
+    return result
 
 
 def _apply_repair(step: Step, repaired: dict[str, Any]) -> Step:

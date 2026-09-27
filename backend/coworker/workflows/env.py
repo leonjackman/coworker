@@ -8,6 +8,7 @@ electron process. Adapters map step kinds onto these methods.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 
@@ -26,7 +27,15 @@ class StepEnvironment:
     def app(self, action: str, payload: dict[str, Any], locator: dict[str, Any] | None) -> Any:
         raise NotImplementedError("app steps are not available in this environment")
 
-    def skill(self, name: str) -> Any:
+    def action(self, kind: str, action: str, payload: dict[str, Any]) -> Any:
+        """Run a native server-side action (http/file/transform/notify)."""
+        raise NotImplementedError(f"{kind} steps are not available in this environment")
+
+    def skill(self, name: str, inputs: dict[str, Any] | None = None, step: Any = None) -> Any:
+        raise NotImplementedError("skill steps are not available in this environment")
+
+    def skill_body(self, name: str) -> str | None:
+        """Return a skill's instructions (used by the agentic skill handoff)."""
         raise NotImplementedError("skill steps are not available in this environment")
 
     def agentic(self, prompt: str, step: Any) -> Any:
@@ -67,7 +76,9 @@ class CallbackEnvironment(StepEnvironment):
         tool_fn: Callable[..., Any] | None = None,
         browser_fn: Callable[..., Any] | None = None,
         app_fn: Callable[..., Any] | None = None,
+        action_fn: Callable[..., Any] | None = None,
         skill_fn: Callable[..., Any] | None = None,
+        skill_body_fn: Callable[..., Any] | None = None,
         agentic_fn: Callable[..., Any] | None = None,
         human_fn: Callable[..., Any] | None = None,
         heal_fn: Callable[..., Any] | None = None,
@@ -77,7 +88,9 @@ class CallbackEnvironment(StepEnvironment):
         self._tool_fn = tool_fn
         self._browser_fn = browser_fn
         self._app_fn = app_fn
+        self._action_fn = action_fn
         self._skill_fn = skill_fn
+        self._skill_body_fn = skill_body_fn
         self._agentic_fn = agentic_fn
         self._human_fn = human_fn
         self._heal_fn = heal_fn
@@ -103,10 +116,20 @@ class CallbackEnvironment(StepEnvironment):
             return super().app(action, payload, locator)
         return self._app_fn(action, payload, locator)
 
-    def skill(self, name: str) -> Any:
+    def action(self, kind: str, action: str, payload: dict[str, Any]) -> Any:
+        if self._action_fn is None:
+            return super().action(kind, action, payload)
+        return self._action_fn(kind, action, payload)
+
+    def skill(self, name: str, inputs: dict[str, Any] | None = None, step: Any = None) -> Any:
         if self._skill_fn is None:
-            return super().skill(name)
-        return self._skill_fn(name)
+            return super().skill(name, inputs, step)
+        return self._skill_fn(name, inputs, step)
+
+    def skill_body(self, name: str) -> str | None:
+        if self._skill_body_fn is None:
+            return None
+        return self._skill_body_fn(name)
 
     def agentic(self, prompt: str, step: Any) -> Any:
         if self._agentic_fn is None:
@@ -155,8 +178,14 @@ class DecisionEnvironment(StepEnvironment):
     def app(self, action, payload, locator):
         return self._base.app(action, payload, locator)
 
-    def skill(self, name):
-        return self._base.skill(name)
+    def action(self, kind, action, payload):
+        return self._base.action(kind, action, payload)
+
+    def skill(self, name, inputs=None, step=None):
+        return self._base.skill(name, inputs, step)
+
+    def skill_body(self, name):
+        return self._base.skill_body(name)
 
     def agentic(self, prompt, step):
         return self._base.agentic(prompt, step)
@@ -228,26 +257,64 @@ def build_tool_environment(
             raise RuntimeError("browser is not available")
         args: dict[str, Any] = {"action": action, **payload}
         _merge_locator(args, locator)
+        # Fail-closed: a click without a target would silently click (0,0).
+        if action == "click" and ("x" not in args or "y" not in args):
+            raise RuntimeError("browser click requires coordinates (x, y) or a coords locator")
         return target.invoke({k: v for k, v in args.items() if v is not None})
 
     def _app(action: str, payload: dict[str, Any], locator: dict[str, Any] | None) -> Any:
         script = tool_map.get("computer_script")
         comp = tool_map.get("computer")
         if action in ("script", "run_script") and script is not None:
-            return script.invoke({"code": payload.get("code") or payload.get("script") or ""})
+            args: dict[str, Any] = {"code": payload.get("code") or payload.get("script") or ""}
+            if payload.get("reset") is not None:
+                args["reset"] = bool(payload.get("reset"))
+            return script.invoke(args)
+        if action in ("script", "run_script"):
+            raise RuntimeError("computer scripting is not available")
+        if action in ("drag", "clipboard", "file_dialog"):
+            if script is None:
+                raise RuntimeError("computer scripting is not available")
+            return script.invoke({"code": _computer_script_for(action, payload)})
         if comp is None:
             raise RuntimeError("computer use is not available")
+        if action == "focus_window":
+            app = str(payload.get("app") or "")
+            if not app:
+                raise RuntimeError("focus_window requires an app name")
+            return comp.invoke({"action": "launch_app", "app": app})
         args: dict[str, Any] = {"action": action, **payload}
         _merge_locator(args, locator)
+        # Semantic locator: resolve role/name/text to a ref by observing the AX
+        # tree, so an author can write atomic nodes WITHOUT a runtime ref.
+        if action in _REF_ACTIONS and not args.get("ref"):
+            ref = _resolve_semantic_ref(tool_map, locator)
+            if ref:
+                args["ref"] = ref
+        # Fail-closed: ref-based actions must actually have a ref.
+        if action in ("click_ref", "double_click_ref", "right_click_ref", "show") and not args.get("ref"):
+            raise RuntimeError(f"computer {action} requires a ref (or a role/name locator)")
         return comp.invoke({k: v for k, v in args.items() if v is not None})
 
-    def _skill(name: str) -> Any:
+    def _skill_body(name: str) -> str | None:
         if skill_manager is None:
-            raise RuntimeError("skill system unavailable")
+            return None
         loaded = skill_manager.read_body(name)
-        if loaded is None:
+        return loaded[0] if loaded else None
+
+    def _skill(name: str, inputs: dict[str, Any] | None = None, step: Any = None) -> Any:
+        """Skill step = agentic handoff.
+
+        A skill is instructions for the agent, not a deterministic program, so a
+        workflow "uses" a skill by handing it (plus the step goal and inputs) to
+        the agent to perform — which is what makes referencing skills meaningful.
+        """
+        body = _skill_body(name)
+        if body is None:
             raise RuntimeError(f"skill not found: {name}")
-        return {"skill": name, "body": loaded[0]}
+        goal = getattr(step, "goal", "") or f"Perform the '{name}' skill."
+        prompt = _skill_prompt(name, body, goal, inputs or {})
+        return _agentic(prompt, step)
 
     def _human(step: Any, question: str, options: list[dict[str, str]] | None = None) -> Any:
         raise NeedsHuman(step.id, question)
@@ -304,17 +371,116 @@ def build_tool_environment(
 
         save_evidence(data_dir, name, data)
 
+    def _native_action(kind: str, action: str, payload: dict[str, Any]) -> Any:
+        from .native import run_native
+
+        return run_native(kind, action, payload)
+
     return CallbackEnvironment(
         command_fn=_command,
         tool_fn=_invoke_tool,
         browser_fn=_browser,
         app_fn=_app,
+        action_fn=_native_action,
         skill_fn=_skill,
+        skill_body_fn=_skill_body,
         human_fn=_human,
         agentic_fn=_agentic,
         heal_fn=_heal,
         evidence_fn=_evidence,
     )
+
+
+SKILL_BODY_MAX_CHARS = 12000
+
+
+def _skill_prompt(name: str, body: str, goal: str, inputs: dict[str, Any]) -> str:
+    import json as _json
+
+    clipped = body if len(body) <= SKILL_BODY_MAX_CHARS else body[:SKILL_BODY_MAX_CHARS] + "\n…[truncated]"
+    try:
+        inputs_text = _json.dumps(inputs, ensure_ascii=False)[:1500] if inputs else "{}"
+    except (TypeError, ValueError):
+        inputs_text = str(inputs)[:1500]
+    return (
+        f"A saved workflow is executing and this step uses the '{name}' skill.\n"
+        f"STEP GOAL: {goal}\n"
+        f"INPUTS: {inputs_text}\n\n"
+        "Follow the skill instructions below to accomplish the goal: use any tools "
+        "you need, verify the result, and end with a final line `VERDICT: DONE` "
+        "(or `VERDICT: BLOCKED` if you cannot complete it).\n\n"
+        f"--- SKILL: {name} ---\n{clipped}"
+    )
+
+
+def _computer_script_for(action: str, payload: dict[str, Any]) -> str:
+    """Generate cw-automa JS for the intent-level computer actions."""
+    import json as _json
+
+    app = _json.dumps(str(payload.get("app") or ""))
+    if action == "drag":
+        return (
+            "(async () => { const app = await cua.getApp(" + app + "); "
+            f"return await app.drag([{int(payload.get('x1', 0))}, {int(payload.get('y1', 0))}], "
+            f"[{int(payload.get('x2', 0))}, {int(payload.get('y2', 0))}]); }})()"
+        )
+    if action == "clipboard":
+        op = str(payload.get("op") or "paste")
+        if op == "copy":
+            return (
+                "(async () => { const app = await cua.getApp(" + app + "); "
+                "return await app.pressKey('cmd+c'); })()"
+            )
+        text = _json.dumps(str(payload.get("text") or ""))
+        return "(async () => { const app = await cua.getApp(" + app + "); return await app.paste(" + text + "); })()"
+    if action == "file_dialog":
+        path = _json.dumps(str(payload.get("path") or ""))
+        return (
+            "(async () => { const app = await cua.getApp(" + app + "); "
+            "await app.pressKey('cmd+shift+g'); await app.settle(); "
+            "await app.typeText(" + path + "); await app.pressKey('enter'); return { ok: true }; })()"
+        )
+    raise RuntimeError(f"no script template for computer action '{action}'")
+
+
+_REF_ACTIONS = {"click_ref", "double_click_ref", "right_click_ref", "show", "type_into"}
+_REF_TOKEN = re.compile(r"\[?(ax[a-z_]+):([^\]\n#]*)#(\d+)\]?")
+
+
+def _semantic_ref_from_text(text: str, role: str, name: str) -> str | None:
+    """Find an AX ref like ``axbutton:导出#1`` by role and/or label."""
+    role_norm = ""
+    if role:
+        role_l = role.strip().lower()
+        role_norm = role_l if role_l.startswith("ax") else f"ax{role_l}"
+    name_l = (name or "").strip().lower()
+    for m in _REF_TOKEN.finditer(text or ""):
+        token_role, label, index = m.group(1), m.group(2), m.group(3)
+        if role_norm and token_role != role_norm:
+            continue
+        if name_l and name_l not in label.lower():
+            continue
+        return f"{token_role}:{label}#{index}"
+    return None
+
+
+def _resolve_semantic_ref(tool_map: dict[str, Any], locator: dict[str, Any] | None) -> str | None:
+    """Observe the AX tree and resolve a ``{role, name/text}`` locator to a ref."""
+    if not locator:
+        return None
+    role = str(locator.get("role") or "")
+    name = str(locator.get("name") or locator.get("text") or locator.get("label") or "")
+    if not role and not name:
+        return None
+    obs = tool_map.get("computer_observe")
+    if obs is None:
+        return None
+    try:
+        snapshot = obs.invoke({"action": "snapshot", "depth": 6})
+    except Exception:  # noqa: BLE001 - observation failure -> caller fails closed
+        return None
+    text = snapshot if isinstance(snapshot, str) else str(snapshot)
+    return _semantic_ref_from_text(text, role, name)
 
 
 def _merge_locator(args: dict[str, Any], locator: dict[str, Any] | None) -> None:

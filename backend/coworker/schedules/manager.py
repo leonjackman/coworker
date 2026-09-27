@@ -79,6 +79,10 @@ class ScheduleManager:
             schedule.id = self._unique_id(slugify(schedule.name))
         elif self.store.get(schedule.id) is not None:
             return {"status": "error", "message": f"schedule already exists: {schedule.id}"}
+        if schedule.trigger_type == "webhook" and not schedule.webhook_token:
+            import secrets
+
+            schedule.webhook_token = secrets.token_urlsafe(24)
         schedule.created_at = utc_now_iso()
         schedule.updated_at = schedule.created_at
         errors = self._validate(schedule)
@@ -155,6 +159,14 @@ class ScheduleManager:
             },
         )
         return {"status": result.get("status", "failed"), "result": result, "schedule": schedule.to_dict()}
+
+    async def trigger_webhook(self, schedule_id: str) -> dict[str, Any]:
+        """Fire a webhook schedule (called by the inbound endpoint)."""
+        schedule = self.store.get(schedule_id)
+        if schedule is None:
+            return {"status": "error", "message": f"schedule not found: {schedule_id}"}
+        await self.engine.trigger_now(schedule_id)
+        return {"status": "ok", "id": schedule_id}
 
     def list_runs(self, schedule_id: str, limit: int = 50) -> list[dict[str, Any]]:
         return self.store.read_runs(schedule_id, limit)

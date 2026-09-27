@@ -55,11 +55,11 @@ class FakeEnv(StepEnvironment):
             return {"ok": True}
         return self._app(action, payload, locator)
 
-    def skill(self, name):
+    def skill(self, name, inputs=None, step=None):
         self.calls.append(("skill", name))
         if self._skill is None:
             return {"ok": True}
-        return self._skill(name)
+        return self._skill(name, inputs, step)
 
     def human(self, step, question, options=None):
         self.calls.append(("human", step.id, question))
@@ -146,10 +146,70 @@ steps:
     post: ["ok"]
 """
     manager.create(flow)
-    env = FakeEnv(command=lambda argv, cwd, timeout: {"ok": True, "argv": argv})
+    env = FakeEnv(command=lambda argv, cwd, timeout: {"ok": True, "argv": argv, "return_code": 0})
     result = manager.run("cmd-flow", env=env)
     assert result["status"] == "ok"
     assert env.calls[0] == ("command", ["echo", "hi"])
+
+
+def test_command_nonzero_exit_fails_closed(manager):
+    """Regression: a non-zero exit code must FAIL, never report ok."""
+    flow = """name: bad-cmd
+description: exits non-zero
+steps:
+  - id: run
+    kind: command
+    do: run
+    params:
+      command: false
+"""
+    manager.create(flow)
+    env = FakeEnv(command=lambda argv, cwd, timeout: {"return_code": 1, "stderr": "boom"})
+    result = manager.run("bad-cmd", env=env)
+    assert result["status"] == "failed"
+
+
+def test_command_shell_opt_in(manager):
+    flow = """name: shell-cmd
+description: runs via sh -c
+steps:
+  - id: run
+    kind: command
+    do: run
+    params:
+      command: echo hi
+      shell: true
+"""
+    manager.create(flow)
+    env = FakeEnv(command=lambda argv, cwd, timeout: {"return_code": 0})
+    manager.run("shell-cmd", env=env)
+    assert env.calls[0] == ("command", ["sh", "-c", "echo hi"])
+
+
+def test_agentic_step_uses_goal_as_prompt(manager):
+    """The agentic prompt must be the natural-language goal, not the do label."""
+    flow = """name: ag-flow
+description: d
+steps:
+  - id: a
+    kind: agentic
+    do: browser-desktop-action
+    goal: 打開 Safari 並導航到 DeepSeek
+"""
+    manager.create(flow)
+
+    class _Env(FakeEnv):
+        def agentic(self, prompt, step):
+            self.calls.append(("agentic", prompt))
+            return {"agentic": True, "output": "ok"}
+
+        def supports_agentic(self):
+            return True
+
+    env = _Env()
+    result = manager.run("ag-flow", env=env)
+    assert result["status"] == "ok"
+    assert env.calls[-1] == ("agentic", "打開 Safari 並導航到 DeepSeek")
 
 
 def test_executor_retry_then_success(manager):

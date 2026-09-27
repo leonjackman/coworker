@@ -255,6 +255,23 @@ class BridgeClient:
     def get_text(self, max_chars: int = BROWSER_OUTPUT_MAX_CHARS) -> dict[str, Any]:
         return self._call("POST", "/get_text", {"max_chars": int(max_chars)})
 
+    def click_selector(self, selector: str) -> dict[str, Any]:
+        return self._call("POST", "/click_selector", {"selector": str(selector)})
+
+    def click_text(self, text: str, exact: bool = False) -> dict[str, Any]:
+        return self._call("POST", "/click_text", {"text": str(text), "exact": bool(exact)})
+
+    def scroll_to(self, selector: str = "", text: str = "") -> dict[str, Any]:
+        return self._call("POST", "/scroll_to", {"selector": str(selector), "text": str(text)})
+
+    def wait_for(self, selector: str = "", text: str = "", timeout_ms: int = 15000) -> dict[str, Any]:
+        return self._call(
+            "POST", "/wait_for", {"selector": str(selector), "text": str(text), "timeout_ms": int(timeout_ms)}
+        )
+
+    def upload(self, files: list[str], selector: str = "") -> dict[str, Any]:
+        return self._call("POST", "/upload", {"files": list(files), "selector": str(selector)})
+
 
 def browser_available(data_dir: Path | str | None) -> bool:
     """True when the desktop bridge is registered and reachable."""
@@ -293,6 +310,7 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
 BrowserAction = Literal[
     "navigate", "get_state", "get_text", "snapshot", "screenshot", "click", "type", "press",
     "scroll", "back", "forward", "reload", "evaluate",
+    "click_selector", "click_text", "scroll_to", "wait_for", "upload",
 ]
 
 
@@ -345,6 +363,10 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
         dy: float = Field(0, description="For 'scroll': vertical scroll delta.")
         max_chars: int = Field(BROWSER_OUTPUT_MAX_CHARS, description="For 'get_text': max characters of page text to return (default 50000).")
         max_items: int = Field(80, description="For 'snapshot': max interactive elements to list (default 80).")
+        selector: str = Field("", description="For 'click_selector'/'scroll_to'/'upload': a CSS selector.")
+        exact: bool = Field(False, description="For 'click_text': match the element text exactly.")
+        timeout_ms: int = Field(15000, description="For 'wait_for': max wait in milliseconds.")
+        files: list[str] = Field(default_factory=list, description="For 'upload': absolute file paths to attach.")
 
     client = BridgeClient(data_dir)
 
@@ -361,6 +383,10 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
         dy: float = 0,
         max_chars: int = BROWSER_OUTPUT_MAX_CHARS,
         max_items: int = 80,
+        selector: str = "",
+        exact: bool = False,
+        timeout_ms: int = 15000,
+        files: list[str] | None = None,
     ) -> str:
         """Open and drive the user's embedded browser (visible live in the right panel).
 
@@ -402,6 +428,16 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
                 result = client.reload()
             elif action == "evaluate":
                 result = client.evaluate(expression)
+            elif action == "click_selector":
+                result = client.click_selector(selector)
+            elif action == "click_text":
+                result = client.click_text(text, exact)
+            elif action == "scroll_to":
+                result = client.scroll_to(selector, text)
+            elif action == "wait_for":
+                result = client.wait_for(selector, text, timeout_ms)
+            elif action == "upload":
+                result = client.upload(list(files or []), selector)
             else:
                 return json.dumps({"error": f"unknown action: {action}"}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001 - tool must never break a turn

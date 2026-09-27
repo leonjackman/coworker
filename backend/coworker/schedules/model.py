@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 TARGET_TYPES = frozenset({"workflow", "command", "agent"})
+TRIGGER_TYPES = frozenset({"cron", "webhook", "file_watch"})
 OVERLAP_POLICIES = frozenset({"skip", "queue", "replace", "allow"})
 MISFIRE_POLICIES = frozenset({"skip", "run_once", "catchup"})
 STATUSES = frozenset({"idle", "running", "ok", "failed", "skipped"})
@@ -36,6 +37,14 @@ class Schedule:
     inputs: dict[str, Any] = field(default_factory=dict)
     cron: str = "0 9 * * *"
     timezone: str = "UTC"
+    # Trigger model: "cron" (default), "webhook" (fired by an inbound HTTP call)
+    # or "file_watch" (fired when watch_path changes).
+    trigger_type: str = "cron"
+    webhook_token: str = ""
+    watch_path: str = ""
+    watch_pattern: str = "*"
+    watch_interval_seconds: int = 30
+    watch_cursor: str = ""
     enabled: bool = True
     overlap: str = "skip"
     misfire: str = "skip"
@@ -63,6 +72,12 @@ class Schedule:
             "inputs": self.inputs,
             "cron": self.cron,
             "timezone": self.timezone,
+            "trigger_type": self.trigger_type,
+            "webhook_token": self.webhook_token,
+            "watch_path": self.watch_path,
+            "watch_pattern": self.watch_pattern,
+            "watch_interval_seconds": self.watch_interval_seconds,
+            "watch_cursor": self.watch_cursor,
             "enabled": self.enabled,
             "overlap": self.overlap,
             "misfire": self.misfire,
@@ -92,6 +107,12 @@ class Schedule:
             inputs=dict(data.get("inputs") or {}),
             cron=str(data.get("cron") or "0 9 * * *"),
             timezone=str(data.get("timezone") or "UTC"),
+            trigger_type=str(data.get("trigger_type") or "cron"),
+            webhook_token=str(data.get("webhook_token") or ""),
+            watch_path=str(data.get("watch_path") or ""),
+            watch_pattern=str(data.get("watch_pattern") or "*"),
+            watch_interval_seconds=int(data.get("watch_interval_seconds") or 30),
+            watch_cursor=str(data.get("watch_cursor") or ""),
             enabled=bool(data.get("enabled", True)),
             overlap=str(data.get("overlap") or "skip"),
             misfire=str(data.get("misfire") or "skip"),
@@ -139,10 +160,18 @@ def validate(schedule: Schedule, *, timezone_ok: Any, cron_ok: Any) -> list[str]
         errors.append(f"invalid overlap policy: {schedule.overlap}")
     if schedule.misfire not in MISFIRE_POLICIES:
         errors.append(f"invalid misfire policy: {schedule.misfire}")
-    if not cron_ok(schedule.cron):
-        errors.append(f"invalid cron expression: {schedule.cron!r}")
-    if not timezone_ok(schedule.timezone):
-        errors.append(f"unknown timezone: {schedule.timezone!r}")
+    if schedule.trigger_type not in TRIGGER_TYPES:
+        errors.append(f"invalid trigger_type: {schedule.trigger_type}")
+    if schedule.trigger_type == "cron":
+        if not cron_ok(schedule.cron):
+            errors.append(f"invalid cron expression: {schedule.cron!r}")
+        if not timezone_ok(schedule.timezone):
+            errors.append(f"unknown timezone: {schedule.timezone!r}")
+    elif schedule.trigger_type == "file_watch":
+        if not schedule.watch_path.strip():
+            errors.append("file_watch trigger requires a watch_path")
+        if schedule.watch_interval_seconds < 5:
+            errors.append("watch_interval_seconds must be >= 5")
     if schedule.grace_seconds < 0:
         errors.append("grace_seconds must be >= 0")
     if schedule.retry_max < 0 or schedule.retry_max > 10:

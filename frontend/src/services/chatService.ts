@@ -85,6 +85,7 @@ import type {
   GoalResponse,
   GoalSetMeta,
   WorkflowsListResponse,
+  WorkflowCapabilitiesResponse,
   WorkflowDetailResponse,
   WorkflowPendingResponse,
   WorkflowPendingDetailResponse,
@@ -233,6 +234,7 @@ export interface ChatService {
   approvePendingSkill: (name: string) => Promise<{ status: string }>;
   rejectPendingSkill: (name: string) => Promise<{ status: string }>;
   listWorkflows: () => Promise<WorkflowsListResponse>;
+  getWorkflowCapabilities: () => Promise<WorkflowCapabilitiesResponse>;
   getWorkflow: (name: string) => Promise<WorkflowDetailResponse>;
   createWorkflow: (content: string, overwrite?: boolean) => Promise<{ status: string; message?: string }>;
   updateWorkflow: (name: string, content: string) => Promise<{ status: string; message?: string }>;
@@ -635,6 +637,10 @@ class ElectronChatService implements ChatService {
 
   async listWorkflows(): Promise<WorkflowsListResponse> {
     return this._workflowRequest<WorkflowsListResponse>('/workflows');
+  }
+
+  async getWorkflowCapabilities(): Promise<WorkflowCapabilitiesResponse> {
+    return this._workflowRequest<WorkflowCapabilitiesResponse>('/workflows/capabilities');
   }
 
   async getWorkflow(name: string): Promise<WorkflowDetailResponse> {
@@ -2181,6 +2187,10 @@ class HttpChatService implements ChatService {
 
   async listWorkflows(): Promise<WorkflowsListResponse> {
     return this.request<WorkflowsListResponse>('/workflows');
+  }
+
+  async getWorkflowCapabilities(): Promise<WorkflowCapabilitiesResponse> {
+    return this.request<WorkflowCapabilitiesResponse>('/workflows/capabilities');
   }
 
   async getWorkflow(name: string): Promise<WorkflowDetailResponse> {

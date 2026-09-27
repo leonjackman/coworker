@@ -95,7 +95,8 @@ steps:
         "description": "Open a compose page, fill title/body, screenshot, ask for approval, then click publish.",
         "category": "connector",
         "yaml": """name: browser-publish-generic
-description: Generic browser publish recipe with a human approval gate.
+description: Generic browser publish recipe (navigate → snapshot → click/type) with a human gate.
+schema_version: 2
 version: 1
 inputs:
   compose_url:
@@ -107,6 +108,15 @@ inputs:
   body:
     type: string
     default: ""
+  title_point:
+    type: list
+    required: true
+  body_point:
+    type: list
+    required: true
+  publish_point:
+    type: list
+    required: true
 steps:
   - id: "id:1"
     kind: browser
@@ -115,102 +125,37 @@ steps:
       url: "{{inputs.compose_url}}"
   - id: "id:2"
     kind: browser
-    do: type
-    locator:
-      role: textbox
-      name: title
-      fallback:
-        - selector: "input[placeholder*='标题'], input[placeholder*='title']"
-    params:
-      text: "{{inputs.title}}"
+    do: snapshot
   - id: "id:3"
     kind: browser
-    do: type
+    do: click
     locator:
-      role: textbox
-      name: body
-      fallback:
-        - selector: "textarea, [contenteditable='true']"
-    params:
-      text: "{{inputs.body}}"
-    when: "{{inputs.body}}"
+      coords: "{{inputs.title_point}}"
   - id: "id:4"
-    kind: human
-    do: "请检查页面内容后确认发布"
+    kind: browser
+    do: type
+    params:
+      text: "{{inputs.title}}"
   - id: "id:5"
     kind: browser
     do: click
     locator:
-      role: button
-      name: publish
-      fallback:
-        - text: 发布
-        - text: Publish
-""",
-    },
-    {
-        "id": "xiaohongshu-publish",
-        "name": "小红书 图文发布",
-        "description": "登录小红书创作平台，上传图片、填写标题正文，人工确认后发布。",
-        "category": "connector",
-        "platform": "xiaohongshu",
-        "yaml": """name: xiaohongshu-publish
-description: 小红书网页版图文发布（含人工确认）。
-version: 1
-platform: xiaohongshu
-inputs:
-  title:
-    type: string
-    required: true
-  body:
-    type: string
-    default: ""
-  images:
-    type: list
-    required: true
-steps:
-  - id: "id:1"
-    kind: browser
-    do: navigate
-    params:
-      url: https://creator.xiaohongshu.com/publish/publish
-  - id: "id:2"
-    kind: browser
-    do: set_files
-    locator:
-      role: button
-      name: 上传图文
-      fallback:
-        - text: 上传图文
-        - selector: "input[type='file']"
-    params:
-      files: "{{inputs.images}}"
-  - id: "id:3"
-    kind: browser
-    do: type
-    locator:
-      selector: "input[placeholder*='标题']"
-    params:
-      text: "{{inputs.title}}"
-  - id: "id:4"
-    kind: browser
-    do: type
-    locator:
-      selector: "[contenteditable='true']"
-    params:
-      text: "{{inputs.body}}"
+      coords: "{{inputs.body_point}}"
     when: "{{inputs.body}}"
-  - id: "id:5"
-    kind: human
-    do: "确认发布到小红书？"
   - id: "id:6"
     kind: browser
+    do: type
+    params:
+      text: "{{inputs.body}}"
+    when: "{{inputs.body}}"
+  - id: "id:7"
+    kind: human
+    do: "请检查页面内容后确认发布"
+  - id: "id:8"
+    kind: browser
     do: click
     locator:
-      role: button
-      name: 发布
-      fallback:
-        - text: 发布
+      coords: "{{inputs.publish_point}}"
 """,
     },
     {
@@ -220,7 +165,8 @@ steps:
         "category": "connector",
         "platform": "wechat-mp",
         "yaml": """name: wechat-mp-draft
-description: 公众号后台定时创建草稿（含人工确认）。
+description: 公众号后台定时创建草稿（navigate → snapshot → click/type，含人工确认）。
+schema_version: 2
 version: 1
 platform: wechat-mp
 inputs:
@@ -230,6 +176,15 @@ inputs:
   body:
     type: string
     default: ""
+  title_point:
+    type: list
+    required: true
+  body_point:
+    type: list
+    required: true
+  save_point:
+    type: list
+    required: true
 steps:
   - id: "id:1"
     kind: browser
@@ -238,31 +193,37 @@ steps:
       url: https://mp.weixin.qq.com/
   - id: "id:2"
     kind: browser
-    do: type
-    locator:
-      selector: "input[placeholder*='标题']"
-    params:
-      text: "{{inputs.title}}"
+    do: snapshot
   - id: "id:3"
     kind: browser
-    do: type
+    do: click
     locator:
-      selector: "[contenteditable='true']"
-    params:
-      text: "{{inputs.body}}"
-    when: "{{inputs.body}}"
+      coords: "{{inputs.title_point}}"
   - id: "id:4"
-    kind: human
-    do: "确认保存公众号草稿？"
+    kind: browser
+    do: type
+    params:
+      text: "{{inputs.title}}"
   - id: "id:5"
     kind: browser
     do: click
     locator:
-      role: button
-      name: 保存
-      fallback:
-        - text: 保存为草稿
-        - text: 保存
+      coords: "{{inputs.body_point}}"
+    when: "{{inputs.body}}"
+  - id: "id:6"
+    kind: browser
+    do: type
+    params:
+      text: "{{inputs.body}}"
+    when: "{{inputs.body}}"
+  - id: "id:7"
+    kind: human
+    do: "确认保存公众号草稿？"
+  - id: "id:8"
+    kind: browser
+    do: click
+    locator:
+      coords: "{{inputs.save_point}}"
 """,
     },
 ]

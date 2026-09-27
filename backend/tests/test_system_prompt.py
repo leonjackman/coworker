@@ -220,6 +220,23 @@ def test_system_assembler_composes_fragments_in_order(tmp_path: Path):
     assert "Available tools" not in out  # P1: no tool catalogue
 
 
+def test_system_assembler_injects_workflow_authoring_spec(tmp_path: Path):
+    from coworker.agent.middleware.system_assembler import SystemAssembler
+    from coworker.workflows import WorkflowManager
+
+    asm = SystemAssembler(
+        capabilities="",
+        workspace=Workspace(tmp_path),
+        memory_manager=_FakeMemoryManager(),
+        skill_manager=None,
+        workflow_manager=WorkflowManager(tmp_path),
+    )
+    out = str(asm._overrides(_assembler_request())["system_message"].content or "")
+    # The authoring spec is injected even with no saved workflows.
+    assert "Workflow authoring" in out
+    assert "Top-level keys" in out
+
+
 def test_system_assembler_hides_skills_in_discuss(tmp_path: Path):
     from coworker.agent.middleware.system_assembler import SystemAssembler
 

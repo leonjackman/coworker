@@ -43,6 +43,11 @@ interface EditorState {
   inputsText: string;
   cron: string;
   timezone: string;
+  trigger_type: 'cron' | 'webhook' | 'file_watch';
+  webhook_token: string;
+  watch_path: string;
+  watch_pattern: string;
+  watch_interval_seconds: number;
   enabled: boolean;
   overlap: 'skip' | 'queue' | 'replace' | 'allow';
   misfire: 'skip' | 'run_once' | 'catchup';
@@ -71,6 +76,11 @@ function emptyEditor(): EditorState {
     inputsText: '{}',
     cron: '0 9 * * *',
     timezone: localTimezone(),
+    trigger_type: 'cron',
+    webhook_token: '',
+    watch_path: '',
+    watch_pattern: '*',
+    watch_interval_seconds: 30,
     enabled: true,
     overlap: 'skip',
     misfire: 'skip',
@@ -92,6 +102,11 @@ function toEditor(schedule: CronSchedule): EditorState {
     inputsText: JSON.stringify(schedule.inputs ?? {}, null, 2),
     cron: schedule.cron,
     timezone: schedule.timezone,
+    trigger_type: schedule.trigger_type ?? 'cron',
+    webhook_token: schedule.webhook_token ?? '',
+    watch_path: schedule.watch_path ?? '',
+    watch_pattern: schedule.watch_pattern ?? '*',
+    watch_interval_seconds: schedule.watch_interval_seconds ?? 30,
     enabled: schedule.enabled,
     overlap: schedule.overlap,
     misfire: schedule.misfire,
@@ -220,6 +235,11 @@ export function SchedulesPanel() {
         inputs,
         cron: editor.cron,
         timezone: editor.timezone,
+        trigger_type: editor.trigger_type,
+        webhook_token: editor.webhook_token || undefined,
+        watch_path: editor.watch_path,
+        watch_pattern: editor.watch_pattern,
+        watch_interval_seconds: editor.watch_interval_seconds,
         enabled: editor.enabled,
         overlap: editor.overlap,
         misfire: editor.misfire,
@@ -400,30 +420,84 @@ export function SchedulesPanel() {
               )}
 
               <label className="add-skill-page__field">
-                <span>{t('schedules.cron')}</span>
-                <Input value={editor.cron} onChange={(e) => setEditor({ ...editor, cron: e.target.value })} spellCheck={false} />
+                <span>{t('schedules.trigger_type')}</span>
+                <select
+                  className="input"
+                  value={editor.trigger_type}
+                  onChange={(e) =>
+                    setEditor({ ...editor, trigger_type: e.target.value as EditorState['trigger_type'] })
+                  }
+                >
+                  <option value="cron">{t('schedules.trigger_cron')}</option>
+                  <option value="webhook">{t('schedules.trigger_webhook')}</option>
+                  <option value="file_watch">{t('schedules.trigger_file_watch')}</option>
+                </select>
               </label>
-              <div className="schedule-editor__presets">
-                {CRON_PRESETS.map((preset) => (
-                  <Button key={preset.key} variant="outline" size="sm" onClick={() => setEditor({ ...editor, cron: preset.cron })}>
-                    {t(`schedules.preset_${preset.key}`)}
-                  </Button>
-                ))}
-              </div>
-              <div className="schedule-editor__preview">
-                {previewError ? (
-                  <span className="add-skill-page__msg add-skill-page__msg--error">{t('schedules.invalid_cron')}</span>
-                ) : preview ? (
-                  <>
-                    <div>{preview.description}</div>
-                    <ul className="schedule-editor__runs">
-                      {preview.runs.map((run) => (
-                        <li key={run}>{run}</li>
-                      ))}
-                    </ul>
-                  </>
-                ) : null}
-              </div>
+
+              {editor.trigger_type === 'webhook' && (
+                <label className="add-skill-page__field">
+                  <span>{t('schedules.webhook_url')}</span>
+                  <Input
+                    readOnly
+                    value={
+                      editor.id && editor.webhook_token
+                        ? `POST /schedules/webhook/${editor.id}?token=${editor.webhook_token}`
+                        : t('schedules.webhook_after_save')
+                    }
+                  />
+                </label>
+              )}
+
+              {editor.trigger_type === 'file_watch' && (
+                <>
+                  <label className="add-skill-page__field">
+                    <span>{t('schedules.watch_path')}</span>
+                    <Input value={editor.watch_path} onChange={(e) => setEditor({ ...editor, watch_path: e.target.value })} />
+                  </label>
+                  <label className="add-skill-page__field">
+                    <span>{t('schedules.watch_pattern')}</span>
+                    <Input value={editor.watch_pattern} onChange={(e) => setEditor({ ...editor, watch_pattern: e.target.value })} />
+                  </label>
+                  <label className="add-skill-page__field">
+                    <span>{t('schedules.watch_interval')}</span>
+                    <Input
+                      type="number"
+                      value={editor.watch_interval_seconds}
+                      onChange={(e) => setEditor({ ...editor, watch_interval_seconds: Number(e.target.value) || 30 })}
+                    />
+                  </label>
+                </>
+              )}
+
+              {editor.trigger_type === 'cron' && (
+                <>
+                  <label className="add-skill-page__field">
+                    <span>{t('schedules.cron')}</span>
+                    <Input value={editor.cron} onChange={(e) => setEditor({ ...editor, cron: e.target.value })} spellCheck={false} />
+                  </label>
+                  <div className="schedule-editor__presets">
+                    {CRON_PRESETS.map((preset) => (
+                      <Button key={preset.key} variant="outline" size="sm" onClick={() => setEditor({ ...editor, cron: preset.cron })}>
+                        {t(`schedules.preset_${preset.key}`)}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="schedule-editor__preview">
+                    {previewError ? (
+                      <span className="add-skill-page__msg add-skill-page__msg--error">{t('schedules.invalid_cron')}</span>
+                    ) : preview ? (
+                      <>
+                        <div>{preview.description}</div>
+                        <ul className="schedule-editor__runs">
+                          {preview.runs.map((run) => (
+                            <li key={run}>{run}</li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                  </div>
+                </>
+              )}
 
               <label className="add-skill-page__field">
                 <span>{t('schedules.timezone')}</span>

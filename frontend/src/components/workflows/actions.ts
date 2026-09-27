@@ -87,8 +87,70 @@ export const VALUE_KINDS: Record<string, { labelKey: string; type: FieldType }> 
   assert: { labelKey: 'workflows.fld_spec', type: 'text' },
 };
 
+export interface CapabilityParam {
+  name: string;
+  type: string;
+  required?: boolean;
+}
+
+export interface CapabilityAction {
+  name: string;
+  params?: CapabilityParam[];
+  outputs?: string[];
+}
+
+export interface CapabilityKind {
+  kind: string;
+  actions?: CapabilityAction[];
+}
+
+// Backend-derived catalog (single source of truth). When present it overrides
+// the static fallback above so the editor can never offer a non-existent action.
+let REMOTE_CATALOG: Record<string, WorkflowAction[]> | null = null;
+let REMOTE_OUTPUTS: Record<string, Record<string, string[]>> = {};
+
+const FIELD_TYPE: Record<string, FieldType> = {
+  string: 'text',
+  number: 'number',
+  boolean: 'boolean',
+  list: 'csv',
+  object: 'text',
+};
+
+export function setCapabilities(kinds: CapabilityKind[]): void {
+  const next: Record<string, WorkflowAction[]> = {};
+  const outputs: Record<string, Record<string, string[]>> = {};
+  for (const k of kinds) {
+    for (const a of k.actions ?? []) {
+      if (a.outputs?.length) {
+        const bucket = outputs[k.kind] ?? {};
+        bucket[a.name] = a.outputs;
+        outputs[k.kind] = bucket;
+      }
+    }
+    const actions = k.actions ?? [];
+    if (!actions.length) continue;
+    next[k.kind] = actions.map((a) => ({
+      action: a.name,
+      labelKey: `workflows.act_${a.name}`,
+      fields: (a.params ?? []).map((p) => ({
+        key: p.name,
+        type: FIELD_TYPE[p.type] ?? 'text',
+        labelKey: `workflows.fld_${p.name}`,
+      })),
+    }));
+  }
+  REMOTE_CATALOG = next;
+  REMOTE_OUTPUTS = outputs;
+}
+
+/** Declared result fields for a step (usable as {{steps.<id>.<field>}}). */
+export function outputsFor(kind: string, doValue: string): string[] {
+  return REMOTE_OUTPUTS[kind]?.[doValue] ?? [];
+}
+
 export function actionsFor(kind: string): WorkflowAction[] {
-  return ACTION_CATALOG[kind] ?? [];
+  return REMOTE_CATALOG?.[kind] ?? ACTION_CATALOG[kind] ?? [];
 }
 
 export function actionDef(kind: string, doValue: string): WorkflowAction | undefined {

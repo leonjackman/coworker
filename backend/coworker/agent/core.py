@@ -191,7 +191,9 @@ class WorkflowArgs(BaseModel):
         "update",
         "delete",
         "validate",
+        "simulate",
         "render",
+        "capabilities",
         "pending",
         "approve",
         "reject",
@@ -201,7 +203,9 @@ class WorkflowArgs(BaseModel):
             "Workflow operation. list = catalog; get = one workflow's steps; "
             "run = execute deterministically by name (inputs optional); "
             "create/update = save a workflow from full YAML content; delete = remove; "
-            "validate/render = check or canonicalize YAML; pending = drafts awaiting "
+            "validate/render = check or canonicalize YAML; simulate = dry-run a "
+            "workflow and report the exact action/args per step; capabilities = the "
+            "valid kinds/actions/params to author against; pending = drafts awaiting "
             "approval; approve/reject = resolve a draft; runs = run history."
         )
     )

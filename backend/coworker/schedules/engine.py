@@ -59,6 +59,10 @@ class ScheduleEngine:
 
     def ensure_next(self, schedule: Schedule, base: datetime | None = None) -> Schedule:
         """Compute/persist ``next_run_at`` when missing or stale."""
+        # webhook / file_watch triggers are event-driven: no next_run_at.
+        if getattr(schedule, "trigger_type", "cron") != "cron":
+            schedule.next_run_at = ""
+            return schedule
         if not schedule.enabled or not cronlib.cron_ok(schedule.cron):
             schedule.next_run_at = ""
             return schedule
@@ -162,6 +166,42 @@ class ScheduleEngine:
                 return
         self._running[schedule.id] = asyncio.create_task(self._run(schedule.id))
 
+    @staticmethod
+    def _watch_signature(schedule: Schedule) -> str:
+        """A cheap change signature for a watch path: newest matching mtime."""
+        import glob
+        import os
+
+        pattern = schedule.watch_pattern or "*"
+        root = os.path.expanduser(schedule.watch_path)
+        latest = 0.0
+        for path in glob.glob(os.path.join(root, pattern), recursive=True):
+            try:
+                latest = max(latest, os.path.getmtime(path))
+            except OSError:
+                continue
+        return str(latest)
+
+    async def _poll_watch(self, schedule: Schedule) -> None:
+        signature = self._watch_signature(schedule)
+        if not schedule.watch_cursor:
+            # First observation establishes the baseline; do not fire.
+            schedule.watch_cursor = signature
+            self.store.save(schedule)
+            return
+        if signature != schedule.watch_cursor:
+            schedule.watch_cursor = signature
+            self.store.save(schedule)
+            await self.fire(schedule)
+
+    async def trigger_now(self, schedule_id: str) -> bool:
+        """Fire a schedule immediately (used by the inbound webhook endpoint)."""
+        schedule = self.store.get(schedule_id)
+        if schedule is None or not schedule.enabled:
+            return False
+        await self.fire(schedule)
+        return True
+
     async def _process(self, schedule: Schedule, now: datetime) -> None:
         anchor = cronlib.parse_iso(schedule.next_run_at)
         if anchor is None:
@@ -209,7 +249,14 @@ class ScheduleEngine:
             return float(self.tick_cap_seconds)
         next_times: list[datetime] = []
         for schedule in schedules:
-            if not schedule.enabled or not cronlib.cron_ok(schedule.cron):
+            if not schedule.enabled:
+                continue
+            if getattr(schedule, "trigger_type", "cron") == "file_watch":
+                await self._poll_watch(schedule)
+                continue
+            if getattr(schedule, "trigger_type", "cron") == "webhook":
+                continue  # fired by the inbound webhook endpoint
+            if not cronlib.cron_ok(schedule.cron):
                 continue
             self.ensure_next(schedule, now)
             await self._process(schedule, now)

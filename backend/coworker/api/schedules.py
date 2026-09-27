@@ -22,6 +22,11 @@ class SchedulePayload(BaseModel):
     inputs: dict[str, Any] | None = None
     cron: str | None = None
     timezone: str | None = None
+    trigger_type: str | None = None
+    webhook_token: str | None = None
+    watch_path: str | None = None
+    watch_pattern: str | None = None
+    watch_interval_seconds: int | None = None
     enabled: bool | None = None
     overlap: str | None = None
     misfire: str | None = None
@@ -115,6 +120,20 @@ async def run_schedule_now(schedule_id: str):
     if result.get("status") == "error" and "not found" in (result.get("message") or ""):
         raise _not_found(schedule_id)
     return result
+
+
+@router.post("/schedules/webhook/{schedule_id}")
+async def schedule_webhook(schedule_id: str, token: str = ""):
+    """Inbound webhook: fire a webhook-triggered schedule (token-protected)."""
+    schedule = schedule_manager.get(schedule_id)
+    if schedule is None:
+        raise _not_found(schedule_id)
+    if schedule.get("trigger_type") != "webhook":
+        raise HTTPException(status_code=400, detail="schedule is not a webhook trigger")
+    expected = str(schedule.get("webhook_token") or "")
+    if expected and token != expected:
+        raise HTTPException(status_code=403, detail="invalid webhook token")
+    return await schedule_manager.trigger_webhook(schedule_id)
 
 
 @router.get("/schedules/{schedule_id}/runs")

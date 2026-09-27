@@ -11,6 +11,7 @@ import { SearchInput } from './ui/search-input';
 import { WorkflowGraphEditor, type GraphEditorTarget } from './WorkflowGraphEditor';
 import { WorkflowStepList } from './workflows/WorkflowStepList';
 import { WorkflowFlowGraph } from './workflows/WorkflowFlowGraph';
+import { setCapabilities } from './workflows/actions';
 import type {
   WorkflowEntry,
   WorkflowDraft,
@@ -103,16 +104,18 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, drafts, notes, tmpl] = await Promise.all([
+      const [list, drafts, notes, tmpl, caps] = await Promise.all([
         chatService.listWorkflows(),
         chatService.listPendingWorkflows().catch(() => ({ status: 'ok', pending: [] })),
         chatService.listNotifications().catch(() => ({ status: 'ok', notifications: [], unread: 0 })),
         chatService.listWorkflowTemplates().catch(() => ({ status: 'ok', templates: [] })),
+        chatService.getWorkflowCapabilities().catch(() => null),
       ]);
       setWorkflows(list.workflows);
       setPending(drafts.pending);
       setNotifications(notes.notifications);
       setTemplates(tmpl.templates);
+      if (caps?.kinds) setCapabilities(caps.kinds);
     } catch (error) {
       setMessageType('error');
       setMessage(translateError(error) || t('workflows.failed_to_load'));

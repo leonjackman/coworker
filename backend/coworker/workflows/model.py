@@ -19,7 +19,10 @@ from typing import Any
 # Action kinds are dispatched to a StepEnvironment; control kinds are handled
 # by the executor itself.
 ACTION_KINDS = frozenset(
-    {"command", "tool", "browser", "app", "computer", "skill", "human", "agentic"}
+    {
+        "command", "tool", "browser", "app", "computer", "skill", "human", "agentic",
+        "http", "file", "transform", "notify",
+    }
 )
 CONTROL_KINDS = frozenset(
     {"set", "assert", "wait", "branch", "loop", "parallel", "subworkflow"}
@@ -151,6 +154,7 @@ class Workflow:
     description: str
     steps: list[Step]
     version: int = 1
+    schema_version: int = 1
     platform: str = ""
     inputs: list[WorkflowInput] = field(default_factory=list)
     outputs: dict[str, str] = field(default_factory=dict)
@@ -182,6 +186,7 @@ class Workflow:
             "name": self.name,
             "description": self.description,
             "version": self.version,
+            "schema_version": self.schema_version,
             "platform": self.platform,
             "inputs": [i.to_dict() for i in self.inputs],
             "outputs": dict(self.outputs),

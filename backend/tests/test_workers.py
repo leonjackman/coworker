@@ -27,6 +27,13 @@ class TestWorkerConfig:
         config = WorkerConfig.for_single_agent(max_concurrent=None)
         assert config.max_concurrent == 4  # defaults to 4
 
+    def test_for_single_agent_accepts_timeout(self):
+        """Regression: the workflow agentic/takeover path passes timeout=...,
+        which used to raise TypeError and broke every agentic step."""
+        config = WorkerConfig.for_single_agent(max_concurrent=1, timeout=30)
+        assert config.timeout == 30
+        assert config.max_concurrent == 1
+
     def test_for_delegation(self):
         config = WorkerConfig.for_delegation(
             memory_rel="proj/agent/BASE/MEMORY.md",

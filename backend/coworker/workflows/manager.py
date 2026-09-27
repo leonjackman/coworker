@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from coworker.logger import get_logger
 
+from .capabilities import DSL_VERSION, CapabilityRegistry
 from .env import StepEnvironment
 from .executor import WorkflowExecutor
 from .model import (
@@ -21,10 +22,12 @@ from .model import (
     WorkflowValidationError,
     Step,
 )
-from .parser import is_valid_name, parse_workflow, renumber_steps, render_workflow, validate
-from .recorder import record_draft
+from .capabilities import Diagnostic
+from .parser import is_valid_name, parse_workflow, renumber_steps, render_workflow
 from .registry import WorkflowRegistry
+from .simulation import simulate_workflow
 from .store import WorkflowStore
+from .validation import validate_workflow
 
 logger = get_logger(__name__)
 
@@ -53,6 +56,18 @@ class WorkflowManager:
         self.executor = WorkflowExecutor(self.store, secrets=secrets, listener=listener)
         # Used to validate that `skill` steps reference real skills (hard check).
         self.skill_manager = skill_manager
+        # Capability registry: single source of truth for kinds/actions/params.
+        # Declared by default; the agent/scheduler may upgrade it with live tool
+        # schemas via ``use_tools`` so validation matches the real environment.
+        self.capabilities_registry = CapabilityRegistry.declared()
+
+    def use_tools(self, tool_map: dict[str, Any] | None) -> None:
+        """Re-derive the capability registry from the live tool schemas."""
+        self.capabilities_registry = CapabilityRegistry.from_tools(tool_map)
+        self.executor.registry = self.capabilities_registry
+
+    def capabilities(self) -> dict[str, Any]:
+        return self.capabilities_registry.to_schema()
 
     # ── catalog ─────────────────────────────────────────────────────────
 
@@ -67,10 +82,17 @@ class WorkflowManager:
         if include_steps:
             data["yaml"] = self.store.read_text(name) or ""
         data["history"] = self.store.history(name)
+        diags = self._all_diagnostics(workflow)
+        data["valid"] = not diags
+        data["diagnostics"] = [d.to_dict() for d in diags]
         return data
 
     def prompt_block(self) -> str:
         return self.registry.prompt_block()
+
+    def authoring_block(self) -> str:
+        """Always-on workflow authoring spec (independent of existing workflows)."""
+        return self.capabilities_registry.authoring_text()
 
     # ── mutations ───────────────────────────────────────────────────────
 
@@ -82,6 +104,7 @@ class WorkflowManager:
 
         workflow = Workflow(
             **{**workflow.__dict__, "version": 1 if not overwrite else self.store.next_version(workflow.name),
+               "schema_version": DSL_VERSION,
                "status": "active", "source": "user", "fingerprint": current_fingerprint()}
         )
         saved = self.store.save(workflow, archive=overwrite)
@@ -99,6 +122,7 @@ class WorkflowManager:
 
         workflow = Workflow(
             **{**workflow.__dict__, "version": self.store.next_version(name),
+               "schema_version": DSL_VERSION,
                "status": workflow.status or "active", "source": existing.source,
                "fingerprint": current_fingerprint()}
         )
@@ -252,18 +276,49 @@ class WorkflowManager:
             status=str(payload.get("status") or "active"),
             source="user",
         )
-        errors = list(diagnostics) + self._all_errors(workflow)
+        diags = self._all_diagnostics(workflow)
+        errors = list(diagnostics) + [str(d) for d in diags]
         return {
             "status": "ok" if not errors else "error",
             "yaml": render_workflow(workflow),
             "errors": errors,
+            "diagnostics": [d.to_dict() for d in diags],
             "workflow": workflow.to_dict(),
         }
 
     def validate(self, content: str) -> dict[str, Any]:
         workflow, diagnostics = parse_workflow(content)
-        errors = self._all_errors(workflow) if workflow is not None else diagnostics
-        return {"status": "ok" if not errors else "error", "errors": errors, "valid": not errors}
+        if workflow is None:
+            return {"status": "error", "errors": diagnostics, "valid": False, "diagnostics": []}
+        diags = self._all_diagnostics(workflow)
+        errors = [str(d) for d in diags if d.severity == "error"]
+        warnings = [str(d) for d in diags if d.severity == "warning"]
+        return {
+            "status": "error" if errors else "ok",
+            "errors": errors,
+            "warnings": warnings,
+            "diagnostics": [d.to_dict() for d in diags],
+            "valid": not errors,
+        }
+
+    def simulate(self, content: str, inputs: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Dry-run a workflow: validate + report per-step resolved action/args."""
+        workflow, diagnostics = parse_workflow(content)
+        if workflow is None:
+            return {"status": "error", "errors": diagnostics, "diagnostics": []}
+        diags = self._all_diagnostics(workflow)
+        errors = [d for d in diags if d.severity == "error"]
+        warnings = [str(d) for d in diags if d.severity == "warning"]
+        if errors:
+            return {
+                "status": "error",
+                "errors": [str(d) for d in errors],
+                "warnings": warnings,
+                "diagnostics": [d.to_dict() for d in diags],
+            }
+        result = simulate_workflow(workflow, self.capabilities_registry, inputs)
+        result["warnings"] = warnings
+        return result
 
     # ── drafts ──────────────────────────────────────────────────────────
 
@@ -316,9 +371,9 @@ class WorkflowManager:
         if workflow is None:
             return {"status": "error", "message": "; ".join(diagnostics)}
         action = str(workflow.provenance.get("action") or "create")
-        ref_errors = self._reference_errors(workflow)
-        if ref_errors:
-            return {"status": "error", "message": "; ".join(ref_errors)}
+        errors = self._all_errors(workflow)
+        if errors:
+            return {"status": "error", "message": "; ".join(errors)}
         existing = self.store.get(workflow.name)
         from dataclasses import replace
 
@@ -464,15 +519,12 @@ class WorkflowManager:
         sources: list[str] | None = None,
         action: str = "create",
     ) -> dict[str, Any]:
-        draft = record_draft(
-            name,
-            steps,
-            description=description,
-            inputs=inputs,
-            triggers=triggers,
-            sources=sources,
+        from .authoring import store
+
+        return store(
+            self, name=name, steps=steps, description=description, action=action,
+            sources=sources, inputs=inputs, approval_required=True,
         )
-        return self.stage_draft(name, draft, sources=sources, action=action)
 
     def apply_agent_workflow(
         self,
@@ -484,18 +536,12 @@ class WorkflowManager:
         sources: list[str] | None = None,
     ) -> dict[str, Any]:
         """Directly create/update a workflow (used when approval is disabled)."""
-        content = record_draft(
-            name,
-            steps,
-            description=description or name,
-            sources=sources,
+        from .authoring import store
+
+        return store(
+            self, name=name, steps=steps, description=description or name, action=action,
+            sources=sources, approval_required=False,
         )
-        exists = self.store.exists(name)
-        if action == "update" or exists:
-            if exists:
-                return self.update(name, content)
-            return self.create(content)
-        return self.create(content)
 
     # ── helpers ─────────────────────────────────────────────────────────
 
@@ -514,33 +560,41 @@ class WorkflowManager:
             return True
         return False
 
-    def _reference_errors(self, workflow: Workflow) -> list[str]:
+    def _reference_diagnostics(self, workflow: Workflow) -> list[Diagnostic]:
         """Hard validation: referenced skills / sub-workflows must exist."""
-        errors: list[str] = []
+        diags: list[Diagnostic] = []
 
         def walk(steps: list[Step]) -> None:
             for step in steps:
                 if step.kind == "skill":
                     name = step.do or str((step.params or {}).get("skill") or "")
                     if not name:
-                        errors.append(f"step '{step.id}': skill step requires a skill name")
+                        diags.append(Diagnostic(step.id, "do", "missing_skill", "skill step requires a skill name"))
                     elif not self._skill_available(name):
-                        errors.append(f"step '{step.id}': skill not found: {name}")
+                        diags.append(Diagnostic(step.id, "do", "skill_not_found", f"skill not found: {name}"))
                 elif step.kind == "subworkflow":
                     name = step.do or str((step.params or {}).get("workflow") or "")
                     if not name:
-                        errors.append(f"step '{step.id}': subworkflow step requires a workflow name")
+                        diags.append(Diagnostic(step.id, "do", "missing_subworkflow", "subworkflow step requires a workflow name"))
                     elif self.store.get(name) is None:
-                        errors.append(f"step '{step.id}': workflow not found: {name}")
+                        diags.append(Diagnostic(step.id, "do", "subworkflow_not_found", f"workflow not found: {name}"))
                 for slot in (step.then, step.else_, step.body):
                     if slot:
                         walk(slot)
 
         walk(workflow.steps)
-        return errors
+        return diags
+
+    def _all_diagnostics(self, workflow: Workflow) -> list[Diagnostic]:
+        diags = validate_workflow(workflow, self.capabilities_registry)
+        diags.extend(self._reference_diagnostics(workflow))
+        return diags
 
     def _all_errors(self, workflow: Workflow) -> list[str]:
-        return validate(workflow) + self._reference_errors(workflow)
+        return [str(d) for d in self._all_diagnostics(workflow) if d.severity == "error"]
+
+    def _all_warnings(self, workflow: Workflow) -> list[str]:
+        return [str(d) for d in self._all_diagnostics(workflow) if d.severity == "warning"]
 
     def _parse_or_raise(self, content: str, *, name_hint: str = "") -> Workflow:
         workflow, diagnostics = parse_workflow(content, name_hint=name_hint)
