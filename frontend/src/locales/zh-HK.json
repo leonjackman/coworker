@@ -1648,5 +1648,6 @@
   "workflows.code_json": "工作流 JSON",
   "workflows.code_render_yaml": "預覽 YAML",
   "workflows.open_in_studio": "在 Studio 中開啟",
-  "workflows.runs": "執行記錄"
+  "workflows.runs": "執行記錄",
+  "workflows.back_to_home": "返回 Studio 首頁"
 }

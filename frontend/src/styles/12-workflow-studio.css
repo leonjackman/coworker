@@ -18,6 +18,15 @@
   min-height: 0;
 }
 
+/* Radix poppers (dropdowns/submenus/selects/tooltips) portal to <body> and copy
+ * the content's z-index (50) onto their wrapper as an INLINE style, which sits
+ * BEHIND the fixed `.wfe-root` overlay (z-index 4000) — menus would open but be
+ * invisible and unclickable. `!important` is required to beat Radix's inline
+ * style; the `:has()` scope keeps it from affecting the rest of the app. */
+body:has(.wfe-root) [data-radix-popper-content-wrapper] {
+  z-index: 7000 !important;
+}
+
 /* ── Topbar ─────────────────────────────────────────────────────────── */
 .wfs-topbar {
   display: flex;
@@ -59,6 +68,32 @@
   font-size: 13px;
 }
 .wfs-topbar__back:hover { background: var(--panel-hover); }
+
+/* Error hint banner (dismissible) */
+.wfs-error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.wfs-error-banner__list {
+  flex: 1;
+  min-width: 0;
+}
+.wfs-error-banner__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.wfs-error-banner__close:hover {
+  background: color-mix(in oklch, var(--danger) 18%, transparent);
+}
 
 .wfs-doc {
   display: flex;

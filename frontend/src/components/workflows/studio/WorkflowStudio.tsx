@@ -28,6 +28,7 @@ import {
   Trash2,
   Undo2,
   Unlock,
+  X,
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -89,6 +90,7 @@ import {
   wireList,
   type StepPath,
 } from './workflowTree';
+import { loadStudioSettings, saveStudioSettings, type EdgeStyle } from './studioSettings';
 import type {
   WorkflowEntry,
   WorkflowEvidence,
@@ -124,6 +126,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const isWindow = mode === 'window';
   const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
+  // Persisted Studio preferences (edge style, minimap, dock layout…). Loaded
+  // once so every useState below can seed from the user's last session.
+  const initialSettings = useMemo(() => loadStudioSettings(), []);
+
   // ── document state ──────────────────────────────────────────────────
   const [name, setName] = useState(target.name);
   const [description, setDescription] = useState('');
@@ -143,11 +149,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [runStatus, setRunStatus] = useState<Record<string, string>>({});
-  const [edgeType, setEdgeType] = useState<'smoothstep' | 'straight' | 'default'>('smoothstep');
+  const [edgeType, setEdgeType] = useState<EdgeStyle>(initialSettings.edgeType);
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-  const [interactive, setInteractive] = useState(true);
-  const [showMinimap, setShowMinimap] = useState(true);
+  const [interactive, setInteractive] = useState(initialSettings.interactive);
+  const [showMinimap, setShowMinimap] = useState(initialSettings.showMinimap);
 
   // ── versions / runs / templates ─────────────────────────────────────
   const [versions, setVersions] = useState<WorkflowVersion[]>([]);
@@ -165,15 +171,15 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [inputsJson, setInputsJson] = useState('{}');
   const [runBusy, setRunBusy] = useState(false);
 
-  // ── UI state ────────────────────────────────────────────────────────
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [leftWidth, setLeftWidth] = useState(240);
-  const [leftTab, setLeftTab] = useState<LeftTab>('nodes');
-  const [rightOpen, setRightOpen] = useState(true);
-  const [rightWidth, setRightWidth] = useState(320);
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('basic');
-  const [bottomOpen, setBottomOpen] = useState(false);
-  const [bottomTab, setBottomTab] = useState<BottomTab>('problems');
+  // ── UI state (seeded from persisted Studio settings) ────────────────
+  const [leftOpen, setLeftOpen] = useState(initialSettings.leftOpen);
+  const [leftWidth, setLeftWidth] = useState(initialSettings.leftWidth);
+  const [leftTab, setLeftTab] = useState<LeftTab>(initialSettings.leftTab as LeftTab);
+  const [rightOpen, setRightOpen] = useState(initialSettings.rightOpen);
+  const [rightWidth, setRightWidth] = useState(initialSettings.rightWidth);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>(initialSettings.inspectorTab as InspectorTab);
+  const [bottomOpen, setBottomOpen] = useState(initialSettings.bottomOpen);
+  const [bottomTab, setBottomTab] = useState<BottomTab>(initialSettings.bottomTab as BottomTab);
   const [codeMode, setCodeMode] = useState(false);
   const [codeText, setCodeText] = useState('');
   const [yamlPreview, setYamlPreview] = useState('');
@@ -694,8 +700,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const cycleEdgeType = useCallback(() => {
     setEdgeType((current) => {
-      const order = ['smoothstep', 'straight', 'default'] as const;
-      const nextType = order[(order.indexOf(current) + 1) % order.length] as (typeof order)[number];
+      const order: EdgeStyle[] = ['default', 'smoothstep', 'straight'];
+      const nextType = order[(order.indexOf(current) + 1) % order.length]!;
       setEdges((cur) => cur.map((e) => ({ ...e, data: { ...e.data, edgeType: nextType } })));
       return nextType;
     });
@@ -1021,6 +1027,35 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     }
   }, [name, description, version, inputs, steps, triggers]);
 
+  // ── persist Studio settings ─────────────────────────────────────────
+  useEffect(() => {
+    saveStudioSettings({
+      edgeType,
+      showMinimap,
+      interactive,
+      leftOpen,
+      leftWidth,
+      leftTab,
+      rightOpen,
+      rightWidth,
+      inspectorTab,
+      bottomOpen,
+      bottomTab,
+    });
+  }, [
+    edgeType,
+    showMinimap,
+    interactive,
+    leftOpen,
+    leftWidth,
+    leftTab,
+    rightOpen,
+    rightWidth,
+    inspectorTab,
+    bottomOpen,
+    bottomTab,
+  ]);
+
   // ── autosave ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isWindow || !started) return;
@@ -1036,6 +1071,16 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     if (dirty && !window.confirm(t('workflows.unsaved_confirm'))) return;
     onClose();
   }, [dirty, onClose]);
+
+  // ── return to Studio home ───────────────────────────────────────────
+  // Leaves the current document (confirming unsaved edits) and shows the
+  // start screen. Reset `persistedRef` so a subsequent blank/new document is
+  // treated as NEW and never overwrites the workflow we just left.
+  const goHome = useCallback(() => {
+    if (dirty && !window.confirm(t('workflows.unsaved_confirm'))) return;
+    persistedRef.current = false;
+    setStarted(false);
+  }, [dirty]);
 
   // ── keyboard shortcuts ──────────────────────────────────────────────
   useEffect(() => {
@@ -1153,14 +1198,18 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           canUndo={false}
           canRedo={false}
           menus={<span />}
-          onBack={onClose}
+          onBack={goHome}
           onSave={() => save(false)}
           onRun={() => undefined}
         />
+        <ErrorBanner errors={errors} onDismiss={() => setErrors([])} />
         <StartScreen
           templates={templates}
           busyId={templateBusy}
-          onBlank={() => loadDocument({ name: '', description: '', steps: [] })}
+          onBlank={() => {
+            persistedRef.current = false;
+            loadDocument({ name: '', description: '', steps: [] });
+          }}
           onOpen={() => setOpenDialog(true)}
           onImport={() => fileInputRef.current?.click()}
           onTemplate={(tpl) => void installTemplate(tpl)}
@@ -1192,7 +1241,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const menus = (
     <>
       <Menu label={t('workflows.menu_file')}>
-        <DropdownMenuItem onSelect={() => setStarted(false)}>
+        <DropdownMenuItem onSelect={goHome}>
           {t('workflows.new')}
           <DropdownMenuShortcut>⌘N</DropdownMenuShortcut>
         </DropdownMenuItem>
@@ -1291,7 +1340,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         canRedo={canRedo}
         saveState={saveState}
         menus={menus}
-        onBack={onClose}
+        onBack={goHome}
         onSave={() => save(false)}
         onRun={() => {
           setBottomTab('output');
@@ -1300,13 +1349,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         }}
       />
 
-      {errors.length > 0 ? (
-        <div className="add-skill-page__msg add-skill-page__msg--error" style={{ margin: '6px 12px' }}>
-          {errors.map((e) => (
-            <div key={e}>{e}</div>
-          ))}
-        </div>
-      ) : null}
+      <ErrorBanner errors={errors} onDismiss={() => setErrors([])} />
 
       <div className="wfs-main">
         {leftOpen ? (
@@ -1692,6 +1735,32 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 }
 
 // ── small helpers ─────────────────────────────────────────────────────
+function ErrorBanner({ errors, onDismiss }: { errors: string[]; onDismiss: () => void }) {
+  if (errors.length === 0) return null;
+  return (
+    <div
+      className="add-skill-page__msg add-skill-page__msg--error wfs-error-banner"
+      style={{ margin: '6px 12px' }}
+      role="alert"
+    >
+      <div className="wfs-error-banner__list">
+        {errors.map((e) => (
+          <div key={e}>{e}</div>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="wfs-error-banner__close"
+        onClick={onDismiss}
+        title={t('common.close')}
+        aria-label={t('common.close')}
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
 function Menu({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <DropdownMenu>
@@ -1782,9 +1851,15 @@ function StudioTopbar({
 }: TopbarProps) {
   return (
     <div className={`wfs-topbar${isWindow ? ' wfs-topbar--window' : ''}${isWindow && isMac ? ' wfs-topbar--mac' : ''}`}>
-      <button type="button" className="wfs-topbar__back" onClick={onBack} title={t('workflows.back_to_library')}>
+      <button
+        type="button"
+        className="wfs-topbar__back"
+        onClick={onBack}
+        title={t('workflows.back_to_home')}
+        aria-label={t('workflows.back_to_home')}
+      >
         <ArrowLeft size={14} />
-        {t('workflows.library')}
+        {t('workflows.back_to_home')}
       </button>
       <span className="wfs-doc">
         <span className="wfs-doc__dot" />

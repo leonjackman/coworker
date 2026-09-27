@@ -1638,5 +1638,6 @@
   "workflows.code_json": "Workflow JSON",
   "workflows.code_render_yaml": "Preview YAML",
   "workflows.open_in_studio": "Open in Studio",
-  "workflows.runs": "Runs"
+  "workflows.runs": "Runs",
+  "workflows.back_to_home": "Back to Studio home"
 }
