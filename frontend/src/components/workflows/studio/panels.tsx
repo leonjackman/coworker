@@ -510,6 +510,7 @@ export function NodeInspector({
   onAddChild: (slot: 'then' | 'else' | 'body') => void;
 }) {
   const kind = selected.kind ?? '';
+  const KindIcon = kindIcon(kind);
   const params = (selected.params ?? {}) as Record<string, unknown>;
   const action = actionDef(kind, selected.do ?? '');
   const locator = (selected.locator ?? {}) as Record<string, unknown>;
@@ -600,20 +601,15 @@ export function NodeInspector({
 
       {tab === 'basic' ? (
         <>
-          <label className="wfs-field">
+          {/* Node type is fixed once the node is created (chosen from the left
+              palette) — it is shown here read-only, not editable. */}
+          <div className="wfs-field">
             <span>{t('workflows.step_kind')}</span>
-            <select className="input" value={kind} onChange={(e) => onPatch({ kind: e.target.value, do: '' })}>
-              {KIND_GROUPS.map((group) => (
-                <optgroup key={group.id} label={t(group.labelKey)}>
-                  {group.kinds.map((k) => (
-                    <option key={k} value={k}>
-                      {t(kindLabelKey(k))}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
+            <div className="wfs-kind-static">
+              <KindIcon size={14} />
+              <span>{t(kindLabelKey(kind))}</span>
+            </div>
+          </div>
 
           {actionsFor(kind).length > 0 ? (
             <>

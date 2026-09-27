@@ -235,6 +235,9 @@ class WorkflowStepsPayload(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list)
     triggers: list[str] | None = None
     status: str = "active"
+    # Explicit canvas endpoint wiring; ``None`` = derive from step order.
+    entry: str | None = None
+    exits: list[str] | None = None
 
 
 @router.post("/workflows/render/steps")

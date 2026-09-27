@@ -159,6 +159,12 @@ class Workflow:
     inputs: list[WorkflowInput] = field(default_factory=list)
     outputs: dict[str, str] = field(default_factory=dict)
     triggers: list[str] = field(default_factory=list)
+    # Canvas wiring for the trigger/output endpoint nodes. ``None`` means "derive
+    # from the step list" (legacy behaviour); an explicit value (including an
+    # empty string / empty list) means the author wired the endpoints by hand, so
+    # the trigger may be unconnected and any steps may feed the output.
+    entry: str | None = None
+    exits: list[str] | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
     fingerprint: str = ""
     status: str = "active"
@@ -191,6 +197,8 @@ class Workflow:
             "inputs": [i.to_dict() for i in self.inputs],
             "outputs": dict(self.outputs),
             "triggers": list(self.triggers),
+            "entry": self.entry,
+            "exits": list(self.exits) if self.exits is not None else None,
             "provenance": dict(self.provenance),
             "fingerprint": self.fingerprint,
             "status": self.status,

@@ -274,6 +274,8 @@ class WorkflowManager:
             inputs=_parse_inputs(payload.get("inputs")),
             triggers=[str(t) for t in (payload.get("triggers") or ["manual"])],
             status=str(payload.get("status") or "active"),
+            entry=payload.get("entry"),
+            exits=payload.get("exits"),
             source="user",
         )
         diags = self._all_diagnostics(workflow)

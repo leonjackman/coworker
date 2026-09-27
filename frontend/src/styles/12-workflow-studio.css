@@ -334,6 +334,51 @@ body:has(.wfe-root) [data-radix-popper-content-wrapper] {
   tab-size: 2;
 }
 
+/* Marquee (multi) selection toolbar on the canvas */
+.wfs-selbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 999px;
+  background: var(--material-panel-solid, var(--material-panel));
+  box-shadow: 0 6px 24px var(--material-shadow);
+}
+.wfs-selbar__count {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  padding: 0 8px 0 6px;
+  white-space: nowrap;
+}
+.wfs-selbar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+}
+.wfs-selbar__btn:hover { background: var(--panel-hover); }
+.wfs-selbar__btn--danger { color: var(--danger); }
+
+.wfs-multi-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+.wfs-multi-actions > button { justify-content: flex-start; }
+
 .wfs-yaml-preview {
   display: flex;
   flex-direction: column;
@@ -437,6 +482,17 @@ body:has(.wfe-root) [data-radix-popper-content-wrapper] {
 .wfs-field input,
 .wfs-field select,
 .wfs-field textarea { width: 100%; }
+.wfs-kind-static {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--material-border);
+  border-radius: 7px;
+  background: var(--material-panel);
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
 .wfs-subtabs {
   display: flex;
   gap: 2px;

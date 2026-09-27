@@ -937,6 +937,9 @@ export interface WorkflowEntry {
   inputs: WorkflowInputSpec[];
   outputs: Record<string, string>;
   triggers: string[];
+  /** Explicit canvas endpoint wiring (null = derive from step order). */
+  entry?: string | null;
+  exits?: string[] | null;
   provenance: Record<string, unknown>;
   status: string;
   source: string;

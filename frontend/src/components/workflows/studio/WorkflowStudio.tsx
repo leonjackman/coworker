@@ -3,6 +3,7 @@ import {
   BackgroundVariant,
   MarkerType,
   ReactFlow,
+  SelectionMode,
   useEdgesState,
   useNodesState,
   type Connection,
@@ -36,6 +37,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../ui/button';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
@@ -54,6 +56,7 @@ import {
   flowEndpoints,
   layoutGraph,
   nodeTypes,
+  remapEndpointIds,
   renumberWorkflowSteps,
 } from '../flowGraph';
 import { edgeTypes } from '../EditableEdge';
@@ -78,12 +81,14 @@ import {
   type StudioCommand,
 } from './panels';
 import {
+  duplicateLeaves,
   getList,
   locate,
   newStep,
   parsePath,
   pathKey,
   removeLeaf,
+  removeLeaves,
   setList,
   updateLeaf,
   validateTree,
@@ -137,8 +142,16 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [inputs, setInputs] = useState<WorkflowEntry['inputs']>([]);
   const [triggers, setTriggers] = useState<string[]>(['manual']);
   const [outputs, setOutputs] = useState<Record<string, string>>({});
+  // Explicit endpoint wiring: null = derive from step order.
+  const [entry, setEntry] = useState<string | null>(null);
+  const [exits, setExits] = useState<string[] | null>(null);
+  const entryRef = useRef<string | null>(null);
+  const exitsRef = useRef<string[] | null>(null);
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  // Marquee / multi selection (React Flow node ids, excluding endpoint pills).
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
+  const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
   const [baseline, setBaseline] = useState('');
   const [errors, setErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -172,6 +185,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [runBusy, setRunBusy] = useState(false);
 
   // ── UI state (seeded from persisted Studio settings) ────────────────
+  const [autoSave, setAutoSave] = useState(initialSettings.autoSave);
   const [leftOpen, setLeftOpen] = useState(initialSettings.leftOpen);
   const [leftWidth, setLeftWidth] = useState(initialSettings.leftWidth);
   const [leftTab, setLeftTab] = useState<LeftTab>(initialSettings.leftTab as LeftTab);
@@ -205,6 +219,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const idToPathRef = useRef<Map<string, string>>(new Map());
   const historyRef = useRef<{ snaps: string[]; index: number }>({ snaps: [], index: -1 });
   const suspendHistoryRef = useRef(false);
+  // Last document revision an autosave was attempted for (avoids retry loops).
+  const autoSaveTriedRef = useRef('');
+  // Signature of the last validation-problem set shown in the banner.
+  const validationBannerRef = useRef('');
   // Name this document was last SAVED as on the backend ('' = never saved).
   // Renaming the doc keeps this as the update target so renames work.
   const persistedNameRef = useRef(target.isNew ? '' : target.name);
@@ -214,17 +232,12 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const validation = useMemo(() => validateTree(steps), [steps]);
   const dirty = useMemo(
-    () => JSON.stringify({ name, description, steps }) !== baseline,
-    [name, description, steps, baseline],
+    () => docKey(name, description, steps, entry, exits) !== baseline,
+    [name, description, steps, entry, exits, baseline],
   );
 
   const selectedPath = useMemo<StepPath>(() => (selectedId ? parsePath(selectedId) : []), [selectedId]);
   const selected = useMemo(() => locate(steps, selectedPath), [steps, selectedPath]);
-
-  const snapshotOf = useCallback(
-    (s: WorkflowStep[], n: string, d: string) => JSON.stringify({ s, n, d }),
-    [],
-  );
 
   const syncHistoryFlags = useCallback(() => {
     const h = historyRef.current;
@@ -233,12 +246,12 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   }, []);
 
   const resetHistory = useCallback(
-    (s: WorkflowStep[], n: string, d: string) => {
+    (s: WorkflowStep[], n: string, d: string, e: string | null, x: string[] | null) => {
       suspendHistoryRef.current = true;
-      historyRef.current = { snaps: [snapshotOf(s, n, d)], index: 0 };
+      historyRef.current = { snaps: [docKey(n, d, s, e, x)], index: 0 };
       syncHistoryFlags();
     },
-    [snapshotOf, syncHistoryFlags],
+    [syncHistoryFlags],
   );
 
   const decorateEdges = useCallback(
@@ -249,9 +262,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         data: {
           ...e.data,
           edgeType,
-          ...(e.id.startsWith('endpoint-')
-            ? {}
-            : { onDelete: (id: string) => deleteEdgeRef.current(id) }),
+          onDelete: (id: string) => deleteEdgeRef.current(id),
         },
       })),
     [edgeType],
@@ -282,11 +293,18 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       ];
       const marker = { type: MarkerType.ArrowClosed } as const;
       const allEdges = [...built.edges];
-      const { inputTarget, outputSource } = flowEndpoints(next);
+      // Explicit endpoint wiring (entry/exits) wins; otherwise derive from the
+      // step order. An explicit empty value means "not connected".
+      const derived = flowEndpoints(next);
+      const entryVal = entryRef.current;
+      const exitsVal = exitsRef.current;
+      const inputTarget = entryVal !== null ? entryVal : derived.inputTarget;
+      const exitSources = exitsVal !== null ? exitsVal : derived.outputSource ? [derived.outputSource] : [];
       if (inputTarget)
         allEdges.unshift({ id: 'endpoint-in', source: '__input__', target: inputTarget, type: 'smoothstep', markerEnd: marker });
-      if (outputSource)
-        allEdges.push({ id: 'endpoint-out', source: outputSource, target: '__output__', type: 'smoothstep', markerEnd: marker });
+      exitSources.forEach((source, index) => {
+        allEdges.push({ id: `endpoint-out-${index}`, source, target: '__output__', type: 'smoothstep', markerEnd: marker });
+      });
       return { nodes: allNodes, edges: allEdges, nodeIdToPath: built.nodeIdToPath };
     },
     [],
@@ -323,6 +341,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       inputs?: WorkflowEntry['inputs'];
       triggers?: string[];
       outputs?: Record<string, string>;
+      entry?: string | null;
+      exits?: string[] | null;
       steps: WorkflowStep[];
     }) => {
       const initial = data.steps.length > 0 ? data.steps : [newStep([])];
@@ -332,14 +352,20 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setInputs(data.inputs ?? []);
       setTriggers(data.triggers ?? ['manual']);
       setOutputs(data.outputs ?? {});
+      const entryVal = data.entry ?? null;
+      const exitsVal = data.exits ?? null;
+      entryRef.current = entryVal;
+      exitsRef.current = exitsVal;
+      setEntry(entryVal);
+      setExits(exitsVal);
       setErrors([]);
       setRunStatus({});
       setRun(null);
       setEvents([]);
       setEvidence([]);
       setSelectedId(pathKey([0]));
-      setBaseline(JSON.stringify({ name: data.name, description: data.description, steps: initial }));
-      resetHistory(initial, data.name, data.description);
+      setBaseline(docKey(data.name, data.description, initial, entryVal, exitsVal));
+      resetHistory(initial, data.name, data.description, entryVal, exitsVal);
       const collected = collectStepGraph(initial, {});
       const laid = layoutGraph(collected.nodes, collected.edges);
       positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
@@ -385,6 +411,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           inputs: wf.inputs,
           triggers: wf.triggers,
           outputs: wf.outputs,
+          entry: wf.entry ?? null,
+          exits: wf.exits ?? null,
           steps: wf.steps ?? [],
         });
         persistedNameRef.current = wf.name;
@@ -427,7 +455,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       suspendHistoryRef.current = false;
       return;
     }
-    const snap = snapshotOf(steps, name, description);
+    const snap = docKey(name, description, steps, entry, exits);
     const h = historyRef.current;
     if (h.index >= 0 && h.snaps[h.index] === snap) return;
     const trimmed = h.snaps.slice(0, h.index + 1);
@@ -436,14 +464,38 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     historyRef.current = { snaps: limited, index: limited.length - 1 };
     syncHistoryFlags();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [steps, name, description, started]);
+  }, [steps, name, description, entry, exits, started]);
+
+  // Surface validation problems in the dismissible banner. Fires ONCE per
+  // distinct problem set (never per keystroke / autosave attempt), so the banner
+  // can't flicker or loop; it clears automatically once the document is valid.
+  useEffect(() => {
+    if (!started) return;
+    const sig = validation.join('\n');
+    if (sig === validationBannerRef.current) return;
+    validationBannerRef.current = sig;
+    setErrors(validation.length > 0 ? validation.slice(0, 6) : []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validation, started]);
 
   const applySnapshot = useCallback(
     (snap: string) => {
-      const parsed = JSON.parse(snap) as { s: WorkflowStep[]; n: string; d: string };
+      const parsed = JSON.parse(snap) as {
+        s: WorkflowStep[];
+        n: string;
+        d: string;
+        e?: string | null;
+        x?: string[] | null;
+      };
       suspendHistoryRef.current = true;
       setName(parsed.n);
       setDescription(parsed.d);
+      const e = parsed.e ?? null;
+      const x = parsed.x ?? null;
+      entryRef.current = e;
+      exitsRef.current = x;
+      setEntry(e);
+      setExits(x);
       rebuild(parsed.s);
       setSelectedId((cur) => (cur && locate(parsed.s, parsePath(cur)) ? cur : ''));
     },
@@ -601,19 +653,65 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (!connection.source || !connection.target) return;
-      const sourcePath = idToPathRef.current.get(connection.source);
-      const targetPath = idToPathRef.current.get(connection.target);
+      const src = connection.source;
+      const tgt = connection.target;
+      if (!src || !tgt) return;
+      // Trigger (input) → top-level step: set the workflow entry.
+      if (src === '__input__') {
+        const path = idToPathRef.current.get(tgt);
+        const step = path && parsePath(path).length === 1 ? locate(steps, parsePath(path)) : null;
+        if (!step) return;
+        entryRef.current = step.id;
+        setEntry(step.id);
+        rebuild(steps);
+        return;
+      }
+      // Top-level step → Output: add an exit.
+      if (tgt === '__output__') {
+        const path = idToPathRef.current.get(src);
+        const step = path && parsePath(path).length === 1 ? locate(steps, parsePath(path)) : null;
+        if (!step) return;
+        const derived = flowEndpoints(steps).outputSource;
+        const base = exitsRef.current ?? (derived ? [derived] : []);
+        exitsRef.current = Array.from(new Set([...base, step.id]));
+        setExits(exitsRef.current);
+        rebuild(steps);
+        return;
+      }
+      const sourcePath = idToPathRef.current.get(src);
+      const targetPath = idToPathRef.current.get(tgt);
       if (sourcePath && targetPath) connectSiblings(sourcePath, targetPath);
     },
-    [connectSiblings],
+    [connectSiblings, steps, rebuild],
   );
 
   const detachEdges = useCallback(
     (list: Edge[]) => {
       if (list.length === 0) return;
       let next = steps;
+      let wiringChanged = false;
       for (const edge of list) {
+        // Trigger → step: disconnect the input (entry becomes explicit-empty).
+        if (edge.source === '__input__') {
+          entryRef.current = '';
+          setEntry('');
+          wiringChanged = true;
+          continue;
+        }
+        // step → Output: remove that step from the exits.
+        if (edge.target === '__output__') {
+          const sp = idToPathRef.current.get(edge.source);
+          const step = sp ? locate(steps, parsePath(sp)) : null;
+          if (step) {
+            const derived = flowEndpoints(steps).outputSource;
+            const base = exitsRef.current ?? (derived ? [derived] : []);
+            exitsRef.current = base.filter((id) => id !== step.id);
+            setExits(exitsRef.current);
+            wiringChanged = true;
+          }
+          continue;
+        }
+        // Internal sibling link: clear the successor.
         const sourcePathStr = idToPathRef.current.get(edge.source);
         const targetPathStr = idToPathRef.current.get(edge.target);
         if (!sourcePathStr || !targetPathStr) continue;
@@ -629,10 +727,49 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         stepsInList[si] = { ...stepsInList[si]!, next: '' };
         next = setList(next, listPath, stepsInList);
       }
-      rebuild(next);
+      if (wiringChanged || next !== steps) rebuild(next);
     },
     [steps, rebuild],
   );
+
+  // ── multi-selection (marquee) ───────────────────────────────────────
+  const selectionPaths = useMemo<StepPath[]>(
+    () =>
+      selectedNodeIds
+        .map((id) => idToPathRef.current.get(id))
+        .filter((p): p is string => !!p)
+        .map((p) => parsePath(p)),
+    [selectedNodeIds],
+  );
+
+  const deleteSelection = useCallback(() => {
+    const paths = selectedNodeIds
+      .map((id) => idToPathRef.current.get(id))
+      .filter((p): p is string => !!p)
+      .map((p) => parsePath(p));
+    const edgesToDelete = edgesRef.current.filter((e) => selectedEdgeIds.includes(e.id));
+    if (paths.length > 0) {
+      rebuild(removeLeaves(steps, paths));
+      setSelectedId('');
+    }
+    if (edgesToDelete.length > 0) detachEdges(edgesToDelete);
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+  }, [selectedNodeIds, selectedEdgeIds, steps, rebuild, detachEdges]);
+
+  const duplicateSelection = useCallback(() => {
+    const paths = selectedNodeIds
+      .map((id) => idToPathRef.current.get(id))
+      .filter((p): p is string => !!p)
+      .map((p) => parsePath(p));
+    if (paths.length > 1) {
+      rebuild(duplicateLeaves(steps, paths));
+      setSelectedId('');
+      setSelectedNodeIds([]);
+      return;
+    }
+    duplicateSelected();
+  }, [selectedNodeIds, steps, rebuild, duplicateSelected]);
 
   const onEdgesDelete = useCallback((deleted: Edge[]) => detachEdges(deleted), [detachEdges]);
   const onReconnectStart = useCallback(() => {
@@ -661,6 +798,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     deleteEdgeRef.current = (id: string) => {
       const edge = edgesRef.current.find((e) => e.id === id);
       if (edge) detachEdges([edge]);
+      setSelectedEdgeIds([]);
     };
   }, [detachEdges]);
 
@@ -668,8 +806,15 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     const source = 'source' in connection ? connection.source : '';
     const target2 = 'target' in connection ? connection.target : '';
     if (!source || !target2 || source === target2) return false;
+    // Endpoints are directional: the Trigger only emits, the Output only receives.
+    if (source === '__output__' || target2 === '__input__') return false;
     const sourcePath = idToPathRef.current.get(source);
     const targetPath = idToPathRef.current.get(target2);
+    // Trigger → any top-level step.
+    if (source === '__input__') return !!targetPath && parsePath(targetPath).length === 1;
+    // Any top-level step → Output.
+    if (target2 === '__output__') return !!sourcePath && parsePath(sourcePath).length === 1;
+    // Otherwise only siblings (same parent list) may be wired.
     if (!sourcePath || !targetPath) return false;
     return pathKey(parsePath(sourcePath).slice(0, -1)) === pathKey(parsePath(targetPath).slice(0, -1));
   }, []);
@@ -685,19 +830,23 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   // ── save / persist ──────────────────────────────────────────────────
   const persist = useCallback(
-    async (opts: { closeAfter?: boolean; asName?: string } = {}): Promise<boolean> => {
-      setErrors([]);
+    async (opts: { closeAfter?: boolean; asName?: string; silent?: boolean } = {}): Promise<boolean> => {
+      // Autosave passes `silent` so a failing autosave never pops/keeps a banner
+      // (it only updates the status-bar save state).
+      if (!opts.silent) setErrors([]);
       const problems = validateTree(steps);
       if (problems.length > 0) {
-        setErrors(problems.slice(0, 6));
-        setBottomTab('problems');
-        setBottomOpen(true);
+        if (!opts.silent) {
+          setErrors(problems.slice(0, 6));
+          setBottomTab('problems');
+          setBottomOpen(true);
+        }
         setSaveState('error');
         return false;
       }
       const finalName = (opts.asName ?? name).trim();
       if (!finalName) {
-        setErrors([t('workflows.name_required')]);
+        if (!opts.silent) setErrors([t('workflows.name_required')]);
         setSaveState('error');
         return false;
       }
@@ -705,6 +854,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setSaveState('saving');
       try {
         const finalSteps = renumberWorkflowSteps(steps);
+        const wiring = remapEndpointIds(steps, entryRef.current, exitsRef.current);
         // The backend requires a non-empty description; fall back to the name so
         // a brand-new workflow can always be saved without forcing the user to
         // fill a description field first.
@@ -716,10 +866,12 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           inputs: inputs ?? [],
           steps: finalSteps,
           triggers,
+          entry: wiring.entry,
+          exits: wiring.exits,
         };
         const rendered = await chatService.renderWorkflowSteps(payload);
         if (rendered.errors.length > 0 || !rendered.yaml) {
-          setErrors(rendered.errors.length ? rendered.errors : [t('workflows.graph_render_failed')]);
+          if (!opts.silent) setErrors(rendered.errors.length ? rendered.errors : [t('workflows.graph_render_failed')]);
           setSaveState('error');
           return false;
         }
@@ -733,8 +885,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         if (result.status !== 'ok') throw new Error(result.message || t('workflows.save_failed'));
         persistedNameRef.current = finalName;
         setName(finalName);
-        setBaseline(JSON.stringify({ name: finalName, description, steps }));
-        historyRef.current = { snaps: [snapshotOf(steps, finalName, description)], index: 0 };
+        setBaseline(docKey(finalName, description, steps, entryRef.current, exitsRef.current));
+        historyRef.current = { snaps: [docKey(finalName, description, steps, entryRef.current, exitsRef.current)], index: 0 };
         syncHistoryFlags();
         try {
           const list = await chatService.listWorkflowVersions(finalName);
@@ -752,14 +904,14 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         if (opts.closeAfter) onClose();
         return true;
       } catch (error) {
-        setErrors([translateError(error)]);
+        if (!opts.silent) setErrors([translateError(error)]);
         setSaveState('error');
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [steps, name, description, version, inputs, triggers, snapshotOf, syncHistoryFlags, onSaved, onClose],
+    [steps, name, description, version, inputs, triggers, syncHistoryFlags, onSaved, onClose],
   );
 
   const save = useCallback(
@@ -783,6 +935,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           inputs: wf.inputs,
           triggers: wf.triggers,
           outputs: wf.outputs,
+          entry: wf.entry ?? null,
+          exits: wf.exits ?? null,
           steps: wf.steps ?? [],
         });
         persistedNameRef.current = wf.name;
@@ -831,6 +985,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     async (format: 'yaml' | 'json') => {
       try {
         const base = name || 'workflow';
+        const wiring = remapEndpointIds(steps, entryRef.current, exitsRef.current);
         if (format === 'json') {
           const payload = {
             name: base,
@@ -839,6 +994,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
             inputs: inputs ?? [],
             steps: renumberWorkflowSteps(steps),
             triggers,
+            entry: wiring.entry,
+            exits: wiring.exits,
           };
           download(`${base}.json`, JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
           return;
@@ -855,6 +1012,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           inputs: inputs ?? [],
           steps: renumberWorkflowSteps(steps),
           triggers,
+          entry: wiring.entry,
+          exits: wiring.exits,
         });
         if (rendered.yaml) download(`${base}.yaml`, rendered.yaml, 'text/yaml;charset=utf-8');
       } catch (error) {
@@ -873,14 +1032,20 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         const result = await chatService.getWorkflowVersion(name, v);
         const wf = result.workflow;
         const nextSteps = wf.steps ?? [];
+        const entryVal = wf.entry ?? null;
+        const exitsVal = wf.exits ?? null;
         suspendHistoryRef.current = true;
+        entryRef.current = entryVal;
+        exitsRef.current = exitsVal;
+        setEntry(entryVal);
+        setExits(exitsVal);
         setName(wf.name);
         setVersion(wf.version);
         setSteps(nextSteps);
-        setBaseline(JSON.stringify({ name: wf.name, description: wf.description, steps: nextSteps }));
+        setBaseline(docKey(wf.name, wf.description, nextSteps, entryVal, exitsVal));
         rebuild(nextSteps);
         setSelectedId(nextSteps.length > 0 ? pathKey([0]) : '');
-        historyRef.current = { snaps: [snapshotOf(nextSteps, wf.name, wf.description)], index: 0 };
+        historyRef.current = { snaps: [docKey(wf.name, wf.description, nextSteps, entryVal, exitsVal)], index: 0 };
         syncHistoryFlags();
         setSelectedVersion(v);
         setErrors([]);
@@ -890,7 +1055,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         setVersionBusy(false);
       }
     },
-    [name, rebuild, snapshotOf, syncHistoryFlags],
+    [name, rebuild, syncHistoryFlags],
   );
 
   const removeVersion = useCallback(
@@ -1015,6 +1180,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const renderYamlPreview = useCallback(async () => {
     try {
+      const wiring = remapEndpointIds(steps, entryRef.current, exitsRef.current);
       const rendered = await chatService.renderWorkflowSteps({
         name: name || 'workflow',
         description: description.trim() || name || 'workflow',
@@ -1022,6 +1188,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         inputs: inputs ?? [],
         steps: renumberWorkflowSteps(steps),
         triggers,
+        entry: wiring.entry,
+        exits: wiring.exits,
       });
       setYamlPreview(rendered.yaml || rendered.errors.join('\n'));
     } catch (error) {
@@ -1033,6 +1201,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   useEffect(() => {
     saveStudioSettings({
       edgeType,
+      autoSave,
       showMinimap,
       interactive,
       leftOpen,
@@ -1046,6 +1215,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     });
   }, [
     edgeType,
+    autoSave,
     showMinimap,
     interactive,
     leftOpen,
@@ -1059,14 +1229,20 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   ]);
 
   // ── autosave ────────────────────────────────────────────────────────
+  // Gated by the "Auto save" setting (File menu). Failures are silent and are
+  // attempted only once per document revision, so a workflow the backend keeps
+  // rejecting can never spam/flicker the error banner in a retry loop.
   useEffect(() => {
-    if (!isWindow || !started) return;
-    if (!dirty || busy || !name.trim() || validation.length > 0 || steps.length === 0) return;
+    if (!autoSave || !started) return;
+    if (!dirty || busy || !name.trim() || validateTree(steps).length > 0 || steps.length === 0) return;
+    const snap = JSON.stringify({ name, description, steps });
+    if (autoSaveTriedRef.current === snap) return;
     const handle = setTimeout(() => {
-      void persist();
+      autoSaveTriedRef.current = snap;
+      void persist({ silent: true });
     }, 800);
     return () => clearTimeout(handle);
-  }, [isWindow, started, dirty, busy, name, validation.length, steps.length, persist]);
+  }, [autoSave, started, dirty, busy, name, description, steps, persist]);
 
   // ── cancel / close ──────────────────────────────────────────────────
   const cancel = useCallback(() => {
@@ -1111,7 +1287,14 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         return;
       }
       if (!mod && (event.key === 'Backspace' || event.key === 'Delete')) {
-        if (!isEditableTarget(event.target) && selectedPath.length > 0) {
+        if (isEditableTarget(event.target)) return;
+        // Selected connections are deleted first — never the nodes they touch.
+        if (selectedEdgeIds.length > 0 || selectedNodeIds.length > 1) {
+          event.preventDefault();
+          deleteSelection();
+          return;
+        }
+        if (selectedPath.length > 0) {
           event.preventDefault();
           deleteSelected();
         }
@@ -1129,12 +1312,25 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       if (key === 'd') {
         if (isEditableTarget(event.target)) return;
         event.preventDefault();
-        duplicateSelected();
+        if (selectedNodeIds.length > 1) duplicateSelection();
+        else duplicateSelected();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [save, executeRun, deleteSelected, duplicateSelected, undo, redo, selectedPath.length]);
+  }, [
+    save,
+    executeRun,
+    deleteSelected,
+    deleteSelection,
+    duplicateSelected,
+    duplicateSelection,
+    undo,
+    redo,
+    selectedPath.length,
+    selectedEdgeIds,
+    selectedNodeIds,
+  ]);
 
   // ── commands (palette) ──────────────────────────────────────────────
   const commands = useMemo<StudioCommand[]>(() => {
@@ -1266,6 +1462,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem checked={autoSave} onCheckedChange={(v) => setAutoSave(!!v)}>
+          {t('workflows.autosave_toggle')}
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={cancel}>{t('common.close')}</DropdownMenuItem>
       </Menu>
       <Menu label={t('workflows.menu_edit')}>
@@ -1278,13 +1478,21 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           <DropdownMenuShortcut>⇧⌘Z</DropdownMenuShortcut>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem disabled={!selected} onSelect={duplicateSelected}>
+        <DropdownMenuItem
+          disabled={selectionPaths.length === 0}
+          onSelect={() => (selectionPaths.length > 1 ? duplicateSelection() : duplicateSelected())}
+        >
           {t('workflows.duplicate')}
           <DropdownMenuShortcut>⌘D</DropdownMenuShortcut>
         </DropdownMenuItem>
-        <DropdownMenuItem disabled={!selected} onSelect={() => move(-1)}>{t('workflows.move_up')}</DropdownMenuItem>
-        <DropdownMenuItem disabled={!selected} onSelect={() => move(1)}>{t('workflows.move_down')}</DropdownMenuItem>
-        <DropdownMenuItem disabled={!selected} onSelect={deleteSelected}>{t('workflows.delete')}</DropdownMenuItem>
+        <DropdownMenuItem disabled={!selected || selectionPaths.length > 1} onSelect={() => move(-1)}>{t('workflows.move_up')}</DropdownMenuItem>
+        <DropdownMenuItem disabled={!selected || selectionPaths.length > 1} onSelect={() => move(1)}>{t('workflows.move_down')}</DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={selectionPaths.length === 0 && selectedEdgeIds.length === 0}
+          onSelect={() => (selectionPaths.length > 1 || selectedEdgeIds.length > 0 ? deleteSelection() : deleteSelected())}
+        >
+          {t('workflows.delete')}
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={relayout}>{t('workflows.auto_layout')}</DropdownMenuItem>
       </Menu>
@@ -1337,7 +1545,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         name={name || t('workflows.untitled')}
         dirty={dirty}
         busy={busy}
-        canSave={!busy && !!name.trim() && validation.length === 0}
+        canSave={!busy && !!name.trim() && dirty}
         canUndo={canUndo}
         canRedo={canRedo}
         saveState={saveState}
@@ -1481,7 +1689,24 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                     const path = node.data.path as string;
                     if (path) setSelectedId(path);
                   }}
-                  onPaneClick={() => setSelectedId('')}
+                  onPaneClick={() => {
+                    setSelectedId('');
+                    setSelectedNodeIds([]);
+                    setSelectedEdgeIds([]);
+                  }}
+                  onSelectionChange={(params) => {
+                    const nodeIds = params.nodes.map((n) => n.id).filter((id) => idToPathRef.current.has(id));
+                    setSelectedNodeIds(nodeIds);
+                    setSelectedEdgeIds(params.edges.map((e) => e.id));
+                    if (nodeIds.length === 1) {
+                      const path = idToPathRef.current.get(nodeIds[0]!);
+                      if (path) setSelectedId(path);
+                    }
+                  }}
+                  onEdgeClick={(_e, edge) => {
+                    setSelectedEdgeIds([edge.id]);
+                    setSelectedNodeIds([]);
+                  }}
                   onNodeContextMenu={(e, node) => {
                     const path = node.data.path as string;
                     if (!path) return;
@@ -1499,6 +1724,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                   nodesDraggable={interactive}
                   nodesConnectable={interactive}
                   deleteKeyCode={null}
+                  selectionOnDrag
+                  selectionMode={SelectionMode.Partial}
+                  panOnDrag={[1, 2]}
+                  panOnScroll={false}
                   isValidConnection={isValidConnection}
                   nodeTypes={nodeTypes}
                   edgeTypes={edgeTypes}
@@ -1509,6 +1738,45 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                 >
                   <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
                 </ReactFlow>
+
+                {selectedNodeIds.length > 1 ? (
+                  <div className="wfs-selbar" role="toolbar" aria-label={t('workflows.multi_select')}>
+                    <span className="wfs-selbar__count">
+                      {selectedNodeIds.length} {t('workflows.selected')}
+                    </span>
+                    <button
+                      type="button"
+                      className="wfs-selbar__btn"
+                      onClick={duplicateSelection}
+                      title={t('workflows.duplicate')}
+                    >
+                      <Copy size={14} />
+                    </button>
+                    <button type="button" className="wfs-selbar__btn" onClick={relayout} title={t('workflows.auto_layout')}>
+                      <Sparkles size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="wfs-selbar__btn wfs-selbar__btn--danger"
+                      onClick={deleteSelection}
+                      title={t('workflows.delete')}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="wfs-selbar__btn"
+                      onClick={() => {
+                        setSelectedNodeIds([]);
+                        setSelectedEdgeIds([]);
+                        setSelectedId('');
+                      }}
+                      title={t('workflows.clear_selection')}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : null}
 
                 {showMinimap ? (
                   <div style={{ position: 'absolute', right: 10, bottom: 44, zIndex: 6, width: 240 }}>
@@ -1616,7 +1884,36 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
             <div className="wfs-resize" onMouseDown={startResize('right')} />
             <aside className="wfs-dock wfs-dock--right" style={{ width: rightWidth, flex: `0 0 ${rightWidth}px` }}>
               <div className="wfs-dock__body wfs-inspector">
-                {selected ? (
+                {selectedNodeIds.length > 1 ? (
+                  <div>
+                    <div className="wf-section__title">{t('workflows.multi_select')}</div>
+                    <p className="wfs-empty-note" style={{ padding: '2px 0 10px' }}>
+                      {selectedNodeIds.length} {t('workflows.selected')}
+                    </p>
+                    <div className="wfs-multi-actions">
+                      <Button variant="secondary" size="sm" onClick={duplicateSelection}>
+                        <Copy size={14} /> {t('workflows.duplicate')}
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={relayout}>
+                        <Sparkles size={14} /> {t('workflows.auto_layout')}
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={deleteSelection}>
+                        <Trash2 size={14} /> {t('workflows.delete')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedNodeIds([]);
+                          setSelectedEdgeIds([]);
+                          setSelectedId('');
+                        }}
+                      >
+                        <X size={14} /> {t('workflows.clear_selection')}
+                      </Button>
+                    </div>
+                  </div>
+                ) : selected ? (
                   <NodeInspector
                     selected={selected}
                     tab={inspectorTab}
@@ -1908,6 +2205,17 @@ function StudioTopbar({
       </button>
     </div>
   );
+}
+
+/** Serialise the document (including endpoint wiring) for dirty/history checks. */
+function docKey(
+  name: string,
+  description: string,
+  steps: WorkflowStep[],
+  entry: string | null,
+  exits: string[] | null,
+): string {
+  return JSON.stringify({ n: name, d: description, s: steps, e: entry, x: exits });
 }
 
 function saveStateLabel(state: 'idle' | 'saving' | 'saved' | 'error'): string {

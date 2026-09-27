@@ -1361,5 +1361,9 @@
   "workflows.code_render_yaml": "預覽 YAML",
   "workflows.open_in_studio": "在 Studio 中開啟",
   "workflows.runs": "執行記錄",
-  "workflows.back_to_home": "返回 Studio 首頁"
+  "workflows.back_to_home": "返回 Studio 首頁",
+  "workflows.autosave_toggle": "自動儲存",
+  "workflows.multi_select": "多選",
+  "workflows.selected": "已選取",
+  "workflows.clear_selection": "清除選取"
 }

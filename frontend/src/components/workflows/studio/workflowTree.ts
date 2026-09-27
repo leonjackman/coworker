@@ -125,6 +125,55 @@ export function wireList(list: WorkflowStep[]): WorkflowStep[] {
   }));
 }
 
+/** Remove several step paths at once (order-safe for same-list siblings). */
+export function removeLeaves(steps: WorkflowStep[], paths: StepPath[]): WorkflowStep[] {
+  const ordered = paths
+    .filter((path) => path.length > 0)
+    .slice()
+    .sort((a, b) => {
+      const la = pathKey(a.slice(0, -1));
+      const lb = pathKey(b.slice(0, -1));
+      if (la !== lb) return la < lb ? -1 : 1;
+      const ia = a[a.length - 1];
+      const ib = b[b.length - 1];
+      return (typeof ib === 'number' ? ib : -1) - (typeof ia === 'number' ? ia : -1);
+    });
+  let next = steps;
+  for (const path of ordered) next = removeLeaf(next, path);
+  return next;
+}
+
+/** Clone several steps at once, appending the copies to the end of each list. */
+export function duplicateLeaves(steps: WorkflowStep[], paths: StepPath[]): WorkflowStep[] {
+  const groups = new Map<string, { listPath: StepPath; indices: number[] }>();
+  for (const path of paths) {
+    const index = path[path.length - 1];
+    if (typeof index !== 'number') continue;
+    const listPath = path.slice(0, -1);
+    const key = pathKey(listPath);
+    if (!groups.has(key)) groups.set(key, { listPath, indices: [] });
+    groups.get(key)!.indices.push(index);
+  }
+  let maxId = 0;
+  for (const id of collectAllIds(steps)) {
+    const match = /^id:(\d+)$/.exec(id);
+    if (match) maxId = Math.max(maxId, Number(match[1]));
+  }
+  let next = steps;
+  for (const { listPath, indices } of groups.values()) {
+    const list = getList(next, listPath).slice();
+    const clones: WorkflowStep[] = [];
+    for (const index of indices.sort((a, b) => a - b)) {
+      const source = list[index];
+      if (!source) continue;
+      maxId += 1;
+      clones.push({ ...(JSON.parse(JSON.stringify(source)) as WorkflowStep), id: `id:${maxId}`, next: '' });
+    }
+    next = setList(next, listPath, [...list, ...clones]);
+  }
+  return next;
+}
+
 /** Validate the whole tree; returns human-readable errors with a step path. */
 export function validateTree(steps: WorkflowStep[]): string[] {
   const errors: string[] = [];

@@ -1361,5 +1361,9 @@
   "workflows.code_render_yaml": "Preview YAML",
   "workflows.open_in_studio": "Open in Studio",
   "workflows.runs": "Runs",
-  "workflows.back_to_home": "Back to Studio home"
+  "workflows.back_to_home": "Back to Studio home",
+  "workflows.autosave_toggle": "Auto save",
+  "workflows.multi_select": "Multiple selection",
+  "workflows.selected": "selected",
+  "workflows.clear_selection": "Clear selection"
 }

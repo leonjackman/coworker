@@ -273,6 +273,20 @@ def parse_workflow(
         else {}
     )
 
+    # Canvas endpoint wiring: absent key => derive from step order (legacy);
+    # present key => authoritative (may be empty, meaning "not connected").
+    entry: str | None = None
+    if "entry" in data:
+        entry = str(data.get("entry") or "").strip()
+    exits: list[str] | None = None
+    if "exits" in data:
+        exits_raw = data.get("exits")
+        exits = (
+            [str(x) for x in exits_raw if isinstance(x, (str, int, float))]
+            if isinstance(exits_raw, list)
+            else []
+        )
+
     status = str(data.get("status") or "active").strip().lower()
     created_at = str(data.get("created_at") or "")
     updated_at = str(data.get("updated_at") or "")
@@ -292,6 +306,8 @@ def parse_workflow(
         inputs=_parse_inputs(data.get("inputs")),
         outputs=outputs,
         triggers=triggers,
+        entry=entry,
+        exits=exits,
         provenance=data.get("provenance") if isinstance(data.get("provenance"), dict) else {},
         fingerprint=str(data.get("fingerprint") or ""),
         status=status,
@@ -345,6 +361,14 @@ def validate(workflow: Workflow) -> list[str]:
     if len(input_names) != len(workflow.inputs):
         errors.append("duplicate input names")
     errors.extend(_validate_steps(workflow.steps, "steps", set()))
+
+    # Endpoint wiring must reference top-level steps.
+    top_ids = {step.id for step in workflow.steps}
+    if workflow.entry and workflow.entry not in top_ids:
+        errors.append(f"entry references unknown step '{workflow.entry}'")
+    for exit_id in workflow.exits or []:
+        if exit_id not in top_ids:
+            errors.append(f"exits references unknown step '{exit_id}'")
     return errors
 
 
@@ -492,6 +516,10 @@ def render_workflow(workflow: Workflow) -> str:
         data["outputs"] = dict(workflow.outputs)
     if workflow.triggers:
         data["triggers"] = list(workflow.triggers)
+    if workflow.entry is not None:
+        data["entry"] = workflow.entry
+    if workflow.exits is not None:
+        data["exits"] = list(workflow.exits)
     if workflow.provenance:
         data["provenance"] = dict(workflow.provenance)
     if workflow.fingerprint:

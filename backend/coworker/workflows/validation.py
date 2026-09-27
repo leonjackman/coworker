@@ -150,6 +150,14 @@ def validate_workflow(workflow: Workflow, registry: CapabilityRegistry) -> list[
     if workflow.status not in {"draft", "active", "deprecated"}:
         diags.append(Diagnostic("", "status", "invalid_status", f"invalid status: {workflow.status}"))
 
+    # Canvas endpoint wiring must reference top-level steps.
+    top_ids = {step.id for step in workflow.steps}
+    if workflow.entry and workflow.entry not in top_ids:
+        diags.append(Diagnostic("", "entry", "unknown_entry", f"entry references unknown step '{workflow.entry}'"))
+    for exit_id in workflow.exits or []:
+        if exit_id not in top_ids:
+            diags.append(Diagnostic("", "exits", "unknown_exit", f"exits references unknown step '{exit_id}'"))
+
     diags.extend(_validate_steps(workflow.steps, registry, set()))
     diags.extend(validate_templates(workflow, registry))
     return diags

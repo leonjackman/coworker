@@ -66,9 +66,14 @@ export function PillNode({ data }: NodeProps) {
   const d = data as PillNodeData;
   return (
     <div className={`wf-pill wf-pill--${d.kind}`}>
-      <Handle type="target" position={Position.Top} className="wf-handle" />
+      {/* Trigger (input) only emits; Output only receives. */}
+      {d.kind === 'output' ? (
+        <Handle type="target" position={Position.Top} className="wf-handle" />
+      ) : null}
       <span className="wf-pill__label">{d.label}</span>
-      <Handle type="source" position={Position.Bottom} className="wf-handle" />
+      {d.kind === 'trigger' ? (
+        <Handle type="source" position={Position.Bottom} className="wf-handle" />
+      ) : null}
     </div>
   );
 }
@@ -171,7 +176,7 @@ export function orderSteps(steps: WorkflowStep[]): WorkflowStep[] {
  * first), rewriting ``next`` links and ``{{steps.<id>}}`` template references so
  * wiring stays correct. Applied on save so all workflows share one id scheme.
  */
-export function renumberWorkflowSteps(steps: WorkflowStep[]): WorkflowStep[] {
+function buildStepIdMap(steps: WorkflowStep[]): Map<string, string> {
   const idMap = new Map<string, string>();
   let counter = 0;
   const assign = (list: WorkflowStep[]) => {
@@ -189,6 +194,25 @@ export function renumberWorkflowSteps(steps: WorkflowStep[]): WorkflowStep[] {
     }
   };
   assign(steps);
+  return idMap;
+}
+
+/** Remap endpoint wiring ids alongside :func:`renumberWorkflowSteps`. */
+export function remapEndpointIds(
+  steps: WorkflowStep[],
+  entry: string | null,
+  exits: string[] | null,
+): { entry: string | null; exits: string[] | null } {
+  const idMap = buildStepIdMap(steps);
+  const mapId = (id: string) => idMap.get(id) ?? id;
+  return {
+    entry: entry === null ? null : entry ? mapId(entry) : '',
+    exits: exits === null ? null : exits.map(mapId),
+  };
+}
+
+export function renumberWorkflowSteps(steps: WorkflowStep[]): WorkflowStep[] {
+  const idMap = buildStepIdMap(steps);
 
   const remap = (value: unknown): unknown => {
     if (typeof value === 'string') {

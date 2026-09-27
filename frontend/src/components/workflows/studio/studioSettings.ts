@@ -13,6 +13,8 @@ export type EdgeStyle = 'default' | 'smoothstep' | 'straight';
 export interface StudioSettings {
   /** Canvas edge style. `default` = bezier curve (the default). */
   edgeType: EdgeStyle;
+  /** Autosave the workflow to the backend while editing. */
+  autoSave: boolean;
   showMinimap: boolean;
   interactive: boolean;
   leftOpen: boolean;
@@ -27,6 +29,7 @@ export interface StudioSettings {
 
 export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   edgeType: 'default',
+  autoSave: true,
   showMinimap: true,
   interactive: true,
   leftOpen: true,
@@ -63,6 +66,7 @@ export function loadStudioSettings(): StudioSettings {
     const parsed = JSON.parse(raw) as Partial<Record<keyof StudioSettings, unknown>>;
     return {
       edgeType: asOneOf(parsed.edgeType, EDGE_STYLES, defaults.edgeType),
+      autoSave: asBool(parsed.autoSave, defaults.autoSave),
       showMinimap: asBool(parsed.showMinimap, defaults.showMinimap),
       interactive: asBool(parsed.interactive, defaults.interactive),
       leftOpen: asBool(parsed.leftOpen, defaults.leftOpen),
