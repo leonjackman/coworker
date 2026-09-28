@@ -990,6 +990,7 @@ export interface WorkflowCapabilityParam {
   name: string;
   type: string;
   required?: boolean;
+  description?: string;
 }
 
 export interface WorkflowCapabilityAction {

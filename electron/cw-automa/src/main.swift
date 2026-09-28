@@ -34,11 +34,24 @@ func frontmostPid() -> pid_t? {
     NSWorkspace.shared.frontmostApplication?.processIdentifier
 }
 
-/// Launch an app by name. Wraps the deprecated `launchApplication` so the
-/// deprecation warning is localized to one call site.
-private func launchAppByName(_ name: String) -> Bool {
-    // swift:disable:next DeprecatedDeclaration
-    return NSWorkspace.shared.launchApplication(name)
+/// A short, de-duplicated list of app display names to suggest when a `launch`
+/// selector matches nothing. Running apps come first (usually the intent).
+private func launchCandidates(for query: String) -> [String] {
+    var ordered: [String] = []
+    var seen = Set<String>()
+    for entry in AppInventory.running() + AppInventory.installed() {
+        let name = entry.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, seen.insert(name.lowercased()).inserted else { continue }
+        ordered.append(name)
+    }
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    func rank(_ name: String) -> Int {
+        let n = name.lowercased()
+        if !q.isEmpty && n.contains(q) { return 0 }
+        if !q.isEmpty && n.hasPrefix(String(q.prefix(1))) { return 1 }
+        return 2
+    }
+    return Array(ordered.sorted { rank($0) < rank($1) }.prefix(12))
 }
 
 /// Re-activate the target app if something (e.g. Dock) stole frontmost.
@@ -235,15 +248,10 @@ func handleRequest(_ req: Request) {
         case "launch":
             let app = p.str("app")
             if app.isEmpty { throw HelperError("param_error", "launch requires app") }
-            var ok = false
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app) {
+            // Resolve via bundle id / exact name / bundle filename / substring,
+            // covering localized and English names, then open it.
+            if let url = AppInventory.resolveBundleURL(app) {
                 NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration())
-                ok = true
-            } else {
-                // Fallback: try as app name via open -a (deprecated but still works).
-                ok = launchAppByName(app)
-            }
-            if ok {
                 cursorShow(targetPid: Injection.lastTargetPid)
                 hudPulse()
                 // Brief settle then re-activate to beat the Dock out.
@@ -258,7 +266,14 @@ func handleRequest(_ req: Request) {
                 }
                 Responder.ok(req.id, ["launched": app])
             } else {
-                throw HelperError("launch_failed", "open -a failed for \(app)")
+                // No match: return a short candidate list so the caller can fix
+                // the name (or use a bundle id).
+                let candidates = launchCandidates(for: app)
+                let hint = candidates.isEmpty ? "" : "; try one of: \(candidates.joined(separator: ", "))"
+                throw HelperError(
+                    "launch_failed",
+                    "no installed app matches \"\(app)\"\(hint)"
+                )
             }
 
         case "click_point":

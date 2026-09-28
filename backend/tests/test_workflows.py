@@ -162,6 +162,8 @@ steps:
     do: run
     params:
       command: false
+    on_error:
+      then: abort
 """
     manager.create(flow)
     env = FakeEnv(command=lambda argv, cwd, timeout: {"return_code": 1, "stderr": "boom"})
@@ -302,7 +304,8 @@ steps:
 """
     manager.create(flow)
     result = manager.run("fail-flow", env=FakeEnv(tool=lambda n, a: {"ok": True}))
-    assert result["status"] == "failed"
+    # Deterministic failure defaults to a human gate (no futile agent takeover).
+    assert result["status"] == "needs_human"
     assert "expected-token" in result["run"]["error"]
 
 
@@ -356,6 +359,8 @@ steps:
   - id: b
     kind: tool
     do: later
+    on_error:
+      then: abort
 """
     manager.create(flow)
     run_id = "run_resume_test"
@@ -490,6 +495,8 @@ steps:
     kind: tool
     do: nope
     goal: publish the article
+    on_error:
+      then: agent
 """
     manager.create(flow)
     env = AgenticEnv(tool=lambda n, a: (_ for _ in ()).throw(RuntimeError("flaky ui")))
@@ -542,8 +549,8 @@ steps:
     manager.create(flow)
     env = FakeEnv(tool=lambda n, a: {"ok": True, "text": "no needle here"})
     result = manager.run("success-flow", env=env)
-    # Default policy with no agent capability -> abort/fail.
-    assert result["status"] == "failed"
+    # Deterministic failure defaults to a human gate (no futile agent takeover).
+    assert result["status"] == "needs_human"
 
 
 def test_human_approval_resume(manager):

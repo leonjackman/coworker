@@ -337,20 +337,27 @@ class WorkflowValidationError(WorkflowError):
 
 
 class StepFailed(WorkflowError):
-    """A step failed after all recovery attempts."""
+    """A step failed after all recovery attempts.
 
-    def __init__(self, step_id: str, message: str):
+    ``result`` optionally carries the raw adapter/tool result that triggered the
+    failure (e.g. the ``{error, error_code}`` envelope), so callers can surface
+    the real cause instead of a generic message.
+    """
+
+    def __init__(self, step_id: str, message: str, result: Any = None):
         super().__init__(f"step '{step_id}' failed: {message}")
         self.step_id = step_id
         self.message = message
+        self.result = result
 
 
 class NeedsHuman(WorkflowError):
     """A human-approval step paused the run (W22/W37)."""
 
-    def __init__(self, step_id: str, message: str = ""):
+    def __init__(self, step_id: str, message: str = "", result: Any = None):
         super().__init__(message or f"step '{step_id}' needs human input")
         self.step_id = step_id
+        self.result = result
 
 
 class GotoStep(WorkflowError):

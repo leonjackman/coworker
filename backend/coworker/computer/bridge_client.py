@@ -424,7 +424,7 @@ def build_computer_tools(
     class ComputerArgs(BaseModel):
         action: ComputerAction = Field(..., description="Structure-first desktop action. Prefer ref-based and intent-level actions; coordinates are a last resort for canvas/rendered content.")
         ref: str = Field("", description="For click_ref/double_click_ref/right_click_ref/type_into/show: the element ref from the latest computer_observe snapshot.")
-        app: str = Field("", description="For 'launch_app': application name to open via the system launcher (e.g. 'Calculator', 'Safari').")
+        app: str = Field("", description="For 'launch_app': an EXACT app name or bundle id (e.g. 'Safari' or 'com.apple.Safari') — localized/display names may not resolve.")
         key: str = Field("", description="For 'press_hotkey': key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or single symbol).")
         modifiers: list[str] = Field(default_factory=list, description="For 'press_hotkey': from cmd, ctrl, alt, shift (e.g. [\"cmd\"] for Cmd+Space).")
         text: str = Field("", description="For 'type_into'/'type_text': the text to enter. NEVER a keyboard shortcut — shortcuts go through press_hotkey.")

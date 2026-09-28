@@ -44,6 +44,11 @@ MAX_TOTAL_STEPS = 5000
 MAX_LOOP_ITERATIONS = 1000
 RESULT_PREVIEW_CHARS = 600
 
+# Step kinds whose default failure recovery is an agent takeover. Everything
+# else defaults to a human gate (deterministic actions are usually not fixable
+# by an agent).
+_AGENTIC_DEFAULT_KINDS = frozenset({"agentic", "skill"})
+
 PatchCallback = Callable[[str, str, dict[str, Any]], None]
 
 
@@ -260,6 +265,35 @@ class WorkflowExecutor:
     # ── single step ─────────────────────────────────────────────────────
 
     def _exec_step(self, workflow: Workflow, step: Step, run: Run, state: "_State") -> Any:
+        """Run one step, recording the failure (with the real cause) before re-raising."""
+        try:
+            return self._exec_step_inner(workflow, step, run, state)
+        except (NeedsHuman, StepFailed) as exc:
+            self._record_failure(step, run, state, exc)
+            raise
+
+    def _record_failure(self, step: Step, run: Run, state: "_State", exc: Exception) -> None:
+        """Persist a failed step's error + raw result so the UI can show why."""
+        message = getattr(exc, "message", "") or str(exc)
+        result = getattr(exc, "result", None)
+        preview = _preview(result) if result is not None else ""
+        entry: dict[str, Any] = {"status": "failed", "step_id": step.id, "error": message}
+        if preview:
+            entry["result"] = preview
+        run.context.setdefault("steps", {})[step.bind] = entry
+        state.emitter.emit(
+            "step_failed",
+            step_id=step.id,
+            status="failed",
+            message=message,
+            data={"preview": preview} if preview else {},
+        )
+        try:
+            self._checkpoint(run)
+        except Exception:  # noqa: BLE001 - persistence is best-effort
+            pass
+
+    def _exec_step_inner(self, workflow: Workflow, step: Step, run: Run, state: "_State") -> Any:
         state.emitter.emit("step_start", step_id=step.id, status="running", data={"kind": step.kind})
 
         # Pre-conditions can gate an action (evaluated against the context).
@@ -278,7 +312,7 @@ class WorkflowExecutor:
         # mode=agent: skip the deterministic path entirely and let the agent do
         # the step (it must self-assess; failure escalates to a human gate).
         if step.mode == "agent":
-            taken = self._takeover(step, "", run, state)
+            taken = self._takeover(step, "", run, state, self._resolve_params(step, run))
             if taken is None:
                 raise NeedsHuman(step.id, f"agent step '{step.id}' could not complete")
             self._emit_success(step, run, state, taken)
@@ -373,9 +407,16 @@ class WorkflowExecutor:
 
         policy = str(step.on_error.get("then") or "").strip().lower()
         if not policy:
-            policy = "agent" if state.env.supports_agentic() else "abort"
+            # A deterministic action failure (bad app name, wrong coordinates,
+            # missing permission, non-zero exit) is usually NOT fixable by an
+            # agent — surface it to the human instead of burning a futile
+            # takeover. Only genuinely agentic steps default to takeover.
+            if step.mode == "agent" or step.kind in _AGENTIC_DEFAULT_KINDS:
+                policy = "agent"
+            else:
+                policy = "human"
         if policy == "agent" and not state.env.supports_agentic():
-            policy = "abort"
+            policy = "human"
 
         state.emitter.emit(
             "recover",
@@ -395,18 +436,33 @@ class WorkflowExecutor:
         if policy == "self_heal":
             raise StepFailed(step.id, error or "step failed")
         # policy == "agent"
-        taken = self._takeover(step, error, run, state)
+        taken = self._takeover(step, error, run, state, self._resolve_params(step, run))
         if taken is not None:
             return taken
-        raise NeedsHuman(step.id, f"agent takeover could not complete '{step.id}': {error}")
+        raise NeedsHuman(step.id, f"agent takeover could not complete '{step.id}': {error}", result=None)
 
-    def _takeover(self, step: Step, error: str, run: Run, state: "_State") -> dict[str, Any] | None:
+    def _resolve_params(self, step: Step, run: Run) -> dict[str, Any]:
+        """Resolve a step's params against the run context (best-effort)."""
+        try:
+            resolved = resolve(step.params, run.context, self.secrets)
+            return resolved if isinstance(resolved, dict) else dict(step.params)
+        except Exception:  # noqa: BLE001 - fall back to the raw params
+            return dict(step.params)
+
+    def _takeover(
+        self,
+        step: Step,
+        error: str,
+        run: Run,
+        state: "_State",
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Hand a step to the agent (full tools); it must self-assess (P3)."""
         if not state.env.supports_agentic():
             return None
         goal = step.goal or f"{step.kind} step '{step.id}'" + (f": {step.do}" if step.do else "")
         specs = self._success_specs(step)
-        prompt = _takeover_prompt(step, goal, error, run.context, specs)
+        prompt = _takeover_prompt(step, goal, error, run.context, specs, params)
         try:
             result = state.env.agentic(prompt, step)
         except Exception as exc:  # noqa: BLE001 - takeover failure falls back to human
@@ -723,18 +779,24 @@ def _takeover_prompt(
     error: str,
     context: dict[str, Any],
     specs: list[str],
+    params: dict[str, Any] | None = None,
 ) -> str:
     inputs = context.get("inputs", {})
     try:
         inputs_text = json.dumps(inputs, ensure_ascii=False)[:1500]
     except (TypeError, ValueError):
         inputs_text = str(inputs)[:1500]
+    try:
+        params_text = json.dumps(params or step.params or {}, ensure_ascii=False)[:1500]
+    except (TypeError, ValueError):
+        params_text = str(params or step.params or {})[:1500]
     lines = [
         f"A fixed workflow is executing and the step '{step.id}' did not succeed.",
         "Take over this ONE step and complete it, then hand control back.",
         "",
         f"STEP GOAL: {goal}",
         f"STEP KIND: {step.kind}" + (f" / action: {step.do}" if step.do else ""),
+        f"STEP PARAMS: {params_text}",
     ]
     if error:
         lines.append(f"FAILURE: {error}")
@@ -772,8 +834,39 @@ def _enforce_success(
     """
     rule = getattr(resolved_action, "success", "result_ok") if resolved_action is not None else "result_ok"
     if not check_success(rule, result, payload):
-        raise StepFailed(step.id, f"{step.kind} step '{step.id}' did not succeed (rule: {rule})")
+        detail = _result_error_detail(result)
+        action = getattr(resolved_action, "action", "") or step.do
+        base = f"{step.kind} step '{step.id}'" + (f" (do: {action})" if action else "")
+        message = f"{base} did not succeed (rule: {rule})" + (f": {detail}" if detail else "")
+        raise StepFailed(step.id, message, result=result)
     return result
+
+
+def _result_error_detail(result: Any) -> str:
+    """Extract a human-readable cause from an adapter/tool result envelope."""
+    data = result
+    if isinstance(data, str):
+        text = data.strip()
+        if text[:1] in ("{", "["):
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                return text[:300]
+        else:
+            return text[:300]
+    if isinstance(data, dict):
+        parts: list[str] = []
+        code = data.get("error_code")
+        err = data.get("error")
+        if code:
+            parts.append(str(code))
+        if err and str(err) != str(code):
+            parts.append(str(err))
+        if data.get("hint"):
+            parts.append(str(data["hint"]))
+        if parts:
+            return " — ".join(parts)[:400]
+    return ""
 
 
 def _apply_repair(step: Step, repaired: dict[str, Any]) -> Step:

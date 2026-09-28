@@ -529,14 +529,17 @@ export function NodeInspector({
         <label className="wf-checkbox" key={f.key}>
           <input type="checkbox" checked={!!value} onChange={(e) => writeField(f, e.target.checked)} />
           <span>{t(f.labelKey)}</span>
+          {f.help ? <span className="wfs-help">{f.help}</span> : null}
         </label>
       );
     }
+    const help = f.help ? <span className="wfs-help">{f.help}</span> : null;
     if (f.type === 'textarea') {
       return (
         <label className="wfs-field" key={f.key}>
           <span>{t(f.labelKey)}</span>
           <Textarea value={String(value ?? '')} onChange={(e) => writeField(f, e.target.value)} rows={3} />
+          {help}
         </label>
       );
     }
@@ -549,6 +552,7 @@ export function NodeInspector({
             value={value === undefined || value === null ? '' : String(value)}
             onChange={(e) => writeField(f, e.target.value === '' ? '' : Number(e.target.value))}
           />
+          {help}
         </label>
       );
     }
@@ -569,6 +573,7 @@ export function NodeInspector({
               )
             }
           />
+          {help}
         </label>
       );
     }
@@ -576,6 +581,7 @@ export function NodeInspector({
       <label className="wfs-field" key={f.key}>
         <span>{t(f.labelKey)}</span>
         <Input value={String(value ?? '')} onChange={(e) => writeField(f, e.target.value)} />
+        {help}
       </label>
     );
   };

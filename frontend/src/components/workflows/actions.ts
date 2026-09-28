@@ -13,6 +13,8 @@ export interface ActionField {
   labelKey: string;
   type: FieldType;
   placeholder?: string;
+  /** Optional help text from the capability registry (shown under the field). */
+  help?: string;
 }
 
 export interface WorkflowAction {
@@ -91,6 +93,7 @@ export interface CapabilityParam {
   name: string;
   type: string;
   required?: boolean;
+  description?: string;
 }
 
 export interface CapabilityAction {
@@ -137,6 +140,7 @@ export function setCapabilities(kinds: CapabilityKind[]): void {
         key: p.name,
         type: FIELD_TYPE[p.type] ?? 'text',
         labelKey: `workflows.fld_${p.name}`,
+        ...(p.description ? { help: p.description } : {}),
       })),
     }));
   }

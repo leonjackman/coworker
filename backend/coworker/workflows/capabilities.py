@@ -372,7 +372,11 @@ BROWSER_ACTIONS: tuple[ActionSpec, ...] = (
 _COMPUTER_LOCATOR = LocatorPolicy(keys=("ref", "coords"), maps={"ref": ("ref",), "coords": ("x", "y")})
 
 COMPUTER_ACTIONS: tuple[ActionSpec, ...] = (
-    ActionSpec("computer", "launch_app", (_p("app", required=True),), target="computer", success="no_error"),
+    ActionSpec(
+        "computer", "launch_app",
+        (_p("app", required=True, description="Exact macOS app name or bundle id (e.g. Safari / com.apple.Safari) — not a localized display name."),),
+        target="computer", success="no_error",
+    ),
     ActionSpec("computer", "press_hotkey", (_p("key", required=True), _p("modifiers", "list")), target="computer", success="no_error"),
     ActionSpec("computer", "click_ref", (_p("ref", required=True),), target="computer", success="no_error", locator=_COMPUTER_LOCATOR),
     ActionSpec("computer", "double_click_ref", (_p("ref", required=True),), target="computer", success="no_error", locator=_COMPUTER_LOCATOR),
@@ -739,6 +743,8 @@ class CapabilityRegistry:
             "- command runs argv WITHOUT a shell; add params.shell: true only for pipes/globs/$(...).\n"
             "- browser click needs x/y (or a coords locator from a snapshot); computer click_ref "
             "needs a ref OR a role/name locator.\n"
+            "- computer launch_app 'app' must be an EXACT macOS app name or bundle id "
+            "(Safari / com.apple.Safari), not a localized display name.\n"
             "- Templates may only reference {{inputs.<declared>}}, {{steps.<id>...}}, {{vars.<name>}} "
             "(and {{env.NAME}}/{{secret:name}}).\n"
             "- Use the declared inputs in the steps (do not hardcode values that an input documents).\n"
