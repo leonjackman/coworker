@@ -174,6 +174,22 @@ export function duplicateLeaves(steps: WorkflowStep[], paths: StepPath[]): Workf
   return next;
 }
 
+/**
+ * Materialise implicit sequential wiring into explicit ``next`` links for every
+ * list (top-level and nested). Used when opening a legacy workflow that has no
+ * explicit wiring, so every edge shown on the canvas is real and deletable.
+ */
+export function chainWiring(steps: WorkflowStep[]): WorkflowStep[] {
+  return wireList(steps).map((step) => {
+    const out: WorkflowStep = { ...step };
+    for (const slot of SLOTS) {
+      const kids = step[slot] as WorkflowStep[] | undefined;
+      if (kids?.length) out[slot] = chainWiring(kids);
+    }
+    return out;
+  });
+}
+
 /** Validate the whole tree; returns human-readable errors with a step path. */
 export function validateTree(steps: WorkflowStep[]): string[] {
   const errors: string[] = [];

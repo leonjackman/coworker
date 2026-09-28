@@ -81,6 +81,7 @@ import {
   type StudioCommand,
 } from './panels';
 import {
+  chainWiring,
   duplicateLeaves,
   getList,
   locate,
@@ -92,7 +93,6 @@ import {
   setList,
   updateLeaf,
   validateTree,
-  wireList,
   type StepPath,
 } from './workflowTree';
 import { loadStudioSettings, saveStudioSettings, type EdgeStyle } from './studioSettings';
@@ -270,7 +270,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const withEndpoints = useCallback(
     (next: WorkflowStep[], status: Record<string, string>, positions: Map<string, { x: number; y: number }>) => {
-      const built = buildGraph(next, status, positions);
+      const built = buildGraph(next, status, positions, { sequential: false });
       const ys = built.nodes.map((n) => n.position.y);
       const minY = ys.length ? Math.min(...ys) : 0;
       const maxY = ys.length ? Math.max(...ys) : 0;
@@ -344,16 +344,30 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       entry?: string | null;
       exits?: string[] | null;
       steps: WorkflowStep[];
+      /** Materialise legacy implicit wiring on load (default true). */
+      materialize?: boolean;
     }) => {
-      const initial = data.steps.length > 0 ? data.steps : [newStep([])];
+      let initial = data.steps.length > 0 ? data.steps : [newStep([])];
+      let entryVal = data.entry ?? null;
+      let exitsVal = data.exits ?? null;
+      if (data.materialize === false) {
+        // Brand-new document: nothing wired, and nothing auto-connects.
+        entryVal = '';
+        exitsVal = [];
+      } else if (entryVal === null && exitsVal === null) {
+        // Legacy document with no explicit wiring: convert the implicit
+        // sequential order + endpoints into real, deletable edges.
+        initial = chainWiring(initial);
+        const derived = flowEndpoints(initial);
+        entryVal = derived.inputTarget || '';
+        exitsVal = derived.outputSource ? [derived.outputSource] : [];
+      }
       setName(data.name);
       setDescription(data.description);
       setVersion(data.version);
       setInputs(data.inputs ?? []);
       setTriggers(data.triggers ?? ['manual']);
       setOutputs(data.outputs ?? {});
-      const entryVal = data.entry ?? null;
-      const exitsVal = data.exits ?? null;
       entryRef.current = entryVal;
       exitsRef.current = exitsVal;
       setEntry(entryVal);
@@ -366,7 +380,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setSelectedId(pathKey([0]));
       setBaseline(docKey(data.name, data.description, initial, entryVal, exitsVal));
       resetHistory(initial, data.name, data.description, entryVal, exitsVal);
-      const collected = collectStepGraph(initial, {});
+      const collected = collectStepGraph(initial, {}, { sequential: false });
       const laid = layoutGraph(collected.nodes, collected.edges);
       positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
       const built = withEndpoints(initial, {}, positionsRef.current);
@@ -552,9 +566,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const addKind = useCallback(
     (kind: string, position?: { x: number; y: number }) => {
-      const wired = wireList(steps);
-      const step = newStep(wired, kind);
-      const next = [...wired, step];
+      // Append WITHOUT wiring: a new node starts unconnected and the author
+      // draws the connections (deleting them then sticks).
+      const step = newStep(steps, kind);
+      const next = [...steps, step];
       if (position) positionsRef.current.set(step.id, position);
       rebuild(next);
       setSelectedId(pathKey([next.length - 1]));
@@ -616,7 +631,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   );
 
   const relayout = useCallback(() => {
-    const collected = collectStepGraph(steps, runStatus);
+    const collected = collectStepGraph(steps, runStatus, { sequential: false });
     const laid = layoutGraph(collected.nodes, collected.edges);
     positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
     positionsRef.current.delete('__input__');
@@ -637,7 +652,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       const si = sourcePath[sourcePath.length - 1];
       const ti = targetPath[targetPath.length - 1];
       if (typeof si !== 'number' || typeof ti !== 'number') return;
-      const list = wireList(getList(steps, listPath).slice());
+      // Only the explicit connection is written — never materialise a chain.
+      const list = getList(steps, listPath).slice();
       const sourceStep = list[si];
       const targetStep = list[ti];
       if (!sourceStep || !targetStep) return;
@@ -1031,9 +1047,15 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       try {
         const result = await chatService.getWorkflowVersion(name, v);
         const wf = result.workflow;
-        const nextSteps = wf.steps ?? [];
-        const entryVal = wf.entry ?? null;
-        const exitsVal = wf.exits ?? null;
+        let nextSteps = wf.steps ?? [];
+        let entryVal = wf.entry ?? null;
+        let exitsVal = wf.exits ?? null;
+        if (entryVal === null && exitsVal === null) {
+          nextSteps = chainWiring(nextSteps);
+          const derived = flowEndpoints(nextSteps);
+          entryVal = derived.inputTarget || '';
+          exitsVal = derived.outputSource ? [derived.outputSource] : [];
+        }
         suspendHistoryRef.current = true;
         entryRef.current = entryVal;
         exitsRef.current = exitsVal;
@@ -1406,7 +1428,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           busyId={templateBusy}
           onBlank={() => {
             persistedNameRef.current = '';
-            loadDocument({ name: '', description: '', steps: [] });
+            loadDocument({ name: '', description: '', steps: [], materialize: false });
           }}
           onOpen={() => setOpenDialog(true)}
           onImport={() => fileInputRef.current?.click()}
@@ -1695,17 +1717,25 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                     setSelectedEdgeIds([]);
                   }}
                   onSelectionChange={(params) => {
+                    // React Flow can emit this repeatedly; only commit when the
+                    // ids actually change, otherwise we feed the store back into
+                    // React state and hit an infinite update loop.
                     const nodeIds = params.nodes.map((n) => n.id).filter((id) => idToPathRef.current.has(id));
-                    setSelectedNodeIds(nodeIds);
-                    setSelectedEdgeIds(params.edges.map((e) => e.id));
+                    const edgeIds = params.edges.map((e) => e.id);
+                    setSelectedNodeIds((prev) =>
+                      prev.length === nodeIds.length && prev.every((v, i) => v === nodeIds[i]) ? prev : nodeIds,
+                    );
+                    setSelectedEdgeIds((prev) =>
+                      prev.length === edgeIds.length && prev.every((v, i) => v === edgeIds[i]) ? prev : edgeIds,
+                    );
                     if (nodeIds.length === 1) {
                       const path = idToPathRef.current.get(nodeIds[0]!);
                       if (path) setSelectedId(path);
                     }
                   }}
                   onEdgeClick={(_e, edge) => {
-                    setSelectedEdgeIds([edge.id]);
-                    setSelectedNodeIds([]);
+                    setSelectedEdgeIds((prev) => (prev.length === 1 && prev[0] === edge.id ? prev : [edge.id]));
+                    setSelectedNodeIds((prev) => (prev.length === 0 ? prev : []));
                   }}
                   onNodeContextMenu={(e, node) => {
                     const path = node.data.path as string;

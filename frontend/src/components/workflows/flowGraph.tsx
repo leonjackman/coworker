@@ -100,7 +100,12 @@ export interface CollectedGraph {
 export function collectStepGraph(
   steps: WorkflowStep[],
   status: Record<string, string> = {},
+  options: { sequential?: boolean } = {},
 ): CollectedGraph {
+  // `sequential` draws implicit edges between consecutive siblings when a list
+  // has no explicit `next` wiring (legacy read-only view). The Studio disables
+  // it so connections are ONLY ever what the author wired.
+  const sequential = options.sequential ?? true;
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const nodeIdToPath = new Map<string, string>();
@@ -130,11 +135,13 @@ export function collectStepGraph(
         if (children?.length) walk(children, [...listPath, index, s], id, id, s);
       });
     });
-    // Within a list: explicit ``next`` wiring when present, else sequential.
+    // Within a list: explicit ``next`` wiring; optionally a sequential fallback
+    // only when NOTHING in the list is wired.
     const wired = list.some((step) => step.next);
     list.forEach((step, index) => {
       const from = idToKey.get(step.id);
-      const nextLocal = wired ? step.next ?? '' : index + 1 < list.length ? list[index + 1]!.id : '';
+      const implicit = sequential && !wired && index + 1 < list.length ? list[index + 1]!.id : '';
+      const nextLocal = step.next || implicit;
       const to = nextLocal ? idToKey.get(nextLocal) : undefined;
       if (!from || !to) return;
       edges.push({ id: `seq-${from}-${to}`, source: from, target: to, type: 'smoothstep', markerEnd: { type: MarkerType.ArrowClosed } });
@@ -313,8 +320,9 @@ export function buildGraph(
   steps: WorkflowStep[],
   status: Record<string, string> = {},
   positions?: Map<string, { x: number; y: number }>,
+  options: { sequential?: boolean } = {},
 ): BuiltGraph {
-  const { nodes, edges, nodeIdToPath } = collectStepGraph(steps, status);
+  const { nodes, edges, nodeIdToPath } = collectStepGraph(steps, status, options);
   const positioned = nodes.map((node, index) => {
     const stored = positions?.get(node.id);
     if (stored) return { ...node, position: stored };
