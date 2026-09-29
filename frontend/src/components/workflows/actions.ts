@@ -6,7 +6,7 @@
  * Field keys map to the step's ``params`` (or ``$do`` → the step's ``do``).
  */
 
-export type FieldType = 'text' | 'textarea' | 'number' | 'boolean' | 'csv';
+export type FieldType = 'text' | 'textarea' | 'number' | 'boolean' | 'csv' | 'app';
 
 export interface ActionField {
   key: string;
@@ -30,7 +30,7 @@ const f = (key: string, type: FieldType = 'text'): ActionField => ({
 });
 
 const COMPUTER_ACTIONS: WorkflowAction[] = [
-  { action: 'launch_app', labelKey: 'workflows.act_launch_app', fields: [f('app')] },
+  { action: 'launch_app', labelKey: 'workflows.act_launch_app', fields: [f('app', 'app')] },
   { action: 'press_hotkey', labelKey: 'workflows.act_press_hotkey', fields: [f('modifiers', 'csv'), f('key')] },
   { action: 'click_ref', labelKey: 'workflows.act_click_ref', fields: [f('ref')] },
   { action: 'double_click_ref', labelKey: 'workflows.act_double_click_ref', fields: [f('ref')] },
@@ -38,7 +38,7 @@ const COMPUTER_ACTIONS: WorkflowAction[] = [
   { action: 'type_into', labelKey: 'workflows.act_type_into', fields: [f('ref'), f('text'), f('submit', 'boolean')] },
   { action: 'type_text', labelKey: 'workflows.act_type_text', fields: [f('text')] },
   { action: 'scroll', labelKey: 'workflows.act_scroll', fields: [f('dy', 'number')] },
-  { action: 'scroll_to', labelKey: 'workflows.act_scroll_to', fields: [f('scroll_app'), f('scroll_y', 'number')] },
+  { action: 'scroll_to', labelKey: 'workflows.act_scroll_to', fields: [f('scroll_app', 'app'), f('scroll_y', 'number')] },
   { action: 'go_back', labelKey: 'workflows.act_go_back', fields: [] },
   { action: 'show', labelKey: 'workflows.act_show', fields: [f('ref')] },
   { action: 'click_coords', labelKey: 'workflows.act_click_coords', fields: [f('x', 'number'), f('y', 'number')] },
@@ -120,6 +120,14 @@ const FIELD_TYPE: Record<string, FieldType> = {
   object: 'text',
 };
 
+// Params that name an app on the local machine → render the App picker.
+const APP_PARAM_KEYS = new Set(['app', 'scroll_app']);
+
+function fieldTypeFor(kind: string, param: CapabilityParam): FieldType {
+  if (kind === 'computer' && APP_PARAM_KEYS.has(param.name)) return 'app';
+  return FIELD_TYPE[param.type] ?? 'text';
+}
+
 export function setCapabilities(kinds: CapabilityKind[]): void {
   const next: Record<string, WorkflowAction[]> = {};
   const outputs: Record<string, Record<string, string[]>> = {};
@@ -138,7 +146,7 @@ export function setCapabilities(kinds: CapabilityKind[]): void {
       labelKey: `workflows.act_${a.name}`,
       fields: (a.params ?? []).map((p) => ({
         key: p.name,
-        type: FIELD_TYPE[p.type] ?? 'text',
+        type: fieldTypeFor(k.kind, p),
         labelKey: `workflows.fld_${p.name}`,
         ...(p.description ? { help: p.description } : {}),
       })),

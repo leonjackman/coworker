@@ -1386,5 +1386,9 @@
   "workflows.input_type_boolean": "布尔",
   "workflows.input_type_list": "清单",
   "workflows.input_type_object": "物件",
-  "workflows.input_type_secret": "密钥"
+  "workflows.input_type_secret": "密钥",
+  "workflows.app_field_placeholder": "输入或选择 App",
+  "workflows.app_field_loading": "正在载入 App…",
+  "workflows.app_field_empty": "没有符合的 App",
+  "workflows.app_field_unknown": "找不到這個 App"
 }

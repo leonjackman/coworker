@@ -260,6 +260,10 @@ export interface ChatService {
   listWorkflowVersions: (name: string) => Promise<WorkflowVersionsResponse>;
   getWorkflowVersion: (name: string, version: number) => Promise<WorkflowDetailResponse>;
   deleteWorkflowVersion: (name: string, version: number) => Promise<{ status: string; removed: boolean }>;
+  listComputerApps: (scope?: 'installed' | 'running') => Promise<{
+    available: boolean;
+    apps: Array<{ displayName: string; bundleId: string; path?: string }>;
+  }>;
   listNotifications: () => Promise<NotificationsResponse>;
   clearNotifications: () => Promise<{ status: string; removed: number }>;
   listSchedules: () => Promise<SchedulesListResponse>;
@@ -785,6 +789,13 @@ class ElectronChatService implements ChatService {
 
   async deleteWorkflowVersion(name: string, version: number): Promise<{ status: string; removed: boolean }> {
     return this._workflowRequest(`/workflows/${encodeURIComponent(name)}/versions/${version}`, { method: 'DELETE' });
+  }
+
+  async listComputerApps(scope: 'installed' | 'running' = 'installed'): Promise<{
+    available: boolean;
+    apps: Array<{ displayName: string; bundleId: string; path?: string }>;
+  }> {
+    return this._workflowRequest(`/api/computer/apps?scope=${scope}`);
   }
 
   async listNotifications(): Promise<NotificationsResponse> {
@@ -2331,6 +2342,13 @@ class HttpChatService implements ChatService {
 
   async deleteWorkflowVersion(name: string, version: number): Promise<{ status: string; removed: boolean }> {
     return this.request(`/workflows/${encodeURIComponent(name)}/versions/${version}`, { method: 'DELETE' });
+  }
+
+  async listComputerApps(scope: 'installed' | 'running' = 'installed'): Promise<{
+    available: boolean;
+    apps: Array<{ displayName: string; bundleId: string; path?: string }>;
+  }> {
+    return this.request(`/api/computer/apps?scope=${scope}`);
   }
 
   async listNotifications(): Promise<NotificationsResponse> {

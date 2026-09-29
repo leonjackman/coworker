@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -21,6 +21,7 @@ import { orderSteps } from '../flowGraph';
 import { KIND_GROUPS, kindDescKey, kindIcon, kindLabelKey, kindStripe } from '../kinds';
 import { VALUE_KINDS, actionDef, actionsFor, outputsFor, type ActionField } from '../actions';
 import { LOCATOR_KINDS } from '../kinds';
+import { chatService } from '../../../services/chatService';
 import { SLOTS } from './workflowTree';
 import { INPUT_TYPES, coerceInputDefault, type InputErrors, type InputFormValue } from './runInputs';
 import type {
@@ -274,6 +275,164 @@ export function RunsPanel({
           <span className="wf-timeline__msg">{run.trigger || 'manual'}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+// ── App picker (computer app params) ──────────────────────────────────
+interface AppOption {
+  displayName: string;
+  bundleId: string;
+  path?: string;
+}
+
+const appCache: Record<string, { available: boolean; apps: AppOption[] }> = {};
+const appInflight: Record<string, Promise<{ available: boolean; apps: AppOption[] }>> = {};
+
+function loadComputerApps(scope: 'installed' | 'running'): Promise<{ available: boolean; apps: AppOption[] }> {
+  if (appCache[scope]) return Promise.resolve(appCache[scope]!);
+  if (appInflight[scope]) return appInflight[scope]!;
+  const promise = chatService
+    .listComputerApps(scope)
+    .then((r) => {
+      appCache[scope] = { available: r.available, apps: r.apps ?? [] };
+      return appCache[scope]!;
+    })
+    .catch(() => {
+      appCache[scope] = { available: false, apps: [] };
+      return appCache[scope]!;
+    })
+    .finally(() => {
+      delete appInflight[scope];
+    });
+  appInflight[scope] = promise;
+  return promise;
+}
+
+function AppField({
+  value,
+  onChange,
+  scope,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  scope: 'installed' | 'running';
+}) {
+  const [text, setText] = useState(value);
+  const [open, setOpen] = useState(false);
+  const [apps, setApps] = useState<AppOption[] | null>(null);
+  const [available, setAvailable] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [unknown, setUnknown] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [menuRect, setMenuRect] = useState<{ left: number; top: number; width: number } | null>(null);
+
+  useEffect(() => setText(value), [value]);
+
+  const openMenu = () => {
+    const el = wrapRef.current;
+    if (el) {
+      const r = el.getBoundingClientRect();
+      setMenuRect({ left: r.left, top: r.bottom + 4, width: r.width });
+    }
+    setOpen(true);
+  };
+
+  const ensureLoaded = () => {
+    if (apps !== null || loading) return;
+    setLoading(true);
+    void loadComputerApps(scope).then((r) => {
+      setApps(r.apps);
+      setAvailable(r.available);
+      setLoading(false);
+    });
+  };
+
+  const query = text.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    const list = apps ?? [];
+    const hits = query
+      ? list.filter(
+          (a) => a.displayName.toLowerCase().includes(query) || a.bundleId.toLowerCase().includes(query),
+        )
+      : list;
+    return hits.slice(0, 60);
+  }, [apps, query]);
+
+  const commit = (next: string) => {
+    setText(next);
+    onChange(next);
+    setUnknown(false);
+  };
+
+  // Bridge unavailable (web/headless): plain free-text field.
+  if (apps !== null && !available) {
+    return (
+      <Input
+        value={text}
+        onChange={(e) => commit(e.target.value)}
+        placeholder={t('workflows.app_field_placeholder')}
+      />
+    );
+  }
+
+  return (
+    <div className="wfs-appfield" ref={wrapRef}>
+      <Input
+        value={text}
+        placeholder={t('workflows.app_field_placeholder')}
+        onFocus={() => {
+          openMenu();
+          ensureLoaded();
+        }}
+        onChange={(e) => {
+          commit(e.target.value);
+          openMenu();
+        }}
+        onBlur={() => {
+          window.setTimeout(() => {
+            setOpen(false);
+            const known =
+              !query || !apps || apps.some((a) => a.displayName.toLowerCase() === query || a.bundleId.toLowerCase() === query);
+            setUnknown(!known);
+          }, 120);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && filtered[0]) {
+            commit(filtered[0].displayName);
+            setOpen(false);
+          } else if (e.key === 'Escape') {
+            setOpen(false);
+          }
+        }}
+      />
+      {open && menuRect ? (
+        <div
+          className="wfs-appfield__menu"
+          style={{ position: 'fixed', left: menuRect.left, top: menuRect.top, width: menuRect.width }}
+        >
+          {loading ? <div className="wfs-appfield__note">{t('workflows.app_field_loading')}</div> : null}
+          {!loading && filtered.length === 0 ? (
+            <div className="wfs-appfield__note">{t('workflows.app_field_empty')}</div>
+          ) : null}
+          {filtered.map((app) => (
+            <button
+              type="button"
+              key={`${app.bundleId}:${app.displayName}`}
+              className="wfs-appfield__item"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                commit(app.displayName);
+                setOpen(false);
+              }}
+            >
+              <span className="wfs-appfield__name">{app.displayName}</span>
+              <span className="wfs-appfield__id">{app.bundleId}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {unknown && !open ? <span className="wfs-input-error">{t('workflows.app_field_unknown')}</span> : null}
     </div>
   );
 }
@@ -662,6 +821,19 @@ export function NodeInspector({
 
   const field = (f: ActionField) => {
     const value = readField(f);
+    if (f.type === 'app') {
+      // launch_app opens any installed app; the other app params target a
+      // running app, so their picker lists running apps.
+      const scope: 'installed' | 'running' =
+        selected.do === 'launch_app' && f.key === 'app' ? 'installed' : 'running';
+      return (
+        <label className="wfs-field" key={f.key}>
+          <span>{t(f.labelKey)}</span>
+          <AppField value={String(value ?? '')} onChange={(v) => writeField(f, v)} scope={scope} />
+          {f.help ? <span className="wfs-help">{f.help}</span> : null}
+        </label>
+      );
+    }
     if (f.type === 'boolean') {
       return (
         <label className="wf-checkbox" key={f.key}>

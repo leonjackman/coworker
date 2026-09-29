@@ -1386,5 +1386,9 @@
   "workflows.input_type_boolean": "Boolean",
   "workflows.input_type_list": "List",
   "workflows.input_type_object": "Object",
-  "workflows.input_type_secret": "Secret"
+  "workflows.input_type_secret": "Secret",
+  "workflows.app_field_placeholder": "Type or select an app",
+  "workflows.app_field_loading": "Loading apps…",
+  "workflows.app_field_empty": "No matching apps",
+  "workflows.app_field_unknown": "No such app found"
 }
