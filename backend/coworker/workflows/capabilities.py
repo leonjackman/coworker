@@ -841,9 +841,11 @@ def _introspect_tool(tool: Any, kind: str) -> KindSpec | None:
         base = decl.action(name)
         seen.add(name)
         if base is not None:
+            # Use the action's OWN declared params — never the tool schema's full
+            # union (that made every action expose every other action's fields).
             actions.append(
                 ActionSpec(
-                    kind, name, params, target=base.target, success=base.success,
+                    kind, name, base.params, target=base.target, success=base.success,
                     locator=base.locator, aliases=base.aliases, description=base.description,
                 )
             )
