@@ -1412,5 +1412,10 @@
   "workflows.help_coords": "目標座標。",
   "workflows.help_code": "cw-automa 腳本程式碼。",
   "workflows.help_path": "檔案或資料夾路徑。",
-  "workflows.help_op": "剪貼簿操作：read 或 write。"
+  "workflows.help_op": "剪貼簿操作：read 或 write。",
+  "workflows.recently_opened": "最近開啟",
+  "workflows.updated_at": "更新日期",
+  "workflows.variables": "變數",
+  "workflows.retry": "重試",
+  "workflows.stop": "停止"
 }

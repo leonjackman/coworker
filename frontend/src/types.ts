@@ -1031,15 +1031,21 @@ export interface WorkflowPendingDetailResponse {
   content: string;
 }
 
+export type WorkflowRunStatus = 'running' | 'ok' | 'failed' | 'paused' | 'needs_human';
+/** Why a run paused for a human: an explicit approval, a question, or a failure. */
+export type WorkflowGateKind = 'approval' | 'question' | 'failure';
+
 export interface WorkflowRun {
   run_id: string;
   workflow: string;
-  status: string;
+  status: WorkflowRunStatus | string;
   context: Record<string, unknown>;
   completed: string[];
   outputs: Record<string, unknown>;
   error: string;
   pending_step?: string;
+  gate_kind?: WorkflowGateKind | string;
+  gate_retryable?: boolean;
   started_at: string;
   ended_at: string;
   trigger: string;

@@ -1412,5 +1412,10 @@
   "workflows.help_coords": "Target coordinates.",
   "workflows.help_code": "cw-automa script code.",
   "workflows.help_path": "File or folder path.",
-  "workflows.help_op": "Clipboard operation: read or write."
+  "workflows.help_op": "Clipboard operation: read or write.",
+  "workflows.recently_opened": "Recently opened",
+  "workflows.updated_at": "Updated",
+  "workflows.variables": "Variables",
+  "workflows.retry": "Retry",
+  "workflows.stop": "Stop"
 }

@@ -8,6 +8,7 @@ import {
   Loader2,
   Play,
   Plus,
+  RotateCw,
   Search,
   Trash2,
   XCircle,
@@ -588,24 +589,35 @@ export function OutputPanel({
 
   // output
   const invalid = Object.keys(inputErrors).length > 0;
+  const vars = (run?.context?.vars as Record<string, unknown>) ?? {};
+  const outputs = run?.outputs ?? {};
+  // A `failure` gate is a retry/stop decision (backward compat: older runs with
+  // no gate_kind default to the approve/reject authorization UI).
+  const isFailure = run?.gate_kind === 'failure';
   return (
-    <div>
+    <div className="wfs-out">
       {inputSpecs.length === 0 ? (
         <p className="wfs-empty-note">{t('workflows.run_no_inputs')}</p>
       ) : (
-        <div className="wfs-run-inputs">
-          {inputSpecs.map((spec) => (
-            <RunInputField
-              key={spec.name}
-              spec={spec}
-              value={inputValues[spec.name]}
-              error={inputErrors[spec.name]}
-              onChange={(v) => onInputChange(spec.name, v)}
-            />
-          ))}
-        </div>
+        <section className="wfs-out-section wfs-out-section--first">
+          <div className="wfs-out-section__head">
+            <span className="wf-section__title">{t('workflows.inputs')}</span>
+          </div>
+          <div className="wfs-run-inputs">
+            {inputSpecs.map((spec) => (
+              <RunInputField
+                key={spec.name}
+                spec={spec}
+                value={inputValues[spec.name]}
+                error={inputErrors[spec.name]}
+                onChange={(v) => onInputChange(spec.name, v)}
+              />
+            ))}
+          </div>
+        </section>
       )}
-      <div style={{ marginTop: 10 }}>
+
+      <div className="wfs-out-runbar">
         <Button variant="primary" size="sm" onClick={onRun} disabled={runBusy || invalid}>
           {runBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
           {t('workflows.run')}
@@ -613,45 +625,85 @@ export function OutputPanel({
       </div>
 
       {run ? (
-        <div style={{ marginTop: 12 }}>
-          <div className="wf-section__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {t('workflows.result')}
-            <span
-              className={`settings-chip settings-chip--${
-                run.status === 'ok' ? 'ok' : run.status === 'failed' ? 'bad' : 'warn'
-              }`}
-            >
-              {run.status}
-            </span>
-          </div>
-          {run.error ? <p className="wf-timeline__msg">{run.error}</p> : null}
-          {run.status === 'needs_human' && run.pending_step ? (
-            <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-              <Button variant="primary" size="sm" onClick={() => onResolve(run.pending_step || '', true)}>
-                <CheckCircle2 size={13} /> {t('workflows.approve_step')}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => onResolve(run.pending_step || '', false)}>
-                <XCircle size={13} /> {t('workflows.reject_step')}
-              </Button>
+        <>
+          <section className="wfs-out-section">
+            <div className="wfs-out-section__head">
+              <span className="wf-section__title">{t('workflows.result')}</span>
+              <span
+                className={`settings-chip settings-chip--${
+                  run.status === 'ok' ? 'ok' : run.status === 'failed' || isFailure ? 'bad' : 'warn'
+                }`}
+              >
+                {run.status}
+              </span>
             </div>
-          ) : null}
-          {Object.keys((run.context?.vars as Record<string, unknown>) ?? {}).length > 0 ? (
-            <pre className="skill-detail__pre" style={{ marginTop: 8 }}>
-              {JSON.stringify(run.context?.vars ?? {}, null, 2)}
-            </pre>
-          ) : null}
-          {evidence.length > 0 ? (
-            <div className="wf-timeline" style={{ marginTop: 8 }}>
-              {evidence.map((item) => (
-                <div className="wf-timeline__row" key={`${item.step_id}-${item.at}`}>
-                  <span className="settings-chip">{item.kind}</span>
-                  <span>{item.step_id}</span>
-                  <span className="wf-timeline__msg">{item.path}</span>
+            {run.error ? (
+              run.status === 'failed' || isFailure ? (
+                <pre className="wfs-out-error">{run.error}</pre>
+              ) : (
+                <p className="wf-timeline__msg">{run.error}</p>
+              )
+            ) : null}
+            {run.status === 'needs_human' && run.pending_step ? (
+              isFailure ? (
+                // A step FAILED and was escalated to a person: this is a retry/stop
+                // decision, not an approve/reject authorization.
+                <div className="wfs-out-actions">
+                  <Button variant="primary" size="sm" onClick={() => onResolve(run.pending_step || '', true)}>
+                    <RotateCw size={13} /> {t('workflows.retry')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => onResolve(run.pending_step || '', false)}>
+                    <XCircle size={13} /> {t('workflows.stop')}
+                  </Button>
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="wfs-out-actions">
+                  <Button variant="primary" size="sm" onClick={() => onResolve(run.pending_step || '', true)}>
+                    <CheckCircle2 size={13} /> {t('workflows.approve_step')}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => onResolve(run.pending_step || '', false)}>
+                    <XCircle size={13} /> {t('workflows.reject_step')}
+                  </Button>
+                </div>
+              )
+            ) : null}
+          </section>
+
+          {Object.keys(outputs).length > 0 ? (
+            <section className="wfs-out-section">
+              <div className="wfs-out-section__head">
+                <span className="wf-section__title">{t('workflows.outputs')}</span>
+              </div>
+              <pre className="wfs-code">{JSON.stringify(outputs, null, 2)}</pre>
+            </section>
           ) : null}
-        </div>
+
+          {Object.keys(vars).length > 0 ? (
+            <section className="wfs-out-section">
+              <div className="wfs-out-section__head">
+                <span className="wf-section__title">{t('workflows.variables')}</span>
+              </div>
+              <pre className="wfs-code">{JSON.stringify(vars, null, 2)}</pre>
+            </section>
+          ) : null}
+
+          {evidence.length > 0 ? (
+            <section className="wfs-out-section">
+              <div className="wfs-out-section__head">
+                <span className="wf-section__title">{t('workflows.evidence')}</span>
+              </div>
+              <div className="wf-timeline">
+                {evidence.map((item) => (
+                  <div className="wf-timeline__row" key={`${item.step_id}-${item.at}`}>
+                    <span className="settings-chip">{item.kind}</span>
+                    <span>{item.step_id}</span>
+                    <span className="wf-timeline__msg">{item.path}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </>
       ) : null}
     </div>
   );
@@ -1360,19 +1412,17 @@ export function OpenDialog({
 
 // ── Start screen (new workflow) ───────────────────────────────────────
 export function StartScreen({
-  templates,
-  busyId,
+  recent,
   onBlank,
   onOpen,
   onImport,
-  onTemplate,
+  onOpenWorkflow,
 }: {
-  templates: WorkflowTemplate[];
-  busyId: string | null;
+  recent: WorkflowEntry[];
   onBlank: () => void;
   onOpen: () => void;
   onImport: () => void;
-  onTemplate: (tpl: WorkflowTemplate) => void;
+  onOpenWorkflow: (entry: WorkflowEntry) => void;
 }) {
   return (
     <div className="wfs-start">
@@ -1389,24 +1439,46 @@ export function StartScreen({
           {t('workflows.import')}
         </Button>
       </div>
-      {templates.length > 0 ? (
+      {recent.length > 0 ? (
         <>
           <div className="wf-section__title" style={{ marginTop: 20 }}>
-            {t('workflows.templates')}
+            {t('workflows.recently_opened')}
           </div>
           <div className="wfs-start__actions">
-            {templates.map((tpl) => (
-              <button key={tpl.id} type="button" className="wfs-start__card" onClick={() => onTemplate(tpl)}>
-                <span className="wfs-start__card-name">{tpl.name}</span>
-                <span className="wfs-start__card-desc">{tpl.description}</span>
-                {busyId === tpl.id ? <Loader2 size={13} className="animate-spin" /> : null}
-              </button>
+            {recent.map((entry) => (
+              <div className="wfs-start__item" key={entry.name}>
+                <button
+                  type="button"
+                  className="wfs-start__card"
+                  onClick={() => onOpenWorkflow(entry)}
+                >
+                  <span className="wfs-start__card-name">{entry.name}</span>
+                  <span className="wfs-start__card-desc">{entry.description}</span>
+                </button>
+                <span className="wfs-start__card-date">
+                  {t('workflows.updated_at')}: {formatDate(entry.updated_at)}
+                </span>
+              </div>
             ))}
           </div>
         </>
       ) : null}
     </div>
   );
+}
+
+/** Locale-aware short date/time for workflow cards. */
+function formatDate(value: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 // ── Name prompt (Save As) ─────────────────────────────────────────────

@@ -240,6 +240,15 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const validation = useMemo(() => validateTree(steps), [steps]);
   const runInputErrors = useMemo(() => collectRunInputs(inputs, runInputs).errors, [inputs, runInputs]);
+  // Recently opened = the library sorted by last update.
+  const recentWorkflows = useMemo(
+    () =>
+      library
+        .slice()
+        .sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''))
+        .slice(0, 6),
+    [library],
+  );
   const dirty = useMemo(
     () => docKey(name, description, steps, entry, exits) !== baseline,
     [name, description, steps, entry, exits, baseline],
@@ -1328,6 +1337,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     if (dirty && !window.confirm(t('workflows.unsaved_confirm'))) return;
     persistedNameRef.current = '';
     setStarted(false);
+    // Refresh the library so the home screen's "recently opened" is current.
+    chatService.listWorkflows().then((r) => setLibrary(r.workflows)).catch(() => undefined);
   }, [dirty]);
 
   // ── keyboard shortcuts ──────────────────────────────────────────────
@@ -1472,15 +1483,14 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         />
         <ErrorBanner errors={errors} onDismiss={() => setErrors([])} />
         <StartScreen
-          templates={templates}
-          busyId={templateBusy}
+          recent={recentWorkflows}
           onBlank={() => {
             persistedNameRef.current = '';
             loadDocument({ name: '', description: '', steps: [], materialize: false });
           }}
           onOpen={() => setOpenDialog(true)}
           onImport={() => fileInputRef.current?.click()}
-          onTemplate={(tpl) => void installTemplate(tpl)}
+          onOpenWorkflow={(entry) => void openByName(entry.name)}
         />
         <OpenDialog
           open={openDialog}

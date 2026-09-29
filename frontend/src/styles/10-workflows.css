@@ -345,11 +345,19 @@
 .wf-timeline { display: flex; flex-direction: column; gap: 6px; }
 .wf-timeline__row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   font-size: 12px;
 }
-.wf-timeline__msg { color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Full text — never truncate with an ellipsis. */
+.wf-timeline__msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 
 .wf-help {
   margin: -2px 0 2px;

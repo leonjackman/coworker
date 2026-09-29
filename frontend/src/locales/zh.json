@@ -1412,5 +1412,10 @@
   "workflows.help_coords": "目标坐标。",
   "workflows.help_code": "cw-automa 脚本代码。",
   "workflows.help_path": "文件或资料夹路径。",
-  "workflows.help_op": "剪贴簿操作：read 或 write。"
+  "workflows.help_op": "剪贴簿操作：read 或 write。",
+  "workflows.recently_opened": "最近打开",
+  "workflows.updated_at": "更新日期",
+  "workflows.variables": "变量",
+  "workflows.retry": "重试",
+  "workflows.stop": "停止"
 }
