@@ -46,6 +46,7 @@ class Action:
 _TEXT_DESC = "The literal text to enter. Any characters are allowed (including '+'); use press_hotkey for keyboard shortcuts."
 _REF_DESC = "Element ref from the latest computer_observe snapshot."
 _MODS_DESC = 'Modifier keys from cmd, ctrl, alt, shift (e.g. ["cmd"] for Cmd+Space).'
+_APP_DESC = "Target app to act on (display name or bundle id); empty = the frontmost app. Use this so input does not land in the wrong window."
 
 COMPUTER_ACTIONS: tuple[Action, ...] = (
     Action(
@@ -59,6 +60,7 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
         (
             Param("key", required=True, description="Key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or a single symbol)."),
             Param("modifiers", "list", description=_MODS_DESC),
+            Param("app", description=_APP_DESC),
         ),
         description="Press a keyboard shortcut / key chord.",
         observation_free=True,
@@ -72,11 +74,19 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
             Param("text", required=True, description=_TEXT_DESC),
             Param("ref", description="Element ref of the input field (AXTextField/AXTextArea)."),
             Param("submit", "boolean", description="Press Enter after typing (search/submit fields need it while focused)."),
+            Param("app", description=_APP_DESC),
         ),
         description="Type literal text into a focused field.",
         locator="ref",
     ),
-    Action("type_text", (Param("text", required=True, description=_TEXT_DESC),), description="Type literal text into the frontmost app."),
+    Action(
+        "type_text",
+        (
+            Param("text", required=True, description=_TEXT_DESC),
+            Param("app", description=_APP_DESC),
+        ),
+        description="Type literal text (into the target/frontmost app).",
+    ),
     Action(
         "scroll",
         (

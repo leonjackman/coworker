@@ -1568,6 +1568,14 @@ async function handleComputerBridgeRequest(method, url, payload) {
     case '/ax/resolve_app': {
       return controller.axResolveApp(String(payload && payload.app || ''));
     }
+    case '/ax/press_to': {
+      return controller.axPressTo(
+        String(payload && payload.app || ''),
+        String(payload && payload.key || ''),
+        (payload && payload.modifiers) || [],
+        Number(payload && payload.repeat) || 1,
+      );
+    }
     case '/ax/input_text': {
       return controller.axInputText({
         app: String(payload && payload.app || ''),

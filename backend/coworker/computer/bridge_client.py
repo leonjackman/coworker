@@ -136,6 +136,22 @@ class ComputerClient(LoopbackBridgeClient):
     def ax_type(self, text: str) -> dict[str, Any]:
         return self._call("POST", "/ax/type", {"text": str(text)})
 
+    def ax_input_text(self, app: str = "", ref: str = "", text: str = "", submit: bool = False) -> dict[str, Any]:
+        """App/ref-targeted text input (vs the frontmost-app ``ax_type``)."""
+        payload: dict[str, Any] = {"text": str(text or ""), "submit": bool(submit)}
+        if app:
+            payload["app"] = str(app)
+        if ref:
+            payload["ref"] = str(ref)
+        return self._call("POST", "/ax/input_text", payload)
+
+    def ax_press_to(self, app: str, key: str, modifiers: list[str] | None = None, repeat: int = 1) -> dict[str, Any]:
+        """App-targeted key press (vs the frontmost-app ``ax_press``)."""
+        payload: dict[str, Any] = {"key": str(key or ""), "modifiers": list(modifiers or []), "repeat": int(repeat or 1)}
+        if app:
+            payload["app"] = str(app)
+        return self._call("POST", "/ax/press_to", payload)
+
     def ax_launch(self, app: str) -> dict[str, Any]:
         return self._call("POST", "/ax/launch", {"app": str(app)})
 
@@ -561,15 +577,27 @@ def build_computer_tools(
         if action == "launch_app":
             return client.ax_launch(str(args.app or ""))
         if action == "press_hotkey":
-            return client.ax_press(str(args.key or ""), [str(m) for m in (args.modifiers or [])])
+            mods = [str(m) for m in (args.modifiers or [])]
+            app = str(getattr(args, "app", "") or "")
+            if app:
+                return client.ax_press_to(app, str(args.key or ""), mods, 1)
+            return client.ax_press(str(args.key or ""), mods)
         if action in ("click_ref", "double_click_ref", "right_click_ref"):
             op = {"click_ref": "click", "double_click_ref": "double", "right_click_ref": "right"}[action]
             return client.ax_act(str(args.ref or ""), op)
         if action == "show":
             return client.ax_act(str(args.ref or ""), "show")
         if action == "type_into":
-            return client.ax_act(str(args.ref or ""), "type_into", text=str(args.text or ""), submit=bool(getattr(args, "submit", False)))
+            app = str(getattr(args, "app", "") or "")
+            ref = str(args.ref or "")
+            submit = bool(getattr(args, "submit", False))
+            if app and not ref:
+                return client.ax_input_text(app=app, text=str(args.text or ""), submit=submit)
+            return client.ax_act(ref, "type_into", text=str(args.text or ""), submit=submit)
         if action == "type_text":
+            app = str(getattr(args, "app", "") or "")
+            if app:
+                return client.ax_input_text(app=app, text=str(args.text or ""))
             return client.ax_type(str(args.text or ""))
         if action == "scroll":
             return client.ax_scroll(float(args.dx or 0), float(args.dy or 0))
@@ -765,7 +793,9 @@ def build_computer_tools(
 
         # Observation-independent actions do NOT need to see the screen — never
         # fail-closed them or the agent will nag the user for a permission it has.
-        observation_free = bool(getattr(_ACTION_BY_NAME.get(action), "observation_free", False))
+        observation_free = bool(getattr(_ACTION_BY_NAME.get(action), "observation_free", False)) or (
+            action in ("type_text", "type_into") and bool(app)
+        )
 
         # Capture the frontmost app identity before the action: the anchor for
         # launch/app-switch verification (a pid CHANGE), never animation churn.

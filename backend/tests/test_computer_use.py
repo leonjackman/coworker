@@ -114,6 +114,7 @@ class _FakeClient:
         self._frontmost = frontmost
         self._script_result = {"blocks": [{"type": "text", "text": "hello"}], "error": None}
         self.reset_called = False
+        self.calls: list[tuple[str, str]] = []
 
     def state(self):
         return self._state
@@ -133,7 +134,7 @@ class _FakeClient:
             return {"error": "no accessibility", "error_code": "input_permission"}
         return {"ok": True, "frontmost": self._frontmost, "refs": 3, "text": self._snapshot_text}
 
-    def ax_act(self, ref, op, text=None):
+    def ax_act(self, ref, op, text=None, **params):
         return self._ax_act
 
     def ax_app_state(self, app="", depth=6):
@@ -150,6 +151,7 @@ class _FakeClient:
         return {"ok": True, "performed": "press_hotkey", "key": key, "modifiers": modifiers}
 
     def ax_type(self, text):
+        self.calls.append(("type", text))
         return {"ok": True, "performed": "type_text"}
 
     def ax_launch(self, app):
@@ -181,8 +183,13 @@ class _FakeClient:
     def ax_resolve_app(self, app):
         return {"selector": app, "pid": 42, "bundleId": "com.apple.Safari"}
 
-    def ax_input_text(self, ref, text, app="", submit=False):
+    def ax_input_text(self, app="", ref="", text="", submit=False):
+        self.calls.append(("input_text", app or ref))
         return {"ok": True, "performed": "input_text", "strategy": "ax_value", "verified": True}
+
+    def ax_press_to(self, app, key, modifiers=None, repeat=1):
+        self.calls.append(("press_to", app))
+        return {"ok": True, "performed": "press_hotkey", "key": key, "modifiers": modifiers or []}
 
     def ax_ui_settle(self, app="", quiet_ms=250, timeout_ms=3000):
         return {"settled": True}
@@ -413,6 +420,26 @@ def test_act_type_text_is_always_literal(fake_client_factory):
         assert payload.get("ok") is True, value
 
 
+def test_act_type_text_with_app_targets_that_app(fake_client_factory):
+    """`app` makes type_text/press_hotkey target that app instead of relying on
+    the frontmost window (so input cannot land in the wrong app)."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    client = fake_client_factory(_FakeClient(snapshot_text=_SNAP_TEXT))
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+
+    act.invoke({"action": "type_text", "text": "1+1", "app": "Calculator"})
+    assert ("input_text", "Calculator") in client.calls
+
+    act.invoke({"action": "press_hotkey", "key": "enter", "app": "Calculator"})
+    assert ("press_to", "Calculator") in client.calls
+
+    # Without app, it stays the global (frontmost) path.
+    client.calls.clear()
+    act.invoke({"action": "type_text", "text": "hi"})
+    assert ("type", "hi") in client.calls
+
+
 def test_act_rejects_param_belonging_to_another_action(fake_client_factory):
     """One `computer` tool, but per-action contract: params from a different
     action are rejected (discriminated-union behaviour)."""
@@ -420,7 +447,8 @@ def test_act_rejects_param_belonging_to_another_action(fake_client_factory):
 
     fake_client_factory(_FakeClient(snapshot_text=_SNAP_TEXT))
     (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
-    payload = json.loads(act.invoke({"action": "type_text", "text": "hi", "app": "Safari"}))
+    # `ref` belongs to ref-based actions, not type_text (which takes text/app).
+    payload = json.loads(act.invoke({"action": "type_text", "text": "hi", "ref": "e1"}))
     assert payload["error_code"] == "param_error"
     assert "unexpected" in payload["error"]
 
