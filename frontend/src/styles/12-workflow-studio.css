@@ -489,6 +489,31 @@ body:has(.wfe-root) [data-radix-popper-content-wrapper] {
   line-height: 1.45;
   color: var(--muted-foreground);
 }
+/* Help icon + hover tooltip */
+.wfs-helpicon {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 3px;
+  color: var(--muted-foreground);
+  cursor: help;
+}
+.wfs-helpicon:hover { color: var(--accent); }
+.wfs-helpicon__tip {
+  z-index: 50;
+  max-width: 260px;
+  padding: 6px 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 6px;
+  background: var(--material-panel-solid, var(--material-panel));
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 8px 24px var(--material-shadow);
+}
+
 /* App picker (computer app params) */
 .wfs-appfield { position: relative; }
 .wfs-appfield__menu {

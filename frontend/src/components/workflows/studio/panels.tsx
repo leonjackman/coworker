@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  HelpCircle,
   Loader2,
   Play,
   Plus,
@@ -790,6 +791,38 @@ export function WorkflowInspector({
   );
 }
 
+// ── Help icon (hover tooltip) ─────────────────────────────────────────
+/** Localized help for a field key, falling back to the backend description. */
+function fieldHelp(f: ActionField): string {
+  const key = `workflows.help_${f.key}`;
+  const localized = t(key);
+  return localized === key ? f.help ?? '' : localized;
+}
+
+function HelpIcon({ text }: { text?: string }) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  if (!text) return null;
+  return (
+    <span
+      className="wfs-helpicon"
+      ref={ref}
+      onMouseEnter={() => {
+        const r = ref.current?.getBoundingClientRect();
+        if (r) setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+      }}
+      onMouseLeave={() => setPos(null)}
+    >
+      <HelpCircle size={13} />
+      {pos ? (
+        <span className="wfs-helpicon__tip" style={{ position: 'fixed', top: pos.top, right: pos.right }}>
+          {text}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 // ── Inspector: node (selected) ────────────────────────────────────────
 export type InspectorTab = 'basic' | 'advanced';
 
@@ -821,6 +854,7 @@ export function NodeInspector({
 
   const field = (f: ActionField) => {
     const value = readField(f);
+    const help = fieldHelp(f);
     if (f.type === 'app') {
       // launch_app opens any installed app; the other app params target a
       // running app, so their picker lists running apps.
@@ -828,9 +862,10 @@ export function NodeInspector({
         selected.do === 'launch_app' && f.key === 'app' ? 'installed' : 'running';
       return (
         <label className="wfs-field" key={f.key}>
-          <span>{t(f.labelKey)}</span>
+          <span>
+            {t(f.labelKey)} <HelpIcon text={help} />
+          </span>
           <AppField value={String(value ?? '')} onChange={(v) => writeField(f, v)} scope={scope} />
-          {f.help ? <span className="wfs-help">{f.help}</span> : null}
         </label>
       );
     }
@@ -838,31 +873,33 @@ export function NodeInspector({
       return (
         <label className="wf-checkbox" key={f.key}>
           <input type="checkbox" checked={!!value} onChange={(e) => writeField(f, e.target.checked)} />
-          <span>{t(f.labelKey)}</span>
-          {f.help ? <span className="wfs-help">{f.help}</span> : null}
+          <span>
+            {t(f.labelKey)} <HelpIcon text={help} />
+          </span>
         </label>
       );
     }
-    const help = f.help ? <span className="wfs-help">{f.help}</span> : null;
     if (f.type === 'textarea') {
       return (
         <label className="wfs-field" key={f.key}>
-          <span>{t(f.labelKey)}</span>
+          <span>
+            {t(f.labelKey)} <HelpIcon text={help} />
+          </span>
           <Textarea value={String(value ?? '')} onChange={(e) => writeField(f, e.target.value)} rows={3} />
-          {help}
         </label>
       );
     }
     if (f.type === 'number') {
       return (
         <label className="wfs-field" key={f.key}>
-          <span>{t(f.labelKey)}</span>
+          <span>
+            {t(f.labelKey)} <HelpIcon text={help} />
+          </span>
           <Input
             type="number"
             value={value === undefined || value === null ? '' : String(value)}
             onChange={(e) => writeField(f, e.target.value === '' ? '' : Number(e.target.value))}
           />
-          {help}
         </label>
       );
     }
@@ -870,7 +907,9 @@ export function NodeInspector({
       const text = Array.isArray(value) ? value.join(', ') : String(value ?? '');
       return (
         <label className="wfs-field" key={f.key}>
-          <span>{t(f.labelKey)}</span>
+          <span>
+            {t(f.labelKey)} <HelpIcon text={help} />
+          </span>
           <Input
             value={text}
             onChange={(e) =>
@@ -883,15 +922,15 @@ export function NodeInspector({
               )
             }
           />
-          {help}
         </label>
       );
     }
     return (
       <label className="wfs-field" key={f.key}>
-        <span>{t(f.labelKey)}</span>
+        <span>
+          {t(f.labelKey)} <HelpIcon text={help} />
+        </span>
         <Input value={String(value ?? '')} onChange={(e) => writeField(f, e.target.value)} />
-        {help}
       </label>
     );
   };
