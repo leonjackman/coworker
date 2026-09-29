@@ -52,11 +52,15 @@ _TERMINAL = {"ok", "failed", "needs_human", "paused"}
 
 class WorkflowContentPayload(BaseModel):
     content: str = Field(description="Full workflow YAML.")
+    # Draft saves skip capability diagnostics (unknown/missing params …) so an
+    # in-progress workflow can always be persisted; those problems surface at run.
+    draft: bool = False
 
 
 class WorkflowCreatePayload(BaseModel):
     content: str = Field(description="Full workflow YAML.")
     overwrite: bool = False
+    draft: bool = False
 
 
 class WorkflowStatusPayload(BaseModel):
@@ -271,7 +275,7 @@ def simulate_workflow_route(payload: WorkflowSimulatePayload):
 @router.post("/workflows")
 def create_workflow(payload: WorkflowCreatePayload):
     try:
-        result = workflow_manager.create(payload.content, overwrite=payload.overwrite)
+        result = workflow_manager.create(payload.content, overwrite=payload.overwrite, draft=payload.draft)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result.get("status") != "ok":
@@ -445,7 +449,7 @@ def get_workflow(name: str):
 
 @router.put("/workflows/{name}")
 def update_workflow(name: str, payload: WorkflowContentPayload):
-    result = workflow_manager.update(name, payload.content)
+    result = workflow_manager.update(name, payload.content, draft=payload.draft)
     if result.get("status") != "ok":
         code = 404 if "not found" in (result.get("message") or "") else 400
         raise HTTPException(status_code=code, detail=result.get("message", "update failed"))

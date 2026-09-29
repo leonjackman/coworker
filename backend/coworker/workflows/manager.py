@@ -96,8 +96,8 @@ class WorkflowManager:
 
     # ── mutations ───────────────────────────────────────────────────────
 
-    def create(self, content: str, *, overwrite: bool = False) -> dict[str, Any]:
-        workflow = self._parse_or_raise(content)
+    def create(self, content: str, *, overwrite: bool = False, draft: bool = False) -> dict[str, Any]:
+        workflow = self._parse_or_raise(content, draft=draft)
         if self.store.exists(workflow.name) and not overwrite:
             return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
         from .fingerprint import current_fingerprint
@@ -110,11 +110,11 @@ class WorkflowManager:
         saved = self.store.save(workflow, archive=overwrite)
         return {"status": "ok", "workflow": saved.to_dict(include_steps=False)}
 
-    def update(self, name: str, content: str) -> dict[str, Any]:
+    def update(self, name: str, content: str, *, draft: bool = False) -> dict[str, Any]:
         existing = self.store.get(name)
         if existing is None:
             return {"status": "error", "message": f"workflow not found: {name}"}
-        workflow = self._parse_or_raise(content, name_hint=name)
+        workflow = self._parse_or_raise(content, name_hint=name, draft=draft)
         # Name changes are allowed only by creating a new workflow.
         if workflow.name != name and self.store.exists(workflow.name):
             return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
@@ -433,7 +433,10 @@ class WorkflowManager:
             trigger=trigger,
             on_patch=on_patch or self._default_patch,
         )
-        if run.status in ("failed", "needs_human") and trigger != "agent":
+        # Only UNATTENDED (scheduled) runs raise a persisted "Run alert". Manual /
+        # in-editor runs surface their result only inside the editor (transient,
+        # cleared on close, never persisted to the alert log).
+        if run.status in ("failed", "needs_human") and trigger.startswith("schedule"):
             try:
                 from coworker.notifications import notify
 
@@ -598,13 +601,16 @@ class WorkflowManager:
     def _all_warnings(self, workflow: Workflow) -> list[str]:
         return [str(d) for d in self._all_diagnostics(workflow) if d.severity == "warning"]
 
-    def _parse_or_raise(self, content: str, *, name_hint: str = "") -> Workflow:
+    def _parse_or_raise(self, content: str, *, name_hint: str = "", draft: bool = False) -> Workflow:
         workflow, diagnostics = parse_workflow(content, name_hint=name_hint)
         if workflow is None:
             raise WorkflowParseError("; ".join(diagnostics) or "invalid workflow")
-        errors = self._all_errors(workflow)
-        if errors:
-            raise WorkflowValidationError("; ".join(errors))
+        # Draft saves (visual editor autosave/manual save) persist the document
+        # even when it has capability problems; those are enforced at RUN time.
+        if not draft:
+            errors = self._all_errors(workflow)
+            if errors:
+                raise WorkflowValidationError("; ".join(errors))
         return workflow
 
 
