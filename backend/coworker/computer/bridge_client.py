@@ -196,17 +196,8 @@ class ComputerClient(LoopbackBridgeClient):
         """Discard the persistent worker and its bindings."""
         return self._call("POST", "/ax/js_reset", {})
 
-    def ax_list_apps(self, scope: str = "running") -> dict[str, Any]:
-        return self._call("POST", "/ax/list_apps", {"scope": str(scope or "running")})
-
     def ax_resolve_app(self, app: str) -> dict[str, Any]:
         return self._call("POST", "/ax/resolve_app", {"app": str(app or "")})
-
-    def ax_input_text(self, ref: str, text: str, app: str = "", submit: bool = False) -> dict[str, Any]:
-        payload: dict[str, Any] = {"ref": str(ref or ""), "text": str(text or ""), "submit": bool(submit)}
-        if app:
-            payload["app"] = str(app)
-        return self._call("POST", "/ax/input_text", payload)
 
     def ax_ui_settle(self, app: str = "", quiet_ms: int = 250, timeout_ms: int = 3000) -> dict[str, Any]:
         return self._call("POST", "/ax/ui_settle", {
