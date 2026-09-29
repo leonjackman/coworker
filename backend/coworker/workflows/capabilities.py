@@ -370,36 +370,41 @@ BROWSER_ACTIONS: tuple[ActionSpec, ...] = (
 )
 
 _COMPUTER_LOCATOR = LocatorPolicy(keys=("ref", "coords"), maps={"ref": ("ref",), "coords": ("x", "y")})
+_COMPUTER_COORDS_LOCATOR = LocatorPolicy(keys=("coords",), require_any=False, maps={"coords": ("x", "y")})
 
-COMPUTER_ACTIONS: tuple[ActionSpec, ...] = (
-    ActionSpec(
-        "computer", "launch_app",
-        (_p("app", required=True, description="App display name (e.g. Calculator), bundle id (com.apple.calculator), or .app path — localized names resolve automatically."),),
-        target="computer", success="no_error",
-    ),
-    ActionSpec("computer", "press_hotkey", (_p("key", required=True), _p("modifiers", "list")), target="computer", success="no_error"),
-    ActionSpec("computer", "click_ref", (_p("ref", required=True),), target="computer", success="no_error", locator=_COMPUTER_LOCATOR),
-    ActionSpec("computer", "double_click_ref", (_p("ref", required=True),), target="computer", success="no_error", locator=_COMPUTER_LOCATOR),
-    ActionSpec("computer", "right_click_ref", (_p("ref", required=True),), target="computer", success="no_error", locator=_COMPUTER_LOCATOR),
-    ActionSpec("computer", "type_into", (_p("text", required=True), _p("ref"), _p("submit", "boolean")), target="computer", success="no_error", locator=_COMPUTER_LOCATOR),
-    ActionSpec("computer", "type_text", (_p("text", required=True),), target="computer", success="no_error"),
-    ActionSpec("computer", "scroll", (_p("dy", "number"), _p("dx", "number")), target="computer", success="no_error"),
-    ActionSpec("computer", "scroll_to", (_p("scroll_app", required=True), _p("scroll_x", "number"), _p("scroll_y", "number")), target="computer", success="no_error"),
-    ActionSpec("computer", "go_back", (), target="computer", success="no_error"),
-    ActionSpec("computer", "show", (_p("ref"),), target="computer", success="no_error", locator=_COMPUTER_LOCATOR),
-    ActionSpec("computer", "click_coords", (_p("x", "number", required=True), _p("y", "number", required=True)), target="computer", success="no_error",
-               locator=LocatorPolicy(keys=("coords",), require_any=False, maps={"coords": ("x", "y")})),
-    ActionSpec("computer", "drag", (_p("app"), _p("x1", "number", required=True), _p("y1", "number", required=True),
-                                    _p("x2", "number", required=True), _p("y2", "number", required=True)),
-               target="computer", success="no_error"),
-    ActionSpec("computer", "focus_window", (_p("app", required=True),), target="computer", success="no_error"),
-    ActionSpec("computer", "clipboard", (_p("op", required=True), _p("text", "textarea"), _p("app")),
-               target="computer", success="no_error"),
-    ActionSpec("computer", "file_dialog", (_p("path", required=True), _p("app")), target="computer", success="no_error"),
-    # Intent-level scripting (the cw-automa helper API) exposed as an atomic action.
-    ActionSpec("computer", "script", (_p("code", required=True), _p("reset", "boolean")),
-               target="computer_script", success="no_error"),
-)
+
+def _computer_actions() -> tuple[ActionSpec, ...]:
+    """Build the computer action registry from the single action catalog."""
+    from coworker.computer.actions import COMPUTER_ACTIONS as definitions
+
+    locators = {"ref": _COMPUTER_LOCATOR, "coords": _COMPUTER_COORDS_LOCATOR}
+    out: list[ActionSpec] = []
+    for definition in definitions:
+        out.append(
+            ActionSpec(
+                "computer",
+                definition.name,
+                tuple(
+                    ParamSpec(
+                        name=p.name,
+                        type=p.type,
+                        required=p.required,
+                        description=p.description,
+                        aliases=p.aliases,
+                    )
+                    for p in definition.params
+                ),
+                target=definition.target,
+                success=definition.success,
+                locator=locators.get(definition.locator),
+                aliases=definition.aliases,
+                description=definition.description,
+            )
+        )
+    return tuple(out)
+
+
+COMPUTER_ACTIONS: tuple[ActionSpec, ...] = _computer_actions()
 
 # Arbitrary tool steps fall back to these when no live tool_map is available.
 TOOL_ACTIONS: tuple[ActionSpec, ...] = (

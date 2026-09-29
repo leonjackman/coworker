@@ -304,8 +304,8 @@ steps:
 """
     manager.create(flow)
     result = manager.run("fail-flow", env=FakeEnv(tool=lambda n, a: {"ok": True}))
-    # Deterministic failure defaults to a human gate (no futile agent takeover).
-    assert result["status"] == "needs_human"
+    # A deterministic failure is a real error (not a human gate by default).
+    assert result["status"] == "failed"
     assert "expected-token" in result["run"]["error"]
 
 
@@ -387,6 +387,7 @@ steps:
     manager.create(flow)
     result = manager.run("gate-flow", env=FakeEnv(human=lambda s, q, o: False))
     assert result["status"] == "needs_human"
+    assert result["run"]["gate_kind"] == "approval"
 
 
 class AgenticEnv(FakeEnv):
@@ -513,11 +514,14 @@ steps:
   - id: act
     kind: tool
     do: nope
+    mode: agent
 """
     manager.create(flow)
     env = AgenticEnv(verdict="VERDICT: BLOCKED", tool=lambda n, a: (_ for _ in ()).throw(RuntimeError("x")))
     result = manager.run("blocked-flow", env=env)
+    # An agent step that cannot complete escalates to a (typed) human gate.
     assert result["status"] == "needs_human"
+    assert result["run"]["gate_kind"] == "failure"
 
 
 def test_mode_agent_step(manager):
@@ -549,8 +553,8 @@ steps:
     manager.create(flow)
     env = FakeEnv(tool=lambda n, a: {"ok": True, "text": "no needle here"})
     result = manager.run("success-flow", env=env)
-    # Deterministic failure defaults to a human gate (no futile agent takeover).
-    assert result["status"] == "needs_human"
+    # A deterministic failure is a real error (not a human gate by default).
+    assert result["status"] == "failed"
 
 
 def test_human_approval_resume(manager):
@@ -570,10 +574,33 @@ steps:
     first = manager.run("resume-approval", env=blocked)
     assert first["status"] == "needs_human"
     assert first["run"]["pending_step"] == "gate"
+    assert first["run"]["gate_kind"] == "approval"
     # Resume with an approval decision.
     resumed = manager.resume(first["run"]["run_id"], {"gate": True}, env=FakeEnv())
     assert resumed["status"] == "ok"
     assert resumed["run"]["context"]["vars"]["approved"] == "yes"
+
+
+def test_human_step_is_a_question_gate():
+    """An explicit `kind: human` step pauses with gate_kind == 'question'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        from coworker.workflows.env import build_tool_environment
+        from coworker.workspace import Workspace
+
+        ws = Path(tmp) / "ws"
+        ws.mkdir()
+        env = build_tool_environment(workspace=Workspace(ws), tools=[], data_dir=Path(tmp))
+        m = WorkflowManager(Path(tmp))
+        m.create("""name: ask-flow
+description: ask a human
+steps:
+  - id: ask
+    kind: human
+    goal: Pick a color
+""")
+        result = m.run("ask-flow", env=env)
+        assert result["status"] == "needs_human"
+        assert result["run"]["gate_kind"] == "question"
 
 
 def test_evidence_persistence():

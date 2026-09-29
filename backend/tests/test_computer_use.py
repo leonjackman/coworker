@@ -397,15 +397,32 @@ def test_act_launch_app(fake_client_factory):
     assert "verified" in payload
 
 
-def test_act_type_text_refuses_shortcut(fake_client_factory):
+def test_act_type_text_is_always_literal(fake_client_factory):
+    """Text actions type literal strings — '+' and key-name words are just text.
+
+    Shortcut semantics belong ONLY to press_hotkey (the action), never to the
+    content of a text string.
+    """
     from coworker.computer.bridge_client import build_computer_tools
 
-    fake_client_factory(_FakeClient())
+    fake_client_factory(_FakeClient(snapshot_text=_SNAP_TEXT))
     (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
-    out = act.invoke({"action": "type_text", "text": "cmd+spaceMusic"})
-    payload = json.loads(out)
-    assert payload["error_code"] == "shortcut_as_text"
-    assert "press_hotkey" in payload["error"]
+    for value in ("1+1", "C++", "a+b", "cmd+spaceMusic", "enter the value"):
+        payload = json.loads(act.invoke({"action": "type_text", "text": value}))
+        assert payload.get("error_code") != "shortcut_as_text", value
+        assert payload.get("ok") is True, value
+
+
+def test_act_rejects_param_belonging_to_another_action(fake_client_factory):
+    """One `computer` tool, but per-action contract: params from a different
+    action are rejected (discriminated-union behaviour)."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient(snapshot_text=_SNAP_TEXT))
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    payload = json.loads(act.invoke({"action": "type_text", "text": "hi", "app": "Safari"}))
+    assert payload["error_code"] == "param_error"
+    assert "unexpected" in payload["error"]
 
 
 def test_act_fail_closed_without_observation(fake_client_factory):

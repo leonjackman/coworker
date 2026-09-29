@@ -45,9 +45,16 @@ from coworker.bridge_common import (
     save_screenshot,
     write_bridge_info,
 )
+from coworker.computer.actions import ACTION_MAP, agent_actions, agent_union_params, param_names
 from coworker.computer_feature import computer_feature
 
 logger = logging.getLogger(__name__)
+
+# The computer action catalog is the single source of truth (coworker.computer.actions).
+# The agent's single `computer` tool and the workflow registry both derive from it.
+_AGENT_ACTIONS = agent_actions()
+_AGENT_ACTION_NAMES = tuple(a.name for a in _AGENT_ACTIONS)
+_ACTION_BY_NAME = ACTION_MAP
 
 #: Settings key under which Electron registers the computer bridge.
 _BRIDGE_KEY = "computer_bridge"
@@ -234,7 +241,7 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "trust the paste receipt/field change instead of retrying blindly. "
             "Legacy low-level tools remain: computer_observe (state/snapshot/app_state/screenshot) and computer "
             "(click_ref/type_into/press_hotkey/launch_app/click_coords). Open apps ONLY via launch_app or "
-            "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey — never type a shortcut as text. "
+            "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey. type_text/type_into enter literal text — any characters. "
             "If an action fails the SAME way twice, STOP and ask the user instead of retry-looping. "
             "NEVER claim an outcome you did not observe. If a permission error is reported, stop and tell the user."
         )
@@ -256,30 +263,14 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
 # ---------------------------------------------------------------------------
 
 ObserveAction = Literal["state", "displays", "screenshot", "snapshot", "app_state"]
-ComputerAction = Literal[
-    "launch_app", "press_hotkey", "click_ref", "double_click_ref", "right_click_ref",
-    "type_into", "type_text", "scroll", "scroll_to", "go_back", "show", "click_coords",
-]
+# Derived from the action catalog (coworker.computer.actions) — never hand-listed.
+ComputerAction = Literal[*_AGENT_ACTION_NAMES]
 
 # The macOS Accessibility (AX) element tree is the PRIMARY observation surface:
 # it only needs the Accessibility permission (NOT Screen Recording), and gives
 # the agent a real searchable element list with stable refs — so it acts by ref
 # instead of guessing pixel coordinates. Screen Recording is a secondary, visual
 # complement. When the AX tree is unavailable the mutating tools fail closed.
-
-_SHORTCUT_TOKENS = [
-    "cmd", "command", "ctrl", "control", "alt", "option", "shift",
-    "space", "enter", "return", "escape", "esc", "tab", "backspace",
-    "super", "meta", "\u2318", "\u21e7", "\u2325", "\u2303", "\u21a9",
-]
-
-
-def _looks_like_shortcut(text: str) -> bool:
-    """True when ``text`` is actually a keyboard shortcut typed as text."""
-    t = (text or "").lower()
-    if "+" in t:
-        return True
-    return any(token in t for token in _SHORTCUT_TOKENS)
 
 
 def _json_cap(result: dict[str, Any], limit: int = COMPUTER_OUTPUT_MAX_CHARS) -> str:
@@ -401,7 +392,7 @@ def build_computer_tools(
     not explicitly enabled it (Settings, default off).
     """
     from langchain_core.tools import tool
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, create_model
 
     client = ComputerClient(data_dir)
 
@@ -426,24 +417,43 @@ def build_computer_tools(
         depth: int = Field(6, ge=1, le=10, description="For 'snapshot'/'app_state': Accessibility tree depth.")
         app: str = Field("", description="For 'app_state': target app display name or bundle id; empty = frontmost app.")
 
-    class ComputerArgs(BaseModel):
-        action: ComputerAction = Field(..., description="Structure-first desktop action. Prefer ref-based and intent-level actions; coordinates are a last resort for canvas/rendered content.")
-        ref: str = Field("", description="For click_ref/double_click_ref/right_click_ref/type_into/show: the element ref from the latest computer_observe snapshot.")
-        app: str = Field("", description="For 'launch_app': the app display name (e.g. 'Calculator'), bundle id ('com.apple.calculator') or .app path; localized names resolve automatically.")
-        key: str = Field("", description="For 'press_hotkey': key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or single symbol).")
-        modifiers: list[str] = Field(default_factory=list, description="For 'press_hotkey': from cmd, ctrl, alt, shift (e.g. [\"cmd\"] for Cmd+Space).")
-        text: str = Field("", description="For 'type_into'/'type_text': the text to enter. NEVER a keyboard shortcut — shortcuts go through press_hotkey.")
-        submit: bool = Field(False, description="For 'type_into': press Enter after typing (search/submit fields need it while focused).")
-        x: float = Field(0, description="For 'click_coords' (last resort): X in the SCREENSHOT's pixel space (read it off the computer_observe screenshot).")
-        y: float = Field(0, description="For 'click_coords' (last resort): Y in the SCREENSHOT's pixel space.")
-        shot_width: int = Field(0, ge=0, description="For 'click_coords': screenshot width from the computer_observe screenshot result; 0 = coordinates are display points.")
-        shot_height: int = Field(0, ge=0, description="For 'click_coords': screenshot height from the computer_observe screenshot result; 0 = coordinates are display points.")
-        display: int = Field(0, ge=0, description="For 'click_coords': display index the screenshot was taken from.")
-        dx: float = Field(0, description="For 'scroll'/'scroll_to': horizontal delta.")
-        dy: float = Field(0, description="For 'scroll'/'scroll_to': vertical delta (positive scrolls down).")
-        scroll_app: str = Field("", description="For 'scroll_to': target app name or bundle id to scroll (required — scroll_to without app is forbidden).")
-        scroll_x: float = Field(0, description="For 'scroll_to': X coordinate within the target app's window to scroll at.")
-        scroll_y: float = Field(0, description="For 'scroll_to': Y coordinate within the target app's window to scroll at.")
+    # The tool schema is GENERATED from the action catalog, so a param name can
+    # never drift from the workflow registry. LangChain cannot express a
+    # discriminated-union args_schema, so per-action required/unknown args are
+    # enforced at call time by `_validate_action_args`.
+    _PY_TYPES: dict[str, Any] = {"number": float, "boolean": bool, "list": list, "object": dict}
+    _computer_fields: dict[str, Any] = {
+        "action": (
+            ComputerAction,
+            Field(..., description="Structure-first desktop action. Prefer ref-based and intent-level actions; coordinates are a last resort."),
+        ),
+    }
+    for _param_name, _param in agent_union_params().items():
+        if _param.type == "list":
+            _computer_fields[_param_name] = (list[str], Field(default_factory=list, description=_param.description))
+        else:
+            _computer_fields[_param_name] = (
+                _PY_TYPES.get(_param.type, str),
+                Field(0.0 if _param.type == "number" else (False if _param.type == "boolean" else ""), description=_param.description),
+            )
+    ComputerArgs = create_model("ComputerArgs", **_computer_fields)
+
+    def _validate_action_args(action: str, raw: dict[str, Any]) -> str | None:
+        """Enforce the per-action contract (discriminated union) at call time.
+
+        Rejects params that belong to a DIFFERENT action, and reports missing
+        required params. This is how one `computer` tool still behaves like a
+        per-action union schema.
+        """
+        definition = _ACTION_BY_NAME.get(action)
+        if definition is None:
+            return f"unknown computer action '{action}' (allowed: {', '.join(_AGENT_ACTION_NAMES)})"
+        allowed = param_names(definition)
+        provided = [k for k, v in raw.items() if k != "action" and v not in (None, "", [], 0, 0.0, False)]
+        unexpected = [k for k in provided if k not in allowed]
+        if unexpected:
+            return f"{action} got unexpected parameter(s): {', '.join(sorted(unexpected))} (allowed: {', '.join(sorted(allowed)) or 'none'})"
+        return None
 
     def _snapshot_text() -> str | None:
         """Return the current AX snapshot text, or None when observation fails
@@ -698,44 +708,43 @@ def build_computer_tools(
         return _observe_impl(action, display, max_width, depth, app)
 
     @tool(args_schema=ComputerArgs)
-    def computer(
-        action: str,
-        ref: str = "",
-        app: str = "",
-        key: str = "",
-        modifiers: list[str] | None = None,
-        text: str = "",
-        submit: bool = False,
-        x: float = 0,
-        y: float = 0,
-        dx: float = 0,
-        dy: float = 0,
-        shot_width: int = 0,
-        shot_height: int = 0,
-        display: int = 0,
-        scroll_app: str = "",
-        scroll_x: float = 0,
-        scroll_y: float = 0,
-    ) -> str:
+    def computer(**kwargs: Any) -> str:
         """Operate the user's real desktop BY ACCESSIBILITY ELEMENT REF.
 
         Structure-first: use a ref from the latest computer_observe snapshot for
         clicks/typing (click_ref, double_click_ref, right_click_ref, type_into, show).
-        Open apps only via launch_app; press keyboard shortcuts only via press_hotkey
-        (cmd+space etc.) — NEVER type a shortcut as text (type_text refuses it). Keep
-        click_coords strictly as a last resort for canvas/rendered content; its x,y are
-        in the SCREENSHOT's pixel space, so pass shot_width/shot_height (and display)
-        from that computer_observe screenshot result. After every action read the
-        returned after_preview and only claim what it confirms.
+        Open apps only via launch_app; press keyboard shortcuts only via press_hotkey.
+        type_text / type_into enter LITERAL text — every character (including ``+``)
+        is just text. Keep click_coords strictly as a last resort for canvas/rendered
+        content; its x,y are in the SCREENSHOT's pixel space, so pass shot_width/
+        shot_height (and display) from that computer_observe screenshot result. After
+        every action read the returned after_preview and only claim what it confirms.
 
         For typing (type_into / type_text): the ref MUST point to an AXTextField or
         AXTextArea element (look for ``AXTextField`` or ``AXTextArea`` in the snapshot).
         Clicking an AXStaticText / AXButton / AXGroup will NOT make it editable — those
-        are display elements, not input fields. If no AXTextField exists in the snapshot,
-        the UI is not ready for typing (wait, click a search button to reveal the field,
-        or use a keyboard shortcut like cmd+F to open the find/search field).
+        are display elements, not input fields.
         """
-        mods = [str(m) for m in (modifiers or [])]
+        action = str(kwargs.get("action") or "")
+        invalid = _validate_action_args(action, kwargs)
+        if invalid:
+            return json.dumps({"error": invalid, "error_code": "param_error"}, ensure_ascii=False)
+        ref = str(kwargs.get("ref") or "")
+        app = str(kwargs.get("app") or "")
+        key = str(kwargs.get("key") or "")
+        mods = [str(m) for m in (kwargs.get("modifiers") or [])]
+        text = str(kwargs.get("text") or "")
+        submit = bool(kwargs.get("submit") or False)
+        x = float(kwargs.get("x") or 0)
+        y = float(kwargs.get("y") or 0)
+        dx = float(kwargs.get("dx") or 0)
+        dy = float(kwargs.get("dy") or 0)
+        shot_width = int(kwargs.get("shot_width") or 0)
+        shot_height = int(kwargs.get("shot_height") or 0)
+        display = int(kwargs.get("display") or 0)
+        scroll_app = str(kwargs.get("scroll_app") or "")
+        scroll_x = float(kwargs.get("scroll_x") or 0)
+        scroll_y = float(kwargs.get("scroll_y") or 0)
 
         sig = json.dumps(
             [action, ref, app, key, mods, str(text or ""), bool(submit), x, y, dx, dy],
@@ -754,20 +763,9 @@ def build_computer_tools(
                 ensure_ascii=False,
             )
 
-        # Instant shortcut-as-text guard: type_* must never be a hotkey.
-        if action in ("type_text", "type_into") and _looks_like_shortcut(str(text or "")):
-            return json.dumps(
-                {
-                    "error": "You passed a keyboard shortcut as text. Use computer(action='press_hotkey', key='<key>', modifiers=['cmd']) instead.",
-                    "error_code": "shortcut_as_text",
-                },
-                ensure_ascii=False,
-            )
-
-        # Observation-independent actions: launch_app / press_hotkey / go_back do NOT need
-        # to see the screen — never fail-closed them or the agent will nag the
-        # user for a permission it already has.
-        observation_free = action in ("launch_app", "press_hotkey", "go_back")
+        # Observation-independent actions do NOT need to see the screen — never
+        # fail-closed them or the agent will nag the user for a permission it has.
+        observation_free = bool(getattr(_ACTION_BY_NAME.get(action), "observation_free", False))
 
         # Capture the frontmost app identity before the action: the anchor for
         # launch/app-switch verification (a pid CHANGE), never animation churn.
@@ -792,9 +790,10 @@ def build_computer_tools(
         from types import SimpleNamespace
 
         ns = SimpleNamespace(
-            ref=ref, app=app, key=key, modifiers=mods, text=text, submit=bool(submit),
+            ref=ref, app=app, key=key, modifiers=mods, text=text, submit=submit,
             x=x, y=y, dx=dx, dy=dy,
-            shot_width=int(shot_width or 0), shot_height=int(shot_height or 0), display=int(display or 0),
+            shot_width=shot_width, shot_height=shot_height, display=display,
+            scroll_app=scroll_app, scroll_x=scroll_x, scroll_y=scroll_y,
         )
         try:
             result = _execute_action(action, ns)

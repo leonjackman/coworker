@@ -128,25 +128,35 @@ class WorkflowExecutor:
             run.outputs = self._resolve_outputs(workflow, run.context)
             run.status = "ok"
             run.pending_step = ""
+            run.gate_kind = ""
+            run.gate_retryable = False
             run.error = ""
         except NeedsHuman as exc:
             run.status = "needs_human"
             run.error = str(exc)
             run.pending_step = exc.step_id
+            run.gate_kind = exc.kind
+            run.gate_retryable = exc.retryable
             emitter.emit(
                 "needs_human",
                 step_id=exc.step_id,
                 status="needs_human",
                 message=str(exc),
-                data={"pending_step": exc.step_id},
+                data={"pending_step": exc.step_id, "gate_kind": exc.kind, "gate_retryable": exc.retryable},
             )
         except StepFailed as exc:
             run.status = "failed"
             run.error = str(exc)
+            run.pending_step = ""
+            run.gate_kind = ""
+            run.gate_retryable = False
             emitter.emit("error", step_id=exc.step_id, status="failed", message=exc.message)
         except Exception as exc:  # noqa: BLE001 - a run must never crash the caller
             run.status = "failed"
             run.error = f"{type(exc).__name__}: {exc}"
+            run.pending_step = ""
+            run.gate_kind = ""
+            run.gate_retryable = False
             emitter.emit("error", status="failed", message=run.error)
             logger.warning("workflow %s run %s crashed: %s", workflow.name, run_id, exc)
 
@@ -306,7 +316,7 @@ class WorkflowExecutor:
         if step.approval:
             gate = self._request_approval(step, run, state)
             if not gate:
-                raise NeedsHuman(step.id, f"approval denied for '{step.id}'")
+                raise NeedsHuman(step.id, f"approval denied for '{step.id}'", kind="approval", retryable=False)
 
         specs = self._success_specs(step)
 
@@ -315,7 +325,7 @@ class WorkflowExecutor:
         if step.mode == "agent":
             taken = self._takeover(step, "", run, state, self._resolve_params(step, run))
             if taken is None:
-                raise NeedsHuman(step.id, f"agent step '{step.id}' could not complete")
+                raise NeedsHuman(step.id, f"agent step '{step.id}' could not complete", kind="failure", retryable=True)
             self._emit_success(step, run, state, taken)
             return taken
 
@@ -409,15 +419,16 @@ class WorkflowExecutor:
         policy = str(step.on_error.get("then") or "").strip().lower()
         if not policy:
             # A deterministic action failure (bad app name, wrong coordinates,
-            # missing permission, non-zero exit) is usually NOT fixable by an
-            # agent — surface it to the human instead of burning a futile
-            # takeover. Only genuinely agentic steps default to takeover.
+            # missing permission, non-zero exit) is a real ERROR, not a human
+            # gate: default to abort so the run ends as `failed`. Only genuinely
+            # agentic steps default to takeover. An author who WANTS a person in
+            # the loop sets `on_error: {then: human}` (or `approval: true`).
             if step.mode == "agent" or step.kind in _AGENTIC_DEFAULT_KINDS:
                 policy = "agent"
             else:
-                policy = "human"
+                policy = "abort"
         if policy == "agent" and not state.env.supports_agentic():
-            policy = "human"
+            policy = "abort"
 
         state.emitter.emit(
             "recover",
@@ -431,7 +442,7 @@ class WorkflowExecutor:
         if policy == "skip":
             return SkippedStep(step.id, error)
         if policy == "human":
-            raise NeedsHuman(step.id, error or f"step '{step.id}' needs human input")
+            raise NeedsHuman(step.id, error or f"step '{step.id}' needs human input", kind="failure", retryable=True)
         if policy.startswith("goto:"):
             raise GotoStep(step.id, policy.split(":", 1)[1].strip())
         if policy == "self_heal":
@@ -440,7 +451,13 @@ class WorkflowExecutor:
         taken = self._takeover(step, error, run, state, self._resolve_params(step, run))
         if taken is not None:
             return taken
-        raise NeedsHuman(step.id, f"agent takeover could not complete '{step.id}': {error}", result=None)
+        raise NeedsHuman(
+            step.id,
+            f"agent takeover could not complete '{step.id}': {error}",
+            result=None,
+            kind="failure",
+            retryable=True,
+        )
 
     def _resolve_params(self, step: Step, run: Run) -> dict[str, Any]:
         """Resolve a step's params against the run context (best-effort)."""
@@ -701,9 +718,15 @@ class WorkflowExecutor:
         question = f"Approve step '{step.id}' ({step.kind}: {step.do or ''})?"
         try:
             decision = state.env.human(step, question, None)
-        except NotImplementedError:
-            # No human channel: in guarded mode fail closed via NeedsHuman.
-            raise NeedsHuman(step.id, f"step '{step.id}' requires human approval")
+        except (NeedsHuman, NotImplementedError) as exc:
+            # No human channel for this run: surface an APPROVAL gate (the env's
+            # generic "question" kind is wrong in this authorization context).
+            raise NeedsHuman(
+                step.id,
+                f"step '{step.id}' requires human approval",
+                kind="approval",
+                retryable=True,
+            ) from exc
         if isinstance(decision, bool):
             return decision
         if isinstance(decision, dict):

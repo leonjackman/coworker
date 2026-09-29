@@ -288,6 +288,10 @@ class Run:
     outputs: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     pending_step: str = ""
+    # Human-gate details, set when status == "needs_human":
+    # kind ∈ approval | question | failure ; retryable = re-run makes sense.
+    gate_kind: str = ""
+    gate_retryable: bool = False
     started_at: str = ""
     ended_at: str = ""
     trigger: str = "manual"
@@ -302,6 +306,8 @@ class Run:
             "outputs": self.outputs,
             "error": self.error,
             "pending_step": self.pending_step,
+            "gate_kind": self.gate_kind,
+            "gate_retryable": self.gate_retryable,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "trigger": self.trigger,
@@ -318,6 +324,8 @@ class Run:
             outputs=dict(data.get("outputs") or {}),
             error=str(data.get("error") or ""),
             pending_step=str(data.get("pending_step") or ""),
+            gate_kind=str(data.get("gate_kind") or ""),
+            gate_retryable=bool(data.get("gate_retryable") or False),
             started_at=str(data.get("started_at") or ""),
             ended_at=str(data.get("ended_at") or ""),
             trigger=str(data.get("trigger") or "manual"),
@@ -352,12 +360,34 @@ class StepFailed(WorkflowError):
 
 
 class NeedsHuman(WorkflowError):
-    """A human-approval step paused the run (W22/W37)."""
+    """A run paused for a human gate.
 
-    def __init__(self, step_id: str, message: str = "", result: Any = None):
+    ``kind`` distinguishes WHY a human is needed (never guess it from the
+    message):
+
+    * ``approval`` — an explicit ``approval: true`` step (authorize the action).
+    * ``question`` — an explicit ``human`` step (an answer is needed).
+    * ``failure``  — a step failed and the policy escalated to a person.
+
+    ``retryable`` says whether re-running the step after the human intervenes is
+    meaningful (a failure gate usually is; a question gate resolves with an
+    answer, not a retry).
+    """
+
+    def __init__(
+        self,
+        step_id: str,
+        message: str = "",
+        result: Any = None,
+        kind: str = "question",
+        retryable: bool = True,
+    ):
         super().__init__(message or f"step '{step_id}' needs human input")
         self.step_id = step_id
+        self.message = message
         self.result = result
+        self.kind = kind
+        self.retryable = retryable
 
 
 class GotoStep(WorkflowError):

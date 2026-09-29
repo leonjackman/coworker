@@ -214,7 +214,7 @@ class DecisionEnvironment(StepEnvironment):
         step_id = getattr(step, "id", "")
         if step_id in self._decisions:
             return self._decisions[step_id]
-        raise NeedsHuman(step_id, question)
+        raise NeedsHuman(step_id, question, kind="question", retryable=False)
 
     def self_heal(self, step, error, context):
         return self._base.self_heal(step, error, context)
@@ -339,7 +339,7 @@ def build_tool_environment(
         return _agentic(prompt, step)
 
     def _human(step: Any, question: str, options: list[dict[str, str]] | None = None) -> Any:
-        raise NeedsHuman(step.id, question)
+        raise NeedsHuman(step.id, question, kind="question", retryable=False)
 
     def _agentic(prompt: str, step: Any, autonomy: str | None = None) -> Any:
         from coworker.agent.graph import build_workspace_tools
