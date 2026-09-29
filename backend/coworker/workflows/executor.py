@@ -341,6 +341,16 @@ class WorkflowExecutor:
                 # Control-flow signals are never treated as failures.
                 raise
             except StepFailed as exc:
+                # The user must act (resume computer control, grant a permission):
+                # pause as a retryable gate — never burn a policy/agent takeover on it.
+                if _error_code_from_result(getattr(exc, "result", None)) in _HUMAN_ACTIONABLE_CODES:
+                    raise NeedsHuman(
+                        step.id,
+                        exc.message,
+                        result=getattr(exc, "result", None),
+                        kind="failure",
+                        retryable=True,
+                    ) from exc
                 # Semantic/verification failure → recovery (policy engine).
                 result = self._recover(workflow, step, exc.message, run, state, patched_step)
                 break
@@ -870,6 +880,33 @@ def _enforce_success(
         message = f"{base} did not succeed (rule: {rule})" + (f": {detail}" if detail else "")
         raise StepFailed(step.id, message, result=result)
     return result
+
+
+# Error codes that mean "the USER must act in their environment" (resume
+# computer control / grant a permission) — not a workflow defect. These pause
+# the run as a retryable failure gate (Retry/Stop) instead of a hard failure.
+_HUMAN_ACTIONABLE_CODES = {
+    "computer_paused",
+    "input_permission",
+    "screen_permission",
+    "no_observation",
+}
+
+
+def _error_code_from_result(result: Any) -> str:
+    """Extract ``error_code`` from an adapter/tool result (dict or JSON string)."""
+    data = result
+    if isinstance(data, str):
+        text = data.strip()
+        if text[:1] != "{":
+            return ""
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return ""
+    if isinstance(data, dict):
+        return str(data.get("error_code") or "")
+    return ""
 
 
 def _result_error_detail(result: Any) -> str:

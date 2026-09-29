@@ -581,6 +581,24 @@ steps:
     assert resumed["run"]["context"]["vars"]["approved"] == "yes"
 
 
+def test_human_actionable_error_pauses_as_retryable_gate(manager):
+    """`computer_paused` (user must resume) is a retryable failure gate, not a
+    hard failure and not a policy/agent takeover."""
+    flow = """name: paused-flow
+description: computer paused
+steps:
+  - id: act
+    kind: tool
+    do: act
+"""
+    manager.create(flow)
+    env = FakeEnv(tool=lambda n, a: {"error_code": "computer_paused", "error": "computer paused by user"})
+    result = manager.run("paused-flow", env=env)
+    assert result["status"] == "needs_human"
+    assert result["run"]["gate_kind"] == "failure"
+    assert result["run"]["gate_retryable"] is True
+
+
 def test_human_step_is_a_question_gate():
     """An explicit `kind: human` step pauses with gate_kind == 'question'."""
     with tempfile.TemporaryDirectory() as tmp:
