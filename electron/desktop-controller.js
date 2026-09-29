@@ -110,6 +110,7 @@ class DesktopController {
   constructor() {
     this.paused = false;
     this.pauseReason = '';
+    this._onPauseChange = null;
     this._stopPauseListener = null;
     this._stopAccel = null;
     this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
@@ -141,7 +142,13 @@ class DesktopController {
         adapter.hudPause(false).catch(() => {});
       }
     } catch (e) { /* helper unavailable */ }
+    try { if (this._onPauseChange) this._onPauseChange(this.paused, this.pauseReason); } catch (e) { /* ignore */ }
     return { ok: true, paused: this.paused, reason: this.pauseReason };
+  }
+
+  /** Observe pause/resume (the tray rebuilds its label from this). */
+  setOnPauseChange(cb) {
+    this._onPauseChange = typeof cb === 'function' ? cb : null;
   }
 
   pause(reason = 'user') {
@@ -150,6 +157,11 @@ class DesktopController {
 
   resume() {
     return this.setPaused(false);
+  }
+
+  /** One key toggles yield/restore — matches the tray label. */
+  togglePaused(reason = 'user') {
+    return this.paused ? this.resume() : this.pause(reason);
   }
 
   abort() {
@@ -203,7 +215,7 @@ class DesktopController {
     }
     if (accel) {
       try {
-        const ok = globalShortcut.register(accel, () => this.pause('user'));
+        const ok = globalShortcut.register(accel, () => this.togglePaused('user'));
         if (!ok) console.warn('[computer] stop shortcut registration failed:', accel);
         else this._stopAccel = accel;
       } catch (e) {

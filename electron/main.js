@@ -1477,6 +1477,7 @@ function ensureComputerController() {
 function setupComputerBridge() {
   try {
     ensureComputerController();
+    computerController.setOnPauseChange(() => refreshComputerTray());
     computerController.registerAutoPauseHandlers();
     computerController.registerEmergencyHotkey();
     const server = startComputerBridge();
