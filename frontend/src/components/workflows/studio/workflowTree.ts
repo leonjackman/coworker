@@ -125,6 +125,39 @@ export function wireList(list: WorkflowStep[]): WorkflowStep[] {
   }));
 }
 
+/** Clear any ``next`` links that point at a step that no longer exists. */
+export function pruneDanglingNext(steps: WorkflowStep[]): WorkflowStep[] {
+  const ids = new Set(steps.map((step) => step.id));
+  return steps.map((step) => {
+    const out: WorkflowStep = { ...step };
+    if (out.next && !ids.has(out.next)) out.next = '';
+    for (const slot of SLOTS) {
+      const kids = step[slot] as WorkflowStep[] | undefined;
+      if (kids?.length) out[slot] = pruneDanglingNext(kids);
+    }
+    return out;
+  });
+}
+
+/**
+ * Drop wiring that references steps no longer present: dangling ``next`` links
+ * plus any ``entry``/``exits`` pointing at a missing step. Keeps a document
+ * saveable after deletions.
+ */
+export function pruneWiring(
+  steps: WorkflowStep[],
+  entry: string | null,
+  exits: string[] | null,
+): { steps: WorkflowStep[]; entry: string | null; exits: string[] | null } {
+  const cleaned = pruneDanglingNext(steps);
+  const ids = new Set(cleaned.map((step) => step.id));
+  return {
+    steps: cleaned,
+    entry: entry && !ids.has(entry) ? '' : entry,
+    exits: exits === null ? null : exits.filter((id) => ids.has(id)),
+  };
+}
+
 /** Remove several step paths at once (order-safe for same-list siblings). */
 export function removeLeaves(steps: WorkflowStep[], paths: StepPath[]): WorkflowStep[] {
   const ordered = paths

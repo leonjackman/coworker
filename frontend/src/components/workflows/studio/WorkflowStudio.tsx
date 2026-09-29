@@ -88,6 +88,7 @@ import {
   newStep,
   parsePath,
   pathKey,
+  pruneWiring,
   removeLeaf,
   removeLeaves,
   setList,
@@ -229,8 +230,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const suspendHistoryRef = useRef(false);
   // Last document revision an autosave was attempted for (avoids retry loops).
   const autoSaveTriedRef = useRef('');
-  // Signature of the last validation-problem set shown in the banner.
-  const validationBannerRef = useRef('');
+
   // Name this document was last SAVED as on the backend ('' = never saved).
   // Renaming the doc keeps this as the update target so renames work.
   const persistedNameRef = useRef(target.isNew ? '' : target.name);
@@ -491,17 +491,9 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [steps, name, description, entry, exits, started]);
 
-  // Surface validation problems in the dismissible banner. Fires ONCE per
-  // distinct problem set (never per keystroke / autosave attempt), so the banner
-  // can't flicker or loop; it clears automatically once the document is valid.
-  useEffect(() => {
-    if (!started) return;
-    const sig = validation.join('\n');
-    if (sig === validationBannerRef.current) return;
-    validationBannerRef.current = sig;
-    setErrors(validation.length > 0 ? validation.slice(0, 6) : []);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validation, started]);
+  // NOTE: validation problems are NOT auto-shown in the banner while editing.
+  // They live in the status bar + Problems tab; the banner is reserved for an
+  // explicit Run (see `executeRun`) or a real save/run failure.
 
   const applySnapshot = useCallback(
     (snap: string) => {
@@ -601,11 +593,22 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     [selected, steps, selectedPath, rebuild],
   );
 
+  // When steps are removed, drop any wiring that now points at a missing step
+  // (entry/exits + dangling `next`) so saving can't fail validation.
+  const pruneWiringFor = useCallback((nextSteps: WorkflowStep[]): WorkflowStep[] => {
+    const pruned = pruneWiring(nextSteps, entryRef.current, exitsRef.current);
+    entryRef.current = pruned.entry;
+    exitsRef.current = pruned.exits;
+    setEntry(pruned.entry);
+    setExits(pruned.exits);
+    return pruned.steps;
+  }, []);
+
   const deleteSelected = useCallback(() => {
     if (selectedPath.length === 0) return;
-    rebuild(removeLeaf(steps, selectedPath));
+    rebuild(pruneWiringFor(removeLeaf(steps, selectedPath)));
     setSelectedId('');
-  }, [steps, selectedPath, rebuild]);
+  }, [steps, selectedPath, rebuild, pruneWiringFor]);
 
   const duplicateSelected = useCallback(() => {
     if (!selected || selectedPath.length === 0) return;
@@ -776,13 +779,13 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       .map((p) => parsePath(p));
     const edgesToDelete = edgesRef.current.filter((e) => selectedEdgeIds.includes(e.id));
     if (paths.length > 0) {
-      rebuild(removeLeaves(steps, paths));
+      rebuild(pruneWiringFor(removeLeaves(steps, paths)));
       setSelectedId('');
     }
     if (edgesToDelete.length > 0) detachEdges(edgesToDelete);
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
-  }, [selectedNodeIds, selectedEdgeIds, steps, rebuild, detachEdges]);
+  }, [selectedNodeIds, selectedEdgeIds, steps, rebuild, detachEdges, pruneWiringFor]);
 
   const duplicateSelection = useCallback(() => {
     const paths = selectedNodeIds
@@ -858,19 +861,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   // ── save / persist ──────────────────────────────────────────────────
   const persist = useCallback(
     async (opts: { closeAfter?: boolean; asName?: string; silent?: boolean } = {}): Promise<boolean> => {
-      // Autosave passes `silent` so a failing autosave never pops/keeps a banner
-      // (it only updates the status-bar save state).
+      // Saving is NEVER gated on validation: the document is persisted as-is so
+      // authors can keep an in-progress/broken workflow. Validation problems are
+      // surfaced at RUN time (see `executeRun`), not here. Autosave passes
+      // `silent` so a failing autosave never pops/keeps a banner.
       if (!opts.silent) setErrors([]);
-      const problems = validateTree(steps);
-      if (problems.length > 0) {
-        if (!opts.silent) {
-          setErrors(problems.slice(0, 6));
-          setBottomTab('problems');
-          setBottomOpen(true);
-        }
-        setSaveState('error');
-        return false;
-      }
       const finalName = (opts.asName ?? name).trim();
       if (!finalName) {
         if (!opts.silent) setErrors([t('workflows.name_required')]);
@@ -880,8 +875,9 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setBusy(true);
       setSaveState('saving');
       try {
-        const finalSteps = renumberWorkflowSteps(steps);
-        const wiring = remapEndpointIds(steps, entryRef.current, exitsRef.current);
+        const pruned = pruneWiring(steps, entryRef.current, exitsRef.current);
+        const finalSteps = renumberWorkflowSteps(pruned.steps);
+        const wiring = remapEndpointIds(pruned.steps, pruned.entry, pruned.exits);
         // The backend requires a non-empty description; fall back to the name so
         // a brand-new workflow can always be saved without forcing the user to
         // fill a description field first.
@@ -897,7 +893,9 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           exits: wiring.exits,
         };
         const rendered = await chatService.renderWorkflowSteps(payload);
-        if (rendered.errors.length > 0 || !rendered.yaml) {
+        // Diagnostics (unknown params, missing required params, …) do NOT block a
+        // save — only a genuine render failure (no YAML at all) does.
+        if (!rendered.yaml) {
           if (!opts.silent) setErrors(rendered.errors.length ? rendered.errors : [t('workflows.graph_render_failed')]);
           setSaveState('error');
           return false;
@@ -906,9 +904,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         // renames the backend workflow via update). Save As always creates.
         const existingName = persistedNameRef.current;
         const isExisting = !!existingName && !opts.asName;
+        // Studio saves are DRAFTS: capability problems (unknown/missing params …)
+        // never block a save; they are enforced when the workflow is run.
         const result = isExisting
-          ? await chatService.updateWorkflow(existingName, rendered.yaml)
-          : await chatService.createWorkflow(rendered.yaml, true);
+          ? await chatService.updateWorkflow(existingName, rendered.yaml, true)
+          : await chatService.createWorkflow(rendered.yaml, true, true);
         if (result.status !== 'ok') throw new Error(result.message || t('workflows.save_failed'));
         persistedNameRef.current = finalName;
         setName(finalName);
@@ -1012,14 +1012,15 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     async (format: 'yaml' | 'json') => {
       try {
         const base = name || 'workflow';
-        const wiring = remapEndpointIds(steps, entryRef.current, exitsRef.current);
+        const pruned = pruneWiring(steps, entryRef.current, exitsRef.current);
+        const wiring = remapEndpointIds(pruned.steps, pruned.entry, pruned.exits);
         if (format === 'json') {
           const payload = {
             name: base,
             description: description.trim() || base,
             version: version ?? 1,
             inputs: inputs ?? [],
-            steps: renumberWorkflowSteps(steps),
+            steps: renumberWorkflowSteps(pruned.steps),
             triggers,
             entry: wiring.entry,
             exits: wiring.exits,
@@ -1037,7 +1038,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           description: description.trim() || base,
           version: version ?? 1,
           inputs: inputs ?? [],
-          steps: renumberWorkflowSteps(steps),
+          steps: renumberWorkflowSteps(pruned.steps),
           triggers,
           entry: wiring.entry,
           exits: wiring.exits,
@@ -1154,6 +1155,34 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setBottomOpen(true);
       return;
     }
+    // Persist unsaved edits first (saving is never blocked) so the run matches
+    // exactly what is on screen.
+    if (dirty && !(await persist())) return;
+    // Pre-flight: validation problems BLOCK the run (and raise the banner).
+    try {
+      const pruned = pruneWiring(steps, entryRef.current, exitsRef.current);
+      const wiring = remapEndpointIds(pruned.steps, pruned.entry, pruned.exits);
+      const rendered = await chatService.renderWorkflowSteps({
+        name: name || 'workflow',
+        description: description.trim() || name || 'workflow',
+        version: version ?? 1,
+        inputs: inputs ?? [],
+        steps: renumberWorkflowSteps(pruned.steps),
+        triggers,
+        entry: wiring.entry,
+        exits: wiring.exits,
+      });
+      const problems = [...validateTree(steps), ...rendered.errors];
+      if (problems.length > 0) {
+        setErrors(problems.slice(0, 6));
+        setBottomTab('problems');
+        setBottomOpen(true);
+        return;
+      }
+    } catch (error) {
+      setErrors([translateError(error)]);
+      return;
+    }
     setRunBusy(true);
     setRun(null);
     try {
@@ -1166,7 +1195,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     } finally {
       setRunBusy(false);
     }
-  }, [name, inputs, runInputs, loadRunDetail]);
+  }, [name, inputs, runInputs, steps, description, version, triggers, dirty, persist, loadRunDetail]);
 
   const resolveHuman = useCallback(
     async (runId: string, stepId: string, approved: boolean) => {
@@ -1215,13 +1244,14 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
 
   const renderYamlPreview = useCallback(async () => {
     try {
-      const wiring = remapEndpointIds(steps, entryRef.current, exitsRef.current);
+      const pruned = pruneWiring(steps, entryRef.current, exitsRef.current);
+      const wiring = remapEndpointIds(pruned.steps, pruned.entry, pruned.exits);
       const rendered = await chatService.renderWorkflowSteps({
         name: name || 'workflow',
         description: description.trim() || name || 'workflow',
         version: version ?? 1,
         inputs: inputs ?? [],
-        steps: renumberWorkflowSteps(steps),
+        steps: renumberWorkflowSteps(pruned.steps),
         triggers,
         entry: wiring.entry,
         exits: wiring.exits,

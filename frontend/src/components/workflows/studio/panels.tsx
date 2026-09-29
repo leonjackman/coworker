@@ -759,7 +759,21 @@ export function NodeInspector({
             <>
               <label className="wfs-field">
                 <span>{t('workflows.step_action')}</span>
-                <select className="input" value={selected.do ?? ''} onChange={(e) => onPatch({ do: e.target.value })}>
+                <select
+                  className="input"
+                  value={selected.do ?? ''}
+                  onChange={(e) => {
+                    // Switching action drops params the new action doesn't accept
+                    // (keeps any that are shared) so stale keys can't linger.
+                    const nextDo = e.target.value;
+                    const def = actionDef(kind, nextDo);
+                    const valid = new Set((def?.fields ?? []).map((f) => f.key));
+                    onPatch({
+                      do: nextDo,
+                      params: Object.fromEntries(Object.entries(params).filter(([k]) => valid.has(k))),
+                    });
+                  }}
+                >
                   <option value="">{t('workflows.step_action_choose')}</option>
                   {actionsFor(kind).map((a) => (
                     <option key={a.action} value={a.action}>

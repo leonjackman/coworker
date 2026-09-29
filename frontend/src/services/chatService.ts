@@ -236,8 +236,8 @@ export interface ChatService {
   listWorkflows: () => Promise<WorkflowsListResponse>;
   getWorkflowCapabilities: () => Promise<WorkflowCapabilitiesResponse>;
   getWorkflow: (name: string) => Promise<WorkflowDetailResponse>;
-  createWorkflow: (content: string, overwrite?: boolean) => Promise<{ status: string; message?: string }>;
-  updateWorkflow: (name: string, content: string) => Promise<{ status: string; message?: string }>;
+  createWorkflow: (content: string, overwrite?: boolean, draft?: boolean) => Promise<{ status: string; message?: string }>;
+  updateWorkflow: (name: string, content: string, draft?: boolean) => Promise<{ status: string; message?: string }>;
   deleteWorkflow: (name: string) => Promise<{ status: string; removed: boolean }>;
   runWorkflow: (name: string, inputs?: Record<string, unknown>, resume?: boolean, runId?: string) => Promise<WorkflowRunResponse>;
   listWorkflowRuns: (name: string, limit?: number) => Promise<WorkflowRunsResponse>;
@@ -647,19 +647,19 @@ class ElectronChatService implements ChatService {
     return this._workflowRequest<WorkflowDetailResponse>(`/workflows/${encodeURIComponent(name)}`);
   }
 
-  async createWorkflow(content: string, overwrite = false): Promise<{ status: string; message?: string }> {
+  async createWorkflow(content: string, overwrite = false, draft = false): Promise<{ status: string; message?: string }> {
     return this._workflowRequest('/workflows', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, overwrite }),
+      body: JSON.stringify({ content, overwrite, draft }),
     });
   }
 
-  async updateWorkflow(name: string, content: string): Promise<{ status: string; message?: string }> {
+  async updateWorkflow(name: string, content: string, draft = false): Promise<{ status: string; message?: string }> {
     return this._workflowRequest(`/workflows/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, draft }),
     });
   }
 
@@ -2197,19 +2197,19 @@ class HttpChatService implements ChatService {
     return this.request<WorkflowDetailResponse>(`/workflows/${encodeURIComponent(name)}`);
   }
 
-  async createWorkflow(content: string, overwrite = false): Promise<{ status: string; message?: string }> {
+  async createWorkflow(content: string, overwrite = false, draft = false): Promise<{ status: string; message?: string }> {
     return this.request('/workflows', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, overwrite }),
+      body: JSON.stringify({ content, overwrite, draft }),
     });
   }
 
-  async updateWorkflow(name: string, content: string): Promise<{ status: string; message?: string }> {
+  async updateWorkflow(name: string, content: string, draft = false): Promise<{ status: string; message?: string }> {
     return this.request(`/workflows/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, draft }),
     });
   }
 
