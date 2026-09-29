@@ -38,12 +38,19 @@ class StepEnvironment:
         """Return a skill's instructions (used by the agentic skill handoff)."""
         raise NotImplementedError("skill steps are not available in this environment")
 
-    def agentic(self, prompt: str, step: Any) -> Any:
+    def agentic(self, prompt: str, step: Any, autonomy: str | None = None) -> Any:
         raise NotImplementedError("agentic steps are not available in this environment")
 
     def supports_agentic(self) -> bool:
         """Whether this environment can hand a step to an agent (W23/P3)."""
         return False
+
+    def resume_decision(self, step_id: str) -> Any | None:
+        """The human decision recorded for a pending step on resume, if any.
+
+        ``None`` = no decision; ``True`` = approved; ``False`` = rejected.
+        """
+        return None
 
     def human(self, step: Any, question: str, options: list[dict[str, str]] | None = None) -> Any:
         raise NotImplementedError("human steps are not available in this environment")
@@ -131,10 +138,10 @@ class CallbackEnvironment(StepEnvironment):
             return None
         return self._skill_body_fn(name)
 
-    def agentic(self, prompt: str, step: Any) -> Any:
+    def agentic(self, prompt: str, step: Any, autonomy: str | None = None) -> Any:
         if self._agentic_fn is None:
-            return super().agentic(prompt, step)
-        return self._agentic_fn(prompt, step)
+            return super().agentic(prompt, step, autonomy)
+        return self._agentic_fn(prompt, step, autonomy=autonomy)
 
     def supports_agentic(self) -> bool:
         return self._agentic_fn is not None
@@ -187,8 +194,16 @@ class DecisionEnvironment(StepEnvironment):
     def skill_body(self, name):
         return self._base.skill_body(name)
 
-    def agentic(self, prompt, step):
-        return self._base.agentic(prompt, step)
+    def agentic(self, prompt, step, autonomy: str | None = None):
+        # An explicit human approval on resume carries over to the agent turn:
+        # run it autonomously so approval-gated tools (e.g. computer control) no
+        # longer interrupt — that is exactly what "Approve" means here.
+        if self._decisions.get(getattr(step, "id", "")) is True:
+            autonomy = "autonomous"
+        return self._base.agentic(prompt, step, autonomy)
+
+    def resume_decision(self, step_id: str):
+        return self._decisions.get(step_id)
 
     def supports_agentic(self) -> bool:
         return self._base.supports_agentic()
@@ -218,6 +233,7 @@ def build_tool_environment(
     llm: Any | None = None,
     data_dir: Any | None = None,
     approval_store: Any | None = None,
+    agent_autonomy: str = "autonomous",
 ) -> CallbackEnvironment:
     """Compose a StepEnvironment from a set of LangChain-style tools + workspace.
 
@@ -225,6 +241,12 @@ def build_tool_environment(
     the scheduler, so a workflow behaves identically however it is triggered.
     ``provider_manager``/``llm`` enable the ``agentic`` step and LLM self-heal;
     ``data_dir`` enables evidence persistence.
+
+    ``agent_autonomy`` controls the agentic-step permission. Workflow runs are
+    unattended, so it defaults to ``"autonomous"``: the agent's own tool-approval
+    (computer control, external writes, MCP, ask_user, …) never turns a run into
+    a ``needs_human`` gate. Only an explicit ``approval: true`` step or a
+    ``human`` step pauses a workflow.
     """
     from .model import NeedsHuman
 
@@ -319,7 +341,7 @@ def build_tool_environment(
     def _human(step: Any, question: str, options: list[dict[str, str]] | None = None) -> Any:
         raise NeedsHuman(step.id, question)
 
-    def _agentic(prompt: str, step: Any) -> Any:
+    def _agentic(prompt: str, step: Any, autonomy: str | None = None) -> Any:
         from coworker.agent.graph import build_workspace_tools
         from coworker.agent.headless import run_agent_task_sync, build_default_llm
 
@@ -350,6 +372,7 @@ def build_tool_environment(
             approval_store=approval_store,
             skill_manager=skill_manager,
             session_id=f"workflow-{getattr(step, 'id', 'step')}",
+            autonomy=autonomy or agent_autonomy,
         )
         if result.get("status") != "ok":
             raise RuntimeError(result.get("error") or "agentic step failed")

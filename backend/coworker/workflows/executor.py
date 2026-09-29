@@ -128,6 +128,7 @@ class WorkflowExecutor:
             run.outputs = self._resolve_outputs(workflow, run.context)
             run.status = "ok"
             run.pending_step = ""
+            run.error = ""
         except NeedsHuman as exc:
             run.status = "needs_human"
             run.error = str(exc)
@@ -458,6 +459,12 @@ class WorkflowExecutor:
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Hand a step to the agent (full tools); it must self-assess (P3)."""
+        # A rejected human decision ends the step (and the run) cleanly instead
+        # of looping back into another interrupt. (Environments need not
+        # implement resume_decision.)
+        decision_fn = getattr(state.env, "resume_decision", None)
+        if callable(decision_fn) and decision_fn(step.id) is False:
+            raise StepFailed(step.id, f"step '{step.id}' was rejected by the human")
         if not state.env.supports_agentic():
             return None
         goal = step.goal or f"{step.kind} step '{step.id}'" + (f": {step.do}" if step.do else "")

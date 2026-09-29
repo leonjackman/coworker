@@ -1047,3 +1047,65 @@ def test_prompt_block_lists_active(manager):
     block = manager.prompt_block()
     assert "hello-flow" in block
     assert "<available_workflows>" in block
+
+
+def test_decision_environment_grants_autonomy_on_approval():
+    """Resuming with Approve runs the agentic step autonomously (no re-interrupt)."""
+    from coworker.workflows.env import DecisionEnvironment, StepEnvironment
+
+    class Env(StepEnvironment):
+        def __init__(self):
+            self.seen: list[str | None] = []
+
+        def supports_agentic(self):
+            return True
+
+        def agentic(self, prompt, step, autonomy=None):
+            self.seen.append(autonomy)
+            return {"output": "ok"}
+
+    class S:
+        id = "s1"
+
+    base = Env()
+    DecisionEnvironment(base, {"s1": True}).agentic("p", S())
+    DecisionEnvironment(base, {"s1": False}).agentic("p", S())
+    DecisionEnvironment(base, {}).agentic("p", S())
+    # Approve forces autonomous; otherwise the caller's value (None = env default).
+    assert base.seen == ["autonomous", None, None]
+    assert DecisionEnvironment(base, {"s1": False}).resume_decision("s1") is False
+    assert DecisionEnvironment(base, {}).resume_decision("s1") is None
+
+    # Workflow runs are unattended: agentic steps default to autonomous.
+    import inspect
+
+    from coworker.workflows.env import build_tool_environment
+
+    default = inspect.signature(build_tool_environment).parameters["agent_autonomy"].default
+    assert default == "autonomous"
+
+
+def test_workflow_agentic_runs_autonomous(monkeypatch, tmp_path):
+    """The workflow agentic bridge hands the headless agent autonomous autonomy."""
+    import coworker.agent.graph as graph_mod
+    import coworker.agent.headless as headless_mod
+    import coworker.workflows.env as env_mod
+    from coworker.workspace import Workspace
+
+    captured: dict = {}
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return {"status": "ok", "output": "done"}
+
+    monkeypatch.setattr(headless_mod, "run_agent_task_sync", fake_run)
+    monkeypatch.setattr(graph_mod, "build_workspace_tools", lambda *a, **k: [])
+
+    env = env_mod.build_tool_environment(workspace=Workspace(tmp_path), tools=[], llm=object(), data_dir=tmp_path)
+
+    class S:
+        id = "s1"
+
+    out = env.agentic("open the calculator", S())
+    assert out == {"agentic": True, "output": "done"}
+    assert captured.get("autonomy") == "autonomous"
