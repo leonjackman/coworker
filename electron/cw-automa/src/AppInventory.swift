@@ -68,12 +68,25 @@ enum AppInventory {
         }
         var seen = Set<String>()
         var out: [Entry] = []
-        let fm = FileManager.default
         for root in roots {
-            guard let children = try? fm.contentsOfDirectory(
-                at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
-            ) else { continue }
-            for child in children where child.pathExtension.lowercased() == "app" {
+            scan(root, depth: 0, seen: &seen, out: &out)
+        }
+        out.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        cachedInstalled = out
+        return out
+    }
+
+    /// Recurse into the standard app directories so apps nested in subfolders
+    /// (e.g. ``/System/Applications/Utilities``) are included, not only the
+    /// top level. ``.app`` bundles are leaves — never descended into.
+    private static func scan(_ dir: URL, depth: Int, seen: inout Set<String>, out: inout [Entry]) {
+        guard depth <= 3 else { return }
+        let fm = FileManager.default
+        guard let children = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return }
+        for child in children {
+            if child.pathExtension.lowercased() == "app" {
                 let bundle = Bundle(url: child)
                 let id = bundle?.bundleIdentifier ?? ""
                 let name = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
@@ -83,11 +96,13 @@ enum AppInventory {
                 guard !seen.contains(key) else { continue }
                 seen.insert(key)
                 out.append(Entry(bundleId: id, displayName: name, pid: nil, path: child.path))
+            } else {
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: child.path, isDirectory: &isDir), isDir.boolValue {
+                    scan(child, depth: depth + 1, seen: &seen, out: &out)
+                }
             }
         }
-        out.sort { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-        cachedInstalled = out
-        return out
     }
 
     /// Resolve a name / bundle id / pid / path to a running pid (nil if not running).

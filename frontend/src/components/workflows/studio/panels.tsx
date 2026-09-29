@@ -288,38 +288,33 @@ interface AppOption {
   path?: string;
 }
 
-const appCache: Record<string, { available: boolean; apps: AppOption[] }> = {};
-const appInflight: Record<string, Promise<{ available: boolean; apps: AppOption[] }>> = {};
+// Installed apps only (you may target an app that is not running yet). The
+// list is cached briefly — a failed/unavailable lookup is NOT cached so it can
+// recover on the next open.
+const APP_CACHE_TTL_MS = 30_000;
+let appCacheEntry: { at: number; data: { available: boolean; apps: AppOption[] } } | null = null;
+let appInflight: Promise<{ available: boolean; apps: AppOption[] }> | null = null;
 
-function loadComputerApps(scope: 'installed' | 'running'): Promise<{ available: boolean; apps: AppOption[] }> {
-  if (appCache[scope]) return Promise.resolve(appCache[scope]!);
-  if (appInflight[scope]) return appInflight[scope]!;
-  const promise = chatService
-    .listComputerApps(scope)
+function loadComputerApps(): Promise<{ available: boolean; apps: AppOption[] }> {
+  const now = Date.now();
+  if (appCacheEntry && now - appCacheEntry.at < APP_CACHE_TTL_MS) return Promise.resolve(appCacheEntry.data);
+  if (appInflight) return appInflight;
+  appInflight = chatService
+    .listComputerApps('installed')
     .then((r) => {
-      appCache[scope] = { available: r.available, apps: r.apps ?? [] };
-      return appCache[scope]!;
+      const data = { available: r.available, apps: r.apps ?? [] };
+      if (data.available) appCacheEntry = { at: Date.now(), data };
+      else appCacheEntry = null;
+      return data;
     })
-    .catch(() => {
-      appCache[scope] = { available: false, apps: [] };
-      return appCache[scope]!;
-    })
+    .catch(() => ({ available: false, apps: [] }))
     .finally(() => {
-      delete appInflight[scope];
+      appInflight = null;
     });
-  appInflight[scope] = promise;
-  return promise;
+  return appInflight;
 }
 
-function AppField({
-  value,
-  onChange,
-  scope,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  scope: 'installed' | 'running';
-}) {
+function AppField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const [text, setText] = useState(value);
   const [open, setOpen] = useState(false);
   const [apps, setApps] = useState<AppOption[] | null>(null);
@@ -341,9 +336,8 @@ function AppField({
   };
 
   const ensureLoaded = () => {
-    if (apps !== null || loading) return;
     setLoading(true);
-    void loadComputerApps(scope).then((r) => {
+    void loadComputerApps().then((r) => {
       setApps(r.apps);
       setAvailable(r.available);
       setLoading(false);
@@ -908,16 +902,12 @@ export function NodeInspector({
     const value = readField(f);
     const help = fieldHelp(f);
     if (f.type === 'app') {
-      // launch_app opens any installed app; the other app params target a
-      // running app, so their picker lists running apps.
-      const scope: 'installed' | 'running' =
-        selected.do === 'launch_app' && f.key === 'app' ? 'installed' : 'running';
       return (
         <label className="wfs-field" key={f.key}>
           <span>
             {t(f.labelKey)} <HelpIcon text={help} />
           </span>
-          <AppField value={String(value ?? '')} onChange={(v) => writeField(f, v)} scope={scope} />
+          <AppField value={String(value ?? '')} onChange={(v) => writeField(f, v)} />
         </label>
       );
     }
