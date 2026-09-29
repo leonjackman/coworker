@@ -122,7 +122,7 @@ enum TextInput {
     /// Never throws on a failed strategy — it walks the ladder and reports the
     /// best outcome, so the caller can decide (rather than a false "ok").
     @discardableResult
-    static func enter(pid: pid_t, ref: String, text: String, submit: Bool) -> Outcome {
+    static func enter(pid: pid_t, ref: String, text: String, submit: Bool, allowClipboardFallback: Bool = true) -> Outcome {
         var notes: [String] = []
         let app = AXUIElementCreateApplication(pid)
         let element: AXUIElement? = ref.isEmpty ? nil : AX.find(app, ref: ref)
@@ -167,7 +167,10 @@ enum TextInput {
         }
 
         // ── 3. Clipboard paste with receipt + target confirmation ───────────
-        if paste(pid: pid, text: text, notes: &notes) {
+        // Only for ref-based entry. A plain (frontmost/targeted) type_text must
+        // NOT fall through to paste: the unicode path already typed the text, so
+        // a paste would duplicate it (or inject stale clipboard content).
+        if allowClipboardFallback, paste(pid: pid, text: text, notes: &notes) {
             let read = readFocusedValue(pid) 
             var outcome = Outcome(strategy: "clipboard", verified: true, value: read ?? "", notes: notes)
             if read == nil { notes.append("clipboard_confirmed_by_target_change") }

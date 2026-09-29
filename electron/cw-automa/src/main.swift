@@ -584,7 +584,7 @@ private func handleInputText(_ id: Int, _ p: [String: Any]) throws {
         cursorShow(targetPid: pid)
     }
 
-    let outcome = TextInput.enter(pid: pid, ref: ref, text: text, submit: submit)
+    let outcome = TextInput.enter(pid: pid, ref: ref, text: text, submit: submit, allowClipboardFallback: !ref.isEmpty)
     ensureAppFrontmost(pid)
 
     var result: [String: Any] = [
