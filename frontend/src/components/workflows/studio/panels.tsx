@@ -22,9 +22,11 @@ import { KIND_GROUPS, kindDescKey, kindIcon, kindLabelKey, kindStripe } from '..
 import { VALUE_KINDS, actionDef, actionsFor, outputsFor, type ActionField } from '../actions';
 import { LOCATOR_KINDS } from '../kinds';
 import { SLOTS } from './workflowTree';
+import { INPUT_TYPES, coerceInputDefault, type InputErrors, type InputFormValue } from './runInputs';
 import type {
   WorkflowEntry,
   WorkflowEvidence,
+  WorkflowInputSpec,
   WorkflowRun,
   WorkflowRunEvent,
   WorkflowStep,
@@ -276,6 +278,80 @@ export function RunsPanel({
   );
 }
 
+// ── Run inputs form ───────────────────────────────────────────────────
+function inputErrorText(code: InputErrors[string]): string {
+  if (code === 'required') return t('workflows.input_required_error');
+  if (code === 'number') return t('workflows.input_number_error');
+  return t('workflows.input_json_error');
+}
+
+function RunInputField({
+  spec,
+  value,
+  error,
+  onChange,
+}: {
+  spec: WorkflowInputSpec;
+  value: InputFormValue | undefined;
+  error: InputErrors[string] | undefined;
+  onChange: (value: InputFormValue) => void;
+}) {
+  const label = (
+    <span>
+      {spec.name}
+      {spec.required ? <span className="wfs-input-required">*</span> : null}
+      <span className="wfs-input-type">{t(`workflows.input_type_${spec.type}`)}</span>
+    </span>
+  );
+
+  let control: ReactNode;
+  if (spec.type === 'boolean') {
+    control = (
+      <label className="wf-checkbox">
+        <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />
+        <span>{t('workflows.input_yes')}</span>
+      </label>
+    );
+  } else if (spec.type === 'object') {
+    control = (
+      <Textarea
+        value={String(value ?? '')}
+        onChange={(e) => onChange(e.target.value)}
+        rows={2}
+        spellCheck={false}
+        placeholder='{"key": "value"}'
+      />
+    );
+  } else if (spec.type === 'number') {
+    control = <Input type="number" value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />;
+  } else if (spec.type === 'list') {
+    control = (
+      <Input
+        value={String(value ?? '')}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={t('workflows.input_list_placeholder')}
+      />
+    );
+  } else {
+    control = (
+      <Input
+        type={spec.type === 'secret' ? 'password' : 'text'}
+        value={String(value ?? '')}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+
+  return (
+    <div className="wfs-field">
+      {label}
+      {control}
+      {spec.description ? <span className="wfs-input-desc">{spec.description}</span> : null}
+      {error ? <span className="wfs-input-error">{inputErrorText(error)}</span> : null}
+    </div>
+  );
+}
+
 // ── Output / problems / console ───────────────────────────────────────
 export type BottomTab = 'problems' | 'console' | 'output';
 
@@ -285,9 +361,11 @@ export function OutputPanel({
   run,
   events,
   evidence,
-  inputsJson,
+  inputSpecs,
+  inputValues,
+  inputErrors,
   runBusy,
-  onInputsChange,
+  onInputChange,
   onRun,
   onResolve,
 }: {
@@ -296,9 +374,11 @@ export function OutputPanel({
   run: WorkflowRun | null;
   events: WorkflowRunEvent[];
   evidence: WorkflowEvidence[];
-  inputsJson: string;
+  inputSpecs: WorkflowInputSpec[];
+  inputValues: Record<string, InputFormValue>;
+  inputErrors: InputErrors;
   runBusy: boolean;
-  onInputsChange: (value: string) => void;
+  onInputChange: (name: string, value: InputFormValue) => void;
   onRun: () => void;
   onResolve: (stepId: string, approved: boolean) => void;
 }) {
@@ -347,18 +427,26 @@ export function OutputPanel({
   }
 
   // output
+  const invalid = Object.keys(inputErrors).length > 0;
   return (
     <div>
-      <div className="wf-section__title">{t('workflows.run_inputs')}</div>
-      <textarea
-        className="skills-pending__editor"
-        style={{ minHeight: 70, width: '100%' }}
-        value={inputsJson}
-        onChange={(e) => onInputsChange(e.target.value)}
-        spellCheck={false}
-      />
-      <div style={{ marginTop: 8 }}>
-        <Button variant="primary" size="sm" onClick={onRun} disabled={runBusy}>
+      {inputSpecs.length === 0 ? (
+        <p className="wfs-empty-note">{t('workflows.run_no_inputs')}</p>
+      ) : (
+        <div className="wfs-run-inputs">
+          {inputSpecs.map((spec) => (
+            <RunInputField
+              key={spec.name}
+              spec={spec}
+              value={inputValues[spec.name]}
+              error={inputErrors[spec.name]}
+              onChange={(v) => onInputChange(spec.name, v)}
+            />
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 10 }}>
+        <Button variant="primary" size="sm" onClick={onRun} disabled={runBusy || invalid}>
           {runBusy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
           {t('workflows.run')}
         </Button>
@@ -420,6 +508,7 @@ export function WorkflowInspector({
   inputs,
   onName,
   onDescription,
+  onInputsChange,
 }: {
   name: string;
   description: string;
@@ -430,8 +519,21 @@ export function WorkflowInspector({
   inputs: WorkflowEntry['inputs'];
   onName: (v: string) => void;
   onDescription: (v: string) => void;
+  onInputsChange: (inputs: WorkflowInputSpec[]) => void;
 }) {
-  const inputList = Array.isArray(inputs) ? inputs : [];
+  const inputList: WorkflowInputSpec[] = Array.isArray(inputs) ? inputs : [];
+  const patchInput = (index: number, patch: Partial<WorkflowInputSpec>) => {
+    onInputsChange(inputList.map((item, i) => (i === index ? { ...item, ...patch } : item)));
+  };
+  const addInput = () => {
+    let n = inputList.length + 1;
+    while (inputList.some((item) => item.name === `input${n}`)) n += 1;
+    onInputsChange([
+      ...inputList,
+      { name: `input${n}`, type: 'string', required: false, default: null, description: '' },
+    ]);
+  };
+  const removeInput = (index: number) => onInputsChange(inputList.filter((_, i) => i !== index));
   return (
     <div>
       <div className="wf-section__title">{t('workflows.section_workflow')}</div>
@@ -455,22 +557,58 @@ export function WorkflowInspector({
           </span>
         ))}
       </div>
-      {inputList.length > 0 ? (
-        <>
-          <div className="wfs-divider" />
-          <div className="wf-section__title">{t('workflows.inputs')}</div>
-          <table className="wf-table">
-            <tbody>
-              {inputList.map((input) => (
-                <tr key={input.name}>
-                  <td className="wf-table__key">{input.name}</td>
-                  <td className="wf-table__muted">{input.type}</td>
-                </tr>
+      <div className="wfs-divider" />
+      <div className="wf-section__title wfs-inputs-head">
+        <span>{t('workflows.inputs')}</span>
+        <Button variant="ghost" size="xs" onClick={addInput}>
+          <Plus size={13} /> {t('workflows.input_add')}
+        </Button>
+      </div>
+      {inputList.length === 0 ? (
+        <p className="wfs-empty-note">{t('workflows.inputs_empty')}</p>
+      ) : (
+        inputList.map((input, index) => (
+          <div className="wfs-input-row" key={`${input.name}-${index}`}>
+            <Input
+              value={input.name}
+              placeholder={t('workflows.input_name')}
+              onChange={(e) => patchInput(index, { name: e.target.value })}
+            />
+            <select
+              className="input"
+              value={input.type}
+              onChange={(e) => patchInput(index, { type: e.target.value })}
+            >
+              {INPUT_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {t(`workflows.input_type_${type}`)}
+                </option>
               ))}
-            </tbody>
-          </table>
-        </>
-      ) : null}
+            </select>
+            <Input
+              value={input.default === null || input.default === undefined ? '' : String(input.default)}
+              placeholder={t('workflows.input_default')}
+              onChange={(e) => patchInput(index, { default: coerceInputDefault(input.type, e.target.value) })}
+            />
+            <Input
+              value={input.description}
+              placeholder={t('workflows.input_description')}
+              onChange={(e) => patchInput(index, { description: e.target.value })}
+            />
+            <label className="wf-checkbox wfs-input-req">
+              <input
+                type="checkbox"
+                checked={input.required}
+                onChange={(e) => patchInput(index, { required: e.target.checked })}
+              />
+              <span>{t('workflows.input_required')}</span>
+            </label>
+            <Button variant="ghost" size="icon-xs" onClick={() => removeInput(index)}>
+              <Trash2 size={13} />
+            </Button>
+          </div>
+        ))
+      )}
       {Object.keys(outputs).length > 0 ? (
         <>
           <div className="wfs-divider" />

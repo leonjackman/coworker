@@ -96,6 +96,14 @@ import {
   type StepPath,
 } from './workflowTree';
 import { loadStudioSettings, saveStudioSettings, type EdgeStyle } from './studioSettings';
+import {
+  collectRunInputs,
+  initRunInputForm,
+  loadRememberedRunInputs,
+  mergeRunInputForm,
+  rememberRunInputs,
+  type InputFormValue,
+} from './runInputs';
 import type {
   WorkflowEntry,
   WorkflowEvidence,
@@ -181,7 +189,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [run, setRun] = useState<WorkflowRun | null>(null);
   const [events, setEvents] = useState<WorkflowRunEvent[]>([]);
   const [evidence, setEvidence] = useState<WorkflowEvidence[]>([]);
-  const [inputsJson, setInputsJson] = useState('{}');
+  const [runInputs, setRunInputs] = useState<Record<string, InputFormValue>>({});
   const [runBusy, setRunBusy] = useState(false);
 
   // ── UI state (seeded from persisted Studio settings) ────────────────
@@ -231,6 +239,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [canRedo, setCanRedo] = useState(false);
 
   const validation = useMemo(() => validateTree(steps), [steps]);
+  const runInputErrors = useMemo(() => collectRunInputs(inputs, runInputs).errors, [inputs, runInputs]);
   const dirty = useMemo(
     () => docKey(name, description, steps, entry, exits) !== baseline,
     [name, description, steps, entry, exits, baseline],
@@ -365,7 +374,9 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setName(data.name);
       setDescription(data.description);
       setVersion(data.version);
-      setInputs(data.inputs ?? []);
+      const inputSpecs = data.inputs ?? [];
+      setInputs(inputSpecs);
+      setRunInputs(initRunInputForm(inputSpecs, loadRememberedRunInputs(data.name)));
       setTriggers(data.triggers ?? ['manual']);
       setOutputs(data.outputs ?? {});
       entryRef.current = entryVal;
@@ -1136,16 +1147,18 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setErrors([t('workflows.run_requires_save')]);
       return;
     }
+    const { inputs: resolved, errors } = collectRunInputs(inputs, runInputs);
+    if (Object.keys(errors).length > 0) {
+      // Inline field errors are shown in the Output tab; just reveal it.
+      setBottomTab('output');
+      setBottomOpen(true);
+      return;
+    }
     setRunBusy(true);
     setRun(null);
     try {
-      let parsed: Record<string, unknown> = {};
-      try {
-        parsed = JSON.parse(inputsJson || '{}');
-      } catch {
-        throw new Error(t('workflows.invalid_json'));
-      }
-      const result = await chatService.runWorkflow(name, parsed);
+      rememberRunInputs(name, inputs, resolved);
+      const result = await chatService.runWorkflow(name, resolved);
       setRun(result.run);
       void loadRunDetail(result.run.run_id);
     } catch (error) {
@@ -1153,7 +1166,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     } finally {
       setRunBusy(false);
     }
-  }, [name, inputsJson, loadRunDetail]);
+  }, [name, inputs, runInputs, loadRunDetail]);
 
   const resolveHuman = useCallback(
     async (runId: string, stepId: string, approved: boolean) => {
@@ -1218,6 +1231,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setYamlPreview(translateError(error));
     }
   }, [name, description, version, inputs, steps, triggers]);
+
+  // ── keep the run-inputs form in sync with the declared inputs ───────
+  useEffect(() => {
+    setRunInputs((prev) => mergeRunInputForm(inputs, prev));
+  }, [inputs]);
 
   // ── persist Studio settings ─────────────────────────────────────────
   useEffect(() => {
@@ -1540,7 +1558,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           {t('workflows.run')}
           <DropdownMenuShortcut>⌘↵</DropdownMenuShortcut>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={editorRunWithReveal}>{t('workflows.run_inputs')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={editorRunWithReveal}>{t('workflows.run_with_inputs')}</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => setLeftTab('versions')}>{t('workflows.version')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => setLeftTab('runs')}>{t('workflows.runs')}</DropdownMenuItem>
@@ -1898,9 +1916,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                   run={run}
                   events={events}
                   evidence={evidence}
-                  inputsJson={inputsJson}
+                  inputSpecs={inputs}
+                  inputValues={runInputs}
+                  inputErrors={runInputErrors}
                   runBusy={runBusy}
-                  onInputsChange={setInputsJson}
+                  onInputChange={(n, v) => setRunInputs((prev) => ({ ...prev, [n]: v }))}
                   onRun={() => void executeRun()}
                   onResolve={(stepId, approved) => run && void resolveHuman(run.run_id, stepId, approved)}
                 />
@@ -1962,6 +1982,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                     inputs={inputs}
                     onName={setName}
                     onDescription={setDescription}
+                    onInputsChange={setInputs}
                   />
                 )}
               </div>

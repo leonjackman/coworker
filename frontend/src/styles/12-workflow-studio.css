@@ -489,6 +489,53 @@ body:has(.wfe-root) [data-radix-popper-content-wrapper] {
   line-height: 1.45;
   color: var(--muted-foreground);
 }
+/* Run inputs (manual test run) + input editor */
+.wfs-run-inputs { display: grid; gap: 4px; }
+.wfs-input-required { color: var(--danger); margin-left: 3px; }
+.wfs-input-type {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.wfs-input-desc { font-size: 11.5px; color: var(--muted-foreground); }
+.wfs-input-error { font-size: 11.5px; color: var(--danger); }
+
+.wfs-inputs-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wfs-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+}
+.wfs-input-row input[type='text'],
+.wfs-input-row input[type='password'],
+.wfs-input-row input[type='number'],
+.wfs-input-row input:not([type]) {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 90px;
+}
+.wfs-input-row select {
+  flex: 0 0 104px;
+  height: 40px;
+  padding: 0 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 8px;
+  background: var(--material-control);
+  color: var(--foreground);
+  font-size: 13px;
+}
+.wfs-input-row .wf-checkbox { flex: 0 0 auto; }
+.wfs-input-row .wf-checkbox input { flex: 0 0 auto; width: auto; }
+.wfs-input-req { margin-right: auto; }
+
 .wfs-kind-static {
   display: flex;
   align-items: center;
