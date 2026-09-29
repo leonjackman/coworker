@@ -132,6 +132,11 @@ class ComputerClient(LoopbackBridgeClient):
     def ax_launch(self, app: str) -> dict[str, Any]:
         return self._call("POST", "/ax/launch", {"app": str(app)})
 
+    def ax_list_apps(self, scope: str = "installed") -> dict[str, Any]:
+        """List installed or running apps: ``{scope, apps:[{bundleId, displayName, path?}]}``."""
+        safe = scope if scope in ("installed", "running") else "installed"
+        return self._call("POST", "/ax/list_apps", {"scope": safe})
+
     def ax_coords(self, x: float, y: float, shot_width: int = 0, shot_height: int = 0, display: int = 0) -> dict[str, Any]:
         """Click at display points, or at screenshot-pixel coords mapped to points
         when shot_width/shot_height (from the computer_observe screenshot) are given."""
@@ -424,7 +429,7 @@ def build_computer_tools(
     class ComputerArgs(BaseModel):
         action: ComputerAction = Field(..., description="Structure-first desktop action. Prefer ref-based and intent-level actions; coordinates are a last resort for canvas/rendered content.")
         ref: str = Field("", description="For click_ref/double_click_ref/right_click_ref/type_into/show: the element ref from the latest computer_observe snapshot.")
-        app: str = Field("", description="For 'launch_app': an EXACT app name or bundle id (e.g. 'Safari' or 'com.apple.Safari') — localized/display names may not resolve.")
+        app: str = Field("", description="For 'launch_app': the app display name (e.g. 'Calculator'), bundle id ('com.apple.calculator') or .app path; localized names resolve automatically.")
         key: str = Field("", description="For 'press_hotkey': key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or single symbol).")
         modifiers: list[str] = Field(default_factory=list, description="For 'press_hotkey': from cmd, ctrl, alt, shift (e.g. [\"cmd\"] for Cmd+Space).")
         text: str = Field("", description="For 'type_into'/'type_text': the text to enter. NEVER a keyboard shortcut — shortcuts go through press_hotkey.")

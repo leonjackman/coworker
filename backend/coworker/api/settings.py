@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import logging
 import os
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -47,6 +48,8 @@ from coworker.api.state import (
 )
 
 from fastapi import APIRouter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -558,6 +561,27 @@ async def register_computer_bridge(request: BrowserBridgeUpdate):
 
     write_computer_bridge(settings.data_dir, request.port, request.token)
     return {"ok": True}
+
+
+@router.get("/api/computer/apps")
+async def list_computer_apps(scope: str = "installed"):
+    """Installed (or running) macOS apps, for the workflow "open app" picker.
+
+    ``available: false`` when the computer bridge is not registered (headless /
+    web mode, or the feature is off), so the editor can fall back to free text.
+    """
+    from coworker.computer.bridge_client import ComputerClient, read_computer_bridge
+
+    if read_computer_bridge(settings.data_dir) is None:
+        return {"available": False, "apps": []}
+    try:
+        result = ComputerClient(settings.data_dir).ax_list_apps(scope)
+    except Exception as exc:  # noqa: BLE001 - a missing bridge is not an API error
+        logger.warning("computer apps lookup failed: %s", exc)
+        return {"available": False, "apps": []}
+    if not isinstance(result, dict) or result.get("error") or result.get("apps") is None:
+        return {"available": False, "apps": []}
+    return {"available": True, "apps": result["apps"]}
 @router.get("/settings/retention")
 async def get_retention_settings():
     """Current data-retention caps (trace/audit line limits)."""
