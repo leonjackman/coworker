@@ -62,6 +62,10 @@ enum AppInventory {
         var roots: [URL] = [
             URL(fileURLWithPath: "/Applications", isDirectory: true),
             URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+            // Safari (and other cryptex apps) live here on modern macOS; the
+            // /Applications/Safari.app symlink is often not enumerated.
+            URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Volumes/Preboot/Cryptexes/App/System/Applications", isDirectory: true),
         ]
         if let home = FileManager.default.homeDirectoryForCurrentUser as URL? {
             roots.append(home.appendingPathComponent("Applications", isDirectory: true))
