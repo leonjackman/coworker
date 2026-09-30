@@ -1182,3 +1182,27 @@ def test_template_tolerates_outputs_wrapper_on_dict_result():
     ctx = {"steps": {"id:7": {"return_code": 0, "stdout": "hello"}}}
     assert resolve_string("{{steps.id:7.stdout}}", ctx) == "hello"
     assert resolve_string("{{steps.id:7.outputs.stdout}}", ctx) == "hello"
+
+
+def test_command_failure_reports_rc_and_stderr(manager):
+    """A failed command surfaces rc + stderr in the error (not just 'rule: command_rc')."""
+    flow = """name: cmd-fail
+description: command returns non-zero
+steps:
+  - id: run
+    kind: command
+    do: run
+    params:
+      command: ["bash", "-c", "echo boom >&2; exit 3"]
+"""
+    manager.create(flow)
+    env = FakeEnv(command=lambda argv, cwd="", timeout=30: {"return_code": 3, "stdout": "", "stderr": "boom\n"})
+    result = manager.run("cmd-fail", env=env)
+    assert result["status"] == "failed"
+    assert "rc=3" in result["run"]["error"]
+    assert "boom" in result["run"]["error"]
+    # The failed step keeps the raw command result (so the Output panel can show it).
+    import json as _json
+
+    entry = result["run"]["context"]["steps"]["run"]
+    assert "boom" in _json.dumps(entry)

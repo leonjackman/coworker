@@ -352,7 +352,9 @@ class WorkflowExecutor:
                         retryable=True,
                     ) from exc
                 # Semantic/verification failure → recovery (policy engine).
-                result = self._recover(workflow, step, exc.message, run, state, patched_step)
+                result = self._recover(
+                    workflow, step, exc.message, run, state, patched_step, result=getattr(exc, "result", None)
+                )
                 break
             except TemplateError as exc:
                 raise StepFailed(step.id, f"template error: {exc}") from exc
@@ -407,6 +409,7 @@ class WorkflowExecutor:
         run: Run,
         state: "_State",
         patched_step: Step,
+        result: Any = None,
     ) -> Any:
         """Route a failure per ``on_error.then``; may return a result or raise.
 
@@ -448,15 +451,21 @@ class WorkflowExecutor:
         )
 
         if policy in ("abort", "fail"):
-            raise StepFailed(step.id, error or "step failed")
+            raise StepFailed(step.id, error or "step failed", result=result)
         if policy == "skip":
             return SkippedStep(step.id, error)
         if policy == "human":
-            raise NeedsHuman(step.id, error or f"step '{step.id}' needs human input", kind="failure", retryable=True)
+            raise NeedsHuman(
+                step.id,
+                error or f"step '{step.id}' needs human input",
+                result=result,
+                kind="failure",
+                retryable=True,
+            )
         if policy.startswith("goto:"):
             raise GotoStep(step.id, policy.split(":", 1)[1].strip())
         if policy == "self_heal":
-            raise StepFailed(step.id, error or "step failed")
+            raise StepFailed(step.id, error or "step failed", result=result)
         # policy == "agent"
         taken = self._takeover(step, error, run, state, self._resolve_params(step, run))
         if taken is not None:
@@ -929,6 +938,16 @@ def _result_error_detail(result: Any) -> str:
             parts.append(str(code))
         if err and str(err) != str(code):
             parts.append(str(err))
+        rc = data.get("return_code")
+        if rc not in (None, 0):
+            parts.append(f"rc={rc}")
+        # Surface the last line of stderr (else stdout) — the actual reason a
+        # command failed, e.g. "ERROR: 未找到最近下载的 zip 文件".
+        for key in ("stderr", "stdout"):
+            text = data.get(key)
+            if isinstance(text, str) and text.strip():
+                parts.append(f"{key}: {text.strip().splitlines()[-1][:200]}")
+                break
         if data.get("hint"):
             parts.append(str(data["hint"]))
         if parts:
