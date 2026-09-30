@@ -1154,3 +1154,31 @@ def test_workflow_agentic_runs_autonomous(monkeypatch, tmp_path):
     out = env.agentic("open the calculator", S())
     assert out == {"agentic": True, "output": "done"}
     assert captured.get("autonomy") == "autonomous"
+
+
+def test_template_tolerates_wrapper_keys_on_text_result():
+    """`steps.<id>.outputs.result` / `.result` on a plain-text result == the text."""
+    from coworker.workflows.templating import resolve_string
+
+    ctx = {"steps": {"id:4": "hello world"}}
+    assert resolve_string("{{steps.id:4}}", ctx) == "hello world"
+    assert resolve_string("{{steps.id:4.result}}", ctx) == "hello world"
+    assert resolve_string("{{steps.id:4.outputs.result}}", ctx) == "hello world"
+
+
+def test_template_parses_json_string_result():
+    import json
+
+    from coworker.workflows.templating import resolve_string
+
+    ctx = {"steps": {"id:1": json.dumps({"return_code": 0, "stdout": "ok"})}}
+    assert resolve_string("{{steps.id:1.stdout}}", ctx) == "ok"
+    assert resolve_string("{{steps.id:1.outputs.stdout}}", ctx) == "ok"
+
+
+def test_template_tolerates_outputs_wrapper_on_dict_result():
+    from coworker.workflows.templating import resolve_string
+
+    ctx = {"steps": {"id:7": {"return_code": 0, "stdout": "hello"}}}
+    assert resolve_string("{{steps.id:7.stdout}}", ctx) == "hello"
+    assert resolve_string("{{steps.id:7.outputs.stdout}}", ctx) == "hello"

@@ -685,8 +685,10 @@ class CapabilityRegistry:
             else:
                 lines.append(f"- kind: {spec.kind}")
         lines.append(
-            "Templates: use only {{inputs.<name>}} (declared inputs), {{steps.<id>...}} "
-            "(existing step ids) and {{vars.<name>}}. Other references are rejected."
+            "Templates: use only {{inputs.<name>}} (declared inputs), {{steps.<id>.<field>}} "
+            "(existing step ids; <field> = the action's declared output fields, NOT a "
+            "'{{...outputs...}}' prefix) and {{vars.<name>}}. A step that returns plain text "
+            "is referenced as {{steps.<id>}}. Other references are rejected."
         )
         lines.append(
             "command runs argv WITHOUT a shell by default; add param shell: true only "
@@ -750,8 +752,9 @@ class CapabilityRegistry:
             "needs a ref OR a role/name locator.\n"
             "- computer launch_app 'app' accepts a display name (Calculator), a bundle id "
             "(com.apple.calculator) or an .app path; localized names resolve automatically.\n"
-            "- Templates may only reference {{inputs.<declared>}}, {{steps.<id>...}}, {{vars.<name>}} "
-            "(and {{env.NAME}}/{{secret:name}}).\n"
+            "- Templates may only reference {{inputs.<declared>}}, {{steps.<id>.<field>}} "
+            "(field = the action's declared outputs; no '.outputs.' prefix), {{vars.<name>}}, "
+            "{{env.NAME}} and {{secret:name}}. A plain-text step result is {{steps.<id>}}.\n"
             "- Use the declared inputs in the steps (do not hardcode values that an input documents).\n"
             "- End with a VERIFICATION step that proves the GOAL: assert the produced artifact "
             "exists AND is meaningful (non-empty / expected content), or that the page shows the "

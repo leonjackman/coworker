@@ -19,6 +19,9 @@ from typing import Any, Callable
 _REF_RE = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 _BARE_RE = re.compile(r"^\{\{\s*([^{}]+?)\s*\}\}$")
 
+# Wrapper-ish keys an author may add in front of a plain (text) result.
+_WRAPPER_KEYS = {"outputs", "output", "result", "data", "value", "text"}
+
 SecretResolver = Callable[[str], str | None]
 
 
@@ -54,14 +57,46 @@ def _lookup(path: str, context: dict[str, Any], secrets: SecretResolver | None) 
         node = context.get("inputs", context)
     for part in parts:
         if isinstance(node, dict):
-            if part not in node:
+            if part in node:
+                node = node[part]
+            elif part == "outputs":
+                # Tolerate a leading `outputs` wrapper: `steps.x.outputs.<field>`
+                # == `steps.x.<field>` when the result has no literal `outputs`.
+                continue
+            else:
                 raise TemplateError(f"undefined reference: {path}")
-            node = node[part]
         elif isinstance(node, list):
             try:
                 node = node[int(part)]
             except (ValueError, IndexError) as exc:
                 raise TemplateError(f"bad list index in reference: {path}") from exc
+        elif isinstance(node, str) and part in _WRAPPER_KEYS:
+            # A text result has no sub-fields: `steps.x.outputs.result` and
+            # `steps.x.result` both mean "the text itself".
+            continue
+        elif isinstance(node, str):
+            # A JSON-encoded string result (many tools return JSON text) is
+            # transparently parsed so `steps.x.<field>` still works.
+            try:
+                node = json.loads(node)
+            except (ValueError, TypeError) as exc:
+                raise TemplateError(
+                    f"cannot descend into text at '{part}' in {path} (this step returned plain text; reference it as {{{{steps.<id>}}}})"
+                ) from exc
+            if isinstance(node, dict):
+                if part in node:
+                    node = node[part]
+                elif part == "outputs":
+                    continue
+                else:
+                    raise TemplateError(f"undefined reference: {path}")
+            elif isinstance(node, list):
+                try:
+                    node = node[int(part)]
+                except (ValueError, IndexError) as exc:
+                    raise TemplateError(f"bad list index in reference: {path}") from exc
+            else:
+                raise TemplateError(f"cannot descend into {type(node).__name__} at '{part}' in {path}")
         else:
             raise TemplateError(f"cannot descend into {type(node).__name__} at '{part}' in {path}")
     return node
