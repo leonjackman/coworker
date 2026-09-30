@@ -226,6 +226,9 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const deleteEdgeRef = useRef<(id: string) => void>(() => {});
   const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const idToPathRef = useRef<Map<string, string>>(new Map());
+  // Latest step tree as it exists in the canvas (after materialising legacy
+  // wiring). Async overlays must rebuild from THIS, never from the raw fetch.
+  const stepsRef = useRef<WorkflowStep[]>([]);
   const historyRef = useRef<{ snaps: string[]; index: number }>({ snaps: [], index: -1 });
   const suspendHistoryRef = useRef(false);
   // Last document revision an autosave was attempted for (avoids retry loops).
@@ -332,6 +335,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     (next: WorkflowStep[]) => {
       const built = withEndpoints(next, runStatus, positionsRef.current);
       idToPathRef.current = built.nodeIdToPath;
+      stepsRef.current = next;
       setSteps(next);
       setNodes(built.nodes);
       setEdges(decorateEdges(built.edges));
@@ -343,6 +347,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     (next: WorkflowStep[], status: Record<string, string>) => {
       const built = withEndpoints(next, status, positionsRef.current);
       idToPathRef.current = built.nodeIdToPath;
+      stepsRef.current = next;
       setSteps(next);
       setNodes(built.nodes);
       setEdges(decorateEdges(built.edges));
@@ -372,9 +377,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         // Brand-new document: nothing wired, and nothing auto-connects.
         entryVal = '';
         exitsVal = [];
-      } else if (entryVal === null && exitsVal === null) {
-        // Legacy document with no explicit wiring: convert the implicit
-        // sequential order + endpoints into real, deletable edges.
+      } else if (!initial.some((step) => step.next)) {
+        // Legacy document with no explicit ``next`` wiring: convert the
+        // implicit sequential order + endpoints into real, deletable edges.
+        // NOTE: the API derives ``entry``/``exits`` even for unwired docs, so
+        // they are NOT a reliable "has wiring" signal — the ``next`` links are.
         initial = chainWiring(initial);
         const derived = flowEndpoints(initial);
         entryVal = derived.inputTarget || '';
@@ -405,6 +412,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       positionsRef.current = new Map(laid.map((n) => [n.id, n.position]));
       const built = withEndpoints(initial, {}, positionsRef.current);
       idToPathRef.current = built.nodeIdToPath;
+      stepsRef.current = initial;
       setSteps(initial);
       setNodes(built.nodes);
       setEdges(decorateEdges(built.edges));
@@ -467,7 +475,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
               else if (e.type === 'step_end') status[e.step_id] = e.status === 'skipped' ? 'skipped' : 'ok';
             }
             setRunStatus(status);
-            applyGraph(wf.steps ?? [], status);
+            if (stepsRef.current.length > 0) applyGraph(stepsRef.current, status);
           })
           .catch(() => undefined);
       } catch (error) {
