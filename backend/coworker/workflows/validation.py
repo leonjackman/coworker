@@ -10,7 +10,11 @@ capability registry and the template grammar, returning structured
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 from typing import Any, Iterable
 
 from .capabilities import TEMPLATE_ROOTS, CapabilityRegistry, Diagnostic
@@ -104,15 +108,27 @@ def validate_templates(workflow: Workflow, registry: CapabilityRegistry | None =
                     diags.append(
                         Diagnostic(step_id, "params", "unknown_step_ref", f"template references unknown step '{name or ref}'")
                     )
-                elif registry is not None and len(parts) > 2:
+                elif len(parts) > 2:
+                    field = parts[2]
                     target = steps_by_id.get(name)
-                    action = registry.action(target.kind, target.do) if target is not None else None
-                    if action is not None and action.outputs and parts[2] not in action.outputs:
+                    action = (
+                        registry.action(target.kind, target.do)
+                        if registry is not None and target is not None
+                        else None
+                    )
+                    if field == "outputs":
+                        diags.append(
+                            Diagnostic(
+                                step_id, "params", "invalid_outputs_layer",
+                                f"'{{{{{ref}}}}}' has a '.outputs.' layer that does not exist — reference "
+                                f"'{{{{steps.{name}.<field>}}}}' (or '{{{{steps.{name}}}}}' for a text result)",
+                            )
+                        )
+                    elif action is not None and action.outputs and field not in action.outputs:
                         diags.append(
                             Diagnostic(
                                 step_id, "params", "unknown_output",
-                                f"'{name}' has no output field '{parts[2]}' (valid: {', '.join(action.outputs)})",
-                                severity="warning",
+                                f"'{name}' has no output field '{field}' (valid: {', '.join(action.outputs)})",
                             )
                         )
             elif root == "vars":
@@ -160,6 +176,110 @@ def validate_workflow(workflow: Workflow, registry: CapabilityRegistry) -> list[
 
     diags.extend(_validate_steps(workflow.steps, registry, set()))
     diags.extend(validate_templates(workflow, registry))
+    diags.extend(validate_scripts(workflow))
+    return diags
+
+
+# ── computer/script validation (author-time) ─────────────────────────────
+# `computer do: script` runs a constrained JS cell (the cw-automa helper API).
+# Catch the common authoring mistakes BEFORE a run: sandbox globals that don't
+# exist, unknown app.* methods, and JS syntax errors.
+
+_SCRIPT_FORBIDDEN: tuple[tuple[str, str], ...] = (
+    ("setTimeout", "timers are not available — use a `wait` node or app.settle()"),
+    ("setInterval", "timers are not available — use a `wait` node or app.settle()"),
+    ("setImmediate", "timers are not available — use a `wait` node or app.settle()"),
+    ("requestAnimationFrame", "requestAnimationFrame is not available"),
+    ("require(", "modules cannot be required in the script sandbox"),
+    ("process.", "the `process` object is not available"),
+    ("eval(", "eval() is not allowed"),
+    ("new Function", "dynamic Function() is not allowed"),
+)
+
+# The app.* surface exposed by the cw-automa script sandbox (no evaluate()).
+_SCRIPT_APP_METHODS: frozenset[str] = frozenset(
+    {
+        "focus", "isRunning", "activate", "close",
+        "getAXState", "getWindowState", "windowState",
+        "getScreenshot", "screenshot",
+        "click", "clickByIndex", "typeText", "type", "paste", "setValue", "getValue",
+        "pressKey", "press", "scroll", "drag", "settle", "waitFor",
+    }
+)
+
+_APP_METHOD_RE = re.compile(r"\bapp\.([A-Za-z_$][\w$]*)")
+
+
+def _script_code(step: Step) -> str | None:
+    if step.kind not in ("computer", "app") or (step.do or "") != "script":
+        return None
+    code = (step.params or {}).get("code")
+    return code if isinstance(code, str) and code.strip() else None
+
+
+def _node_syntax_error(code: str) -> str | None:
+    """Best-effort JS syntax check via ``node --check`` (skipped if node absent)."""
+    node = shutil.which("node")
+    if not node:
+        return None
+    path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+            # The sandbox runs the cell inside an async function, so top-level
+            # await/return are legal; wrap it the same way for the check.
+            handle.write("(async () => {\n" + code + "\n})();\n")
+            path = handle.name
+        proc = subprocess.run([node, "--check", path], capture_output=True, text=True, timeout=5)
+    except Exception:  # noqa: BLE001 - never fail validation on a checker problem
+        return None
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    if proc.returncode != 0:
+        text = (proc.stderr or "").strip()
+        return text.splitlines()[-1][:200] if text else "syntax error"
+    return None
+
+
+def validate_scripts(workflow: Workflow) -> list[Diagnostic]:
+    diags: list[Diagnostic] = []
+
+    def walk(steps: list[Step]) -> None:
+        for step in steps:
+            code = _script_code(step)
+            if code is not None:
+                for token, why in _SCRIPT_FORBIDDEN:
+                    if token in code:
+                        diags.append(
+                            Diagnostic(
+                                step.id, "code", "invalid_script_api",
+                                f"script uses '{token}' which is not available: {why}",
+                            )
+                        )
+                seen_methods: set[str] = set()
+                for match in _APP_METHOD_RE.finditer(code):
+                    method = match.group(1)
+                    if method in _SCRIPT_APP_METHODS or method in seen_methods:
+                        continue
+                    seen_methods.add(method)
+                    diags.append(
+                        Diagnostic(
+                            step.id, "code", "unknown_script_method",
+                            f"script calls 'app.{method}', not part of the computer-script API "
+                            f"(allowed: {', '.join(sorted(_SCRIPT_APP_METHODS))})",
+                        )
+                    )
+                syntax = _node_syntax_error(code)
+                if syntax:
+                    diags.append(Diagnostic(step.id, "code", "script_syntax_error", f"script syntax error: {syntax}"))
+            for slot in (step.then, step.else_, step.body):
+                if slot:
+                    walk(slot)
+
+    walk(workflow.steps)
     return diags
 
 

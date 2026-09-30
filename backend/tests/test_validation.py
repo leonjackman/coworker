@@ -82,15 +82,44 @@ def test_bundled_agentic_goal_is_warning_not_error():
     assert not [d for d in diags if d.severity == "error"]
 
 
-def test_unknown_output_field_is_warning():
+def test_unknown_output_field_is_error():
+    """A reference to a field the action does not declare is a hard error."""
     wf = _wf(
         "  - id: a\n    kind: command\n    do: run\n    params:\n      command: echo hi\n"
         "  - id: b\n    kind: transform\n    do: template\n    params:\n      text: '{{steps.a.nope}}'\n"
     )
     diags = validate_workflow(wf, CapabilityRegistry.declared())
     out = [d for d in diags if d.code == "unknown_output"]
-    assert out and out[0].severity == "warning"
-    assert not [d for d in diags if d.severity == "error"]
+    assert out and out[0].severity == "error"
+
+
+def test_outputs_layer_reference_is_rejected():
+    """`steps.<id>.outputs.<field>` (a made-up layer) is a hard error."""
+    wf = _wf(
+        "  - id: a\n    kind: computer\n    do: script\n    params:\n      code: return 'x'\n"
+        "  - id: b\n    kind: transform\n    do: template\n    params:\n      text: '{{steps.a.outputs.result}}'\n"
+    )
+    assert "invalid_outputs_layer" in _codes(wf)
+
+
+def test_script_timer_is_rejected():
+    wf = _wf("  - id: a\n    kind: computer\n    do: script\n    params:\n      code: 'setTimeout(()=>{}, 100)'\n")
+    assert "invalid_script_api" in _codes(wf)
+
+
+def test_script_unknown_app_method_is_rejected():
+    wf = _wf("  - id: a\n    kind: computer\n    do: script\n    params:\n      code: 'await app.evaluate(\"1\");'\n")
+    assert "unknown_script_method" in _codes(wf)
+
+
+def test_valid_script_is_ok():
+    wf = _wf(
+        "  - id: a\n    kind: computer\n    do: script\n    params:\n"
+        "      code: 'const app = await cua.getApp(\"Safari\"); await app.settle();'\n"
+    )
+    codes = _codes(wf)
+    assert "invalid_script_api" not in codes
+    assert "unknown_script_method" not in codes
 
 
 def test_known_output_field_is_ok():

@@ -498,6 +498,11 @@ _OUTPUTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("notify", "webhook"): ("status", "ok", "text", "json"),
     ("tool", "web_search"): ("results", "result"),
     ("tool", "web_fetch"): ("text", "result"),
+    # computer/script returns the cell's rendered text (string), so it has no
+    # sub-fields; declaring "result"/"text" lets the validator reject
+    # `{{steps.<id>.outputs...}}` and unknown fields.
+    ("computer", "script"): ("result", "text"),
+    ("app", "script"): ("result", "text"),
 }
 
 
@@ -855,6 +860,7 @@ def _introspect_tool(tool: Any, kind: str) -> KindSpec | None:
                 ActionSpec(
                     kind, name, base.params, target=base.target, success=base.success,
                     locator=base.locator, aliases=base.aliases, description=base.description,
+                    outputs=base.outputs,
                 )
             )
         else:
