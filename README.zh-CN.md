@@ -39,38 +39,18 @@
 
 ## 功能特点
 
-| 功能 | 说明 |
-| --- | --- |
-| 🗨️ **流式对话** | 基于 SSE 的实时 Agent 响应，支持心跳保活与多会话并行流式输出 |
-| 💬 **内置聊天项目** | 应用内置一个系统保留的「聊天」项目，无需创建项目即可直接闲聊；它拥有独立的沙箱工作区，置顶固定在侧栏且不可删除 / 重命名；其中的 Agent 采用轻松的「懒懒男孩」(Lazzzy Boy) 人设，仅在用户明确要求时才操作文件或命令 |
-| 📥 **消息排队 & 插話** | Agent 回覆期間仍可繼續輸入，消息按会话入队，當前流結束後逐條自動發送；亦可對佇列中任一消息「插話」(↳)，在不中斷當前流的前提下引導回覆 |
-| 🔌 **多模型支持** | 内置 32 个模型厂商预设 —— OpenAI、Anthropic、Google Gemini、DeepSeek、Qwen / DashScope、Moonshot (Kimi)、Zhipu (GLM)、Doubao、Minimax、Cohere、Groq、xAI、Mistral、Ollama、vLLM、OpenRouter、SiliconFlow 等 —— 以及任意 OpenAI 兼容自定义端点，支持上下文窗口在线探测 |
-| 🧠 **长程记忆** | 按 Agent / 项目隔离的 Markdown 记忆库，LLM 自动提取，支持 zip 导入导出、回收站与跨目录迁移 |
-| 👥 **多 Agent 团队** ⚠️ | 创建团队与部门，Agent 之间可互相委派任务。**实验性能力** — 见下方说明 |
-| 👤 **子代理 (Sub-Agent)** | 单 Agent 模式下可派出独立子代理并行或串行执行任务，每个子代理拥有独立的 LLM 运行环境和受限工具集 |
-| 🎯 **目标模式 (Goal Mode)** | 用 `/goal` 设定持久目标，Agent 自动连续多轮推进直至完成或受阻，并配有常驻进度卡片与暂停 / 恢复 / 清除控制 |
-| 🔄 **MCP 集成** | Model Context Protocol 支持 — stdio / HTTP / SSE / WebSocket / Streamable HTTP 传输，OAuth 2.1 + PKCE、模板发现、持久会话 |
-| 📦 **技能系统** | SKILL.md 标准技能，支持市场浏览与一键安装（SkillHub · ClawHub），Agent 可在对话中直接安装新技能；还能**自动沉淀可复用流程**为草稿技能，进入审批队列等待你批准后生效 |
-| 🌐 **网页搜索 & 抓取** | 基于 [Tavily](https://tavily.com) 的网页搜索（`web_search`）与网页抓取（`web_fetch`），支持深度搜索、结果数配置、Cloudflare 自动重试；API Key 安全存储于系统钥匙串 |
-| 🖥️ **内置浏览器** | 应用内嵌 Chromium 浏览器视图，Agent 可操控它导航、点击、输入、滚动、截图、执行 JS 并读取 DOM；用户也可右键捕获页面元素或截图发送到对话中。支持持久化配置（Cookie / 登录态）、书签、历史记录、下载管理器、站点权限、可选的标签页还原（默认关闭），以及可供 Agent 在你批准后登录使用的**系统钥匙串密码管理器**；Agent 也能读取/管理书签、历史、下载与站点数据 |
-| 🧭 **桌面操控 (OS Computer Use)** | 桌面级控制：截图 + 任意原生 App 中的全局点击 / 拖拽 / 滚动 / 输入。总开关默认关闭；默认权限下每次操作都需确认（Shift+⌘+Esc 可暂停）。**目前仅支持 macOS。** |
-| 🔒 **人机协作审查** | 越界文件修改、记忆更新与 MCP 调用需确认，支持「默认权限」/「完整权限」两级权限 |
-| 📓 **变更追踪** | 每次文件修改记录 before/after 差异；编辑 / 重新生成 / 撤销可恢复至修改前状态 |
-| 🖥️ **内置终端** | 底部面板内置交互式 PTY 终端，并实时展示工具审计日志 |
-| 🔎 **审计与追踪** | 工具审计日志与 Agent 追踪记录，支持导出、清空与保留上限配置 |
-| ✏️ **消息编辑** | 可编辑或重新生成任意用户消息，下游代码改动自动回滚且可恢复 |
-| 📄 **Office / PDF 文档** | 通过四个统一工具读取/创建/编辑/转换 `docx`/`xlsx`/`pptx`/`pdf`（原子写入、改动可回滚）；聊天中的 Office/PDF 附件会被抽取文本而非塞入 base64；PDF 支持合并/拆分/旋转/删除/加密与 Office→PDF |
-| 🍎 **macOS 应用脚本** | `run_applescript` 确定性地驱动 Pages / Numbers / Keynote / Finder，**独立于「电脑操控」主开关**（execute 阶段 + HITL 审批；子代理不继承） |
-| 📎 **文件附件** | 对话中可发送文本或二进制文件附件（默认上限 25MB，可配置 1–1024MB），Agent 可直接读取内容 |
-| 🔗 **会话交叉引用** | 在对话中粘贴其他会话 ID，Agent 可读取被引用的会话上下文 |
-| 🛡️ **安全保护** | 禁止读取 `.env`、`.pem`、`id_rsa` 等敏感文件；文件写入严格限制在工作区目录内 |
-| 📋 **计划 / 执行双模式** | "Plan" 为只读规划阶段（Agent 只能查看和列计划），切换到 "Build" 后解锁全部写入与执行能力 |
-| 🌎 **国际化** | 支持 11 种语言 — 英文、中文（简 / 繁 / 港）、日文、韩文、法文、德文、西班牙文、葡萄牙文、俄文 |
-| 🎨 **主题** | 10 套精心设计的 OKLCH 色彩预设（矿物、赫耳墨斯、余烬、Sage、石墨、蔚蓝、夜曲、Solarized、Monokai、紫罗兰），各含明暗双配色，支持自定义强调色 |
-| 🔊 **声音通知** | Agent 回复完成、错误、提醒等事件触发提示音，支持全局开关 |
-| 📊 **上下文窗口指示器** | 实时显示 Token / 字符消耗量，追踪上下文压缩状态，帮你掌控预算 |
-| 🔄 **自动更新** | 支持预发布通道，带进度条、版本跳过、错误分类与本地版本通知 |
-| 📊 **项目仪表盘** | 每个项目的概览页 —— 文件、Agent、Git 状态与会话历史一览无余；文件树支持键盘导航，文件预览支持代码高亮、CSV / XLSX 虚拟表格滚动与外部打开 |
+|  |  |  |  |
+| --- | --- | --- | --- |
+| 🗨️ 流式对话 | 💬 内置聊天项目 | 📥 消息排队 & 插话 | 🔌 多模型支持 |
+| 🧠 长程记忆 | 👥 多 Agent 团队 ⚠️ | 👤 子代理 | 🎯 目标模式 |
+| ⚙️ 工作流工作室 (Beta) | 🔄 MCP 集成 | 📦 技能系统 | 🌐 网页搜索 & 抓取 |
+| 🖥️ 内置浏览器 | 🧭 桌面操控 (macOS) | 🔒 人机协作审查 | 📓 变更追踪 |
+| 🖥️ 内置终端 | 🔎 审计与追踪 | ✏️ 消息编辑 | 📄 Office / PDF 文档 |
+| 🍎 macOS 应用脚本 | 📎 文件附件 | 🔗 会话交叉引用 | 🛡️ 安全保护 |
+| 📋 计划 / 执行双模式 | 🌎 国际化 (11 语言) | 🎨 主题 | 🔊 声音通知 |
+| 📊 上下文预算 | 🔄 自动更新 | 📊 项目仪表盘 |  |
+
+> 📖 **完整功能说明** → [FEATURES.zh-CN.md](FEATURES.zh-CN.md)
 
 > ⚠️ **多 Agent（实验性）** — 多 Agent 团队、部门与任务委派属于实验性能力，仍在积极开发中：功能尚未完善，行为可能随版本变化，且项目模式创建后不可更改。日常使用建议采用单 Agent 模式。
 
@@ -194,14 +174,14 @@ NODE_ENV=development npx electron . --no-sandbox
 backend/main.py                 # 薄入口：组合根 + re-export + 路由注册
 backend/coworker/api/*.py       # 领域路由与助手（state / streaming / chat / sessions /
                                 #   memory_org / settings / workspace / ops / approvals /
-                                #   providers / terminal / skills）——单例只存在于 state.py
-backend/coworker/**             # 领域逻辑（agent / memory / providers / skills / search …）
+                                #   providers / terminal / skills / browser / workflows）——单例只存在于 state.py
+backend/coworker/**             # 领域逻辑（agent / memory / providers / skills / search / workflows / documents …）
 frontend/src/App.tsx            # 应用外壳（状态与接线），组合领域组件
 frontend/src/App.css            # @import 枢纽 → frontend/src/styles/*.css（分域样式）
 frontend/src/components/**      # React 功能组件（侧栏 / 面板 / 弹窗 …）
 frontend/src/lib/**             # 前端共享逻辑（messageParts / i18n / theme …）
 frontend/src/locales/*.json     # 11 种语言字典（构建期静态并入 bundle）
-electron/main.js                # 桌面外壳：窗口、后端起 boot、浏览器 bridge
+electron/main.js                # 桌面外壳：窗口、后端启动、浏览器 bridge
 ```
 
 启动行为：窗口立即显示且介面已完整翻译（i18n 随前端一起就绪）；打包版后端起 boot 并行进行，最多等待 1 分钟才报错。

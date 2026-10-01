@@ -40,38 +40,18 @@
 ## Features
 
 
-| Feature | Description |
-| --- | --- |
-| 🗨️ **Streaming Chat** | Real-time agent responses via SSE with keep-alive heartbeats; multiple sessions stream in parallel |
-| 💬 **Built-in Chat Project** | A system-reserved "Chat" project ships on first launch — start a casual conversation without creating a project. It lives in its own sandbox folder, is pinned to the top of the sidebar, and can't be deleted or renamed; the agent there adopts a relaxed **Lazzzy Boy** persona and only touches files / commands when you explicitly ask |
-| 📥 **Message Queue & Interject** | Keep typing while the agent works — sends queue up per session and auto-send one-by-one when the stream finishes; interject (↳) any queued message to steer the running reply without interrupting it |
-| 🔌 **Multi-Provider** | 32 built-in provider presets — OpenAI, Anthropic, Google Gemini, DeepSeek, Qwen / DashScope, Moonshot (Kimi), Zhipu (GLM), Doubao, Minimax, Cohere, Groq, xAI, Mistral, Ollama, vLLM, OpenRouter, SiliconFlow and more — plus any OpenAI-compatible custom endpoint, with live context-window discovery |
-| 🧠 **Long-Term Memory** | Per-agent / per-project markdown memory with LLM auto-extract, zip export / import, trash recovery, and cross-directory migration |
-| 👥 **Multi-Agent Teams** ⚠️ | Create teams & departments and let agents delegate tasks to each other. **Experimental** — see note below |
-| 👤 **Sub-Agent Workers** | Spawn independent sub-agents in single-agent mode for parallel or sequential tasks, each with its own LLM graph, memory, and restricted toolset |
-| 🎯 **Goal Mode** | Set a persistent `/goal` and let the agent drive multi-round autonomous execution until complete or blocked, with a pinned progress card and pause / resume / clear controls |
-| 🔄 **MCP Integration** | Model Context Protocol — stdio / HTTP / SSE / WebSocket / Streamable HTTP transports, OAuth 2.1 + PKCE, template discovery, persistent sessions |
-| 📦 **Skills** | SKILL.md-based skills with marketplace browsing, one-click install (SkillHub · ClawHub), and in-chat install via the agent — plus **self-authoring**: the agent captures repeatable procedures as draft skills that wait in a review queue for your approval |
-| 🌐 **Web Search & Fetch** | Web search powered by [Tavily](https://tavily.com) (`web_search`) and web page fetching (`web_fetch`), with configurable search depth, result count, Cloudflare retry, and secure keychain storage for your API key |
-| 🖥️ **Built-in Browser** | Embedded Chromium view the agent can drive — navigate, click, type, scroll, screenshot, evaluate JS, and read DOM; right-click to capture elements or the whole page into your chat. Persistent profile (cookies / logins), bookmarks, history, a download manager, per-site permissions, optional tab restore (off by default), and an **OS-keychain password manager** the agent can use to sign in (with your approval). The agent can also list / manage bookmarks, history, downloads and site data |
-| 🧭 **OS Computer Use** | Desktop-scale control — screenshots, global clicks / drag / scroll / typing in any native app. Master switch off by default; every mutating action asks under default permission (Shift+⌘+Esc pauses). **Currently macOS only.** |
-| 🔒 **Human-In-The-Loop** | Approves boundary-crossing file writes, memory updates, and MCP tools before they run — with 默認權限 (default) / 完整權限 (full) permission levels |
-| 📓 **Change Tracking** | Every file change logged with before/after diffs; edit / regenerate / revert restores the state before changes |
-| 🖥️ **Integrated Terminal** | Interactive PTY shell in the bottom panel, plus a live tool-audit feed |
-| 🔎 **Audit & Traces** | Tool-audit log and agent traces with export, clear, and retention caps |
-| ✏️ **Message Editing** | Edit or regenerate any user message — downstream code changes are rolled back and can be restored |
-| 📄 **Office & PDF Documents** | Read / create / edit / convert `docx`, `xlsx`, `pptx`, `pdf` through four unified tools (atomic writes, revertable changes); attached Office/PDF files are text-extracted instead of dumped as base64; PDF supports merge/split/rotate/delete/encrypt and Office→PDF |
-| 🍎 **macOS App Scripting** | `run_applescript` drives Pages / Numbers / Keynote / Finder deterministically and works **independently of the Computer Use master switch** (execute-phase + HITL gated; excluded from sub-agents) |
-| 📎 **File Attachments** | Send text or binary files in chat messages (default 25 MB limit, configurable 1–1024 MB); the agent reads content directly |
-| 🔗 **Session Cross-Reference** | Paste a session ID in chat so the agent can read context from other sessions |
-| 🛡️ **Sensitive File Protection** | Blocked reads of `.env`, `.pem`, `.key`, `id_rsa`, etc. and enforced workspace boundary for all file writes |
-| 📋 **Plan / Build Work Mode** | "Plan" is read-only — the agent can only view, search, and create plans. Switch to "Build" to unlock full write and execute capabilities |
-| 🌎 **i18n** | 11 languages — English, Chinese (Simplified / Traditional / HK), Japanese, Korean, French, German, Spanish, Portuguese, Russian |
-| 🎨 **Theme** | 10 curated OKLCH presets (Mineral, Hermes, Ember, Sage, Graphite, Azure, Nocturne, Solarized, Monokai, Violet), each with light/dark palettes, plus custom accent colors |
-| 🔊 **Sound Notifications** | Audio feedback on agent reply done, errors, and attention events, with a global toggle |
-| 📊 **Context Budget Indicator** | Live context-window usage bar showing token / character consumption and compaction tracking, so you always know your budget |
-| 🔄 **Auto-Update** | Supports pre-release channels, progress bar, version skip, error classification, and local version notifications |
-| 📊 **Project Dashboard** | Per-project overview page — files, agents, git status, and session history at a glance, with a keyboard-navigable file tree, rich file previews (code highlight, CSV / XLSX tables), and open-in-external-app |
+|  |  |  |  |
+| --- | --- | --- | --- |
+| 🗨️ Streaming Chat | 💬 Built-in Chat Project | 📥 Message Queue & Interject | 🔌 Multi-Provider |
+| 🧠 Long-Term Memory | 👥 Multi-Agent Teams ⚠️ | 👤 Sub-Agents | 🎯 Goal Mode |
+| ⚙️ Workflow Studio (Beta) | 🔄 MCP Integration | 📦 Skills | 🌐 Web Search & Fetch |
+| 🖥️ Built-in Browser | 🧭 Desktop Control (macOS) | 🔒 Human-in-the-Loop | 📓 Change Tracking |
+| 🖥️ Integrated Terminal | 🔎 Audit & Traces | ✏️ Message Editing | 📄 Office & PDF Documents |
+| 🍎 macOS App Scripting | 📎 File Attachments | 🔗 Session Cross-Reference | 🛡️ Sensitive File Protection |
+| 📋 Plan / Build Modes | 🌎 i18n (11 languages) | 🎨 Themes | 🔊 Sound Notifications |
+| 📊 Context Budget | 🔄 Auto-Update | 📊 Project Dashboard |  |
+
+> 📖 **Full feature guide** → [FEATURES.md](FEATURES.md)
 
 > ⚠️ **Multi-Agent (Experimental)** — Multi-agent teams, departments, and delegation are an experimental capability still under active development: the feature set is not yet complete, behavior may change, and the project mode is immutable after creation. Prefer single-agent mode for daily work.
 
@@ -195,8 +175,8 @@ NODE_ENV=development npx electron . --no-sandbox
 backend/main.py                 # thin entry: composition root + re-exports + router wiring
 backend/coworker/api/*.py       # domain routers & helpers (state, streaming, chat, sessions,
                                 #   memory_org, settings, workspace, ops, approvals, providers,
-                                #   terminal, skills) — singletons live once in state.py
-backend/coworker/**             # domain logic (agent / memory / providers / skills / search …)
+                                #   terminal, skills, browser, workflows) — singletons live once in state.py
+backend/coworker/**             # domain logic (agent / memory / providers / skills / search / workflows / documents …)
 frontend/src/App.tsx             # app shell (state + wiring) importing domain components
 frontend/src/App.css             # @import hub → frontend/src/styles/*.css (per-domain styles)
 frontend/src/components/**       # React feature components (sidebar / panels / modals …)
