@@ -391,6 +391,7 @@ def build_computer_tools(
     vision: bool = False,
     session_id: str = "",
     max_shot_width: int = 1024,
+    interactive: bool = True,
 ) -> list[Any]:
     """Build the ``computer_observe`` + ``computer`` LangChain tools.
 
@@ -411,6 +412,11 @@ def build_computer_tools(
     _LOOP_LIMIT = 3
 
     def _loop_guard(kind: str, signature: str) -> bool:
+        # Interactive-only guard: it exists to stop the MODEL retry-looping the
+        # same call. A deterministic workflow run is not an interactive loop, so
+        # the guard is disabled there (each step is intentional and reproducible).
+        if not interactive:
+            return False
         hist = _recent[kind]
         hist.append(signature)
         if len(hist) > _LOOP_LIMIT:
@@ -963,6 +969,7 @@ def resolve_computer_tools(
     *,
     vision: bool = False,
     session_id: str = "",
+    interactive: bool = True,
 ) -> list[Any]:
     """Computer tools for a runtime when the master switch is on AND the desktop
     bridge is up; otherwise ``[]`` (the model never sees the tools)."""
@@ -973,7 +980,7 @@ def resolve_computer_tools(
     if not computer_available(data_dir):
         return []
     try:
-        return build_computer_tools(data_dir, vision=vision, session_id=session_id)
+        return build_computer_tools(data_dir, vision=vision, session_id=session_id, interactive=interactive)
     except Exception:  # noqa: BLE001 - a computer misconfig must never break a turn
         logger.warning("computer tools disabled (config error)", exc_info=True)
         return []

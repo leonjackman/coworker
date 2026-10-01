@@ -308,12 +308,36 @@ def build_tool_environment(
     def _app(action: str, payload: dict[str, Any], locator: dict[str, Any] | None) -> Any:
         script = tool_map.get("computer_script")
         comp = tool_map.get("computer")
-        if action in ("script", "run_script") and script is not None:
-            args: dict[str, Any] = {"code": payload.get("code") or payload.get("script") or ""}
-            if payload.get("reset") is not None:
-                args["reset"] = bool(payload.get("reset"))
-            return script.invoke(args)
         if action in ("script", "run_script"):
+            code = str(payload.get("code") or payload.get("script") or "")
+            # A workflow step needs the STRUCTURED result that satisfies the
+            # declared outputs (`result`/`text`), not the agent-rendered blocks —
+            # so talk to the bridge client directly when we can.
+            if data_dir is not None:
+                try:
+                    from coworker.computer.bridge_client import ComputerClient
+
+                    client = ComputerClient(data_dir)
+                    if payload.get("reset"):
+                        client.ax_script_reset()
+                    res = client.ax_script(code, int(payload.get("timeout_ms") or 0))
+                    if isinstance(res, dict):
+                        if res.get("error_code"):
+                            raise RuntimeError(str(res.get("error") or res.get("error_code")))
+                        return {
+                            "blocks": res.get("blocks") or [],
+                            "result": res.get("result"),
+                            "text": res.get("text") or "",
+                        }
+                except RuntimeError:
+                    raise
+                except Exception:  # noqa: BLE001 - fall back to the agent tool
+                    pass
+            if script is not None:
+                args: dict[str, Any] = {"code": code}
+                if payload.get("reset") is not None:
+                    args["reset"] = bool(payload.get("reset"))
+                return script.invoke(args)
             raise RuntimeError("computer scripting is not available")
         if action in ("drag", "clipboard", "file_dialog"):
             if script is None:

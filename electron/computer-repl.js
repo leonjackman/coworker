@@ -105,7 +105,14 @@ class ComputerScript {
       clearTimeout(pending.timer);
       this._pending = null;
       const blocks = this._capBlocks(msg.blocks || []);
-      pending.resolve({ blocks, error: msg.error || null, errorName: msg.errorName || null });
+      pending.resolve({
+        blocks,
+        // Declared outputs of `computer.script` / `app.script` (contract).
+        result: msg.result === undefined ? null : msg.result,
+        text: typeof msg.text === 'string' ? msg.text : '',
+        error: msg.error || null,
+        errorName: msg.errorName || null,
+      });
     }
   }
 

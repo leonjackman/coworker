@@ -434,7 +434,12 @@ def build_workspace_tools(
                 result = workflow_manager.create(content, source="agent")
                 return json.dumps(result, ensure_ascii=False)
             if action == "update":
-                result = workflow_manager.update(name, content, source="agent")
+                # Single source of identity: if no name was passed, use the one
+                # declared in the YAML content.
+                target = (name or workflow_manager.name_of(content) or "").strip()
+                if not target:
+                    return json.dumps({"status": "error", "message": "update requires a workflow name"}, ensure_ascii=False)
+                result = workflow_manager.update(target, content, source="agent")
                 return json.dumps(result, ensure_ascii=False)
             if action == "delete":
                 return json.dumps(workflow_manager.delete(name), ensure_ascii=False)

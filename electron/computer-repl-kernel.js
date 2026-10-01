@@ -223,16 +223,25 @@ function stringify(v) {
   try { return JSON.stringify(v); } catch (e) { return String(v); }
 }
 
+function cloneSafe(value) {
+  if (value === undefined) return null;
+  try { return JSON.parse(JSON.stringify(value)); } catch (e) { return null; }
+}
+
 async function runCell(cellId, code) {
   blocks.length = 0;
   try {
     const wrapped = `(async () => {\n${String(code || '')}\n})()`;
     const script = new vm.Script(wrapped, { filename: 'cell.js' });
-    await script.runInContext(context, { timeout: 30000 });
-    parentPort.postMessage({ type: 'done', cellId, blocks: blocks.slice() });
+    // The script's RESOLVED VALUE is the declared `result` output; text blocks
+    // become the declared `text` output. (Previously the value was discarded.)
+    const value = await script.runInContext(context, { timeout: 30000 });
+    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    parentPort.postMessage({ type: 'done', cellId, blocks: blocks.slice(), result: cloneSafe(value), text });
   } catch (err) {
+    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
     parentPort.postMessage({
-      type: 'done', cellId, blocks: blocks.slice(),
+      type: 'done', cellId, blocks: blocks.slice(), result: null, text,
       error: (err && err.message) ? String(err.message) : String(err),
       errorName: (err && err.name) || 'Error',
     });

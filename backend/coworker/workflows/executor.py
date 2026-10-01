@@ -1039,6 +1039,20 @@ def _enforce_success(
     This is the fix for the false-success class of bug (command exit codes were
     ignored, so a run that did nothing still reported ``ok``).
     """
+    # Contract enforcement: an action's runtime result must satisfy its declared
+    # outputs, so downstream references ({{steps.id.<output>}}) can never silently
+    # resolve to nothing. A mismatch is a real defect, surfaced as a step failure.
+    declared = tuple(getattr(resolved_action, "outputs", ()) or ())
+    if declared and isinstance(result, dict):
+        missing = [name for name in declared if name not in result]
+        if missing:
+            action = getattr(resolved_action, "action", "") or step.do
+            raise StepFailed(
+                step.id,
+                f"contract violation: {step.kind}.{action} result is missing declared outputs {missing}",
+                result=result,
+            )
+
     rule = getattr(resolved_action, "success", "result_ok") if resolved_action is not None else "result_ok"
     if not check_success(rule, result, payload):
         detail = _result_error_detail(result)

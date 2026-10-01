@@ -149,7 +149,9 @@ def build_server_environment(
     except Exception:  # noqa: BLE001
         pass
     try:
-        tools.extend(resolve_computer_tools(data_dir))
+        # Workflow execution is deterministic (not an interactive agent loop), so
+        # disable the interactive loop guard for these tools.
+        tools.extend(resolve_computer_tools(data_dir, interactive=False))
     except Exception:  # noqa: BLE001
         pass
     root = Path(workspace_root)

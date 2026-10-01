@@ -72,6 +72,8 @@ def evaluate(spec: str, result: Any, context: dict[str, Any]) -> AssertionResult
         return True, ""
 
     low = token.lower()
+    if low in ("true", "false"):
+        return (low == "true"), ("" if low == "true" else f"assertion '{spec}' failed: literal false")
     if low in ("ok", "not_error", "no_error"):
         if _has_error(result):
             return False, f"assertion '{spec}' failed: result reports an error"
@@ -194,6 +196,40 @@ def evaluate(spec: str, result: Any, context: dict[str, Any]) -> AssertionResult
         truthy = bool(value)
     if not truthy:
         return False, f"assertion '{spec}' failed: value is falsy"
+    return True, ""
+
+
+#: Operators that take a fixed arity of arguments (for authoring validation).
+_ARITY_1 = ("contains", "not_contains", "exists", "not_exists", "file_exists", "not_file_exists", "exit_code")
+_ARITY_2 = ("equals", "not_equals", "matches", "regex", "file_contains")
+_NO_ARGS = ("ok", "not_error", "no_error", "true", "false")
+
+
+def validate_spec(spec: str) -> tuple[bool, str]:
+    """Check an assertion spec is well-formed (authoring-time).
+
+    Returns ``(ok, message)``. A bare reference is always accepted (its
+    resolvability is a runtime concern). Only malformed operator usage — e.g.
+    ``equals`` with a missing operand — is rejected.
+    """
+    token = (spec or "").strip()
+    if not token:
+        return True, ""
+    low = token.lower()
+    if low in _NO_ARGS:
+        return True, ""
+    for op in _ARITY_1:
+        if low == op:
+            return False, f"assertion '{spec}': '{op}' needs an argument"
+        if low.startswith(op + " "):
+            return (True, "") if token[len(op):].strip() else (False, f"assertion '{spec}': '{op}' needs an argument")
+    for op in _ARITY_2:
+        if low == op or low.startswith(op + " "):
+            rest = token[len(op):].strip()
+            if len(rest.split(None, 1)) != 2:
+                return False, f"assertion '{spec}': expected '{op} <ref> <value>' (two arguments)"
+            return True, ""
+    # Bare reference (truthiness) — valid form; resolution happens at runtime.
     return True, ""
 
 

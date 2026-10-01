@@ -1203,7 +1203,7 @@ steps:
       command: ["bash", "-c", "echo boom >&2; exit 3"]
 """
     manager.create(flow)
-    env = FakeEnv(command=lambda argv, cwd="", timeout=30: {"return_code": 3, "stdout": "", "stderr": "boom\n"})
+    env = FakeEnv(command=lambda argv, cwd="", timeout=30: {"return_code": 3, "timed_out": False, "stdout": "", "stderr": "boom\n"})
     result = manager.run("cmd-fail", env=env)
     assert result["status"] == "failed"
     assert "rc=3" in result["run"]["error"]

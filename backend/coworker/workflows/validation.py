@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 from typing import Any, Iterable
 
+from .assertions import validate_spec
 from .capabilities import TEMPLATE_ROOTS, CapabilityRegistry, Diagnostic
 from .model import Step, Workflow
 from .parser import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, is_valid_name
@@ -178,6 +179,28 @@ def validate_workflow(workflow: Workflow, registry: CapabilityRegistry) -> list[
     diags.extend(validate_templates(workflow, registry))
     diags.extend(validate_scripts(workflow))
     diags.extend(validate_conformance(workflow, registry))
+    diags.extend(validate_assertions(workflow))
+    return diags
+
+
+def validate_assertions(workflow: Workflow) -> list[Diagnostic]:
+    """Authoring-time check that every pre/post/success/assert spec is well-formed."""
+    diags: list[Diagnostic] = []
+
+    def walk(steps: list[Step]) -> None:
+        for step in steps:
+            specs = list(step.pre) + list(step.post) + list(step.success)
+            if step.kind == "assert" and step.do:
+                specs = [step.do, *specs]
+            for spec in specs:
+                ok, message = validate_spec(spec)
+                if not ok:
+                    diags.append(Diagnostic(step.id, "post", "bad_assertion", message))
+            for slot in (step.then, step.else_, step.body):
+                if slot:
+                    walk(slot)
+
+    walk(workflow.steps)
     return diags
 
 
@@ -215,6 +238,7 @@ CONFORMANCE_CODES: frozenset[str] = frozenset({
     "missing_target",
     "unverified_state_change",
     "guessy_source",
+    "bad_assertion",
 })
 
 

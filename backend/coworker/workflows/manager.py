@@ -115,6 +115,14 @@ class WorkflowManager:
 
     # ── mutations ───────────────────────────────────────────────────────
 
+    def name_of(self, content: str) -> str:
+        """The workflow name declared in ``content`` (single source of identity)."""
+        try:
+            workflow, _ = parse_workflow(content)
+        except Exception:  # noqa: BLE001
+            return ""
+        return (workflow.name if workflow is not None else "") or ""
+
     def _assert_absolute_allowed(self, workflow: Workflow, source: str, existing: Workflow | None = None) -> None:
         """絕對遵守 is a user-only hard constraint. Agents may neither set it on
         new steps nor alter a workflow that already contains it."""
