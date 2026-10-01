@@ -928,9 +928,22 @@ export interface WorkflowStep {
   absolute?: boolean;
   /** Conformance codes explicitly downgraded to warnings for this step. */
   bypass?: string[];
+  /** Who authored the binding (user | agent) when known. */
+  origin?: string;
   then?: WorkflowStep[];
   else?: WorkflowStep[];
   body?: WorkflowStep[];
+}
+
+export interface WorkflowStepState {
+  status: string;
+  resolved: boolean;
+  error: string;
+  at: string;
+  origin?: string;
+  healed?: boolean;
+  heal_count?: number;
+  takeover?: boolean;
 }
 
 export interface WorkflowEntry {
@@ -948,6 +961,8 @@ export interface WorkflowEntry {
   status: string;
   source: string;
   step_count: number;
+  /** Latest observed per-step state (binding observability), keyed by step id. */
+  state?: Record<string, WorkflowStepState>;
   created_at: string;
   updated_at: string;
   file_path: string;

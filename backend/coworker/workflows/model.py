@@ -102,6 +102,11 @@ class Step:
     # are downgraded from error to warning; everything else still blocks.
     bypass: list[str] = field(default_factory=list)
     bypass_reason: str = ""
+    # Intent/Binding two-layer model. The step's INTENT is ``goal`` (kept in
+    # sync with ``description`` for labels/compat); the machine success
+    # criterion lives in ``post``. ``origin`` records who authored the binding
+    # (user/agent) when known.
+    origin: str = ""
     # 絕對遵守 (absolute-obey): a HARD, user-only constraint. When set, the
     # agent may not change the existing intent/binding, substitute a method,
     # self-heal, or take over. Empty fields may still be filled once, then
@@ -152,6 +157,8 @@ class Step:
             data["bypass"] = list(self.bypass)
         if self.bypass_reason:
             data["bypass_reason"] = self.bypass_reason
+        if self.origin:
+            data["origin"] = self.origin
         if self.absolute:
             data["absolute"] = True
         if self.then:

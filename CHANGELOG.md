@@ -398,26 +398,34 @@
 
 ## Unreleased
 
-本輪把「工作流編寫規範」從提示詞下沉到代碼，並改造工作流的執行模型：意圖/綁定、驗證、可降級、絕對遵守。
+本輪把工作流節點改造成「目標＝意圖 / 綁定」一層可見結構，並在 Studio 中可見、可編輯、可觀測。
 
-### 執行模型（新增）
+### 節點設置重設計（本次）
 
-- **可觀察變更驗證**：新增成功規則 `observable_change`；`browser` 的 `click`/`click_selector`/`click_text` 預設要求「點了要有變化」（DOM 變動/導覽/下載），把「點了卻沒反應」的假成功變成真正失敗。點擊結果回傳 `changed/target` 供除錯與驗證。
-- **定位修正**：`_locate` 改為語意/`aria-label` 優先、互動元素優先、取最小葉節點並自動上溯到控制項祖先、**唯一命中**、命中巨型容器視為失敗（避免點到版面容器）。
-- **瀏覽器面板自動顯示**：agent/workflow 驅動內置瀏覽器時自動打開右側面板（隱藏面板為 0×0 viewport，會令座標點擊與下載失效）。
-- **檔案能力**：新增 `file.newest`（依 mtime 取最新檔）；`file.glob` 改**非遞迴預設**（`**`/`recursive` 才遞迴）；`file.zip`/`file.unzip`。
-- **絕對遵守（user-only 硬約束）**：節點層級 `absolute: true`（僅使用者可設）。標記後 agent 不得改意圖/綁定、不自癒、不降級、不接手；失敗即停止（agent 只可提出建議，使用者手改後重跑）。agent 來源的工作流不得設定或修改含 `absolute` 的工作流。
-- **來源分級**：agent 透過工具建立/更新工作流時以 `source="agent"` 記名；一般節點的意圖/綁定可改並保留版本歷史。
+- **「目標」就是節點的意圖**：步驟 `goal` 與 `description` 為同一值（解析/序列化雙向同步）；節點標籤以目標顯示。
+- **「成功標準」置於目標下方**：即機器驗證 `post`（合併 `success` 與 `binding.verify` 為單一清單）。
+- **「絕對遵守」移入行為分組**；移除獨立的「意圖」分組與白話 `success_text`。
+- **行為（Behavior / Binding）分組**：目標 → 成功標準 → 絕對遵守 → 動作＋動作欄位。
+- **高級設定重排**：定位（role/name/selector ＋ **可編輯的 fallback 階梯 JSON**）、移除重複的參數編輯器（參數以動作欄位為單一來源）、`foreach` 僅 loop 顯示、執行歷程保留。
+- 後端：`parser._parse_step` 統一 goal/description 並把 `success` 併入 `post`；`_step_to_yaml` 只輸出單一 `intent.what` 與 `binding.verify`；`validation` 的意圖必填改看 goal/description。
 
-### 意圖優先與契約（P3/P4）
+### Intent / Binding（節點兩層）
 
-- **語意點擊目標**：`browser click` 現在接受 `selector`/`text`（語意優先），座標為 fallback 階梯末位；`missing_target` 於 conformance 檢查。
-- **Studio 意圖優先**：步驟列表與節點改以 `description`（意圖）為主標籤，並顯示 `絕對遵守` 徽章（11 語系）；`absolute`/`bypass` 已加入前端型別。
-- **節點契約測試**：新增 `tests/test_workflow_contract.py`——每個 kind/action 的 target/success/params/outputs/locator 均需良構，且前端 fallback 目錄必須是後端 registry 的子集（drift guard）。
-- **新 conformance 提示**：`unverified_state_change`（狀態變更步無成功條件）、`guessy_source`（對 Downloads 猜檔）——皆為 warning。
+- 節點 YAML 為 `intent{what,success,absolute}` + `binding{action,target,params,verify,origin}`；`_parse_step` 攤平為 runtime 扁平欄位（向後相容舊扁平檔），`render_workflow` 重新分層輸出。
+- **Studio 檢查器（NodeInspector）改為上下兩區**：上「意圖」（`what`＝description、`success` 白話成功、`絕對遵守` 開關），下「行為 / 綁定」（動作＋欄位＋locator（進階）＋ `verify`）。
+- 畫布/列表節點以 `description`（意圖）為主標籤，並顯示 `絕對遵守` 徽章（11 語系）。
+- 節點 `success_text`、`origin`、`absolute`、`bypass` 已納入前端型別並可編輯。
 
-### 其它
+### 可觀測（每步執行狀態）
 
-- 工作流 conformance linter：description 必填、驗證步、禁 opaque shell/evaluate 點擊、語意定位、`tool` 僅限已註冊、macOS 工具需 `platform`；可用 `bypass` 降級。
-- 系統提示瘦身：工作流規範由常駐 ~1.2k tokens 改為短指針，完整規範按需 `workflow action=spec`。
-- `deepseek-usage-export` 重寫為合規範本：`click_text(exact)` + `list_downloads` + `file.unzip` + `file.glob` + `file.copy` + 每步驗證；**真機測試端到端成功**（DeepSeek 用量 zip → 解壓 → `~/Desktop/DeepSeek_费用.csv` / `DeepSeek_用量.csv`）。
+- `workflows/.state.json` 記錄每節點最近一次 `status/resolved/error/at/origin/healed/heal_count/takeover`（由 run 事件 `self_heal`/`recover` 彙整）；`GET /workflows/{name}` 回傳 `state`。
+- Studio 檢查器「進階」頁顯示**執行歷程**（狀態、來源、已自動修復、Agent 接手、錯誤）；工作流清單/流程圖顯示 `已驗證 / 失敗 / 未解析` 徽章。
+
+### 驗證
+
+- `pytest` 664 passed（新增 `test_workflow_intent_binding.py`、`test_node_execution_contracts.py`、`test_workflow_state.py`）；`tsc --noEmit`、`vite build` 通過。
+- 真機：`deepseek-usage-export`（Intent/Binding v10）端到端成功，桌面產出 `DeepSeek_费用.csv` / `DeepSeek_用量.csv`。
+
+## 未發布內容
+
+（發版時將本區段改名為對應版本號，例如 `## x.x.x` ）

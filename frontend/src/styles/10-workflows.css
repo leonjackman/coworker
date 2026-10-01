@@ -99,11 +99,26 @@
 }
 
 .wf-section__title {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--material-border);
+  font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--muted-foreground);
+  color: var(--foreground);
+}
+
+.wf-section__title::before {
+  content: '';
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex: 0 0 auto;
 }
 
 .wf-row {
@@ -720,4 +735,13 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.wf-badge--ok {
+  color: var(--success, var(--accent));
+  border-color: color-mix(in oklch, var(--success, var(--accent)) 40%, transparent);
+  background: color-mix(in oklch, var(--success, var(--accent)) 12%, transparent);
+}
+.wfs-history__error {
+  color: var(--danger);
+  word-break: break-word;
 }

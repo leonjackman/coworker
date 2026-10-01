@@ -267,7 +267,8 @@ def test_api_render_steps_for_visual_editor():
     body = result.json()
     assert body["status"] == "ok"
     assert "mode: agent" in body["yaml"]
-    assert "goal: do it" in body["yaml"]
+    # The step intent (goal) is rendered under intent.what.
+    assert "what: do it" in body["yaml"]
 
 
 def test_api_duplicate_workflow():

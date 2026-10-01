@@ -111,6 +111,7 @@ import type {
   WorkflowRun,
   WorkflowRunEvent,
   WorkflowStep,
+  WorkflowStepState,
   WorkflowTemplate,
   WorkflowVersion,
 } from '../../../types';
@@ -171,6 +172,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [runStatus, setRunStatus] = useState<Record<string, string>>({});
+  // Persisted per-step binding state (observability) from the last run.
+  const [stepState, setStepState] = useState<Record<string, WorkflowStepState>>({});
   const [edgeType, setEdgeType] = useState<EdgeStyle>(initialSettings.edgeType);
   const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
@@ -446,6 +449,13 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         const res = await chatService.getWorkflow(target.name);
         if (cancelled) return;
         const wf = res.workflow;
+        const persisted = wf.state ?? {};
+        setStepState(persisted);
+        // Seed run status from the persisted last-run state so badges show even
+        // before a fresh run (live run events override this below).
+        const seeded: Record<string, string> = {};
+        for (const [sid, st] of Object.entries(persisted)) seeded[sid] = st.status === 'failed' ? 'failed' : 'ok';
+        if (Object.keys(seeded).length) setRunStatus(seeded);
         loadDocument({
           name: wf.name,
           description: wf.description,
@@ -2018,6 +2028,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                     onTab={setInspectorTab}
                     onPatch={patchSelected}
                     onAddChild={addChild}
+                    state={stepState[selected.id]}
                   />
                 ) : (
                   <WorkflowInspector

@@ -33,6 +33,7 @@ import type {
   WorkflowRun,
   WorkflowRunEvent,
   WorkflowStep,
+  WorkflowStepState,
   WorkflowTemplate,
   WorkflowVersion,
 } from '../../../types';
@@ -872,25 +873,30 @@ function HelpIcon({ text }: { text?: string }) {
 // ── Inspector: node (selected) ────────────────────────────────────────
 export type InspectorTab = 'basic' | 'advanced';
 
+/** Kinds where a per-step timeout (seconds) is meaningful. */
+const TIMEOUT_KINDS = new Set(['command', 'http', 'browser', 'computer', 'app', 'subworkflow']);
+
 export function NodeInspector({
   selected,
   tab,
   onTab,
   onPatch,
   onAddChild,
+  state,
 }: {
   selected: WorkflowStep;
   tab: InspectorTab;
   onTab: (tab: InspectorTab) => void;
   onPatch: (patch: Partial<WorkflowStep>) => void;
   onAddChild: (slot: 'then' | 'else' | 'body') => void;
+  state?: WorkflowStepState | undefined;
 }) {
   const kind = selected.kind ?? '';
   const KindIcon = kindIcon(kind);
   const params = (selected.params ?? {}) as Record<string, unknown>;
   const action = actionDef(kind, selected.do ?? '');
   const locator = (selected.locator ?? {}) as Record<string, unknown>;
-  const successList = selected.success ?? [];
+  const postList = selected.post ?? [];
 
   const readField = (field: ActionField): unknown => (field.key === '$do' ? selected.do ?? '' : params[field.key]);
   const writeField = (field: ActionField, value: unknown) => {
@@ -979,6 +985,26 @@ export function NodeInspector({
 
   return (
     <div>
+      {/* Node card: type + id, always visible above the tabs. */}
+      <div className="wfs-node-card" style={{ borderLeftColor: kindStripe(kind) }}>
+        <span className="wfs-node-card__icon" style={{ color: kindStripe(kind) }}>
+          <KindIcon size={16} />
+        </span>
+        <div className="wfs-node-card__meta">
+          <span className="wfs-node-card__type">{t(kindLabelKey(kind))}</span>
+          <label className="wfs-node-card__idrow">
+            <span className="wfs-node-card__hash">#</span>
+            <Input
+              className="wfs-node-card__id"
+              value={selected.id}
+              onChange={(e) => onPatch({ id: e.target.value })}
+              aria-label={t('workflows.step_id')}
+              placeholder={t('workflows.step_id')}
+            />
+          </label>
+        </div>
+      </div>
+
       <div className="wfs-subtabs">
         <button
           type="button"
@@ -998,14 +1024,48 @@ export function NodeInspector({
 
       {tab === 'basic' ? (
         <>
-          {/* Node type is fixed once the node is created (chosen from the left
-              palette) — it is shown here read-only, not editable. */}
+          {/* ── BEHAVIOR / BINDING ──
+              The step INTENT is the 目標 (goal); the machine success criterion
+              (成功標準) sits right below it; then the 絕對遵守 hard constraint. */}
+          <div className="wf-section__title">{t('workflows.section_binding')}</div>
+
+          <label className="wfs-field">
+            <span>{t('workflows.goal')}</span>
+            <Textarea
+              value={selected.goal ?? selected.description ?? ''}
+              onChange={(e) => onPatch({ goal: e.target.value, description: e.target.value })}
+              rows={2}
+              placeholder={t('workflows.goal_placeholder')}
+            />
+          </label>
+
           <div className="wfs-field">
-            <span>{t('workflows.step_kind')}</span>
-            <div className="wfs-kind-static">
-              <KindIcon size={14} />
-              <span>{t(kindLabelKey(kind))}</span>
-            </div>
+            <span>{t('workflows.step_success')}</span>
+            {postList.map((spec, index) => (
+              <div className="wf-kv__row" key={`${spec}-${index}`} style={{ marginBottom: 6 }}>
+                <Input
+                  value={spec}
+                  placeholder={t('workflows.success_placeholder')}
+                  onChange={(e) => {
+                    const next = [...postList];
+                    next[index] = e.target.value;
+                    onPatch({ post: next });
+                  }}
+                  style={{ gridColumn: 'span 2' }}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => onPatch({ post: postList.filter((_, i) => i !== index) })}
+                >
+                  <Trash2 size={13} />
+                </Button>
+              </div>
+            ))}
+            <Button variant="outline" size="sm" onClick={() => onPatch({ post: [...postList, ''] })}>
+              <Plus size={13} />
+              {t('workflows.add_success')}
+            </Button>
           </div>
 
           {actionsFor(kind).length > 0 ? (
@@ -1045,24 +1105,6 @@ export function NodeInspector({
           {actionsFor(kind).length === 0 && VALUE_KINDS[kind]
             ? field({ key: '$do', type: VALUE_KINDS[kind]!.type, labelKey: VALUE_KINDS[kind]!.labelKey })
             : null}
-
-          {outputsFor(kind, selected.do ?? '').length > 0 ? (
-            <div className="wf-help">
-              {t('workflows.outputs')}:{' '}
-              {outputsFor(kind, selected.do ?? '')
-                .map((o) => `{{steps.${selected.id}.${o}}}`)
-                .join('  ')}
-            </div>
-          ) : null}
-
-          <label className="wfs-field">
-            <span>{t('workflows.goal')}</span>
-            <Input
-              value={selected.goal ?? ''}
-              onChange={(e) => onPatch({ goal: e.target.value })}
-              placeholder={t('workflows.goal_placeholder')}
-            />
-          </label>
 
           <div className="wfs-divider" />
           <div className="wf-section__title">{t('workflows.section_exec')}</div>
@@ -1111,26 +1153,58 @@ export function NodeInspector({
               {t('workflows.add_body')}
             </Button>
           ) : null}
+          <label className="wf-checkbox" style={{ marginTop: 10 }}>
+            <input
+              type="checkbox"
+              checked={!!selected.absolute}
+              onChange={(e) => onPatch({ absolute: e.target.checked })}
+            />
+            <span>
+              {t('workflows.badge_absolute')} <HelpIcon text={t('workflows.help_absolute')} />
+            </span>
+          </label>
         </>
       ) : (
         <>
-          <label className="wfs-field">
-            <span>{t('workflows.step_id')}</span>
-            <Input value={selected.id} onChange={(e) => onPatch({ id: e.target.value })} />
-          </label>
+          {state ? (
+            <>
+              <div className="wf-section__title">{t('workflows.history_title')}</div>
+              <div className="wf-help">
+                {t('workflows.history_status')}: {state.status}
+                {state.resolved ? '' : ` · ${t('workflows.state_unresolved')}`}
+                {state.origin ? ` · ${t('workflows.history_origin')}: ${state.origin}` : ''}
+                {state.healed ? ` · ${t('workflows.history_healed')} ×${state.heal_count ?? 1}` : ''}
+                {state.takeover ? ` · ${t('workflows.history_takeover')}` : ''}
+              </div>
+              {state.error ? <div className="wf-help wfs-history__error">{state.error}</div> : null}
+              <div className="wfs-divider" />
+            </>
+          ) : null}
+          {/* Control — shown for every node (wiring/condition), plus the
+              kind-specific extras below. */}
+          <div className="wf-section__title">{t('workflows.section_control')}</div>
           <label className="wfs-field">
             <span>{t('workflows.step_when')}</span>
             <Input value={selected.when ?? ''} onChange={(e) => onPatch({ when: e.target.value })} />
           </label>
-          <label className="wfs-field">
-            <span>{t('workflows.step_foreach')}</span>
-            <Input
-              value={selected.foreach ?? ''}
-              onChange={(e) => onPatch({ foreach: e.target.value })}
-              disabled={kind !== 'loop'}
-            />
-          </label>
+          {kind === 'loop' ? (
+            <label className="wfs-field">
+              <span>{t('workflows.step_foreach')}</span>
+              <Input value={selected.foreach ?? ''} onChange={(e) => onPatch({ foreach: e.target.value })} />
+            </label>
+          ) : null}
+          {TIMEOUT_KINDS.has(kind) ? (
+            <label className="wfs-field">
+              <span>{t('workflows.step_timeout')}</span>
+              <Input
+                type="number"
+                value={String(selected.timeout ?? 30)}
+                onChange={(e) => onPatch({ timeout: Number(e.target.value) || 30 })}
+              />
+            </label>
+          ) : null}
 
+          {/* Locator — only meaningful for GUI-driving kinds. */}
           {LOCATOR_KINDS.has(kind) ? (
             <>
               <div className="wfs-divider" />
@@ -1149,6 +1223,15 @@ export function NodeInspector({
                   onChange={(e) => onPatch({ locator: { ...locator, name: e.target.value } })}
                 />
               </label>
+              {kind === 'browser' ? (
+                <label className="wfs-field">
+                  <span>text</span>
+                  <Input
+                    value={String(locator.text ?? '')}
+                    onChange={(e) => onPatch({ locator: { ...locator, text: e.target.value } })}
+                  />
+                </label>
+              ) : null}
               <label className="wfs-field">
                 <span>selector</span>
                 <Input
@@ -1156,130 +1239,57 @@ export function NodeInspector({
                   onChange={(e) => onPatch({ locator: { ...locator, selector: e.target.value } })}
                 />
               </label>
+              <label className="wfs-field">
+                <span>{t('workflows.locator_fallback')}</span>
+                <LocatorFallbackEditor
+                  fallback={locator.fallback}
+                  onChange={(next) => onPatch({ locator: { ...locator, fallback: next } })}
+                />
+              </label>
             </>
           ) : null}
 
-          <div className="wfs-divider" />
-          <div className="wf-section__title">{t('workflows.step_params')}</div>
-          <ParamsEditor params={params} onPatch={(next) => onPatch({ params: next })} />
-
-          <div className="wfs-divider" />
-          <div className="wf-section__title">{t('workflows.step_success')}</div>
-          {successList.map((spec, index) => (
-            <div className="wf-kv__row" key={`${spec}-${index}`} style={{ marginBottom: 6 }}>
-              <Input
-                value={spec}
-                placeholder={t('workflows.success_placeholder')}
-                onChange={(e) => {
-                  const next = [...successList];
-                  next[index] = e.target.value;
-                  onPatch({ success: next });
-                }}
-                style={{ gridColumn: 'span 2' }}
-              />
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                onClick={() => onPatch({ success: successList.filter((_, i) => i !== index) })}
-              >
-                <Trash2 size={13} />
-              </Button>
+          {outputsFor(kind, selected.do ?? '').length > 0 ? (
+            <div className="wf-help" style={{ marginTop: 10 }}>
+              {t('workflows.outputs')}:{' '}
+              {outputsFor(kind, selected.do ?? '')
+                .map((o) => `{{steps.${selected.id}.${o}}}`)
+                .join('  ')}
             </div>
-          ))}
-          <Button variant="outline" size="sm" onClick={() => onPatch({ success: [...successList, ''] })}>
-            <Plus size={13} />
-            {t('workflows.add_success')}
-          </Button>
+          ) : null}
         </>
       )}
     </div>
   );
 }
 
-function ParamsEditor({
-  params,
-  onPatch,
+/** Edit the locator fallback ladder as JSON (applied on blur). */
+function LocatorFallbackEditor({
+  fallback,
+  onChange,
 }: {
-  params: Record<string, unknown>;
-  onPatch: (next: Record<string, unknown>) => void;
+  fallback: unknown;
+  onChange: (next: unknown[]) => void;
 }) {
-  const [json, setJson] = useState(false);
-
-  const entries = Object.entries(params);
-  const rowsToShow = json
-    ? []
-    : entries.map(([key, value]) => ({ key, value: typeof value === 'string' ? value : JSON.stringify(value) }));
-
-  if (json) {
-    return (
-      <>
-        <Button variant="ghost" size="xs" onClick={() => setJson(false)} style={{ marginBottom: 6 }}>
-          {t('workflows.params_json')}
-        </Button>
-        <textarea
-          className="skills-pending__editor"
-          style={{ minHeight: 90, width: '100%' }}
-          spellCheck={false}
-          value={JSON.stringify(params, null, 2)}
-          onChange={(e) => {
-            try {
-              onPatch(JSON.parse(e.target.value));
-            } catch {
-              /* keep typing */
-            }
-          }}
-        />
-      </>
-    );
-  }
-
+  const [text, setText] = useState(() => JSON.stringify(fallback ?? [], null, 0));
+  useEffect(() => {
+    setText(JSON.stringify(fallback ?? [], null, 0));
+  }, [fallback]);
   return (
-    <>
-      <Button variant="ghost" size="xs" onClick={() => setJson(true)} style={{ marginBottom: 6 }}>
-        {t('workflows.params_kv')}
-      </Button>
-      <div className="wf-kv">
-        {rowsToShow.map((row, index) => (
-          <div className="wf-kv__row" key={index}>
-            <Input
-              value={row.key}
-              placeholder={t('workflows.param_key')}
-              onChange={(e) => {
-                const next = { ...params };
-                const old = row.key;
-                delete next[old];
-                if (e.target.value.trim()) next[e.target.value] = row.value;
-                onPatch(next);
-              }}
-            />
-            <Input
-              value={row.value}
-              placeholder={t('workflows.param_value')}
-              onChange={(e) => onPatch({ ...params, [row.key]: e.target.value })}
-            />
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => {
-                const next = { ...params };
-                delete next[row.key];
-                onPatch(next);
-              }}
-            >
-              <Trash2 size={13} />
-            </Button>
-          </div>
-        ))}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => onPatch({ ...params, [`param${Object.keys(params).length + 1}`]: '' })}
-        >
-          <Plus size={13} />
-          {t('workflows.add_param')}
-        </Button>
-      </div>
-    </>
+    <Textarea
+      rows={3}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        try {
+          const parsed = JSON.parse(text || '[]');
+          onChange(Array.isArray(parsed) ? parsed : []);
+        } catch {
+          /* keep invalid text until the user fixes it */
+        }
+      }}
+      placeholder='[{"role":"button","name":"..."}]'
+    />
   );
 }
 

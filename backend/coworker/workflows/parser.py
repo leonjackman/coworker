@@ -76,6 +76,10 @@ _STEP_KEYS = frozenset(
         "bypass",
         "bypass_reason",
         "absolute",
+        "origin",
+        # Intent/Binding two-layer authoring (flattened into the fields above).
+        "intent",
+        "binding",
         "then",
         "else",
         "body",
@@ -168,21 +172,40 @@ def _parse_step(raw: Any, index: int, diagnostics: list[str], scope: str) -> Ste
         diagnostics.append(f"{scope}: step '{step_id}' has unknown kind '{kind}' — skipped")
         return None
 
-    do = str(raw.get("do") or raw.get("action") or "").strip()
+    # Intent/Binding two-layer authoring is flattened into the canonical fields.
+    intent = raw.get("intent") if isinstance(raw.get("intent"), dict) else {}
+    binding = raw.get("binding") if isinstance(raw.get("binding"), dict) else {}
+
+    do = str(raw.get("do") or raw.get("action") or (binding.get("action") if binding else "") or "").strip()
     params: dict[str, Any] = {}
     if isinstance(raw.get("params"), dict):
         params.update(raw["params"])
     if isinstance(raw.get("args"), dict):
         params.update(raw["args"])
+    if isinstance(binding.get("params"), dict):
+        params.update(binding["params"])
     for key, value in raw.items():
         if key not in _STEP_KEYS:
             params[key] = value
 
     locator = raw.get("locator") if isinstance(raw.get("locator"), dict) else None
+    if locator is None and isinstance(binding.get("target"), dict):
+        locator = binding["target"]
     pre = [str(x) for x in _as_list(raw.get("pre"))]
+    # The step INTENT is a single value: goal == description == intent.what.
+    intent_text = str(intent.get("what") or raw.get("goal") or raw.get("description") or "")
+    description = intent_text
+    goal = intent_text
+    # Machine success criterion is a single list (post); legacy `success` and
+    # binding.verify fold into it.
     post = [str(x) for x in _as_list(raw.get("post"))]
-    goal = str(raw.get("goal") or "")
     success = [str(x) for x in _as_list(raw.get("success"))]
+    if isinstance(binding.get("verify"), list):
+        post = [str(x) for x in _as_list(binding.get("verify"))] + post
+    post = post + success
+    success = []
+    absolute = bool(raw.get("absolute")) or bool(intent.get("absolute"))
+    origin = str(raw.get("origin") or (binding.get("origin") if binding else "") or "")
     mode = str(raw.get("mode") or "auto").strip().lower()
     on_error = dict(raw.get("on_error")) if isinstance(raw.get("on_error"), dict) else {}
     try:
@@ -216,10 +239,11 @@ def _parse_step(raw: Any, index: int, diagnostics: list[str], scope: str) -> Ste
         then=then,
         else_=else_,
         body=body,
-        description=str(raw.get("description") or ""),
+        description=description,
+        origin=origin,
         bypass=[str(x) for x in _as_list(raw.get("bypass"))],
         bypass_reason=str(raw.get("bypass_reason") or ""),
-        absolute=bool(raw.get("absolute")),
+        absolute=absolute,
     )
 
 
@@ -536,8 +560,70 @@ def render_workflow(workflow: Workflow) -> str:
         data["created_at"] = workflow.created_at
     if workflow.updated_at:
         data["updated_at"] = workflow.updated_at
-    data["steps"] = [step.to_dict() for step in workflow.steps]
+    data["steps"] = [_step_to_yaml(step) for step in workflow.steps]
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+
+def _step_to_yaml(step: Step) -> dict[str, Any]:
+    """Serialize a Step to the canonical Intent/Binding YAML shape.
+
+    ``intent`` (intent.what/success/absolute) is what the user reads; ``binding``
+    (action/target/params/verify/origin) is what the executor uses. The flat Step
+    fields remain the runtime representation (``Step.to_dict`` keeps them flat for
+    the API/Studio), only the on-disk YAML is grouped.
+    """
+    out: dict[str, Any] = {"id": step.id, "kind": step.kind}
+
+    intent: dict[str, Any] = {}
+    intent_text = step.goal or step.description
+    if intent_text:
+        intent["what"] = intent_text
+    if step.absolute:
+        intent["absolute"] = True
+    if intent:
+        out["intent"] = intent
+
+    binding: dict[str, Any] = {}
+    if step.do:
+        binding["action"] = step.do
+    if step.locator:
+        binding["target"] = step.locator
+    if step.params:
+        binding["params"] = step.params
+    verify = list(step.post) + list(step.success)
+    if verify:
+        binding["verify"] = verify
+    if step.origin:
+        binding["origin"] = step.origin
+    if binding:
+        out["binding"] = binding
+
+    if step.pre:
+        out["pre"] = step.pre
+    if step.mode and step.mode != "auto":
+        out["mode"] = step.mode
+    if step.on_error:
+        out["on_error"] = step.on_error
+    if step.timeout != 30:
+        out["timeout"] = step.timeout
+    if step.approval:
+        out["approval"] = True
+    if step.when:
+        out["when"] = step.when
+    if step.foreach:
+        out["foreach"] = step.foreach
+    if step.as_name:
+        out["as"] = step.as_name
+    if step.next:
+        out["next"] = step.next
+    if step.bypass:
+        out["bypass"] = step.bypass
+    if step.bypass_reason:
+        out["bypass_reason"] = step.bypass_reason
+    for slot, value in (("then", step.then), ("else", step.else_), ("body", step.body)):
+        if value:
+            out[slot] = [_step_to_yaml(child) for child in value]
+    return out
 
 
 def _input_to_yaml(spec: WorkflowInput) -> Any:

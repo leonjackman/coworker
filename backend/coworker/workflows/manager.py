@@ -7,9 +7,13 @@ render them directly.
 
 from __future__ import annotations
 
+import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+from coworker.atomicio import atomic_write_json
 
 from coworker.logger import get_logger
 
@@ -86,6 +90,7 @@ class WorkflowManager:
         if include_steps:
             data["yaml"] = self.store.read_text(name) or ""
         data["history"] = self.store.history(name)
+        data["state"] = self.get_state(name)
         diags = self._all_diagnostics(workflow)
         data["valid"] = not diags
         data["diagnostics"] = [d.to_dict() for d in diags]
@@ -484,7 +489,73 @@ class WorkflowManager:
                 )
             except Exception:  # noqa: BLE001
                 pass
+        self.record_run_state(workflow, run)
         return {"status": run.status, "run": run.to_dict()}
+
+    # ── per-step run state (binding observability) ───────────────────────
+    # The workflow FILE holds the definition (intent/binding); this companion
+    # file holds the latest OBSERVED state per step (verified/failed/resolved),
+    # so the Studio can show badges without polluting the definition.
+
+    @property
+    def state_path(self) -> Path:
+        return self.store.root / ".state.json"
+
+    def _load_state(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8") or "{}")
+            return data if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def record_run_state(self, workflow: Workflow, run: Any) -> None:
+        try:
+            state = self._load_state()
+        except Exception:  # noqa: BLE001
+            return
+        at = datetime.now(timezone.utc).isoformat()
+        steps_ctx = (getattr(run, "context", None) or {}).get("steps", {}) or {}
+        # Heal / takeover history from the run's event stream (observability).
+        heals: dict[str, int] = {}
+        takeovers: set[str] = set()
+        try:
+            for event in self.store.read_events(run.run_id):
+                sid = str(event.get("step_id") or "")
+                if not sid:
+                    continue
+                if event.get("type") == "self_heal":
+                    heals[sid] = heals.get(sid, 0) + 1
+                elif event.get("type") == "recover" and str(event.get("status")) == "agent":
+                    takeovers.add(sid)
+        except Exception:  # noqa: BLE001
+            pass
+        entry: dict[str, Any] = {}
+        for step in _walk_steps(workflow.steps):
+            info = steps_ctx.get(step.id)
+            status = "ok"
+            error = ""
+            if isinstance(info, dict):
+                status = str(info.get("status") or "ok")
+                error = str(info.get("error") or "")
+            resolved = bool(step.do or step.locator or step.params)
+            entry[step.id] = {
+                "status": status,
+                "resolved": resolved,
+                "error": error,
+                "at": at,
+                "origin": step.origin or workflow.source or "user",
+                "healed": heals.get(step.id, 0) > 0,
+                "heal_count": heals.get(step.id, 0),
+                "takeover": step.id in takeovers,
+            }
+        state[workflow.name] = entry
+        try:
+            atomic_write_json(self.state_path, state)
+        except Exception:  # noqa: BLE001 - observability must not break a run
+            pass
+
+    def get_state(self, name: str) -> dict[str, Any]:
+        return self._load_state().get(name, {}) or {}
 
     def resume(
         self,
@@ -511,6 +582,7 @@ class WorkflowManager:
             trigger=run.trigger or "manual",
             on_patch=self._default_patch,
         )
+        self.record_run_state(workflow, resumed)
         return {"status": resumed.status, "run": resumed.to_dict()}
 
     def list_runs(self, name: str = "", limit: int = 50) -> list[dict[str, Any]]:
@@ -695,6 +767,15 @@ def _patch_steps(steps: list[Step], step_id: str, fields: dict[str, Any]) -> lis
             continue
         out.append(step)
     return out if found else None
+
+
+def _walk_steps(steps: list) -> Any:
+    """Yield every step recursively (then/else/body)."""
+    for step in steps:
+        yield step
+        for slot in (step.then, step.else_, step.body):
+            if slot:
+                yield from _walk_steps(slot)
 
 
 def _absolute_step_ids(workflow: Workflow) -> list[str]:

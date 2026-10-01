@@ -3,11 +3,11 @@ import { CheckCircle2, Zap } from 'lucide-react';
 import { orderSteps } from './flowGraph';
 import { kindIcon, kindLabelKey, kindStripe } from './kinds';
 import { t } from '../../lib/i18n';
-import type { WorkflowStep } from '../../types';
+import type { WorkflowStep, WorkflowStepState } from '../../types';
 
 const SLOTS: Array<'then' | 'else' | 'body'> = ['then', 'else', 'body'];
 
-function StepRow({ step, depth }: { step: WorkflowStep; depth: number }) {
+function StepRow({ step, depth, state }: { step: WorkflowStep; depth: number; state?: WorkflowStepState | undefined }) {
   const Icon = kindIcon(step.kind);
   const onError = (step.on_error as { then?: string } | undefined)?.then;
   const success = step.success ?? [];
@@ -26,6 +26,15 @@ function StepRow({ step, depth }: { step: WorkflowStep; depth: number }) {
       <span className="wf-flow-row__id">#{step.id}</span>
       {step.goal ? <span className="wf-flow-row__goal">{step.goal}</span> : null}
       <span className="wf-flow-row__badges">
+        {state ? (
+          state.status === 'failed' ? (
+            <span className="wf-badge wf-badge--error" title={state.error}>{t('workflows.state_failed')}</span>
+          ) : !state.resolved ? (
+            <span className="wf-badge">{t('workflows.state_unresolved')}</span>
+          ) : (
+            <span className="wf-badge wf-badge--ok">{t('workflows.state_verified')}</span>
+          )
+        ) : null}
         {step.absolute ? <span className="wf-badge wf-badge--absolute">{t('workflows.badge_absolute')}</span> : null}
         {step.mode === 'agent' ? <span className="wf-badge wf-badge--agent">agent</span> : null}
         {step.approval ? <span className="wf-badge wf-badge--human">approval</span> : null}
@@ -41,13 +50,16 @@ interface Props {
   steps: WorkflowStep[];
   triggers?: string[];
   outputs?: Record<string, string>;
+  state?: Record<string, WorkflowStepState> | undefined;
 }
 
 /** Read-only single-card view of a workflow: trigger → steps → outputs. */
-export function WorkflowStepList({ steps, triggers = [], outputs = {} }: Props) {
+export function WorkflowStepList({ steps, triggers = [], outputs = {}, state }: Props) {
   const render = (list: WorkflowStep[], depth: number) =>
     list.map((step, index) => {
-      const nodes: ReactNode[] = [<StepRow key={`row-${depth}-${index}`} step={step} depth={depth} />];
+      const nodes: ReactNode[] = [
+        <StepRow key={`row-${depth}-${index}`} step={step} depth={depth} state={state?.[step.id]} />,
+      ];
       for (const slot of SLOTS) {
         const kids = (step[slot] as WorkflowStep[] | undefined) ?? [];
         if (kids.length === 0) continue;

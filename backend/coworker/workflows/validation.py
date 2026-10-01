@@ -254,11 +254,11 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
 
     def walk(steps: list[Step]) -> None:
         for step in steps:
-            if not (step.description or "").strip():
+            if not ((step.description or getattr(step, "goal", "") or "").strip()):
                 _conformance_diag(
                     step, "missing_description", "description",
-                    "step has no description — every node needs a short human-readable label so it "
-                    "renders meaningfully in the Studio", diags,
+                    "step has no intent (goal/description) — every node needs a short human-readable "
+                    "label so it renders meaningfully in the Studio", diags,
                 )
 
             if step.kind == "browser" and step.do == "click":

@@ -748,9 +748,9 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
                   </div>
                 </div>
                 {flowView === 'list' ? (
-                  <WorkflowStepList steps={detail.steps ?? []} triggers={detail.triggers} outputs={detail.outputs ?? {}} />
+                  <WorkflowStepList steps={detail.steps ?? []} triggers={detail.triggers} outputs={detail.outputs ?? {}} state={detail.state} />
                 ) : (
-                  <WorkflowFlowGraph steps={detail.steps ?? []} triggers={detail.triggers} outputs={detail.outputs ?? {}} />
+                  <WorkflowFlowGraph steps={detail.steps ?? []} triggers={detail.triggers} outputs={detail.outputs ?? {}} state={detail.state} />
                 )}
               </div>
 
