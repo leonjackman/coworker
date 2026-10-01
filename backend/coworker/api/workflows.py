@@ -261,6 +261,29 @@ def workflow_capabilities():
     return workflow_manager.capabilities()
 
 
+class WorkflowSettingsPayload(BaseModel):
+    default_on_error: str | None = Field(
+        None, description="Default failure policy when a step sets no on_error: 'abort' | 'agent'."
+    )
+
+
+@router.get("/workflows/settings")
+def get_workflow_settings_route():
+    from coworker.workflows.settings import read_workflow_settings
+
+    return read_workflow_settings(settings.data_dir)
+
+
+@router.post("/workflows/settings")
+def save_workflow_settings_route(payload: WorkflowSettingsPayload):
+    from coworker.workflows.settings import read_workflow_settings, write_workflow_settings
+
+    patch = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    if not patch:
+        return read_workflow_settings(settings.data_dir)
+    return write_workflow_settings(settings.data_dir, patch)
+
+
 class WorkflowSimulatePayload(BaseModel):
     content: str = Field(description="Full workflow YAML.")
     inputs: dict[str, Any] | None = None

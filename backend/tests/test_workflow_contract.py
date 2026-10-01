@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from coworker.workflows.capabilities import SUCCESS_RULES, CapabilityRegistry
-from coworker.workflows.model import VALID_KINDS
+from coworker.workflows.model import VALID_KINDS, Step
 
 _PARAM_TYPES = {"string", "number", "boolean", "list", "object", "textarea", "csv", "app"}
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +50,32 @@ def test_browser_click_and_type_are_verified():
     reg = CapabilityRegistry.declared()
     for action in ("click", "click_selector", "click_text"):
         assert reg.action("browser", action).success == "observable_change"
+
+
+_GUI_KINDS = {"browser", "computer", "app"}
+_DUMMY = {"number": 1, "boolean": True, "list": ["x"], "object": {}, "string": "x",
+          "textarea": "x", "csv": "a,b", "app": "Safari"}
+
+
+def test_every_action_resolves_from_a_minimal_step():
+    """Per-action resolution contract: every declared action (incl. GUI) resolves
+    to a ResolvedAction with no error diagnostics given required params."""
+    reg = CapabilityRegistry.declared()
+    failures = []
+    for kind, kspec in reg.kinds.items():
+        for action in kspec.actions:
+            params = {p.name: _DUMMY.get(p.type, "x") for p in action.params if p.required}
+            locator = (
+                {"role": "button", "name": "x", "text": "x", "selector": "#x"}
+                if kind in _GUI_KINDS
+                else None
+            )
+            step = Step(id="s", kind=kind, do=action.name, params=params, locator=locator)
+            resolved, diags = reg.resolve(step)
+            errors = [d.code for d in diags if getattr(d, "severity", "error") == "error"]
+            if resolved is None or errors:
+                failures.append((kind, action.name, errors))
+    assert not failures, f"actions without a valid resolution contract: {failures}"
 
 
 def test_frontend_fallback_catalog_is_subset_of_registry():

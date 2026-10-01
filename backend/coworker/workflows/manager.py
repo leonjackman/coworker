@@ -31,6 +31,7 @@ from .parser import is_valid_name, parse_workflow, renumber_steps, render_workfl
 from .registry import WorkflowRegistry
 from .simulation import simulate_workflow
 from .store import WorkflowStore
+from .settings import read_workflow_settings
 from .validation import CONFORMANCE_CODES, validate_workflow
 
 logger = get_logger(__name__)
@@ -464,6 +465,11 @@ class WorkflowManager:
         workflow = self.store.get(name)
         if workflow is None:
             return {"status": "error", "message": f"workflow not found: {name}"}
+        # Apply the configured default failure policy for this run.
+        try:
+            self.executor.default_on_error = read_workflow_settings(self.store.root.parent)["default_on_error"]
+        except Exception:  # noqa: BLE001
+            self.executor.default_on_error = "abort"
         run = self.executor.run(
             workflow,
             inputs or {},
@@ -688,8 +694,25 @@ class WorkflowManager:
                     name = step.do or str((step.params or {}).get("workflow") or "")
                     if not name:
                         diags.append(Diagnostic(step.id, "do", "missing_subworkflow", "subworkflow step requires a workflow name"))
-                    elif self.store.get(name) is None:
-                        diags.append(Diagnostic(step.id, "do", "subworkflow_not_found", f"workflow not found: {name}"))
+                    else:
+                        child = self.store.get(name)
+                        if child is None:
+                            diags.append(Diagnostic(step.id, "do", "subworkflow_not_found", f"workflow not found: {name}"))
+                        elif isinstance((step.params or {}).get("inputs"), dict):
+                            provided = step.params["inputs"]
+                            declared = {i.name for i in (child.inputs or [])}
+                            for key in provided:
+                                if key not in declared:
+                                    diags.append(Diagnostic(
+                                        step.id, f"inputs.{key}", "unknown_subworkflow_input",
+                                        f"'{name}' has no input '{key}'", severity="warning",
+                                    ))
+                            for spec in (child.inputs or []):
+                                if spec.required and spec.name not in provided:
+                                    diags.append(Diagnostic(
+                                        step.id, f"inputs.{spec.name}", "missing_subworkflow_input",
+                                        f"'{name}' requires input '{spec.name}'", severity="warning",
+                                    ))
                 for slot in (step.then, step.else_, step.body):
                     if slot:
                         walk(slot)

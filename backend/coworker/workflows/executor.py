@@ -59,10 +59,14 @@ class WorkflowExecutor:
         *,
         secrets: Callable[[str], str | None] | None = None,
         listener: Callable[[Any], None] | None = None,
+        default_on_error: str = "abort",
     ):
         self.store = store
         self.secrets = secrets
         self.listener = listener
+        # What a deterministic failure does when the step has no `on_error`:
+        # "abort" (default) or "agent" (hand the step to the agent).
+        self.default_on_error = default_on_error if default_on_error in ("abort", "agent") else "abort"
         # Capability registry: drives success evaluation (fail-closed). The
         # manager re-points this via ``use_tools`` when live schemas are known.
         self.registry = CapabilityRegistry.declared()
@@ -450,7 +454,7 @@ class WorkflowExecutor:
             # gate: default to abort so the run ends as `failed`. Only genuinely
             # agentic steps default to takeover. An author who WANTS a person in
             # the loop sets `on_error: {then: human}` (or `approval: true`).
-            if step.mode == "agent" or step.kind in _AGENTIC_DEFAULT_KINDS:
+            if step.mode == "agent" or step.kind in _AGENTIC_DEFAULT_KINDS or self.default_on_error == "agent":
                 policy = "agent"
             else:
                 policy = "abort"
@@ -539,7 +543,38 @@ class WorkflowExecutor:
         )
         if blocked:
             return None
+        # Learning writeback (P4): if the agent stated the concrete method it
+        # used, validate it statically and persist it so the next run is
+        # deterministic. Best-effort; never blocks the successful step.
+        self._writeback_binding(step, output, state)
         return {"agentic": True, "takeover": True, "output": output, "recovered_from": error}
+
+    def _writeback_binding(self, step: Step, output: str, state: "_State") -> None:
+        binding = _extract_takeover_binding(output)
+        if not isinstance(binding, dict):
+            return
+        fields = {k: binding[k] for k in ("do", "params", "locator") if binding.get(k)}
+        if not fields:
+            return
+        patched = replace(step, **fields)
+        try:
+            patched = replace(patched, origin="agent")
+        except Exception:  # noqa: BLE001
+            pass
+        # Static validation only: the agent ALREADY ran this step successfully,
+        # so we never re-execute (avoids duplicate side effects).
+        try:
+            _, diags = state.registry.resolve(patched)
+        except Exception:  # noqa: BLE001
+            diags = []
+        if any(getattr(d, "severity", "error") == "error" for d in diags):
+            state.emitter.emit("writeback", step_id=step.id, status="rejected", data={"binding": fields})
+            return
+        try:
+            self._record_patch(state.workflow, step, patched, state)
+            state.emitter.emit("writeback", step_id=step.id, status="ok", data={"binding": fields})
+        except Exception as exc:  # noqa: BLE001 - writeback is best-effort
+            state.emitter.emit("writeback", step_id=step.id, status="error", message=str(exc))
 
     def _dispatch(self, workflow: Workflow, step: Step, run: Run, state: "_State") -> Any:
         context = run.context
@@ -736,17 +771,35 @@ class WorkflowExecutor:
         return {"parallel": results}
 
     def _run_subworkflow(self, step: Step, run: Run, state: "_State") -> Any:
+        """Run another workflow as a reusable unit with TYPED inputs/outputs."""
         name = step.do or str(step.params.get("workflow") or "")
         if not name:
             raise StepFailed(step.id, "subworkflow step requires a workflow name")
         child_wf = self.store.get(name)
         if child_wf is None:
             raise StepFailed(step.id, f"subworkflow not found: {name}")
-        inputs = resolve(step.params.get("inputs") or {}, run.context, self.secrets)
+        raw_inputs = step.params.get("inputs") or {}
+        if not isinstance(raw_inputs, dict):
+            raise StepFailed(step.id, "subworkflow 'inputs' must be a mapping")
+        inputs = resolve(raw_inputs, run.context, self.secrets)
+        # Apply the child's input contract: defaults for missing optional inputs,
+        # fail for missing required ones (typed inputs).
+        for spec in getattr(child_wf, "inputs", []) or []:
+            if spec.name in inputs:
+                continue
+            if spec.default is not None:
+                inputs[spec.name] = spec.default
+            elif spec.required:
+                raise StepFailed(step.id, f"subworkflow '{name}' requires input '{spec.name}'")
         child_run = self.run(child_wf, inputs, env=state.env, trigger="subworkflow", on_patch=state.on_patch)
         if child_run.status != "ok":
             raise StepFailed(step.id, f"subworkflow '{name}' {child_run.status}: {child_run.error}")
-        return {"workflow": name, "outputs": child_run.outputs, "run_id": child_run.run_id}
+        return {
+            "workflow": name,
+            "inputs": inputs,
+            "outputs": child_run.outputs,
+            "run_id": child_run.run_id,
+        }
 
     def _run_set(self, step: Step, run: Run) -> Any:
         context = run.context
@@ -931,11 +984,41 @@ def _takeover_prompt(
     lines += [
         f"CURRENT INPUTS: {inputs_text}",
         "",
-        "Use any tools you need. When finished, end your reply with a final line:",
+        "Use any tools you need. If you found a concrete, reusable method for this",
+        "step, add ONE line before the verdict with it (only include keys you are",
+        "sure about; use actions/params valid for this step kind):",
+        'BINDING: {"do": "...", "params": {...}, "locator": {...}}',
+        "",
+        "Then end your reply with a final line:",
         "VERDICT: DONE   (if the step is complete)",
         "VERDICT: BLOCKED (if you cannot complete it)",
     ]
     return "\n".join(lines)
+
+
+def _extract_takeover_binding(output: str) -> dict[str, Any] | None:
+    """Pull the optional ``BINDING: {...}`` JSON block from a takeover reply."""
+    text = output or ""
+    idx = text.rfind("BINDING:")
+    if idx == -1:
+        return None
+    start = text.find("{", idx)
+    if start == -1:
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    data = json.loads(text[start : i + 1])
+                except json.JSONDecodeError:
+                    return None
+                return data if isinstance(data, dict) else None
+    return None
 
 
 def _promote_locator(locator: dict[str, Any] | None, descriptor: dict[str, Any]) -> dict[str, Any]:
