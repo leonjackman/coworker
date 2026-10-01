@@ -13,6 +13,7 @@ interface RightPanelProps {
   onAdd: () => void;
   onBrowserHandle: (tabId: string, handle: BrowserViewHandle | null) => void;
   onBrowserTitle: (tabId: string, title: string) => void;
+  onBrowserUrl: (tabId: string, url: string) => void;
   onOpenNewTab: (url: string) => void;
   onAddCapture: (attachments: ComposerAttachment[]) => void;
   agentActive?: boolean;
@@ -45,6 +46,7 @@ export function RightPanel({
   onAdd,
   onBrowserHandle,
   onBrowserTitle,
+  onBrowserUrl,
   onOpenNewTab,
   onAddCapture,
   agentActive,
@@ -128,7 +130,7 @@ export function RightPanel({
                 active={isActive}
                 onHandle={(handle) => onBrowserHandle(tab.id, handle)}
                 onTitleChange={(title) => onBrowserTitle(tab.id, title)}
-                onUrlChange={(url) => onBrowserTitle(tab.id, '')}
+                onUrlChange={(url) => onBrowserUrl(tab.id, url)}
                 onOpenNewTab={onOpenNewTab}
                 onAddCapture={onAddCapture}
                 agentActive={agentActive}

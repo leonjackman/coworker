@@ -35,6 +35,7 @@ import { WorkspaceSidebar } from './components/WorkspaceSidebar';
 import { WorkspaceBottomPanel, type BottomPanelView } from './components/WorkspaceBottomPanel';
 import { RightPanel } from './components/RightPanel';
 import type { BrowserViewHandle } from './components/BrowserView';
+import { BrowserPrompts } from './components/browser/BrowserPrompts';
 import { ChangesPanel } from './components/ChangesPanel';
 import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, tOrDefault, translateError, useLanguage } from './lib/i18n';
@@ -47,6 +48,37 @@ import { useSound } from './components/sound-provider';
 import { chatService } from './services/chatService';
 import type { AppView, ApprovalDecisionPayload, ApprovalOption, Autonomy, ChatMessage, CommandApproval, ComposerAttachment, ContextUsage, CreateProjectRequest, GoalSetMeta, GoalState, McpServerEntry, McpTemplateEntry, MemorySettings, MemorySettingsPatch, MessagePart, OrgRosterEntry, PartAgent, PendingRequest, ProjectEntry, ProviderEntry, RightPanelTab, RightPanelTabKind, RuntimeConfig, SessionDetailResponse, SessionReference, SessionSummary, SessionBadgeMap, SessionBadges, SkillDiagnostic, SkillEntry, SkillReviewSettings, SkillReviewSettingsPatch, WorkflowReviewSettings, WorkflowReviewSettingsPatch, StreamEvent, Todo, WorkMode } from './types';
 import './App.css';
+
+// Persisted embedded-browser tabs. Ephemeral search/probe tabs are excluded so
+// a restored session never reopens agent-internal browsing surfaces.
+const BROWSER_TABS_STORAGE_KEY = 'coworker-browser-tabs';
+
+interface PersistedBrowserTabs {
+  tabs: RightPanelTab[];
+  activeId: string;
+}
+
+function isPersistableBrowserTab(tab: RightPanelTab | undefined): tab is RightPanelTab {
+  if (!tab || tab.kind !== 'browser' || typeof tab.id !== 'string') return false;
+  return !tab.id.startsWith('browser-search-') && !tab.id.startsWith('settings-probe');
+}
+
+function readPersistedBrowserTabs(): PersistedBrowserTabs | null {
+  try {
+    const raw = localStorage.getItem(BROWSER_TABS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { tabs?: unknown; activeId?: unknown };
+    if (!parsed || !Array.isArray(parsed.tabs)) return null;
+    const tabs = parsed.tabs.filter(isPersistableBrowserTab);
+    if (tabs.length === 0) return null;
+    const activeId = typeof parsed.activeId === 'string' && tabs.some((tab) => tab.id === parsed.activeId)
+      ? parsed.activeId
+      : tabs[0]!.id;
+    return { tabs, activeId };
+  } catch {
+    return null;
+  }
+}
 
 function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -108,9 +140,18 @@ function App() {
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 860px)').matches,
   );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
-  const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(() => [{ id: 'browser-1', kind: 'browser' }]);
-  const [activeRightTabId, setActiveRightTabId] = useState<string>('browser-1');
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(
+    () => {
+      const persisted = readPersistedBrowserTabs();
+      return !!persisted && persisted.tabs.some((tab) => !!tab.data?.url);
+    },
+  );
+  const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(
+    () => readPersistedBrowserTabs()?.tabs ?? [{ id: 'browser-1', kind: 'browser' }],
+  );
+  const [activeRightTabId, setActiveRightTabId] = useState<string>(
+    () => readPersistedBrowserTabs()?.activeId ?? 'browser-1',
+  );
   const browserHandlesRef = useRef<Map<string, BrowserViewHandle>>(new Map());
   // Synchronous mirror of `rightTabs` so tab helpers can read the current list
   // without state-async races (used by the search-tab open/close helpers).
@@ -3742,6 +3783,40 @@ function App() {
     rightTabsRef.current = rightTabs;
   }, [rightTabs]);
 
+  // Persist the open browser tabs (id/kind/url/title) so a restart restores the
+  // session. Ephemeral agent tabs are filtered out; an empty list never
+  // overwrites a good snapshot.
+  useEffect(() => {
+    try {
+      const tabs = rightTabs.filter(isPersistableBrowserTab);
+      if (tabs.length === 0) return;
+      const activeId = tabs.some((tab) => tab.id === activeRightTabId) ? activeRightTabId : tabs[0]!.id;
+      localStorage.setItem(BROWSER_TABS_STORAGE_KEY, JSON.stringify({ tabs, activeId }));
+    } catch {
+      // localStorage unavailable — tab persistence is best-effort.
+    }
+  }, [rightTabs, activeRightTabId]);
+
+  // Honor the "restore tabs" setting: when disabled, drop the snapshot and
+  // start from a single blank tab.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.browserSettingsGet) return;
+    void api.browserSettingsGet().then((settings) => {
+      if (settings && settings.restore_tabs === false) {
+        try {
+          localStorage.removeItem(BROWSER_TABS_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+        setRightTabs([{ id: 'browser-1', kind: 'browser' }]);
+        setActiveRightTabId('browser-1');
+        setRightSidebarOpen(false);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Whether the configured web-search provider drives the embedded browser.
   const readWebSearchProvider = useCallback(async (): Promise<string> => {
     const cached = webProviderRef.current;
@@ -3853,6 +3928,13 @@ function App() {
     if (!title) return;
     setRightTabs((prev) =>
       prev.map((tab) => (tab.id === tabId ? { ...tab, data: { ...(tab.data || {}), title } } : tab)),
+    );
+  };
+
+  const handleBrowserUrl = (tabId: string, url: string) => {
+    if (!url) return;
+    setRightTabs((prev) =>
+      prev.map((tab) => (tab.id === tabId ? { ...tab, data: { ...(tab.data || {}), url } } : tab)),
     );
   };
 
@@ -4089,6 +4171,7 @@ function App() {
         onRenameSession={renameCurrentSession}
         onDeleteSession={deleteCurrentSession}
       />
+      <BrowserPrompts />
       <div className="app-body">
         {isNarrowViewport ? (
           <div
@@ -4399,6 +4482,7 @@ function App() {
               onAdd={() => addRightTab('browser')}
               onBrowserHandle={handleBrowserHandle}
               onBrowserTitle={handleBrowserTitle}
+              onBrowserUrl={handleBrowserUrl}
               onOpenNewTab={(url) => {
                 if (url) addRightTab('browser', { url });
               }}

@@ -41,12 +41,14 @@ require('./bootstrap');
   };
 })();
 
-const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage, nativeTheme, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage, nativeTheme, screen, shell, session, systemPreferences } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const browserData = require('./browser-data');
+const { CredentialVault } = require('./browser-credentials');
 const { autoUpdater } = require('electron-updater');
 const { CancellationToken } = require('builder-util-runtime');
 
@@ -697,6 +699,21 @@ function createWindow() {
     browserController.register(guest);
   });
 
+  // Force the guest preload and harden webPreferences regardless of what the
+  // renderer requested. Only the app's persisted browser partition may attach a
+  // guest; the preload powers password autofill/capture (isolated world only).
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    if (!String(params.partition || '').startsWith('persist:cw-browser')) {
+      event.preventDefault();
+      return;
+    }
+    webPreferences.preload = path.join(__dirname, 'browser-guest-preload.js');
+    delete webPreferences.preloadURL;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+  });
+
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -753,6 +770,53 @@ function createWindow() {
 // visible live in the panel.
 
 let browserController = null;
+
+// Embedded-browser personal data (Phase 4-6): encrypted credential vault,
+// per-origin permissions, cached non-secret settings, and the pending request
+// maps used to await renderer responses (permission prompts / credential use).
+let credentialVault = null;
+let permissionStore = null;
+let browserSessionRef = null;
+let downloadControls = null;
+const browserSettings = {
+  restore_tabs: true,
+  download_dir: '',
+  ask_where_to_save: false,
+  password_manager_enabled: false,
+  password_autofill: true,
+  permissions_prompt: true,
+};
+const pendingPermissionRequests = new Map(); // requestId -> resolve(answer)
+const pendingCredentialUse = new Map(); // requestId -> resolve(boolean)
+const pendingCredentialCaptures = new Map(); // token -> {origin, username, password}
+
+function sendToMainWindow(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send(channel, payload);
+    } catch { /* renderer gone */ }
+  }
+}
+
+function browserGuestOrigin(sender) {
+  try {
+    return new URL(sender.getURL()).origin;
+  } catch {
+    return '';
+  }
+}
+
+function isBrowserGuest(sender) {
+  if (!sender) return false;
+  if (browserController && browserController.guests.has(sender.id)) return true;
+  // The guest preload can boot a hair before `did-attach-webview` registers the
+  // guest; fall back to accepting a webview hosted by the app's main window.
+  try {
+    return !!(sender.hostWebContents && mainWindow && sender.hostWebContents.id === mainWindow.webContents.id);
+  } catch {
+    return false;
+  }
+}
 
 // Hard cap for any single evaluate/get_text result (chars). A content-heavy
 // page (e.g. bilibili) can yield 200k+ chars of innerText; one oversized tool
@@ -850,6 +914,14 @@ class BrowserController {
             }
           : {},
       });
+    });
+
+    // Record main-frame navigations into the browsing history (http/https only).
+    wc.on('did-navigate', (_event, url) => {
+      this._recordHistory(url, wc.getTitle());
+    });
+    wc.on('page-title-updated', (_event, title) => {
+      this._recordHistory(wc.getURL(), title);
     });
 
     if (process.env.COWORKER_BROWSER_DEBUG === '1') {
@@ -973,6 +1045,77 @@ class BrowserController {
       canGoForward: g.canGoForward(),
       loading: g.isLoading(),
     };
+  }
+
+  // Sites (cookie domains) the embedded browser has stored data for.
+  async siteOrigins() {
+    const s = browserSessionRef || session.fromPartition('persist:cw-browser');
+    try {
+      const cookies = await s.cookies.get({});
+      const counts = new Map();
+      for (const cookie of cookies) {
+        if (cookie.domain) counts.set(cookie.domain, (counts.get(cookie.domain) || 0) + 1);
+      }
+      return { origins: [...counts.entries()].map(([domain, count]) => ({ domain, count })).sort((a, b) => a.domain.localeCompare(b.domain)) };
+    } catch {
+      return { origins: [] };
+    }
+  }
+
+  // Clear one origin's cookies + local storage in the embedded profile.
+  async clearSiteData(origin) {
+    if (!origin) return { error: 'origin_required', error_code: 'origin_required' };
+    const s = browserSessionRef || session.fromPartition('persist:cw-browser');
+    try {
+      await s.clearStorageData({
+        origin: String(origin),
+        storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage', 'serviceworkers', 'websql', 'shadercache'],
+      });
+      return { ok: true, origin: String(origin) };
+    } catch (e) {
+      return { error: e.message, error_code: 'clear_failed' };
+    }
+  }
+
+  // Best-effort history recording (fire-and-forget to the backend store).
+  _recordHistory(url, title) {
+    if (!/^https?:/i.test(url || '')) return;
+    requestBackend('/api/browser/history', 'POST', { url, title: title || '' }).catch(() => {});
+  }
+
+  // Agent-driven login using a stored credential. The plaintext password is
+  // sent straight to the guest preload (isolated world) and NEVER returned to
+  // the agent — only the resulting URL/title is. Requires password_manager to
+  // be enabled and the user to approve this use.
+  async login({ site = '', username = '', submit = true } = {}) {
+    await this._waitForGuest();
+    const g = this.guest;
+    if (!g) return { error: 'browser_not_attached', error_code: 'browser_not_attached' };
+    if (!credentialVault || !browserSettings.password_manager_enabled) {
+      return { error: 'password manager is disabled', error_code: 'password_manager_disabled' };
+    }
+    let origin = '';
+    try {
+      origin = new URL(g.getURL()).origin;
+    } catch {
+      origin = '';
+    }
+    if ((!origin || origin === 'null') && site) {
+      try {
+        origin = new URL(/^https?:/i.test(site) ? site : `https://${site}`).origin;
+      } catch {
+        origin = '';
+      }
+    }
+    if (!origin) return { error: 'no target origin', error_code: 'no_origin' };
+    const matches = credentialVault.match(origin).filter((c) => !username || c.username === username);
+    const best = matches[0];
+    if (!best) return { error: `no stored credential for ${origin}`, error_code: 'no_credential', origin };
+    const approved = await requestCredentialUse({ origin, username: best.username });
+    if (!approved) return { error: 'credential use denied by user', error_code: 'credential_use_denied' };
+    g.send('browser-guest:fill', { username: best.username, password: best.password, submit: !!submit });
+    await this._waitForLoad(10000);
+    return this.getState();
   }
 
   async screenshot() {
@@ -1384,6 +1527,14 @@ async function handleBridgeRequest(method, url, payload) {
       return browserController.waitFor(payload.selector, payload.text, payload.timeout_ms);
     case '/upload':
       return browserController.uploadFiles(payload.selector, payload.files);
+    case '/login':
+      return browserController.login({ site: payload.site, username: payload.username, submit: payload.submit !== false });
+    case '/permissions':
+      return { items: permissionStore ? permissionStore.list() : {} };
+    case '/site_origins':
+      return browserController.siteOrigins();
+    case '/clear_site_data':
+      return browserController.clearSiteData(payload.origin);
     default:
       throw new Error('not_found');
   }
@@ -1773,12 +1924,318 @@ ipcMain.handle('browser:capture-element', async (event, payload) => {
   }
 });
 
+// ── Embedded-browser personal data + permissions (Phase 4-7) ──────────────
+// Permission prompts and agent credential use are awaited via request ids
+// resolved by the renderer, mirroring how the app already coordinates UI state.
+
+function askPermission(payload) {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      resolve({ allow: false });
+      return;
+    }
+    const id = crypto.randomUUID();
+    pendingPermissionRequests.set(id, resolve);
+    sendToMainWindow('browser:permission-request', { id, ...payload });
+    setTimeout(() => {
+      if (pendingPermissionRequests.has(id)) {
+        pendingPermissionRequests.delete(id);
+        resolve({ allow: false });
+      }
+    }, 30000);
+  });
+}
+
+function requestCredentialUse(payload) {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      resolve(false);
+      return;
+    }
+    const id = crypto.randomUUID();
+    pendingCredentialUse.set(id, resolve);
+    sendToMainWindow('browser:credential-use-request', { id, ...payload });
+    setTimeout(() => {
+      if (pendingCredentialUse.has(id)) {
+        pendingCredentialUse.delete(id);
+        resolve(false);
+      }
+    }, 60000);
+  });
+}
+
+ipcMain.on('browser-permission-response', (_event, payload) => {
+  const resolve = pendingPermissionRequests.get(payload && payload.id);
+  if (resolve) {
+    pendingPermissionRequests.delete(payload.id);
+    resolve({ allow: !!(payload && payload.allow), remember: !!(payload && payload.remember) });
+  }
+});
+
+ipcMain.on('browser-credential-use-response', (_event, payload) => {
+  const resolve = pendingCredentialUse.get(payload && payload.id);
+  if (resolve) {
+    pendingCredentialUse.delete(payload.id);
+    resolve(!!(payload && payload.allow));
+  }
+});
+
+// Guest preload IPC (strict: sender must be a registered browser guest).
+ipcMain.handle('browser-guest:features', (event) => {
+  if (!isBrowserGuest(event.sender)) return { password_manager: false, autofill: false };
+  return {
+    password_manager: !!browserSettings.password_manager_enabled,
+    autofill: browserSettings.password_autofill !== false,
+  };
+});
+
+ipcMain.handle('browser-guest:autofill', (event, payload) => {
+  if (!isBrowserGuest(event.sender) || !browserSettings.password_manager_enabled) return null;
+  if (browserSettings.password_autofill === false) return null;
+  if (!credentialVault || !credentialVault.available()) return null;
+  const origin = browserGuestOrigin(event.sender);
+  if (!origin) return null;
+  const best = credentialVault.match(origin)[0];
+  if (!best) return null;
+  return { username: best.username, password: best.password };
+});
+
+ipcMain.on('browser-guest:credential-captured', (event, payload) => {
+  if (!isBrowserGuest(event.sender) || !browserSettings.password_manager_enabled) return;
+  if (!credentialVault || !credentialVault.available()) return;
+  const origin = browserGuestOrigin(event.sender);
+  const password = payload && typeof payload.password === 'string' ? payload.password : '';
+  if (!origin || !password) return;
+  const token = crypto.randomUUID();
+  pendingCredentialCaptures.set(token, {
+    origin,
+    username: String((payload && payload.username) || ''),
+    password,
+  });
+  setTimeout(() => pendingCredentialCaptures.delete(token), 120000);
+  sendToMainWindow('browser:credential-captured', {
+    token,
+    origin,
+    username: String((payload && payload.username) || ''),
+  });
+});
+
+// Browser settings (non-secret).
+ipcMain.handle('browser-settings-get', async () => {
+  try {
+    const s = await requestBackend('/api/browser/settings');
+    if (s && typeof s === 'object') Object.assign(browserSettings, s);
+  } catch { /* backend starting */ }
+  return { ...browserSettings };
+});
+
+ipcMain.handle('browser-settings-save', async (_event, patch) => {
+  try {
+    const s = await requestBackend('/api/browser/settings', 'POST', patch || {});
+    if (s && typeof s === 'object') Object.assign(browserSettings, s);
+  } catch (e) {
+    return { ...browserSettings, error: e.message };
+  }
+  return { ...browserSettings };
+});
+
+// Bookmarks.
+ipcMain.handle('browser-bookmarks-list', async () => requestBackendOr('/api/browser/bookmarks', { items: [] }));
+ipcMain.handle('browser-bookmark-add', async (_event, payload) =>
+  requestBackend('/api/browser/bookmarks', 'POST', { url: payload?.url || '', title: payload?.title || '' }));
+ipcMain.handle('browser-bookmark-update', async (_event, payload) =>
+  requestBackend(`/api/browser/bookmarks/${encodeURIComponent(payload?.id || '')}`, 'PATCH', {
+    ...(typeof payload?.url === 'string' ? { url: payload.url } : {}),
+    ...(typeof payload?.title === 'string' ? { title: payload.title } : {}),
+  }));
+ipcMain.handle('browser-bookmark-remove', async (_event, id) =>
+  requestBackend(`/api/browser/bookmarks/${encodeURIComponent(String(id || ''))}`, 'DELETE'));
+ipcMain.handle('browser-bookmarks-reorder', async (_event, ids) =>
+  requestBackend('/api/browser/bookmarks/reorder', 'POST', { ids: Array.isArray(ids) ? ids : [] }));
+
+// History.
+ipcMain.handle('browser-history-list', async (_event, options = {}) => {
+  const params = new URLSearchParams();
+  if (options?.query) params.set('query', String(options.query));
+  if (options?.limit) params.set('limit', String(options.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return requestBackendOr(`/api/browser/history${suffix}`, { items: [] });
+});
+ipcMain.handle('browser-history-remove', async (_event, id) =>
+  requestBackend(`/api/browser/history/${encodeURIComponent(String(id || ''))}`, 'DELETE'));
+ipcMain.handle('browser-history-clear', async () => requestBackend('/api/browser/history', 'DELETE'));
+
+// Downloads.
+ipcMain.handle('browser-downloads-list', async (_event, limit) => {
+  const suffix = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
+  return requestBackendOr(`/api/browser/downloads${suffix}`, { items: [] });
+});
+ipcMain.handle('browser-download-remove', async (_event, id) =>
+  requestBackend(`/api/browser/downloads/${encodeURIComponent(String(id || ''))}`, 'DELETE'));
+ipcMain.handle('browser-downloads-clear', async () => requestBackend('/api/browser/downloads', 'DELETE'));
+ipcMain.handle('browser-download-pause', (_event, id) =>
+  (downloadControls ? downloadControls.pause(String(id || '')) : { ok: false, error: 'unavailable' }));
+ipcMain.handle('browser-download-resume', (_event, id) =>
+  (downloadControls ? downloadControls.resume(String(id || '')) : { ok: false, error: 'unavailable' }));
+ipcMain.handle('browser-download-cancel', (_event, id) =>
+  (downloadControls ? downloadControls.cancel(String(id || '')) : { ok: false, error: 'unavailable' }));
+ipcMain.handle('browser-download-reveal', (_event, targetPath) => {
+  if (targetPath) shell.showItemInFolder(String(targetPath));
+  return { ok: true };
+});
+ipcMain.handle('browser-download-open', async (_event, targetPath) => {
+  if (!targetPath) return { ok: false };
+  const error = await shell.openPath(String(targetPath));
+  return { ok: !error, error };
+});
+ipcMain.handle('browser-downloads-dir', () => browserSettings.download_dir || app.getPath('downloads'));
+
+// Credentials (masked list only; plaintext requires Touch ID / OS unlock).
+ipcMain.handle('browser-credentials-available', () => !!(credentialVault && credentialVault.available()));
+ipcMain.handle('browser-credentials-list', () => ({
+  available: !!(credentialVault && credentialVault.available()),
+  items: credentialVault && credentialVault.available() ? credentialVault.list() : [],
+}));
+ipcMain.handle('browser-credentials-save-pending', (_event, payload) => {
+  const token = String(payload?.token || '');
+  const pending = pendingCredentialCaptures.get(token);
+  pendingCredentialCaptures.delete(token);
+  if (!pending || !payload?.save) return { ok: false };
+  if (!credentialVault || !credentialVault.available()) return { ok: false, error: 'encryption_unavailable' };
+  try {
+    credentialVault.save(pending.origin, pending.username, pending.password);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('browser-credentials-remove', (_event, id) =>
+  ({ ok: !!(credentialVault && credentialVault.remove(String(id || ''))) }));
+ipcMain.handle('browser-credentials-clear', () => {
+  if (credentialVault) credentialVault.clear();
+  return { ok: true };
+});
+ipcMain.handle('browser-credentials-reveal', async (_event, id) => {
+  if (!credentialVault || !credentialVault.available()) return { error: 'unavailable' };
+  if (process.platform === 'darwin' && systemPreferences && typeof systemPreferences.canPromptTouchID === 'function') {
+    try {
+      if (systemPreferences.canPromptTouchID()) {
+        await systemPreferences.promptTouchID('reveal a saved password');
+      }
+    } catch {
+      return { error: 'cancelled' };
+    }
+  }
+  const password = credentialVault.getPassword(String(id || ''));
+  return password != null ? { password } : { error: 'not_found' };
+});
+
+// Per-origin permission records.
+ipcMain.handle('browser-permission-list', () => (permissionStore ? permissionStore.list() : {}));
+ipcMain.handle('browser-permission-reset', (_event, origin) => {
+  if (permissionStore) permissionStore.reset(origin ? String(origin) : '');
+  return { ok: true };
+});
+
+// Clear browsing data (cookies / cache / site data / history / passwords).
+ipcMain.handle('browser-clear-data', async (_event, options = {}) => {
+  const s = browserSessionRef || session.fromPartition('persist:cw-browser');
+  const origin = options?.origin ? String(options.origin) : '';
+  try {
+    if (options?.cookies || options?.site_data) {
+      await s.clearStorageData({
+        ...(origin ? { origin } : {}),
+        storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage', 'serviceworkers', 'websql', 'shadercache'],
+      });
+    }
+    if (options?.cache) {
+      await s.clearCache();
+    }
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  if (options?.history) {
+    await requestBackendOr('/api/browser/history', {}, { method: 'DELETE' });
+  }
+  if (options?.passwords && credentialVault) {
+    credentialVault.clear();
+  }
+  return { ok: true };
+});
+
+ipcMain.handle('browser-site-origins', async () => {
+  const s = browserSessionRef || session.fromPartition('persist:cw-browser');
+  try {
+    const cookies = await s.cookies.get({});
+    const counts = new Map();
+    for (const cookie of cookies) {
+      const domain = cookie.domain;
+      if (!domain) continue;
+      counts.set(domain, (counts.get(domain) || 0) + 1);
+    }
+    const origins = [...counts.entries()]
+      .map(([domain, count]) => ({ domain, count }))
+      .sort((a, b) => a.domain.localeCompare(b.domain));
+    return { origins };
+  } catch {
+    return { origins: [] };
+  }
+});
+
+function setupBrowserSession() {
+  browserSessionRef = session.fromPartition('persist:cw-browser');
+  permissionStore = browserData.createPermissionStore(app.getPath('userData'));
+  credentialVault = new CredentialVault(app.getPath('userData'));
+  downloadControls = browserData.installDownloadHandler(browserSessionRef, {
+    getSettings: () => browserSettings,
+    requestBackend,
+    sendToRenderer: sendToMainWindow,
+    osDownloadsDir: app.getPath('downloads'),
+  });
+  browserData.installPermissionHandlers(browserSessionRef, {
+    getSettings: () => browserSettings,
+    permissionStore,
+    askRenderer: askPermission,
+    allowedPermissions: new Set([
+      'media', 'geolocation', 'notifications', 'clipboard-read', 'clipboard-sanitized-write',
+      'fullscreen', 'midi', 'midiSysex', 'pointerLock', 'openExternal', 'idle-detection',
+      'display-capture', 'window-management', 'serial', 'hid', 'usb', 'keyboardLock',
+    ]),
+  });
+}
+
+async function loadBrowserSettingsFromBackend() {
+  try {
+    const s = await requestBackend('/api/browser/settings');
+    if (s && typeof s === 'object') Object.assign(browserSettings, s);
+  } catch { /* backend not ready — defaults apply until the renderer saves */ }
+  reconcileStaleDownloads();
+}
+
+// A download that was in flight when the app last closed cannot be resumed
+// after restart (the DownloadItem is gone), so settle leftovers as interrupted
+// instead of showing a permanent phantom progress bar.
+async function reconcileStaleDownloads() {
+  try {
+    const r = await requestBackendOr('/api/browser/downloads?limit=500', { items: [] });
+    for (const item of r?.items || []) {
+      if (item.state === 'progressing' || item.state === 'paused') {
+        await requestBackend(`/api/browser/downloads/${encodeURIComponent(String(item.id))}`, 'PATCH', {
+          state: 'interrupted',
+          ended_at: new Date().toISOString(),
+        }).catch(() => {});
+      }
+    }
+  } catch { /* best effort */ }
+}
+
 app.whenReady().then(async () => {
   setupAutoUpdater();
   startAutoUpdateTimer();
 
   createTray();
   createWindow();
+  setupBrowserSession();
   nativeTheme.on('updated', refreshBrandIcons);
 
   // Built-in browser: start the loopback bridge and register it with the
@@ -1792,6 +2249,7 @@ app.whenReady().then(async () => {
     // Dev: the launcher already waited for the backend before starting us.
     registerBrowserBridge(bridge);
     if (cbridge) registerComputerBridge(cbridge);
+    loadBrowserSettingsFromBackend();
   } else {
     // Packaged: the PyInstaller backend takes several seconds to boot. Show the
     // window immediately (the frontend renders its own "正在啟動 CoWorker…"
@@ -1810,6 +2268,7 @@ async function launchBundledBackendAndBridge(bridge, cbridge) {
   if (backendProcess === null && !IS_DEV) return; // startBundledBackend showed the error and is quitting
   registerBrowserBridge(bridge);
   if (cbridge) registerComputerBridge(cbridge);
+  loadBrowserSettingsFromBackend();
 }
 
 // Single-instance lock: double-launching the app (e.g. clicking the launcher

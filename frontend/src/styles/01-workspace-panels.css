@@ -1559,3 +1559,384 @@ body.bottom-panel-resizing {
 .stream-waiting__text {
   line-height: 1.5;
 }
+
+/* ── Embedded browser: bookmarks / history / downloads / prompts ───────── */
+.browser-view {
+  position: relative;
+}
+
+.browser-view__nav--active {
+  color: var(--ring);
+}
+
+.browser-bookmarks-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--material-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.browser-bookmarks-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.browser-bookmarks-bar__item {
+  flex: 0 0 auto;
+  max-width: 160px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-bookmarks-bar__item:hover {
+  background: var(--material-control);
+  color: var(--foreground);
+}
+
+.browser-bookmarks-bar__manage {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--muted-foreground);
+}
+
+.browser-bookmarks-bar__manage:hover {
+  background: var(--material-control);
+  color: var(--foreground);
+}
+
+.browser-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, #000 18%, transparent);
+}
+
+.browser-overlay__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 100%);
+  height: 100%;
+  background: var(--background);
+  border-left: 1px solid var(--material-border);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.18);
+}
+
+.browser-overlay__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--material-border);
+  flex-shrink: 0;
+}
+
+.browser-overlay__title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.browser-overlay__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.browser-overlay__link {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.browser-overlay__link:hover {
+  background: var(--material-control);
+  color: var(--foreground);
+}
+
+.browser-overlay__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.browser-overlay__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--material-border);
+  border-radius: 7px;
+  background: var(--material-control);
+  color: var(--muted-foreground);
+}
+
+.browser-overlay__search input {
+  flex: 1;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  outline: none;
+}
+
+.browser-overlay__empty {
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.browser-history__group {
+  margin-bottom: 10px;
+}
+
+.browser-history__day {
+  padding: 4px 6px;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+
+.browser-history__row,
+.browser-download__row,
+.browser-bookmark__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: 8px;
+}
+
+.browser-history__row:hover,
+.browser-download__row:hover,
+.browser-bookmark__row:hover {
+  background: var(--material-control);
+}
+
+.browser-history__main,
+.browser-bookmark__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+}
+
+.browser-history__title,
+.browser-bookmark__title,
+.browser-download__name {
+  font-size: 12px;
+  color: var(--foreground);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-history__meta,
+.browser-bookmark__meta,
+.browser-download__meta {
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-history__remove,
+.browser-bookmark__actions,
+.browser-download__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.browser-download__icon {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.browser-download__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.browser-download__bar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--material-control);
+  overflow: hidden;
+}
+
+.browser-download__bar span {
+  display: block;
+  height: 100%;
+  background: var(--ring);
+}
+
+.browser-settings__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 4px 2px;
+}
+
+.browser-password__actions {
+  display: flex;
+  gap: 4px;
+}
+
+.browser-clear__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 4px;
+}
+
+.browser-clear__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--foreground);
+}
+
+/* Permission / credential prompts (fixed, window-level). */
+.browser-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, #000 32%, transparent);
+}
+
+.browser-prompt__card {
+  width: min(360px, calc(100vw - 48px));
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--background);
+  border: 1px solid var(--material-border);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+}
+
+.browser-prompt__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  margin-bottom: 8px;
+}
+
+.browser-prompt__body {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  margin-bottom: 10px;
+}
+
+.browser-prompt__remember {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-bottom: 12px;
+}
+
+.browser-prompt__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.browser-prompt__btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--material-control);
+  color: var(--foreground);
+}
+
+.browser-prompt__btn:hover {
+  background: var(--material-control-hover, var(--material-control));
+}
+
+.browser-prompt__btn--primary {
+  background: var(--accent);
+  color: var(--accent-foreground, #fff);
+}
+
+.browser-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 4000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 36px));
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--background);
+  border: 1px solid var(--material-border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.browser-toast__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.browser-toast__copy strong {
+  font-size: 12.5px;
+}
+
+.browser-toast__copy span {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-toast__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.browser-toast__close {
+  color: var(--muted-foreground);
+}

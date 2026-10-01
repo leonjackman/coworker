@@ -16,6 +16,7 @@ import { ToolAuditPanel } from './ToolAuditPanel';
 import { UpdatePanel } from './UpdatePanel';
 import { WebSettingsPage } from './WebSettingsPage';
 import { ShortcutsPage } from './ShortcutsPage';
+import { BrowserSettingsPage } from '../browser/BrowserSettingsPage';
 import { autonomyOptions, languageOptions, themeOptions } from './preference-options';
 
 interface SettingsViewProps {
@@ -51,7 +52,7 @@ interface SettingsViewProps {
   onSearchBrowserClose?: () => void;
 }
 
-export type SettingsPage = 'main' | 'theme' | 'audit' | 'web' | 'shortcuts';
+export type SettingsPage = 'main' | 'theme' | 'audit' | 'web' | 'browser' | 'shortcuts';
 
 /** Chip state for the Web settings list entry under the multi-provider model:
  * keyless providers (DuckDuckGo / browser) count as configured once enabled. */
@@ -166,7 +167,9 @@ export function SettingsView({
             ? t('settings.audit_group')
             : settingsPage === 'web'
               ? t('settings.web_title')
-              : t('shortcuts.page_title');
+              : settingsPage === 'browser'
+                ? t('browser.settings_title')
+                : t('shortcuts.page_title');
       publishNav({
         viewLabel: t('settings.title'),
         leafLabel: leaf,
@@ -265,6 +268,10 @@ export function SettingsView({
         onSearchBrowserClose={onSearchBrowserClose}
       />
     );
+  }
+
+  if (settingsPage === 'browser') {
+    return <BrowserSettingsPage onBack={() => onSettingsPageChange('main')} />;
   }
 
   if (settingsPage === 'shortcuts') {
@@ -426,6 +433,21 @@ export function SettingsView({
                   );
                 })(),
                 onAction: () => onSettingsPageChange('web'),
+              },
+            ],
+          },
+          {
+            id: 'browser',
+            title: t('settings.browser_group'),
+            description: t('settings.browser_group_desc'),
+            items: [
+              {
+                id: 'browser_settings',
+                type: 'action',
+                label: t('settings.browser_entry'),
+                description: t('settings.browser_entry_desc'),
+                actionLabel: t('settings.configure'),
+                onAction: () => onSettingsPageChange('browser'),
               },
             ],
           },

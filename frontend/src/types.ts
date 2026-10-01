@@ -1589,6 +1589,83 @@ export interface BrowserCaptureResult {
   error?: string;
 }
 
+// ── Embedded browser personal data ──────────────────────────────────────
+export interface BrowserBookmark {
+  id: string;
+  url: string;
+  title: string;
+  created_at: string;
+}
+
+export interface BrowserHistoryEntry {
+  id: string;
+  url: string;
+  title: string;
+  visited_at: string;
+  visit_count: number;
+}
+
+export type BrowserDownloadState = 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted';
+
+export interface BrowserDownload {
+  id: string;
+  url: string;
+  filename: string;
+  path: string;
+  mime?: string;
+  state: BrowserDownloadState;
+  total_bytes: number;
+  received_bytes: number;
+  can_resume?: boolean;
+  started_at?: string;
+  ended_at?: string;
+}
+
+export interface BrowserSettings {
+  restore_tabs: boolean;
+  download_dir: string;
+  ask_where_to_save: boolean;
+  password_manager_enabled: boolean;
+  password_autofill: boolean;
+  permissions_prompt: boolean;
+}
+
+export type BrowserSettingsPatch = Partial<BrowserSettings>;
+
+export interface BrowserCredential {
+  id: string;
+  origin: string;
+  username: string;
+  updated_at: string;
+}
+
+export interface BrowserPermissionRequest {
+  id: string;
+  origin: string;
+  permission: string;
+}
+
+export interface BrowserCredentialUseRequest {
+  id: string;
+  origin: string;
+  username: string;
+}
+
+export interface BrowserCredentialCaptured {
+  token: string;
+  origin: string;
+  username: string;
+}
+
+export interface BrowserClearDataOptions {
+  history?: boolean;
+  cookies?: boolean;
+  cache?: boolean;
+  site_data?: boolean;
+  passwords?: boolean;
+  origin?: string;
+}
+
 // Right-click context-menu request forwarded from the guest webContents
 // (main process) with the authoritative cursor position in client coords.
 export interface BrowserContextMenuPayload {

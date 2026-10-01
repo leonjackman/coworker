@@ -184,6 +184,60 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('browser:context-menu', listener);
     return () => ipcRenderer.removeListener('browser:context-menu', listener);
   },
+  // Browser personal data (bookmarks / history / downloads / settings).
+  browserSettingsGet: () => ipcRenderer.invoke('browser-settings-get'),
+  browserSettingsSave: (patch) => ipcRenderer.invoke('browser-settings-save', patch),
+  browserBookmarksList: () => ipcRenderer.invoke('browser-bookmarks-list'),
+  browserBookmarkAdd: (payload) => ipcRenderer.invoke('browser-bookmark-add', payload),
+  browserBookmarkUpdate: (payload) => ipcRenderer.invoke('browser-bookmark-update', payload),
+  browserBookmarkRemove: (id) => ipcRenderer.invoke('browser-bookmark-remove', id),
+  browserBookmarksReorder: (ids) => ipcRenderer.invoke('browser-bookmarks-reorder', ids),
+  browserHistoryList: (options) => ipcRenderer.invoke('browser-history-list', options || {}),
+  browserHistoryRemove: (id) => ipcRenderer.invoke('browser-history-remove', id),
+  browserHistoryClear: () => ipcRenderer.invoke('browser-history-clear'),
+  browserDownloadsList: (limit) => ipcRenderer.invoke('browser-downloads-list', limit),
+  browserDownloadRemove: (id) => ipcRenderer.invoke('browser-download-remove', id),
+  browserDownloadsClear: () => ipcRenderer.invoke('browser-downloads-clear'),
+  browserDownloadPause: (id) => ipcRenderer.invoke('browser-download-pause', id),
+  browserDownloadResume: (id) => ipcRenderer.invoke('browser-download-resume', id),
+  browserDownloadCancel: (id) => ipcRenderer.invoke('browser-download-cancel', id),
+  browserDownloadReveal: (path) => ipcRenderer.invoke('browser-download-reveal', path),
+  browserDownloadOpen: (path) => ipcRenderer.invoke('browser-download-open', path),
+  browserDownloadsDir: () => ipcRenderer.invoke('browser-downloads-dir'),
+  onBrowserDownload: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('browser:download', listener);
+    return () => ipcRenderer.removeListener('browser:download', listener);
+  },
+  // Passwords (masked list; reveal is gated by the OS/Touch ID in main).
+  browserCredentialsAvailable: () => ipcRenderer.invoke('browser-credentials-available'),
+  browserCredentialsList: () => ipcRenderer.invoke('browser-credentials-list'),
+  browserCredentialSavePending: (payload) => ipcRenderer.invoke('browser-credentials-save-pending', payload),
+  browserCredentialRemove: (id) => ipcRenderer.invoke('browser-credentials-remove', id),
+  browserCredentialsClear: () => ipcRenderer.invoke('browser-credentials-clear'),
+  browserCredentialReveal: (id) => ipcRenderer.invoke('browser-credentials-reveal', id),
+  onBrowserCredentialCaptured: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('browser:credential-captured', listener);
+    return () => ipcRenderer.removeListener('browser:credential-captured', listener);
+  },
+  onBrowserCredentialUseRequest: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('browser:credential-use-request', listener);
+    return () => ipcRenderer.removeListener('browser:credential-use-request', listener);
+  },
+  respondBrowserCredentialUse: (payload) => ipcRenderer.send('browser-credential-use-response', payload),
+  // Site permissions + site data.
+  onBrowserPermissionRequest: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('browser:permission-request', listener);
+    return () => ipcRenderer.removeListener('browser:permission-request', listener);
+  },
+  respondBrowserPermission: (payload) => ipcRenderer.send('browser-permission-response', payload),
+  browserPermissionList: () => ipcRenderer.invoke('browser-permission-list'),
+  browserPermissionReset: (origin) => ipcRenderer.invoke('browser-permission-reset', origin),
+  browserClearData: (options) => ipcRenderer.invoke('browser-clear-data', options || {}),
+  browserSiteOrigins: () => ipcRenderer.invoke('browser-site-origins'),
   revealInFolder: (path) => ipcRenderer.invoke('reveal-in-folder', path),
   listMarketSources: () => ipcRenderer.invoke('list-market-sources'),
   listMarketCategories: (source) => ipcRenderer.invoke('list-market-categories', source),

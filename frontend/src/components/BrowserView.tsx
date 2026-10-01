@@ -14,20 +14,26 @@ import {
   ClipboardPaste,
   Copy,
   Database,
+  Download,
   ExternalLink,
   FileText,
   Globe,
+  History,
   Link,
   Loader2,
+  MoreVertical,
   PenLine,
   RotateCw,
   Scissors,
   Sparkles,
   Square,
+  Star,
 } from 'lucide-react';
 import { t } from '../lib/i18n';
+import { hostOf } from '../lib/browser';
 import { ContextMenu, type ContextMenuItem } from './ui/context-menu';
-import type { BrowserCaptureResult, BrowserContextMenuPayload, ComposerAttachment } from '../types';
+import { BrowserBookmarksBar, BrowserBookmarkManager, BrowserDownloadsPanel, BrowserHistoryPanel } from './browser/BrowserPanels';
+import type { BrowserBookmark, BrowserCaptureResult, BrowserContextMenuPayload, ComposerAttachment } from '../types';
 
 // Minimal typing for Electron's <webview> custom element (not part of DOM lib).
 export type ElectronWebview = HTMLElement & {
@@ -101,6 +107,8 @@ function buildCaptureAttachments(capture: BrowserCaptureResult, intent: string):
   return attachments;
 }
 
+type BrowserOverlayKind = 'history' | 'downloads' | 'bookmarks' | null;
+
 export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(function BrowserView(
   { initialUrl, active = true, onTitleChange, onUrlChange, onHandle, onOpenNewTab, onAddCapture, agentActive, agentClick },
   ref,
@@ -108,10 +116,24 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
   const webviewRef = useRef<ElectronWebview | null>(null);
   const activeRef = useRef(active);
   activeRef.current = active;
+  // Lazy tab loading: inactive (restored) tabs keep an empty src until first
+  // activated so a session restore does not fire N simultaneous page loads.
+  const [src, setSrc] = useState(active ? initialUrl || 'about:blank' : '');
   const [address, setAddress] = useState(initialUrl || '');
+  const [pageTitle, setPageTitle] = useState('');
   const [loading, setLoading] = useState(false);
+  const [bookmarks, setBookmarks] = useState<BrowserBookmark[]>([]);
+  const [overlay, setOverlay] = useState<BrowserOverlayKind>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; params: BrowserContextMenuPayload } | null>(null);
   const [clickShown, setClickShown] = useState<{ x: number; y: number } | null>(null);
+
+  const loadBookmarks = useCallback(() => {
+    void window.electronAPI?.browserBookmarksList().then((r) => setBookmarks(r?.items ?? []));
+  }, []);
+
+  useEffect(() => {
+    loadBookmarks();
+  }, [loadBookmarks]);
 
   // Briefly show a target ring at the agent's click coordinate.
   useEffect(() => {
@@ -123,11 +145,11 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
 
   const navigate = useCallback((url: string) => {
     const wv = webviewRef.current;
-    if (!wv) return;
     const target = normalizeUrl(url);
     setAddress(target);
-    wv.loadURL(target).catch(() => {});
-  }, []);
+    if (!src) setSrc(target);
+    else if (wv) wv.loadURL(target).catch(() => {});
+  }, [src]);
 
   useImperativeHandle(
     ref,
@@ -161,7 +183,10 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     };
     const onTitleUpdated = (event: Event) => {
       const { title } = event as unknown as { title?: string };
-      if (title) onTitleChange?.(title);
+      if (title) {
+        setPageTitle(title);
+        onTitleChange?.(title);
+      }
     };
     const onStartLoading = () => setLoading(true);
     const onStopLoading = () => setLoading(false);
@@ -218,6 +243,13 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
     return unsubscribe;
   }, []);
 
+  // Lazily load a restored tab the first time it becomes active.
+  useEffect(() => {
+    if (!active) return;
+    if (!src) setSrc(initialUrl || 'about:blank');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
   // Keep the main process targeting the visible tab for agent control.
   useEffect(() => {
     if (!active) return;
@@ -250,6 +282,21 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
 
   const copyLink = (url: string) => {
     void window.electronAPI?.clipboardWriteText(url);
+  };
+
+  const isBookmarked = bookmarks.some((b) => b.url === address);
+  const toggleBookmark = () => {
+    const existing = bookmarks.find((b) => b.url === address);
+    if (existing) {
+      void window.electronAPI?.browserBookmarkRemove(existing.id).then(loadBookmarks);
+    } else if (address && address !== 'about:blank') {
+      void window.electronAPI?.browserBookmarkAdd({ url: address, title: pageTitle || address }).then(loadBookmarks);
+    }
+  };
+
+  const clearBrowsingData = () => {
+    if (!window.confirm(t('browser.clear_data_confirm'))) return;
+    void window.electronAPI?.browserClearData({ history: true, cookies: true, cache: true, site_data: true });
   };
 
   const captureForAgent = (scope: 'element' | 'page', intent: string) => {
@@ -370,11 +417,33 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
             spellCheck={false}
           />
         </div>
+        <button
+          type="button"
+          className="browser-view__nav"
+          onClick={toggleBookmark}
+          aria-label={t('browser.bookmark_toggle')}
+          title={t('browser.bookmark_toggle')}
+        >
+          <Star size={14} className={isBookmarked ? 'browser-view__nav--active' : ''} fill={isBookmarked ? 'currentColor' : 'none'} />
+        </button>
+        <button type="button" className="browser-view__nav" onClick={() => setOverlay('bookmarks')} aria-label={t('browser.bookmarks_title')} title={t('browser.bookmarks_title')}>
+          <Globe size={14} />
+        </button>
+        <button type="button" className="browser-view__nav" onClick={() => setOverlay('history')} aria-label={t('browser.history_title')} title={t('browser.history_title')}>
+          <History size={14} />
+        </button>
+        <button type="button" className="browser-view__nav" onClick={() => setOverlay('downloads')} aria-label={t('browser.downloads_title')} title={t('browser.downloads_title')}>
+          <Download size={14} />
+        </button>
+        <button type="button" className="browser-view__nav" onClick={clearBrowsingData} aria-label={t('browser.clear_data_action')} title={t('browser.clear_data_action')}>
+          <MoreVertical size={14} />
+        </button>
       </form>
+      <BrowserBookmarksBar items={bookmarks} onNavigate={navigate} onManage={() => setOverlay('bookmarks')} />
       <div className="browser-view__stage">
         {createElement('webview', {
           ref: webviewRef,
-          src: initialUrl || 'about:blank',
+          src: src || 'about:blank',
           partition: 'persist:cw-browser',
           className: 'browser-view__webview',
           // allowpopups=true lets target=_blank / window.open emit new-window;
@@ -392,6 +461,15 @@ export const BrowserView = forwardRef<BrowserViewHandle, BrowserViewProps>(funct
           </>
         )}
       </div>
+      <BrowserHistoryPanel open={overlay === 'history'} onClose={() => setOverlay(null)} onNavigate={navigate} />
+      <BrowserDownloadsPanel open={overlay === 'downloads'} onClose={() => setOverlay(null)} />
+      <BrowserBookmarkManager
+        open={overlay === 'bookmarks'}
+        onClose={() => { setOverlay(null); loadBookmarks(); }}
+        onNavigate={navigate}
+        currentUrl={address}
+        currentTitle={pageTitle || hostOf(address)}
+      />
       {contextMenu && (
         <>
           <div

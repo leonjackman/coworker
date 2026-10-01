@@ -67,6 +67,16 @@ import type {
   MemorySettingsPatch,
   BrowserCaptureResult,
   BrowserContextMenuPayload,
+  BrowserBookmark,
+  BrowserHistoryEntry,
+  BrowserDownload,
+  BrowserSettings,
+  BrowserSettingsPatch,
+  BrowserCredential,
+  BrowserPermissionRequest,
+  BrowserCredentialUseRequest,
+  BrowserCredentialCaptured,
+  BrowserClearDataOptions,
   UpdateStateSnapshot,
   WebSettings,
   WebConfigPatch,
@@ -203,6 +213,41 @@ declare global {
       browserMenuAction: (action: string) => Promise<{ ok: boolean; error?: string }>;
       browserCaptureElement: (payload: { x: number; y: number; scope?: 'element' | 'page' }) => Promise<BrowserCaptureResult>;
       onBrowserContextMenu: (callback: (payload: BrowserContextMenuPayload) => void) => () => void;
+      browserSettingsGet: () => Promise<BrowserSettings>;
+      browserSettingsSave: (patch: BrowserSettingsPatch) => Promise<BrowserSettings & { error?: string }>;
+      browserBookmarksList: () => Promise<{ items: BrowserBookmark[] }>;
+      browserBookmarkAdd: (payload: { url: string; title?: string }) => Promise<{ item: BrowserBookmark }>;
+      browserBookmarkUpdate: (payload: { id: string; url?: string; title?: string }) => Promise<{ item: BrowserBookmark }>;
+      browserBookmarkRemove: (id: string) => Promise<{ ok: boolean }>;
+      browserBookmarksReorder: (ids: string[]) => Promise<{ items: BrowserBookmark[] }>;
+      browserHistoryList: (options?: { query?: string; limit?: number }) => Promise<{ items: BrowserHistoryEntry[] }>;
+      browserHistoryRemove: (id: string) => Promise<{ ok: boolean }>;
+      browserHistoryClear: () => Promise<{ ok: boolean }>;
+      browserDownloadsList: (limit?: number) => Promise<{ items: BrowserDownload[] }>;
+      browserDownloadRemove: (id: string) => Promise<{ ok: boolean }>;
+      browserDownloadsClear: () => Promise<{ ok: boolean }>;
+      browserDownloadPause: (id: string) => Promise<{ ok: boolean; state?: string; error?: string }>;
+      browserDownloadResume: (id: string) => Promise<{ ok: boolean; state?: string; error?: string }>;
+      browserDownloadCancel: (id: string) => Promise<{ ok: boolean; state?: string; error?: string }>;
+      browserDownloadReveal: (path: string) => Promise<{ ok: boolean }>;
+      browserDownloadOpen: (path: string) => Promise<{ ok: boolean; error?: string }>;
+      browserDownloadsDir: () => Promise<string>;
+      onBrowserDownload: (callback: (download: BrowserDownload) => void) => () => void;
+      browserCredentialsAvailable: () => Promise<boolean>;
+      browserCredentialsList: () => Promise<{ available: boolean; items: BrowserCredential[] }>;
+      browserCredentialSavePending: (payload: { token: string; save: boolean }) => Promise<{ ok: boolean; error?: string }>;
+      browserCredentialRemove: (id: string) => Promise<{ ok: boolean }>;
+      browserCredentialsClear: () => Promise<{ ok: boolean }>;
+      browserCredentialReveal: (id: string) => Promise<{ password?: string; error?: string }>;
+      onBrowserCredentialCaptured: (callback: (payload: BrowserCredentialCaptured) => void) => () => void;
+      onBrowserCredentialUseRequest: (callback: (payload: BrowserCredentialUseRequest) => void) => () => void;
+      respondBrowserCredentialUse: (payload: { id: string; allow: boolean }) => void;
+      onBrowserPermissionRequest: (callback: (payload: BrowserPermissionRequest) => void) => () => void;
+      respondBrowserPermission: (payload: { id: string; allow: boolean; remember?: boolean }) => void;
+      browserPermissionList: () => Promise<Record<string, Record<string, boolean>>>;
+      browserPermissionReset: (origin?: string) => Promise<{ ok: boolean }>;
+      browserClearData: (options: BrowserClearDataOptions) => Promise<{ ok: boolean; error?: string }>;
+      browserSiteOrigins: () => Promise<{ origins: { domain: string; count: number }[] }>;
       revealInFolder: (path: string) => Promise<{ status: string }>;
       installSkill: (payload: { name: string; content: string; commands?: { name: string; description: string; body: string }[] }) => Promise<{ status: string; message?: string }>;
       exportToolAudit: () => Promise<string>;

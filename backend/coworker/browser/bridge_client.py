@@ -109,6 +109,10 @@ _TIMEOUT = 15.0
 #: How long a bridge info discovery is cached before being re-read.
 _CACHE_TTL = 5.0
 
+#: Login waits for the user to approve using a stored credential in the app,
+#: so it needs a much longer budget than ordinary navigation calls.
+_LOGIN_TIMEOUT = 90.0
+
 #: Hard cap for any single browser tool output (chars). Content-heavy pages
 #: (e.g. bilibili) can yield 200k+ chars of innerText; one oversized tool result
 #: alone can exceed the LLM context window and 400 the request before trimming
@@ -201,17 +205,18 @@ class BridgeClient:
         self._cache = (now, info)
         return info
 
-    def _call(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _call(self, method: str, path: str, payload: dict[str, Any] | None = None, timeout: float | None = None) -> dict[str, Any]:
         info = self._discover()
         if info is None:
             return {"error": "browser unavailable", "error_code": "browser_unavailable"}
         url = f"{info.base_url}{path}"
         headers = {"Authorization": f"Bearer {info.token}"}
+        effective_timeout = timeout if timeout is not None else _TIMEOUT
         try:
             if method == "GET":
-                resp = httpx.get(url, headers=headers, timeout=_TIMEOUT)
+                resp = httpx.get(url, headers=headers, timeout=effective_timeout)
             else:
-                resp = httpx.post(url, json=payload or {}, headers=headers, timeout=_TIMEOUT)
+                resp = httpx.post(url, json=payload or {}, headers=headers, timeout=effective_timeout)
             if resp.status_code >= 400:
                 body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                 return {
@@ -272,6 +277,28 @@ class BridgeClient:
     def upload(self, files: list[str], selector: str = "") -> dict[str, Any]:
         return self._call("POST", "/upload", {"files": list(files), "selector": str(selector)})
 
+    def login(self, site: str = "", username: str = "", submit: bool = True) -> dict[str, Any]:
+        """Ask the desktop app to sign in using a stored credential (no plaintext
+        is ever returned to the agent)."""
+        return self._call(
+            "POST",
+            "/login",
+            {"site": str(site), "username": str(username), "submit": bool(submit)},
+            timeout=_LOGIN_TIMEOUT,
+        )
+
+    def permissions(self) -> dict[str, Any]:
+        """Per-origin permission decisions the user has remembered."""
+        return self._call("POST", "/permissions")
+
+    def site_origins(self) -> dict[str, Any]:
+        """Cookie domains (with counts) stored in the embedded profile."""
+        return self._call("POST", "/site_origins")
+
+    def clear_site_data(self, origin: str) -> dict[str, Any]:
+        """Clear cookies + local storage for one origin."""
+        return self._call("POST", "/clear_site_data", {"origin": str(origin)})
+
 
 def browser_available(data_dir: Path | str | None) -> bool:
     """True when the desktop bridge is registered and reachable."""
@@ -298,7 +325,12 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
             "project dir) then navigate to http://localhost:8000. To read page "
             "text use get_text or a targeted evaluate (title + specific selectors) — "
             "never dump whole-page innerText, which can overflow the model's context "
-            "window."
+            "window. You can also see and manage the browser's data: list/add/remove "
+            "bookmarks, list/clear history, list/clear downloads, list remembered "
+            "site permissions, list cookie-holding sites, and clear one site's data. "
+            "When the user has saved a login for a site, use action='login' (with "
+            "their on-screen approval) to sign in; saved passwords are never shown "
+            "to you."
         )
     return (
         "The built-in browser is DISABLED — you have no browser tool. It is only available "
@@ -310,7 +342,11 @@ def browser_capability_line(data_dir: Path | str | None) -> str:
 BrowserAction = Literal[
     "navigate", "get_state", "get_text", "snapshot", "screenshot", "click", "type", "press",
     "scroll", "back", "forward", "reload", "evaluate",
-    "click_selector", "click_text", "scroll_to", "wait_for", "upload",
+    "click_selector", "click_text", "scroll_to", "wait_for", "upload", "login",
+    "list_bookmarks", "add_bookmark", "remove_bookmark",
+    "list_history", "clear_history",
+    "list_downloads", "clear_downloads",
+    "list_permissions", "list_sites", "clear_site_data",
 ]
 
 
@@ -337,6 +373,47 @@ def _render_error(result: dict[str, Any], action: str) -> str:
             ensure_ascii=False,
         )
     return json.dumps(result, ensure_ascii=False)
+
+
+def _data_action(
+    data_dir: Path | str | None,
+    action: str,
+    *,
+    url: str = "",
+    title: str = "",
+    query: str = "",
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Read/write the browser's personal data (bookmarks/history/downloads).
+
+    These live in the backend ``data_dir/browser/`` store, so the agent can see
+    and manage them without touching the Electron bridge.
+    """
+    if data_dir is None:
+        return {"error": "no data dir", "error_code": "browser_unavailable"}
+    from coworker.browser.store import BrowserStore
+
+    store = BrowserStore(data_dir)
+    if action == "list_bookmarks":
+        return {"bookmarks": store.list_bookmarks()}
+    if action == "add_bookmark":
+        return {"bookmark": store.add_bookmark(url, title)}
+    if action == "remove_bookmark":
+        for bookmark in store.list_bookmarks():
+            if bookmark.get("url") == url:
+                return {"removed": store.remove_bookmark(bookmark["id"])}
+        return {"removed": False, "note": "no bookmark with that url"}
+    if action == "list_history":
+        return {"history": store.list_history(query=query, limit=limit)}
+    if action == "clear_history":
+        store.clear_history()
+        return {"ok": True}
+    if action == "list_downloads":
+        return {"downloads": store.list_downloads(limit=limit)}
+    if action == "clear_downloads":
+        store.clear_downloads()
+        return {"ok": True}
+    return {"error": f"unknown data action: {action}"}
 
 
 def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, session_id: str = "") -> Any | None:
@@ -367,6 +444,11 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
         exact: bool = Field(False, description="For 'click_text': match the element text exactly.")
         timeout_ms: int = Field(15000, description="For 'wait_for': max wait in milliseconds.")
         files: list[str] = Field(default_factory=list, description="For 'upload': absolute file paths to attach.")
+        site: str = Field("", description="For 'login': the site/origin to sign in to (defaults to the current page).")
+        username: str = Field("", description="For 'login': pick a specific saved account (optional).")
+        submit: bool = Field(True, description="For 'login': submit the form after filling (default true).")
+        query: str = Field("", description="For 'list_history': optional text to filter history by.")
+        origin: str = Field("", description="For 'clear_site_data': the origin/domain to clear.")
 
     client = BridgeClient(data_dir)
 
@@ -387,6 +469,11 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
         exact: bool = False,
         timeout_ms: int = 15000,
         files: list[str] | None = None,
+        site: str = "",
+        username: str = "",
+        submit: bool = True,
+        query: str = "",
+        origin: str = "",
     ) -> str:
         """Open and drive the user's embedded browser (visible live in the right panel).
 
@@ -400,6 +487,18 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
         ``document.body.innerText.slice(0, 4000)``) — never dump the whole
         ``document.body.innerText``: content-heavy pages exceed the model's
         context window. Tool output is truncated (~50k chars; evaluate ~20k).
+
+        ``login`` signs in to the current site (or ``site``/``username``) using a
+        password the user saved for that site; the plaintext password is never
+        returned to you, and the user is asked to approve each use. It only works
+        when the user has enabled the password manager.
+
+        You can also see and manage the browser's personal data:
+        ``list_bookmarks`` / ``add_bookmark`` (url, text=title) /
+        ``remove_bookmark`` (url); ``list_history`` (query) / ``clear_history``;
+        ``list_downloads`` / ``clear_downloads``; ``list_permissions`` (remembered
+        site-permission decisions); ``list_sites`` (cookie domains with counts);
+        and ``clear_site_data`` (origin=domain).
         """
         try:
             if action == "navigate":
@@ -438,6 +537,16 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
                 result = client.wait_for(selector, text, timeout_ms)
             elif action == "upload":
                 result = client.upload(list(files or []), selector)
+            elif action == "login":
+                result = client.login(site=site, username=username, submit=submit)
+            elif action in ("list_bookmarks", "add_bookmark", "remove_bookmark", "list_history", "clear_history", "list_downloads", "clear_downloads"):
+                result = _data_action(data_dir, action, url=url, title=text or query, query=query, limit=max_items)
+            elif action == "list_permissions":
+                result = client.permissions()
+            elif action == "list_sites":
+                result = client.site_origins()
+            elif action == "clear_site_data":
+                result = client.clear_site_data(origin or site)
             else:
                 return json.dumps({"error": f"unknown action: {action}"}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001 - tool must never break a turn
