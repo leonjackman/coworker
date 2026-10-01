@@ -1534,5 +1534,6 @@
   "workflows.fld_site": "サイト",
   "workflows.fld_origin": "オリジン",
   "workflows.act_unzip": "アーカイブを展開",
-  "workflows.act_zip": "アーカイブを作成"
+  "workflows.act_zip": "アーカイブを作成",
+  "workflows.badge_absolute": "絶対遵守"
 }

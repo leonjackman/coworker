@@ -61,11 +61,14 @@ def test_resolve_unknown_param():
     assert "unknown_param" in codes
 
 
-def test_resolve_click_missing_target():
+def test_resolve_click_target_is_optional_at_schema_level():
+    # The click target is now optional at the schema level (selector/text/coords
+    # are all valid); a targetless click is caught by the conformance linter
+    # (`missing_target`) and fail-closed at runtime.
     reg = CapabilityRegistry.declared()
     resolved, diags = reg.resolve(_step("browser", do="click"))
-    assert resolved is None
-    assert any(d.code == "missing_param" for d in diags)
+    assert resolved is not None
+    assert diags == []
 
 
 def test_resolve_click_locator_target_satisfies_required():
@@ -169,3 +172,21 @@ def test_from_tools_introspection():
 
     reg = CapabilityRegistry.from_tools({"web_search": FakeTool()})
     assert "web_search" in _names(reg, "tool")
+
+
+def test_observable_change_rule():
+    from coworker.workflows.capabilities import check_success
+
+    assert check_success("observable_change", {"ok": True, "changed": True}) is True
+    assert check_success("observable_change", {"ok": True, "changed": False}) is False
+    # No signal → falls back to no_error (never over-fails older adapters).
+    assert check_success("observable_change", {"ok": True}) is True
+    assert check_success("observable_change", '{"ok": true, "changed": false}') is False
+
+
+def test_browser_clicks_use_observable_change():
+    reg = CapabilityRegistry.declared()
+    for action in ("click", "click_selector", "click_text"):
+        spec = reg.action("browser", action)
+        assert spec is not None
+        assert spec.success == "observable_change"

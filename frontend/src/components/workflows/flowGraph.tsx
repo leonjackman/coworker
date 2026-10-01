@@ -41,10 +41,10 @@ export function StepNode({ data, selected }: NodeProps) {
         ) : null}
       </div>
       <div className="wf-node__meta">
-        {d.slot ? `${d.slot} · ` : ''}
-        {step.do || step.goal || ''}
+        {step.description ? step.description : `${d.slot ? `${d.slot} · ` : ''}${step.do || step.goal || ''}`}
       </div>
       <div className="wf-node__badges">
+        {step.absolute ? <span className="wf-badge wf-badge--absolute">{t('workflows.badge_absolute')}</span> : null}
         {step.mode === 'agent' ? <span className="wf-badge wf-badge--agent">agent</span> : null}
         {step.approval ? <span className="wf-badge wf-badge--human">approval</span> : null}
         {step.on_error && (step.on_error as { then?: string }).then ? (

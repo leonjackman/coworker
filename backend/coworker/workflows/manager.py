@@ -109,8 +109,26 @@ class WorkflowManager:
 
     # ── mutations ───────────────────────────────────────────────────────
 
-    def create(self, content: str, *, overwrite: bool = False, draft: bool = False) -> dict[str, Any]:
+    def _assert_absolute_allowed(self, workflow: Workflow, source: str, existing: Workflow | None = None) -> None:
+        """絕對遵守 is a user-only hard constraint. Agents may neither set it on
+        new steps nor alter a workflow that already contains it."""
+        if source != "agent":
+            return
+        incoming = _absolute_step_ids(workflow)
+        if incoming:
+            raise WorkflowValidationError(
+                f"steps {incoming} set `absolute` (絕對遵守) — that flag is user-only and may not be set by an agent"
+            )
+        if existing is not None and _absolute_step_ids(existing):
+            raise WorkflowValidationError(
+                "this workflow contains 絕對遵守 (absolute) steps; an agent may not modify it — the user must edit it"
+            )
+
+    def create(
+        self, content: str, *, overwrite: bool = False, draft: bool = False, source: str = "user"
+    ) -> dict[str, Any]:
         workflow = self._parse_or_raise(content, draft=draft)
+        self._assert_absolute_allowed(workflow, source)
         if self.store.exists(workflow.name) and not overwrite:
             return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
         from .fingerprint import current_fingerprint
@@ -118,25 +136,29 @@ class WorkflowManager:
         workflow = Workflow(
             **{**workflow.__dict__, "version": 1 if not overwrite else self.store.next_version(workflow.name),
                "schema_version": DSL_VERSION,
-               "status": "active", "source": "user", "fingerprint": current_fingerprint()}
+               "status": "active", "source": source, "fingerprint": current_fingerprint()}
         )
         saved = self.store.save(workflow, archive=overwrite)
         return self._ok_with_diagnostics(saved)
 
-    def update(self, name: str, content: str, *, draft: bool = False) -> dict[str, Any]:
+    def update(self, name: str, content: str, *, draft: bool = False, source: str = "user") -> dict[str, Any]:
         existing = self.store.get(name)
         if existing is None:
             return {"status": "error", "message": f"workflow not found: {name}"}
         workflow = self._parse_or_raise(content, name_hint=name, draft=draft)
+        self._assert_absolute_allowed(workflow, source, existing)
         # Name changes are allowed only by creating a new workflow.
         if workflow.name != name and self.store.exists(workflow.name):
             return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
         from .fingerprint import current_fingerprint
 
+        # Agent edits to a workflow are recorded against the agent source so the
+        # (intent/binding) change history is visible to the user.
+        new_source = "agent" if source == "agent" else existing.source
         workflow = Workflow(
             **{**workflow.__dict__, "version": self.store.next_version(name),
                "schema_version": DSL_VERSION,
-               "status": workflow.status or "active", "source": existing.source,
+               "status": workflow.status or "active", "source": new_source,
                "fingerprint": current_fingerprint()}
         )
         saved = self.store.save(workflow)
@@ -673,3 +695,19 @@ def _patch_steps(steps: list[Step], step_id: str, fields: dict[str, Any]) -> lis
             continue
         out.append(step)
     return out if found else None
+
+
+def _absolute_step_ids(workflow: Workflow) -> list[str]:
+    """Ids of steps (recursively) marked ``absolute`` (絕對遵守)."""
+    found: list[str] = []
+
+    def walk(steps: list) -> None:
+        for step in steps:
+            if getattr(step, "absolute", False):
+                found.append(step.id)
+            for slot in (step.then, step.else_, step.body):
+                if slot:
+                    walk(slot)
+
+    walk(workflow.steps)
+    return found

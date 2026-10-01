@@ -1532,5 +1532,6 @@
   "workflows.fld_site": "사이트",
   "workflows.fld_origin": "출처",
   "workflows.act_unzip": "압축 풀기",
-  "workflows.act_zip": "압축 만들기"
+  "workflows.act_zip": "압축 만들기",
+  "workflows.badge_absolute": "절대 준수"
 }

@@ -128,6 +128,37 @@ def test_conformant_workflow_has_no_conformance_errors():
     assert not _codes(diags)
 
 
+def test_browser_click_without_target_is_error():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: browser\n  do: click\n  description: tap\n  post: [ok]\n"
+    ))
+    assert "missing_target" in _codes(diags)
+
+
+def test_browser_click_with_text_target_ok():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: browser\n  do: click\n  params: {text: 导出}\n  description: tap\n  post: [ok]\n"
+    ))
+    assert "missing_target" not in _codes(diags)
+
+
+def test_state_change_without_verification_warns():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: file\n  do: copy\n  params: {path: /a, to: /b}\n  description: copy\n"
+        "- id: \"id:2\"\n  kind: assert\n  description: verify\n  post: [ok]\n"
+    ))
+    assert "unverified_state_change" in _codes(diags, "warning")
+    assert "unverified_state_change" not in _codes(diags, "error")
+
+
+def test_guessy_downloads_source_warns():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: file\n  do: glob\n  params: {path: ~/Downloads, pattern: '*.zip'}\n"
+        "  description: find\n  post: [result.count]\n"
+    ))
+    assert "guessy_source" in _codes(diags, "warning")
+
+
 def test_create_returns_warnings_and_blocks_errors(tmp_path: Path):
     from coworker.workflows import WorkflowManager, WorkflowValidationError
 

@@ -1534,5 +1534,6 @@
   "workflows.fld_site": "Website",
   "workflows.fld_origin": "Ursprung",
   "workflows.act_unzip": "Archiv entpacken",
-  "workflows.act_zip": "Archiv erstellen"
+  "workflows.act_zip": "Archiv erstellen",
+  "workflows.badge_absolute": "Absolut befolgen"
 }

@@ -18,12 +18,15 @@ function StepRow({ step, depth }: { step: WorkflowStep; depth: number }) {
       <span className="wf-flow-row__icon" style={{ color: kindStripe(step.kind) }}>
         <Icon size={14} />
       </span>
-      {/* Capability-based label (system-defined); raw id is a muted tag. */}
+      {/* Intent first (what the step does, human-readable); the capability +
+          binding are secondary so the flow reads as intent, not raw actions. */}
+      {step.description ? <span className="wf-flow-row__intent">{step.description}</span> : null}
       <span className="wf-flow-row__cap">{t(kindLabelKey(step.kind))}</span>
       {action ? <code className="wf-flow-row__action">{action}</code> : null}
       <span className="wf-flow-row__id">#{step.id}</span>
       {step.goal ? <span className="wf-flow-row__goal">{step.goal}</span> : null}
       <span className="wf-flow-row__badges">
+        {step.absolute ? <span className="wf-badge wf-badge--absolute">{t('workflows.badge_absolute')}</span> : null}
         {step.mode === 'agent' ? <span className="wf-badge wf-badge--agent">agent</span> : null}
         {step.approval ? <span className="wf-badge wf-badge--human">approval</span> : null}
         {onError ? <span className="wf-badge">on_error: {onError}</span> : null}

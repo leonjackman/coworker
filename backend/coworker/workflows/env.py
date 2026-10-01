@@ -279,9 +279,11 @@ def build_tool_environment(
             raise RuntimeError("browser is not available")
         args: dict[str, Any] = {"action": action, **payload}
         _merge_locator(args, locator)
-        # Fail-closed: a click without a target would silently click (0,0).
-        if action == "click" and ("x" not in args or "y" not in args):
-            raise RuntimeError("browser click requires coordinates (x, y) or a coords locator")
+        # Fail-closed: a click without ANY target would silently click (0,0).
+        if action == "click" and not (
+            ("x" in args and "y" in args) or args.get("selector") or args.get("text")
+        ):
+            raise RuntimeError("browser click requires a selector, text, or coordinates (x, y)")
         return target.invoke({k: v for k, v in args.items() if v is not None})
 
     def _app(action: str, payload: dict[str, Any], locator: dict[str, Any] | None) -> Any:
@@ -513,6 +515,10 @@ def _merge_locator(args: dict[str, Any], locator: dict[str, Any] | None) -> None
         args.setdefault("selector", locator["selector"])
     if "ref" in locator:
         args.setdefault("ref", locator["ref"])
+    if "text" in locator:
+        args.setdefault("text", locator["text"])
+    if "exact" in locator:
+        args.setdefault("exact", locator["exact"])
     if "coords" in locator:
         try:
             x, y = locator["coords"]

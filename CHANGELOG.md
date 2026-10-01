@@ -398,4 +398,26 @@
 
 ## Unreleased
 
-（尚未發布內容記錄於此，發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
+本輪把「工作流編寫規範」從提示詞下沉到代碼，並改造工作流的執行模型：意圖/綁定、驗證、可降級、絕對遵守。
+
+### 執行模型（新增）
+
+- **可觀察變更驗證**：新增成功規則 `observable_change`；`browser` 的 `click`/`click_selector`/`click_text` 預設要求「點了要有變化」（DOM 變動/導覽/下載），把「點了卻沒反應」的假成功變成真正失敗。點擊結果回傳 `changed/target` 供除錯與驗證。
+- **定位修正**：`_locate` 改為語意/`aria-label` 優先、互動元素優先、取最小葉節點並自動上溯到控制項祖先、**唯一命中**、命中巨型容器視為失敗（避免點到版面容器）。
+- **瀏覽器面板自動顯示**：agent/workflow 驅動內置瀏覽器時自動打開右側面板（隱藏面板為 0×0 viewport，會令座標點擊與下載失效）。
+- **檔案能力**：新增 `file.newest`（依 mtime 取最新檔）；`file.glob` 改**非遞迴預設**（`**`/`recursive` 才遞迴）；`file.zip`/`file.unzip`。
+- **絕對遵守（user-only 硬約束）**：節點層級 `absolute: true`（僅使用者可設）。標記後 agent 不得改意圖/綁定、不自癒、不降級、不接手；失敗即停止（agent 只可提出建議，使用者手改後重跑）。agent 來源的工作流不得設定或修改含 `absolute` 的工作流。
+- **來源分級**：agent 透過工具建立/更新工作流時以 `source="agent"` 記名；一般節點的意圖/綁定可改並保留版本歷史。
+
+### 意圖優先與契約（P3/P4）
+
+- **語意點擊目標**：`browser click` 現在接受 `selector`/`text`（語意優先），座標為 fallback 階梯末位；`missing_target` 於 conformance 檢查。
+- **Studio 意圖優先**：步驟列表與節點改以 `description`（意圖）為主標籤，並顯示 `絕對遵守` 徽章（11 語系）；`absolute`/`bypass` 已加入前端型別。
+- **節點契約測試**：新增 `tests/test_workflow_contract.py`——每個 kind/action 的 target/success/params/outputs/locator 均需良構，且前端 fallback 目錄必須是後端 registry 的子集（drift guard）。
+- **新 conformance 提示**：`unverified_state_change`（狀態變更步無成功條件）、`guessy_source`（對 Downloads 猜檔）——皆為 warning。
+
+### 其它
+
+- 工作流 conformance linter：description 必填、驗證步、禁 opaque shell/evaluate 點擊、語意定位、`tool` 僅限已註冊、macOS 工具需 `platform`；可用 `bypass` 降級。
+- 系統提示瘦身：工作流規範由常駐 ~1.2k tokens 改為短指針，完整規範按需 `workflow action=spec`。
+- `deepseek-usage-export` 重寫為合規範本：`click_text(exact)` + `list_downloads` + `file.unzip` + `file.glob` + `file.copy` + 每步驗證；**真機測試端到端成功**（DeepSeek 用量 zip → 解壓 → `~/Desktop/DeepSeek_费用.csv` / `DeepSeek_用量.csv`）。

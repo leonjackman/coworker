@@ -415,7 +415,21 @@ class WorkflowExecutor:
 
         Order: locator self-heal (drift) → explicit policy. The default policy
         is ``agent`` when the environment can run an agent, else ``abort``.
+
+        A node marked ``absolute: true`` (絕對遵守) is a HARD constraint: the
+        agent may not substitute a method, self-heal, or take over. It fails
+        hard so the user can update the workflow (the agent may *propose* a fix
+        in conversation, but nothing is mutated here).
         """
+        if getattr(step, "absolute", False):
+            state.emitter.emit("recover", step_id=step.id, status="absolute", message=error)
+            raise StepFailed(
+                step.id,
+                f"absolute-obey step '{step.id}' failed and may not be substituted "
+                f"(the agent may propose a fix; the user must update the workflow): {error}",
+                result=result,
+            )
+
         # 1) Locator drift: try an LLM/fallback repair once, then re-dispatch.
         if step.locator and step.kind in ("browser", "app", "computer") and not state.healed.get(step.id):
             repaired = self._try_heal(patched_step, error, run, state)
@@ -557,6 +571,10 @@ class WorkflowExecutor:
 
         parsed = _Locator.from_dict(step.locator) if step.locator else None
         candidates = parsed.candidates() if parsed else []
+        # 絕對遵守: never walk fallbacks / promote — use the exact specified
+        # target only (a fallback would be "changing the method").
+        if getattr(step, "absolute", False):
+            return self._dispatch_action_once(step, run, state, step.locator)
         if step.kind not in ("browser", "app", "computer") or len(candidates) <= 1:
             return self._dispatch_action_once(step, run, state, step.locator)
 

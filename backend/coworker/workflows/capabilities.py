@@ -67,6 +67,8 @@ STEP_KEYS: tuple[dict[str, str], ...] = (
     {"description": "required — short human-readable node label (shown in the Studio)"},
     {"bypass": "list of conformance codes to downgrade to warnings (e.g. [coord_only_locator])"},
     {"bypass_reason": "why the bypass is justified"},
+    {"absolute": "user-only HARD constraint (絕對遵守): existing intent/binding may not be changed, "
+                 "substituted, self-healed, or taken over; agent writes may not set it"},
 )
 
 EXAMPLE_YAML = """name: my-flow
@@ -294,6 +296,26 @@ def rule_no_error(result: Any, params: dict[str, Any] | None = None) -> bool:
     return True
 
 
+def rule_observable_change(result: Any, params: dict[str, Any] | None = None) -> bool:
+    """A state-changing GUI action (click/type) must produce an observable
+    effect (DOM change / navigation / download). This is what turns the old
+    "clicked but nothing happened" false-success into a real failure.
+
+    Falls back to ``no_error`` when the result carries no ``changed`` signal
+    (e.g. an adapter that predates this check), so it never over-fails.
+    """
+    data = _parse(result)
+    if isinstance(data, dict):
+        if "changed" in data:
+            if data.get("changed") is True:
+                return True
+            # Explicit "nothing changed" is a verification failure unless the
+            # adapter also reported a hard error (which is failure anyway).
+            return False
+        return rule_no_error(result, params)
+    return rule_no_error(result, params)
+
+
 def rule_result_ok(result: Any, params: dict[str, Any] | None = None) -> bool:
     if result is None:
         return True
@@ -329,6 +351,7 @@ SUCCESS_RULES: dict[str, Callable[[Any, dict[str, Any] | None], bool]] = {
     "no_error": rule_no_error,
     "result_ok": rule_result_ok,
     "http_status": rule_http_status,
+    "observable_change": rule_observable_change,
 }
 
 
@@ -354,10 +377,14 @@ BROWSER_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("browser", "snapshot", (_p("max_items", "number"),), target="browser", success="no_error"),
     ActionSpec("browser", "screenshot", (), target="browser", success="no_error"),
     ActionSpec(
-        "browser", "click", (_p("x", "number", required=True), _p("y", "number", required=True)),
-        target="browser", success="no_error",
-        locator=LocatorPolicy(keys=("coords", "selector", "ref"), require_any=False,
-                              maps={"coords": ("x", "y"), "selector": ("selector",), "ref": ("selector",)}),
+        "browser", "click",
+        (_p("x", "number"), _p("y", "number"), _p("selector"), _p("text"), _p("exact", "boolean")),
+        target="browser", success="observable_change",
+        # Semantic target first: a selector or text (role/name-ish) is preferred;
+        # raw coords are the last resort in a fallback ladder.
+        locator=LocatorPolicy(keys=("selector", "text", "ref", "coords"), require_any=False,
+                              maps={"coords": ("x", "y"), "selector": ("selector",), "text": ("text",),
+                                    "ref": ("selector",)}),
     ),
     ActionSpec("browser", "type", (_p("text", required=True),), target="browser", success="no_error"),
     ActionSpec("browser", "press", (_p("key", required=True),), target="browser", success="no_error"),
@@ -366,8 +393,8 @@ BROWSER_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("browser", "forward", (), target="browser", success="no_error"),
     ActionSpec("browser", "reload", (), target="browser", success="no_error"),
     ActionSpec("browser", "evaluate", (_p("expression", required=True),), target="browser", success="no_error"),
-    ActionSpec("browser", "click_selector", (_p("selector", required=True),), target="browser", success="no_error"),
-    ActionSpec("browser", "click_text", (_p("text", required=True), _p("exact", "boolean")), target="browser", success="no_error"),
+    ActionSpec("browser", "click_selector", (_p("selector", required=True),), target="browser", success="observable_change"),
+    ActionSpec("browser", "click_text", (_p("text", required=True), _p("exact", "boolean")), target="browser", success="observable_change"),
     ActionSpec("browser", "scroll_to", (_p("selector"), _p("text")), target="browser", success="no_error"),
     ActionSpec("browser", "wait_for", (_p("selector"), _p("text"), _p("timeout_ms", "number")), target="browser", success="no_error"),
     ActionSpec("browser", "upload", (_p("files", "list", required=True), _p("selector")), target="browser", success="no_error"),
@@ -459,7 +486,8 @@ FILE_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("file", "delete", (_p("path", required=True),), target="file"),
     ActionSpec("file", "mkdir", (_p("path", required=True),), target="file"),
     ActionSpec("file", "list", (_p("path", required=True), _p("pattern")), target="file"),
-    ActionSpec("file", "glob", (_p("path", required=True), _p("pattern")), target="file"),
+    ActionSpec("file", "glob", (_p("path", required=True), _p("pattern"), _p("recursive", "boolean")), target="file"),
+    ActionSpec("file", "newest", (_p("path", required=True), _p("pattern"), _p("recursive", "boolean")), target="file", success="no_error"),
     ActionSpec("file", "exists", (_p("path", required=True),), target="file"),
     ActionSpec("file", "stat", (_p("path", required=True),), target="file"),
     ActionSpec("file", "unzip", (_p("path", required=True), _p("to", required=True)), target="file", success="no_error"),
@@ -505,6 +533,7 @@ _OUTPUTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("file", "glob"): ("path", "items", "count"),
     ("file", "exists"): ("path", "exists"),
     ("file", "stat"): ("path", "exists", "is_dir", "size"),
+    ("file", "newest"): ("path", "found", "mtime", "count"),
     ("file", "unzip"): ("path", "to", "names", "items", "count"),
     ("file", "zip"): ("path", "to", "count"),
     ("transform", "json_path"): ("result",),
@@ -799,7 +828,9 @@ class CapabilityRegistry:
             "needed). Use `kind: computer do: script` (params.code, the cw-automa helper API) for "
             "intent-level steps, each script its OWN node.\n\n"
             "Rules (violations are REJECTED at create/update time):\n"
-            "- Every step needs a `description` (short human-readable label) — the Studio shows it.\n"
+            "- Every step needs a `description` (short human-readable label = the step's INTENT) — the Studio shows it.\n"
+            "- A step may be marked `absolute: true` (絕對遵守) ONLY by the user; it freezes the existing "
+            "intent/binding (no substitution / self-heal / agent takeover).\n"
             "- Atomic nodes: exactly one action per step. NEVER bundle a sequence into one `command` "
             "shell blob (| ; && $(...)); split into command/file/transform nodes.\n"
             "- Valid kinds/actions/params come from the capability catalog: call the "

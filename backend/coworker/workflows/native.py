@@ -123,9 +123,25 @@ def _file(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     if action == "mkdir":
         path.mkdir(parents=True, exist_ok=True)
         return {"path": str(path), "created": True}
-    if action in ("list", "glob"):
+    if action in ("list", "glob", "newest"):
         pattern = str(payload.get("pattern") or "*")
-        iterator = path.rglob(pattern) if (action == "glob" or payload.get("recursive")) else path.glob(pattern)
+        # Non-recursive by default (like a shell glob). Recursion only when the
+        # pattern asks for it ("**") or `recursive: true` is set — this stops a
+        # broad `*.zip` from reaching into unrelated subfolders.
+        recursive = bool(payload.get("recursive")) or "**" in pattern
+        if action == "newest":
+            candidates = path.rglob(pattern) if recursive else path.glob(pattern)
+            files = [p for p in candidates if p.is_file()]
+            if not files:
+                return {"path": str(path), "found": False}
+            latest = max(files, key=lambda p: p.stat().st_mtime)
+            return {
+                "path": str(latest),
+                "found": True,
+                "mtime": latest.stat().st_mtime,
+                "count": len(files),
+            }
+        iterator = path.rglob(pattern) if recursive else path.glob(pattern)
         items = sorted(str(p) for p in iterator)
         return {"path": str(path), "items": items[:5000], "count": len(items)}
     if action == "exists":

@@ -987,6 +987,10 @@ class BrowserController {
   // The agent can call the bridge a moment before the frontend mounts the
   // <webview> (auto-open race). Wait briefly for a guest to attach.
   async _waitForGuest(timeoutMs = 3000) {
+    // A hidden browser panel gives the guest a 0x0 viewport, which breaks
+    // coordinate clicks and downloads. Any agent/workflow use of the browser
+    // should reveal the panel so the page lays out for real.
+    sendToMainWindow('browser:open-panel');
     const started = Date.now();
     while (!this.guest) {
       if (Date.now() - started > timeoutMs) return;
@@ -1154,9 +1158,49 @@ class BrowserController {
   async click(x, y) {
     const g = this.guest;
     if (!g) throw new Error('browser_not_attached');
+    const dlBefore = (downloadControls && downloadControls.lastDownloadAt) ? downloadControls.lastDownloadAt() : 0;
+
+    // Arm a mutation observer + remember the URL so we can tell whether the
+    // click produced ANY observable effect. This is the "verification" signal:
+    // a click that changes nothing must not be reported as a silent success.
+    let beforeUrl = '';
+    try {
+      beforeUrl = await this._eval(`(() => {
+        window.__cwMut = 0;
+        try { if (window.__cwObserver) window.__cwObserver.disconnect(); } catch (e) {}
+        window.__cwObserver = new MutationObserver((records) => { window.__cwMut += records.length; });
+        window.__cwObserver.observe(document.documentElement || document, { subtree: true, childList: true, attributes: true, characterData: true });
+        return location.href;
+      })()`) || '';
+    } catch { /* observer unavailable — fall back to url/download checks */ }
+
+    let navigated = false;
+    const onNav = () => { navigated = true; };
+    try { g.once('did-navigate', onNav); } catch { /* ignore */ }
+
     g.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
     g.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
-    return { ok: true };
+
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    let afterUrl = beforeUrl;
+    let mutations = 0;
+    try {
+      const after = await this._eval(`(() => {
+        try { if (window.__cwObserver) { window.__cwObserver.disconnect(); window.__cwObserver = null; } } catch (e) {}
+        return { url: location.href, mut: window.__cwMut || 0 };
+      })()`);
+      if (after && typeof after === 'object') {
+        afterUrl = after.url || afterUrl;
+        mutations = Number(after.mut) || 0;
+      }
+    } catch { /* ignore */ }
+    try { g.removeListener('did-navigate', onNav); } catch { /* ignore */ }
+
+    const dlAfter = (downloadControls && downloadControls.lastDownloadAt) ? downloadControls.lastDownloadAt() : 0;
+    const downloaded = dlAfter > dlBefore;
+    const changed = navigated || downloaded || afterUrl !== beforeUrl || mutations > 0;
+    return { ok: true, changed, mutations, beforeUrl, afterUrl, navigated, downloaded };
   }
 
   async type(text) {
@@ -1196,24 +1240,87 @@ class BrowserController {
       const selector = ${sel};
       const target = ${txt};
       const exact = ${exact ? 'true' : 'false'};
-      let el = null;
-      if (selector) el = document.querySelector(selector);
-      if (!el && target) {
-        const sels = 'a,button,input,textarea,select,[role="button"],[role="link"],[onclick],[contenteditable],[tabindex],label,span,div,p';
-        el = Array.from(document.querySelectorAll(sels)).find((node) => {
-          const t = (node.innerText || node.value || node.getAttribute('aria-label') || '').trim();
-          return exact ? t === target : (t && t.includes(target));
-        });
-      }
-      if (!el) return { found: false };
-      el.scrollIntoView({ block: 'center', inline: 'center' });
-      const r = el.getBoundingClientRect();
-      return {
-        found: true,
-        x: Math.round(r.x + r.width / 2),
-        y: Math.round(r.y + r.height / 2),
-        text: (el.innerText || el.value || '').trim().slice(0, 80),
+      const INTERACTIVE = 'a,button,input,textarea,select,summary,[role="button"],[role="link"],[onclick],[contenteditable],[tabindex]';
+      const isInteractive = (n) => { try { return n.matches(INTERACTIVE); } catch (e) { return false; } };
+      const visible = (n) => {
+        try {
+          const r = n.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return false;
+          const s = getComputedStyle(n);
+          return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+        } catch (e) { return false; }
       };
+      const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+      const labelOf = (n) => norm(n.innerText || n.value || n.getAttribute('aria-label') || n.getAttribute('title') || '');
+      const rectOf = (n) => n.getBoundingClientRect();
+      const describe = (el) => {
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = rectOf(el);
+        return {
+          found: true,
+          x: Math.round(r.x + r.width / 2),
+          y: Math.round(r.y + r.height / 2),
+          tag: (el.tagName || '').toLowerCase(),
+          role: el.getAttribute('role') || '',
+          text: norm(el.innerText || el.value || el.getAttribute('aria-label') || '').slice(0, 80),
+          interactive: isInteractive(el),
+          width: Math.round(r.width),
+          height: Math.round(r.height),
+        };
+      };
+
+      if (selector) {
+        const el = document.querySelector(selector);
+        return el ? describe(el) : { found: false, reason: 'selector_not_found' };
+      }
+      if (!target) return { found: false, reason: 'no_target' };
+
+      // Candidate pool: interactive elements first (Playwright-style), then text
+      // containers. Never treat a wrapper whose text merely CONTAINS the label
+      // as the target when a more specific descendant/interactive node matches.
+      const ALL = 'a,button,input,textarea,select,summary,[role="button"],[role="link"],[onclick],[contenteditable],[tabindex],label,span,div,p';
+      const nodes = Array.from(document.querySelectorAll(ALL)).filter(visible);
+      const labelMatch = (n) => { const t = labelOf(n); return exact ? t === target : (t && t.includes(target)); };
+      let matches = nodes.filter(labelMatch);
+      if (!matches.length) return { found: false, reason: 'text_not_found' };
+
+      // Drop ancestors that contain another match (the wrapper), keeping the
+      // most specific nodes.
+      const leaves = matches.filter((n) => !matches.some((o) => o !== n && n.contains(o)));
+      let pool = leaves.length ? leaves : matches;
+
+      // Prefer interactive targets over passive text spans.
+      const interactive = pool.filter(isInteractive);
+      if (interactive.length) pool = interactive;
+
+      // Among the remaining, pick the smallest box (the actual control).
+      pool.sort((a, b) => { const ra = rectOf(a), rb = rectOf(b); return ra.width * ra.height - rb.width * rb.height; });
+      let el = pool[0];
+
+      // A label is often a bare span inside the real control (e.g. a <span>
+      // "导出" inside <div class="ds-button">). Climb to the nearest ancestor
+      // that is a control/role so we click the button, not the little label.
+      const CONTROL = 'a,button,input,textarea,select,summary,[role],[onclick],[tabindex],[contenteditable]';
+      const isControl = (n) => {
+        try { return n.matches(CONTROL) || /(^|[\\s-])(btn|button)/i.test(String(n.className || '')); } catch (e) { return false; }
+      };
+      for (let i = 0; i < 5 && el.parentElement; i += 1) {
+        const parent = el.parentElement;
+        if (labelMatch(parent) && (isControl(parent) || isInteractive(parent))) el = parent;
+        else break;
+      }
+
+      // Ambiguity guard: a huge non-interactive box almost certainly means we
+      // latched onto a page/layout container, not the control the author meant.
+      const r = rectOf(el);
+      const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      // Only judge ambiguity when we actually know the viewport. A hidden panel
+      // reports 0x0, which must not flag every element as a container.
+      if (vw > 0 && vh > 0 && !isInteractive(el) && (r.width * r.height) > 0.6 * vw * vh) {
+        return { found: false, reason: 'ambiguous_container', tag: (el.tagName || '').toLowerCase(), text: labelOf(el).slice(0, 80) };
+      }
+      return describe(el);
     })()`;
     return this._eval(expr);
   }
@@ -1221,15 +1328,19 @@ class BrowserController {
   async clickSelector(selector) {
     if (!this.guest) throw new Error('browser_not_attached');
     const info = await this._locate(selector, '', false);
-    if (!info || !info.found) throw new Error('element_not_found');
-    return this.click(info.x, info.y);
+    if (!info || !info.found) throw new Error(`element_not_found:${(info && info.reason) || 'unknown'}`);
+    const res = await this.click(info.x, info.y);
+    return { ...res, target: info };
   }
 
   async clickText(text, exact = false) {
     if (!this.guest) throw new Error('browser_not_attached');
     const info = await this._locate('', text, exact);
-    if (!info || !info.found) throw new Error('text_not_found');
-    return this.click(info.x, info.y);
+    // A wrapper-only match ("ambiguous_container") is a real failure, not a
+    // silent success — otherwise we'd click a page container and report ok.
+    if (!info || !info.found) throw new Error(`text_not_found:${(info && info.reason) || 'unknown'}`);
+    const res = await this.click(info.x, info.y);
+    return { ...res, target: info };
   }
 
   async scrollTo(selector, text) {

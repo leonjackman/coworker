@@ -102,6 +102,12 @@ class Step:
     # are downgraded from error to warning; everything else still blocks.
     bypass: list[str] = field(default_factory=list)
     bypass_reason: str = ""
+    # 絕對遵守 (absolute-obey): a HARD, user-only constraint. When set, the
+    # agent may not change the existing intent/binding, substitute a method,
+    # self-heal, or take over. Empty fields may still be filled once, then
+    # frozen. Only user-authored workflows may set this (enforced in the
+    # manager's agent-write path).
+    absolute: bool = False
 
     @property
     def bind(self) -> str:
@@ -146,6 +152,8 @@ class Step:
             data["bypass"] = list(self.bypass)
         if self.bypass_reason:
             data["bypass_reason"] = self.bypass_reason
+        if self.absolute:
+            data["absolute"] = True
         if self.then:
             data["then"] = [s.to_dict() for s in self.then]
         if self.else_:

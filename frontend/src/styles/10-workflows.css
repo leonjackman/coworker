@@ -220,6 +220,13 @@
 
 .wf-badge--agent { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 40%, transparent); background: var(--accent-soft); }
 .wf-badge--human { color: var(--warning); }
+.wf-badge--absolute {
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 45%, transparent);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  font-weight: 600;
+}
+.wf-flow-row__intent { color: var(--foreground); font-weight: 600; }
 .wf-badge--error { color: var(--danger); border-color: color-mix(in oklch, var(--danger) 40%, transparent); }
 
 .wf-handle {

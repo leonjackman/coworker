@@ -1534,5 +1534,6 @@
   "workflows.fld_site": "站点",
   "workflows.fld_origin": "来源",
   "workflows.act_unzip": "解压压缩包",
-  "workflows.act_zip": "创建压缩包"
+  "workflows.act_zip": "创建压缩包",
+  "workflows.badge_absolute": "绝对遵守"
 }

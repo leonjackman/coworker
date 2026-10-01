@@ -1532,5 +1532,6 @@
   "workflows.fld_site": "Site",
   "workflows.fld_origin": "Origine",
   "workflows.act_unzip": "Extraire l’archive",
-  "workflows.act_zip": "Créer une archive"
+  "workflows.act_zip": "Créer une archive",
+  "workflows.badge_absolute": "Respect absolu"
 }

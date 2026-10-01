@@ -428,10 +428,10 @@ def build_workspace_tools(
                     return json.dumps({"status": "error", "message": f"workflow not found: {name}"}, ensure_ascii=False)
                 return json.dumps({"status": "ok", "workflow": data}, ensure_ascii=False)
             if action == "create":
-                result = workflow_manager.create(content)
+                result = workflow_manager.create(content, source="agent")
                 return json.dumps(result, ensure_ascii=False)
             if action == "update":
-                result = workflow_manager.update(name, content)
+                result = workflow_manager.update(name, content, source="agent")
                 return json.dumps(result, ensure_ascii=False)
             if action == "delete":
                 return json.dumps(workflow_manager.delete(name), ensure_ascii=False)

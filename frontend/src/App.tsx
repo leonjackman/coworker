@@ -3840,6 +3840,15 @@ function App() {
     return () => window.removeEventListener('coworker-browser-settings-changed', handler);
   }, []);
 
+  // The agent / a workflow driving the embedded browser asks us to reveal the
+  // panel so the page has a real viewport (a hidden panel is 0x0 and breaks
+  // coordinate clicks/downloads).
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onBrowserOpenPanel) return;
+    return api.onBrowserOpenPanel(() => setRightSidebarOpen(true));
+  }, []);
+
   // Whether the configured web-search provider drives the embedded browser.
   const readWebSearchProvider = useCallback(async (): Promise<string> => {
     const cached = webProviderRef.current;

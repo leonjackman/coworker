@@ -1532,5 +1532,6 @@
   "workflows.fld_site": "Site",
   "workflows.fld_origin": "Origem",
   "workflows.act_unzip": "Extrair arquivo",
-  "workflows.act_zip": "Criar arquivo"
+  "workflows.act_zip": "Criar arquivo",
+  "workflows.badge_absolute": "Cumprimento absoluto"
 }

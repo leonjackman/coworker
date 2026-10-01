@@ -212,6 +212,9 @@ CONFORMANCE_CODES: frozenset[str] = frozenset({
     "missing_platform",
     "coord_only_locator",
     "unknown_tool",
+    "missing_target",
+    "unverified_state_change",
+    "guessy_source",
 })
 
 
@@ -225,8 +228,11 @@ def _has_verification(steps: list[Step]) -> bool:
     return False
 
 
-def _conformance_diag(step: Step, code: str, field: str, message: str, diags: list[Diagnostic]) -> None:
-    severity = "warning" if code in (getattr(step, "bypass", None) or []) else "error"
+def _conformance_diag(
+    step: Step, code: str, field: str, message: str, diags: list[Diagnostic], severity: str = "error"
+) -> None:
+    if severity == "error" and code in (getattr(step, "bypass", None) or []):
+        severity = "warning"
     diags.append(Diagnostic(step.id, field, code, message, severity=severity))
 
 
@@ -254,6 +260,21 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
                     "step has no description — every node needs a short human-readable label so it "
                     "renders meaningfully in the Studio", diags,
                 )
+
+            if step.kind == "browser" and step.do == "click":
+                params = step.params or {}
+                loc = step.locator or {}
+                has_target = (
+                    ("x" in params and "y" in params)
+                    or params.get("selector") or params.get("text")
+                    or loc.get("selector") or loc.get("text") or loc.get("coords") or loc.get("ref")
+                )
+                if not has_target:
+                    _conformance_diag(
+                        step, "missing_target", "params",
+                        "browser click needs a target: a selector, text, or x/y coordinates "
+                        "(directly or via a locator)", diags,
+                    )
 
             if step.kind == "browser" and step.do == "evaluate":
                 expr = str((step.params or {}).get("expression") or "").lower()
@@ -304,6 +325,30 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
                         "GUI step targets raw coordinates with no semantic identity (role/name/selector) — "
                         "use a semantic locator so it survives UI changes, or set `bypass: [coord_only_locator]` "
                         "with a reason when coordinates are genuinely required", diags,
+                    )
+
+            # Verification is the contract. A state-changing action whose default
+            # success rule is weak (bare result/no_error) SHOULD declare an
+            # explicit post/success; advisory (warning) so it never blocks a run.
+            if step.kind in ("command", "http", "file") and not (step.post or step.success):
+                spec = registry.action(step.kind, step.do) if step.do else None
+                rule = getattr(spec, "success", "result_ok") if spec is not None else "result_ok"
+                if rule not in ("command_rc", "observable_change"):
+                    _conformance_diag(
+                        step, "unverified_state_change", "params",
+                        f"{step.kind} step '{step.id}' changes state but declares no success condition "
+                        "(add `post`/`success`, e.g. the output file exists)",
+                        diags, severity="warning",
+                    )
+            # Guessy file sources (non-deterministic across runs) are advisory.
+            if step.kind == "file" and step.do in ("glob", "newest"):
+                target = str((step.params or {}).get("path") or "")
+                if "downloads" in target.lower():
+                    _conformance_diag(
+                        step, "guessy_source", "params",
+                        f"file.{step.do} targets a Downloads folder — prefer an explicit input/path so the "
+                        "result is deterministic across runs",
+                        diags, severity="warning",
                     )
 
             if step.kind == "tool" and live_tools:

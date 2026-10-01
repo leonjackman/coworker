@@ -1532,5 +1532,6 @@
   "workflows.fld_site": "網站",
   "workflows.fld_origin": "來源",
   "workflows.act_unzip": "解壓縮壓縮檔",
-  "workflows.act_zip": "建立壓縮檔"
+  "workflows.act_zip": "建立壓縮檔",
+  "workflows.badge_absolute": "絕對遵守"
 }

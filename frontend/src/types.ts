@@ -924,6 +924,10 @@ export interface WorkflowStep {
   as_name?: string;
   next?: string;
   description?: string;
+  /** 絕對遵守: user-only hard constraint (no substitution / no agent edits). */
+  absolute?: boolean;
+  /** Conformance codes explicitly downgraded to warnings for this step. */
+  bypass?: string[];
   then?: WorkflowStep[];
   else?: WorkflowStep[];
   body?: WorkflowStep[];

@@ -1532,5 +1532,6 @@
   "workflows.fld_site": "Сайт",
   "workflows.fld_origin": "Источник",
   "workflows.act_unzip": "Извлечь архив",
-  "workflows.act_zip": "Создать архив"
+  "workflows.act_zip": "Создать архив",
+  "workflows.badge_absolute": "Абсолютное соблюдение"
 }

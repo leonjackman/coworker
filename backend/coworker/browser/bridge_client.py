@@ -512,7 +512,13 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
             elif action == "screenshot":
                 result = client.screenshot()
             elif action == "click":
-                result = client.act("click", x=x, y=y)
+                # Semantic target preferred; coordinates are the last resort.
+                if selector:
+                    result = client.click_selector(selector)
+                elif text:
+                    result = client.click_text(text, exact)
+                else:
+                    result = client.act("click", x=x, y=y)
             elif action == "type":
                 result = client.act("type", text=text)
             elif action == "press":

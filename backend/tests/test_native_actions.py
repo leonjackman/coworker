@@ -70,6 +70,39 @@ def test_file_zip_unzip_roundtrip(tmp_path: Path):
     assert (dest / "sub" / "amount.csv").read_text().startswith("amount")
 
 
+def test_file_newest_picks_most_recent(tmp_path: Path):
+    import os
+    import time
+
+    old = tmp_path / "old.zip"
+    new = tmp_path / "new.zip"
+    old.write_text("x")
+    time.sleep(0.01)
+    new.write_text("y")
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+
+    result = run_native("file", "newest", {"path": str(tmp_path), "pattern": "*.zip"})
+    assert result["found"] is True
+    assert result["path"] == str(new)
+
+    empty = run_native("file", "newest", {"path": str(tmp_path), "pattern": "*.csv"})
+    assert empty["found"] is False
+
+
+def test_file_glob_is_non_recursive_by_default(tmp_path: Path):
+    (tmp_path / "top.zip").write_text("x")
+    nested = tmp_path / "sub"
+    nested.mkdir()
+    (nested / "deep.zip").write_text("y")
+
+    flat = run_native("file", "glob", {"path": str(tmp_path), "pattern": "*.zip"})
+    assert flat["count"] == 1
+    assert flat["items"] == [str(tmp_path / "top.zip")]
+
+    deep = run_native("file", "glob", {"path": str(tmp_path), "pattern": "**/*.zip"})
+    assert deep["count"] == 2
+
+
 def test_file_unzip_and_zip_registered():
     reg = CapabilityRegistry.declared()
     for action in ("unzip", "zip"):

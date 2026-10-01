@@ -90,8 +90,10 @@ function installDownloadHandler(browserSession, { getSettings, requestBackend, s
   // Live DownloadItem handles keyed by our id, so the renderer can pause /
   // resume / cancel an in-flight download. Cleared when the item finishes.
   const active = new Map();
+  let lastDownloadAt = 0;
 
   browserSession.on('will-download', (event, item) => {
+    lastDownloadAt = Date.now();
     const settings = (typeof getSettings === 'function' && getSettings()) || {};
     const settingsDir = String(settings.download_dir || '').trim();
     const targetDir = settingsDir || osDownloadsDir;
@@ -165,6 +167,11 @@ function installDownloadHandler(browserSession, { getSettings, requestBackend, s
   });
 
   return {
+    // Timestamp of the most recent download start (0 = none). Used by the
+    // browser click action to detect "the click actually did something".
+    lastDownloadAt() {
+      return lastDownloadAt;
+    },
     pause(id) {
       const item = active.get(id);
       if (!item) return { ok: false, error: 'not_found' };

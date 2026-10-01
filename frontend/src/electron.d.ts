@@ -213,6 +213,7 @@ declare global {
       browserMenuAction: (action: string) => Promise<{ ok: boolean; error?: string }>;
       browserCaptureElement: (payload: { x: number; y: number; scope?: 'element' | 'page' }) => Promise<BrowserCaptureResult>;
       onBrowserContextMenu: (callback: (payload: BrowserContextMenuPayload) => void) => () => void;
+      onBrowserOpenPanel: (callback: () => void) => () => void;
       browserSettingsGet: () => Promise<BrowserSettings>;
       browserSettingsSave: (patch: BrowserSettingsPatch) => Promise<BrowserSettings & { error?: string }>;
       browserBookmarksList: () => Promise<{ items: BrowserBookmark[] }>;

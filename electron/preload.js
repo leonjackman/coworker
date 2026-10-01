@@ -184,6 +184,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('browser:context-menu', listener);
     return () => ipcRenderer.removeListener('browser:context-menu', listener);
   },
+  onBrowserOpenPanel: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('browser:open-panel', listener);
+    return () => ipcRenderer.removeListener('browser:open-panel', listener);
+  },
   // Browser personal data (bookmarks / history / downloads / settings).
   browserSettingsGet: () => ipcRenderer.invoke('browser-settings-get'),
   browserSettingsSave: (patch) => ipcRenderer.invoke('browser-settings-save', patch),
