@@ -805,6 +805,26 @@ class Workspace:
                 raise ValueError(f"Command cwd is not a directory: {cwd or '.'}")
 
             executable = self.resolve_executable(command[0], working_dir)
+            # A shell (or a wrapper like env/xargs/timeout) execs a later argv
+            # entry, so validating only argv[0] would let `sh -c 'anything'`
+            # bypass the allowlist. Validate every program the wrapper runs.
+            # Windows command names are case-insensitive (Get-ChildItem).
+            windows = _platform.is_windows()
+            allowed = {c.lower() for c in ALLOWED_COMMANDS} if windows else ALLOWED_COMMANDS
+            for program in _platform.wrapped_program_names(command):
+                if program == _platform.SHELL_UNVALIDATABLE:
+                    raise ValueError(
+                        f"Command not allowed: {command[0]} runs a script file or an "
+                        "interactive shell, which cannot be validated against the "
+                        'allowlist. Invoke the commands directly (e.g. `bash -c "…"`).'
+                    )
+                candidate = program.lower() if windows else program
+                if candidate not in allowed:
+                    raise ValueError(
+                        f"Command is not allowed inside a shell/wrapper: {program}. "
+                        "The run_command allowlist applies to every program a shell or "
+                        "wrapper would run — the allowlist is a guardrail, not a sandbox."
+                    )
             safe_timeout = max(1, min(int(timeout_seconds or DEFAULT_COMMAND_TIMEOUT_SECONDS), MAX_COMMAND_TIMEOUT_SECONDS))
             safe_command = [executable, *command[1:]]
             details["cwd"] = self._safe_rel_path(working_dir) if working_dir != self.root else ""
@@ -1020,9 +1040,10 @@ class Workspace:
         if command_name not in ALLOWED_COMMANDS:
             raise ValueError(
                 f"Command is not allowed: {command_name}. "
-                "This is a fixed workspace restriction that user approval cannot override. "
-                "The allowlist covers all mainstream dev/ops toolchains plus niche "
-                f"utilities. Confirm it exists with `which {command_name}` / "
+                "The run_command allowlist covers mainstream dev/ops toolchains plus "
+                "niche utilities and cannot be overridden by approval. It is a guardrail "
+                "(interpreters and build tools can still run arbitrary code), not a "
+                f"sandbox. Confirm availability with `which {command_name}` / "
                 f"`command -v {command_name}`; see the run_command tool description "
                 "for the curated list."
             )

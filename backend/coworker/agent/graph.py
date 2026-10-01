@@ -77,6 +77,7 @@ from .middleware import (
     StallRetryMiddleware,
     SteerInjectionMiddleware,
     ToolCallCleanerMiddleware,
+    VerificationGuardMiddleware,
     _summarizer_candidates,
     command_approval_middleware,
 )
@@ -1048,6 +1049,12 @@ def build_coworker_agent_graph(
     # signal (≥7/10 steps with no new info or regular repetition). Soft warning
     # first, hard stop if the pattern holds through a 20-step window.
     middleware.append(IdleLoopMiddleware())
+
+    # Verification guard: an unconfirmed desktop mutation (computer tool
+    # verified != true) must not be reported as a success. If the model tries to
+    # end the turn with a success claim, jump back to the model ONCE with a
+    # nudge to actually verify (snapshot / filesystem check).
+    middleware.append(VerificationGuardMiddleware())
 
     # Interjection (插話) steering: drains the per-session steer inbox at every
     # model-call boundary and folds pending user messages into the next request

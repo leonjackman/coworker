@@ -592,6 +592,30 @@ class SessionStore:
             session.messages[idx].parts = list(parts)
         self.save(session)
 
+    def merge_placeholder(self, session_id: str, placeholder_id: str, target_id: str) -> Session:
+        """Fold a parts-only incremental placeholder into the terminal message.
+
+        Mid-turn incremental persistence (``replace_assistant_parts``) creates an
+        assistant message keyed by the round's client id. When the turn ends in an
+        error/disconnect, the terminal partial is persisted with a *generated* id
+        (so the frontend never adopts a half reply as a successful commit) — which
+        used to leave TWO assistant messages: the empty placeholder (tool parts)
+        and the text partial. Move the placeholder's parts onto the target and
+        drop the placeholder so one reply is one message.
+        """
+        session = self.require(session_id)
+        placeholder_idx = next((i for i, m in enumerate(session.messages) if m.id == placeholder_id), None)
+        target_idx = next((i for i, m in enumerate(session.messages) if m.id == target_id), None)
+        if placeholder_idx is None or target_idx is None or placeholder_idx == target_idx:
+            return session
+        placeholder = session.messages[placeholder_idx]
+        target = session.messages[target_idx]
+        if not target.parts and placeholder.parts:
+            target.parts = list(placeholder.parts)
+        session.messages.pop(placeholder_idx)
+        self.save(session)
+        return session
+
     def find_message_index(self, session_id: str, message_id: str) -> int:
         session = self.require(session_id)
         for index, message in enumerate(session.messages):

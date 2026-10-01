@@ -87,6 +87,10 @@ class CoworkerAgentState(AgentState[Any]):
     # truth for the value set — see LOOP_REASON_* constants below). Surfaced on
     # the done event so the UI/continuation knows exactly WHY the loop ended.
     loop_reason: NotRequired[str]
+    # VerificationGuardMiddleware: once the model has been nudged to verify a
+    # turn's unconfirmed desktop mutations, don't nudge again this turn. Lives
+    # in state (the checkpoint is dropped per turn/round) so it resets each turn.
+    verification_guard_done: NotRequired[bool]
 
 
 # Single source of truth for the loop_reason value set (referenced by the loop
@@ -708,12 +712,12 @@ MAX_TOOL_DESCRIPTION_CHARS = 650
 _READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "workflow", "git_status", "web_search", "web_fetch", "browser", "computer_observe", "get_goal", "run_command_status"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
-_EXEC_TOOLS = {"run_command", "install_skill", "skill_manage", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal", "computer", "computer_script"}
+_EXEC_TOOLS = {"run_command", "install_skill", "skill_manage", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal", "computer", "computer_script", "run_applescript"}
 
 # 子代理（worker）工具集在構造期就排除的委派/spawn 工具。把这些工具塞给子代理，
 # 会允许 worker 无限嵌套 spawn 更多 worker/team（单 agent 模式没有 org.max_depth
 # 约束）。见 build_workspace_tools 中 UseWorkerTool 的 tools= 传参。
-_CHILD_EXCLUDED_TOOLS = {"use_worker", "use_workers", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "computer", "computer_observe", "computer_script"}
+_CHILD_EXCLUDED_TOOLS = {"use_worker", "use_workers", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "computer", "computer_observe", "computer_script", "run_applescript"}
 
 
 

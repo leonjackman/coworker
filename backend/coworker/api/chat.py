@@ -318,6 +318,20 @@ async def chat_stream(request: ChatStreamRequest):
                 last = session.messages[-1] if session.messages else None
                 if last is not None:
                     agent_registry.change_store.assign_message(session_id, last.id)
+                    # Error/disconnect partials use a GENERATED id (message_id=None)
+                    # so the frontend never adopts a half reply as success. A
+                    # mid-turn incremental placeholder (client id, parts-only) would
+                    # then remain as a second, empty bubble — fold it into the
+                    # terminal message and drop it (one reply = one message).
+                    if (
+                        message_id is not _USE_CLIENT_MESSAGE_ID
+                        and current_round_assistant_id
+                        and last.id != current_round_assistant_id
+                    ):
+                        try:
+                            session_store.merge_placeholder(session_id, current_round_assistant_id, last.id)
+                        except Exception:  # noqa: BLE001 - best-effort cleanup
+                            logger.debug("merge_placeholder failed for %s", session_id, exc_info=True)
             except Exception:  # noqa: BLE001 - persistence is a side effect; a
                 # write failure must NEVER corrupt the SSE stream contract (the
                 # client still needs its terminal done/error event), otherwise a

@@ -404,6 +404,248 @@ def normalize_command(command: str | list[str], platform: str | None = None) -> 
 
 
 # ---------------------------------------------------------------------------
+# Shell-wrapper program validation
+# ---------------------------------------------------------------------------
+# ``run_command`` validates only ``argv[0]``. A shell is therefore a universal
+# trampoline: ``sh -c 'osascript …'`` / ``bash -c 'osascript …'`` would slip
+# past the whole allowlist because only ``sh``/``bash`` (both allowlisted) is
+# inspected. When the invoked program is a shell (or a wrapper that execs a
+# later argv entry), we parse the script it will run and check EVERY program it
+# invokes, recursing through nested shells and ``eval``.
+#
+# This is a GUARDRAIL, not a security boundary: interpreters (python/node/ruby),
+# build tools (make/npm postinstall), ``awk``/``git`` hooks and similar can
+# still execute arbitrary code and are intentionally left reachable.
+
+#: Shells (basenames) that may appear as the invoked program.
+SHELL_INTERPRETERS = frozenset({
+    "sh", "bash", "zsh", "dash", "ksh", "ksh93", "mksh", "csh", "tcsh",
+    "fish", "pwsh", "powershell", "powershell.exe", "cmd", "cmd.exe",
+    "nu", "nushell", "xonsh", "elvish", "rc",
+})
+
+#: Shell builtins that never spawn an external program (safe to skip).
+_SHELL_BUILTINS = frozenset({
+    ":", "true", "false", "cd", "echo", "printf", "pwd", "export", "unset",
+    "set", "test", "[", "]", "alias", "unalias", "local", "read", "shift",
+    "exit", "return", "break", "continue", "wait", "jobs", "fg", "bg",
+    "disown", "trap", "umask", "ulimit", "times", "type", "hash", "help",
+    "history", "let", "declare", "typeset", "readonly", "getopts", "shopt",
+    "enable", "dirs", "pushd", "popd", "caller",
+})
+
+#: Control-flow keywords. A segment that is *only* a keyword, or that opens a
+#: for/select/case header, carries no program; leading keywords are stripped so
+#: the command after ``then``/``do``/``{`` is still validated.
+_SHELL_KEYWORDS = frozenset({
+    "if", "elif", "then", "else", "fi", "for", "while", "until", "do", "done",
+    "case", "esac", "in", "select", "function", "coproc", "!", "{", "}", "not",
+})
+_HEADER_KEYWORDS = frozenset({"for", "select", "case", "coproc"})
+_LEADING_KEYWORDS = frozenset({"if", "elif", "then", "else", "do", "while", "until", "!", "{"})
+_TRAILING_KEYWORDS = frozenset({"fi", "done", "esac", "in", "}", "not"})
+
+#: Commands whose *arguments* name the program they actually execute, so the
+#: wrapped program (not the wrapper) must be validated.
+_COMMAND_WRAPPERS = frozenset({
+    "command", "builtin", "exec", "env", "nice", "nohup", "setsid", "stdbuf",
+    "timeout", "time", "xargs", "parallel", "watch", "script",
+})
+
+#: Wrapper flags that consume a following value token (so it is skipped, not
+#: mistaken for the wrapped program).
+_WRAPPER_VALUE_FLAGS: dict[str, frozenset[str]] = {
+    "env": frozenset({"-u", "--unset", "-S", "--split-string", "-C", "--chdir"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "timeout": frozenset({"-s", "--signal", "-k", "--kill-after"}),
+    "stdbuf": frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}),
+    "xargs": frozenset({
+        "-n", "--max-args", "-I", "--replace", "-L", "--max-lines", "-P",
+        "--max-procs", "-s", "--max-chars", "-a", "--arg-file", "-E", "--eof",
+        "-d", "--delimiter",
+    }),
+    "watch": frozenset({"-n", "--interval"}),
+    "time": frozenset({"-f", "--format", "-o", "--output"}),
+}
+
+#: Sentinel: a shell running a file / interactively — its contents cannot be
+#: validated statically, so callers reject it rather than silently allow it.
+SHELL_UNVALIDATABLE = "<shell-script-unvalidatable>"
+
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_PUNCT_RE = re.compile(r"[();|&<>]+")
+_REDIRECTION_RE = re.compile(r"^(?:[<>]&?|&>>?)$")
+_BACKTICK_RE = re.compile(r"`([^`]*)`")
+
+
+def _base_program(token: str) -> str:
+    return token.strip("\"'`$").rsplit("/", 1)[-1]
+
+
+def _tokenize_shell(script: str, platform: str | None) -> list[str]:
+    if is_windows(platform):
+        return [t for t in re.split(r"(;|\|\||\||&&|&|\n|\r|\(|\))", script) if t]
+    try:
+        lex = shlex.shlex(script, posix=True, punctuation_chars="();<>|&")
+        lex.whitespace_split = True
+        return list(lex)
+    except ValueError:
+        return script.split()
+
+
+def _split_segments(tokens: list[str]) -> list[list[str]]:
+    segments: list[list[str]] = []
+    current: list[str] = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if _PUNCT_RE.fullmatch(token):
+            if _REDIRECTION_RE.match(token) and i + 1 < len(tokens):
+                i += 2  # redirection operator + its target are not a program
+                continue
+            if current:
+                segments.append(current)
+                current = []
+            i += 1
+            continue
+        current.append(token)
+        i += 1
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _command_and_tail(
+    segment: list[str],
+    *,
+    skip_flags: bool = False,
+    value_flags: frozenset[str] = frozenset(),
+) -> tuple[str | None, list[str]]:
+    i = 0
+    while i < len(segment):
+        token = segment[i]
+        if _ASSIGNMENT_RE.match(token):
+            i += 1
+            continue
+        if skip_flags and token.startswith("-") and token != "-":
+            i += 2 if token in value_flags else 1
+            continue
+        if skip_flags and re.fullmatch(r"\d+", token):
+            i += 1
+            continue
+        break
+    if i >= len(segment):
+        return None, []
+    return _base_program(segment[i]), segment[i + 1:]
+
+
+def _shell_argv_programs(argv: list[str], platform: str | None, depth: int) -> list[str]:
+    args = argv[1:]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        lowered = arg.lower()
+        if lowered in ("-c", "--command", "-command", "/c", "/command"):
+            if i + 1 < len(args):
+                return shell_programs(args[i + 1], platform, depth + 1)
+            return [SHELL_UNVALIDATABLE]
+        if lowered.startswith("--command=") or lowered.startswith("/command:"):
+            return shell_programs(arg.split("=", 1)[1] if "=" in arg else arg.split(":", 1)[1], platform, depth + 1)
+        i += 1
+    return [SHELL_UNVALIDATABLE]
+
+
+def _find_exec_programs(tail: list[str]) -> list[str]:
+    found: list[str] = []
+    for j, token in enumerate(tail):
+        if token in ("-exec", "-execdir", "-ok", "-okdir") and j + 1 < len(tail):
+            candidate = _base_program(tail[j + 1])
+            if candidate:
+                found.append(candidate)
+    return found
+
+
+def _segment_programs(segment: list[str], platform: str | None, depth: int) -> list[str]:
+    seg = list(segment)
+    if len(seg) == 1 and seg[0] in _SHELL_KEYWORDS:
+        return []
+    if seg and seg[0] in _HEADER_KEYWORDS:
+        return []  # for/select/case header: no program on this segment
+    while seg and seg[0] in _LEADING_KEYWORDS:
+        seg = seg[1:]
+    while seg and seg[-1] in _TRAILING_KEYWORDS:
+        seg = seg[:-1]
+    if not seg:
+        return []
+    name, tail = _command_and_tail(seg)
+    if not name:
+        return []
+    extra: list[str] = _find_exec_programs(tail) if name == "find" else []
+    if name in _SHELL_BUILTINS:
+        programs = []
+    elif name == "eval":
+        programs = shell_programs(" ".join(tail), platform, depth + 1)
+    elif name in _COMMAND_WRAPPERS:
+        inner, inner_tail = _command_and_tail(
+            tail, skip_flags=True, value_flags=_WRAPPER_VALUE_FLAGS.get(name, frozenset())
+        )
+        if inner is None:
+            programs = []
+        elif inner in SHELL_INTERPRETERS:
+            programs = _shell_argv_programs([inner, *inner_tail], platform, depth)
+        elif inner == "eval":
+            programs = shell_programs(" ".join(inner_tail), platform, depth + 1)
+        else:
+            programs = [inner]
+    elif name in SHELL_INTERPRETERS:
+        programs = _shell_argv_programs([name, *tail], platform, depth)
+    else:
+        programs = [name]
+    return programs + extra
+
+
+def shell_programs(script: str, platform: str | None = None, _depth: int = 0) -> list[str]:
+    """Best-effort list of program names a shell script will invoke."""
+    if _depth > 8 or not script or not script.strip():
+        return []
+    programs: list[str] = []
+    for inner in _BACKTICK_RE.findall(script):
+        programs += shell_programs(inner, platform, _depth + 1)
+    cleaned = _BACKTICK_RE.sub(" ", script)
+    for segment in _split_segments(_tokenize_shell(cleaned, platform)):
+        programs += _segment_programs(segment, platform, _depth)
+    return programs
+
+
+def wrapped_program_names(argv: list[str], platform: str | None = None) -> list[str]:
+    """Program names ``argv`` runs indirectly via a shell or wrapper command.
+
+    Returns ``[]`` when the first program invokes no other program directly
+    (nothing extra to validate). ``SHELL_UNVALIDATABLE`` is returned when a
+    shell runs a file or is interactive — static validation is impossible.
+    """
+    if not argv:
+        return []
+    name = _base_program(argv[0])
+    if name in SHELL_INTERPRETERS:
+        return _shell_argv_programs([name, *argv[1:]], platform, 0)
+    if name in _COMMAND_WRAPPERS:
+        inner, inner_tail = _command_and_tail(
+            argv[1:], skip_flags=True, value_flags=_WRAPPER_VALUE_FLAGS.get(name, frozenset())
+        )
+        if inner is None:
+            return []
+        if inner in SHELL_INTERPRETERS:
+            return _shell_argv_programs([inner, *inner_tail], platform, 0)
+        if inner == "eval":
+            return shell_programs(" ".join(inner_tail), platform, 1)
+        return [inner]
+    if name == "find":
+        return _find_exec_programs(argv[1:])
+    return []
+
+
+# ---------------------------------------------------------------------------
 # LLM-facing hints
 # ---------------------------------------------------------------------------
 
@@ -436,9 +678,11 @@ def command_hint(platform: str | None = None) -> str:
     more = max(0, total - len(curated.split(", ")))
     return (
         f"Allowed commands: {curated}, and {more} more (all mainstream dev/ops "
-        "toolchains plus niche utilities). If a command is rejected, the error "
-        "names it — confirm availability with `which <cmd>` / `command -v <cmd>` "
-        "before retrying."
+        "toolchains plus niche utilities). The allowlist also applies to every "
+        "program a shell runs, so `sh -c '…'` / `bash -c '…'` cannot reach a "
+        "non-allowlisted command. It is a guardrail, not a sandbox. If a command "
+        "is rejected, the error names it — confirm availability with `which <cmd>` "
+        "/ `command -v <cmd>` before retrying."
     )
 
 
@@ -457,6 +701,8 @@ __all__ = [
     "COMMON_COMMANDS",
     "UNIX_COMMANDS",
     "WINDOWS_COMMANDS",
+    "SHELL_INTERPRETERS",
+    "SHELL_UNVALIDATABLE",
     "allowed_commands",
     "command_hint",
     "default_shell",
@@ -468,5 +714,7 @@ __all__ = [
     "platform_hint",
     "platform_tag",
     "resolve_command_name",
+    "shell_programs",
     "shell_wrap_command",
+    "wrapped_program_names",
 ]

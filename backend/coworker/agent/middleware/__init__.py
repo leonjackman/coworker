@@ -43,6 +43,9 @@ from .loop_guard import (
     ToolCallCleanerMiddleware,
 )
 
+# Verification guard (block premature success claims after unconfirmed actions)
+from .verification_guard import VerificationGuardMiddleware
+
 # Phase-gated tool selection
 from .phase_gate import PhaseToolGateMiddleware
 
@@ -100,6 +103,8 @@ __all__ = [
     "RepeatedToolCallMiddleware",
     "StallRetryMiddleware",
     "ToolCallCleanerMiddleware",
+    # Verification
+    "VerificationGuardMiddleware",
     # Phase
     "PhaseToolGateMiddleware",
     # Assembler

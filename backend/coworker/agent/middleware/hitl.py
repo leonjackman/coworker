@@ -222,6 +222,12 @@ def command_approval_middleware(
             "description": "Coworker wants to run a computer-use script controlling your desktop.",
             "when": _needs_computer_approval,
         },
+        # AppleScript drives native apps (and can do much more); same gate.
+        "run_applescript": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to run an AppleScript controlling a native app.",
+            "when": _needs_computer_approval,
+        },
     }
 
     def _mcp_policy_for(tool_call: Any) -> dict[str, Any] | None:

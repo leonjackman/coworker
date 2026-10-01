@@ -153,6 +153,23 @@ enum AppInventory {
         if s.hasSuffix(".app"), FileManager.default.fileExists(atPath: s) {
             return URL(fileURLWithPath: s)
         }
+        // A RUNNING app whose localized name matches (e.g. "Pages文稿" on a zh
+        // system): the installed list only knows the English "Pages", so the
+        // localized name the caller just observed would otherwise fail to launch.
+        if let pid = resolvePid(s),
+           let url = NSRunningApplication(processIdentifier: pid)?.bundleURL {
+            return url
+        }
+        // Localized display name of any installed app.
+        if let e = installed().first(where: { entry in
+            guard let p = entry.path, let b = Bundle(url: URL(fileURLWithPath: p)) else { return false }
+            let localized = (b.localizedInfoDictionary?["CFBundleDisplayName"] as? String)
+                ?? (b.localizedInfoDictionary?["CFBundleName"] as? String)
+                ?? ""
+            return !localized.isEmpty && localized.caseInsensitiveCompare(s) == .orderedSame
+        }), let p = e.path {
+            return URL(fileURLWithPath: p)
+        }
         if let e = installed().first(where: {
             $0.bundleId == s || $0.displayName.caseInsensitiveCompare(s) == .orderedSame
         }), let p = e.path {

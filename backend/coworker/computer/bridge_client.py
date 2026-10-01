@@ -234,6 +234,15 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
     """Capability summary injected into the system prompt (4 states)."""
     status = computer_capability_status(data_dir)
     if status == "ok":
+        import sys as _sys
+
+        applescript_note = (
+            " DETERMINISTIC APP CONTROL: for scriptable native apps (Pages, Numbers, Keynote, Finder, "
+            "Music, …) prefer run_applescript over click/type UI automation — it drives the app's real "
+            "API and is far more reliable. Feed it the whole script; do not shell-quote it."
+            if _sys.platform == "darwin"
+            else ""
+        )
         return (
             "OS Computer Use is ENABLED. PRIMARY surface = computer_script (persistent JavaScript): "
             "`const app = await cua.getApp('Music')` binds an app, then in ONE call observe + act, with "
@@ -251,6 +260,7 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey. type_text/type_into enter literal text — any characters. "
             "If an action fails the SAME way twice, STOP and ask the user instead of retry-looping. "
             "NEVER claim an outcome you did not observe. If a permission error is reported, stop and tell the user."
+            + applescript_note
         )
     if status == "feature_off":
         return (
@@ -503,6 +513,19 @@ def build_computer_tools(
             pass
         return ""
 
+    def _focus_conflict(target: str, front: str) -> bool:
+        """Loose check that input meant for ``target`` may have hit another app.
+
+        Names are localized (target "Pages" vs frontmost "Pages文稿"), so treat
+        a containment either way as a match; skip bundle ids (dots) to avoid
+        false positives.
+        """
+        if not target or not front or "." in target:
+            return False
+        a = target.strip().lower()
+        f = front.strip().lower()
+        return a not in f and f not in a
+
     def _verify_and_report(before: str, action: str, text: str, app: str, res: dict[str, Any],
                            front_before_pid: int | None) -> str:
         # Evidence policy (Anthropic-aligned): only a STRONG identity signal may
@@ -540,6 +563,12 @@ def build_computer_tools(
 
         time.sleep(0.35)
         after = _snapshot_text() or ""
+        focus_lost = _focus_conflict(app, _frontmost_name())
+        focus_note = (
+            f" Focus is on another app than '{app}' — the action may have hit the wrong window. "
+            "Re-focus the target app before continuing."
+            if focus_lost else ""
+        )
         focused_val = ""
         if isinstance(res, dict):
             focused = res.get("focused")
@@ -558,7 +587,8 @@ def build_computer_tools(
                 note = "Verified by focused-field readback: the text is in the field."
             return json.dumps({
                 "ok": True, "action": action, "verified": verified, "focused_value": focused_val,
-                "note": note, "after_preview": "\n".join(after.split("\n")[:16]),
+                "focus_lost": focus_lost, "note": note + focus_note,
+                "after_preview": "\n".join(after.split("\n")[:16]),
             }, ensure_ascii=False)
 
         # No strong anchor (click/scroll/press_hotkey/show/coords): report
@@ -566,7 +596,11 @@ def build_computer_tools(
         preview = "\n".join(after.split("\n")[:16])
         return json.dumps({
             "ok": True, "action": action, "verified": None, "changed": None,
-            "note": "No automatic confirmation for this action. Evaluate the after_preview yourself: only continue/claim if the observation shows the intended result.",
+            "focus_lost": focus_lost,
+            "note": (
+                "No automatic confirmation for this action. Evaluate the after_preview yourself: "
+                "only continue/claim if the observation shows the intended result." + focus_note
+            ),
             "after_preview": preview,
         }, ensure_ascii=False)
 
@@ -980,7 +1014,19 @@ def resolve_computer_tools(
     if not computer_available(data_dir):
         return []
     try:
-        return build_computer_tools(data_dir, vision=vision, session_id=session_id, interactive=interactive)
+        tools = build_computer_tools(data_dir, vision=vision, session_id=session_id, interactive=interactive)
     except Exception:  # noqa: BLE001 - a computer misconfig must never break a turn
         logger.warning("computer tools disabled (config error)", exc_info=True)
         return []
+    # AppleScript is the deterministic route for scriptable native apps
+    # (Pages/Numbers/Keynote). It runs `osascript` locally (no Electron bridge
+    # needed) but shares the master switch + execute-phase + HITL gate.
+    try:
+        from coworker.computer.applescript import build_applescript_tool
+
+        apple = build_applescript_tool()
+        if apple is not None:
+            tools.append(apple)
+    except Exception:  # noqa: BLE001 - a scripting misconfig must never break a turn
+        logger.warning("run_applescript tool unavailable", exc_info=True)
+    return tools
