@@ -122,3 +122,26 @@ def build_applescript_tool() -> Any | None:
     # Attach the (long) usage description to the generated tool schema.
     run_applescript.description = _DESCRIPTION
     return run_applescript
+
+
+def resolve_applescript_tools() -> list[Any]:
+    """Return ``[run_applescript]`` on macOS, else ``[]``.
+
+    Independent of the OS Computer Use master switch: this is the deterministic
+    route for scriptable native apps (Pages/Numbers/Keynote/Finder/Music) and is
+    gated only by the execute phase + HITL like other mutating tools.
+    """
+    tool = build_applescript_tool()
+    return [tool] if tool is not None else []
+
+
+def applescript_capability_line() -> str:
+    """System-prompt fragment advertising the AppleScript tool (macOS only)."""
+    if sys.platform != "darwin":
+        return ""
+    return (
+        " NATIVE APP AUTOMATION: run_applescript is available for scriptable macOS apps (Pages, Numbers, "
+        "Keynote, Finder, Music, …). Prefer it over click/type UI automation for these apps — it drives the "
+        "app's real API deterministically. Feed it the whole script; do not shell-quote it. It is execute-phase "
+        "only and HITL-gated like other mutating tools."
+    )

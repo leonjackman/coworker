@@ -234,15 +234,6 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
     """Capability summary injected into the system prompt (4 states)."""
     status = computer_capability_status(data_dir)
     if status == "ok":
-        import sys as _sys
-
-        applescript_note = (
-            " DETERMINISTIC APP CONTROL: for scriptable native apps (Pages, Numbers, Keynote, Finder, "
-            "Music, …) prefer run_applescript over click/type UI automation — it drives the app's real "
-            "API and is far more reliable. Feed it the whole script; do not shell-quote it."
-            if _sys.platform == "darwin"
-            else ""
-        )
         return (
             "OS Computer Use is ENABLED. PRIMARY surface = computer_script (persistent JavaScript): "
             "`const app = await cua.getApp('Music')` binds an app, then in ONE call observe + act, with "
@@ -260,7 +251,6 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey. type_text/type_into enter literal text — any characters. "
             "If an action fails the SAME way twice, STOP and ask the user instead of retry-looping. "
             "NEVER claim an outcome you did not observe. If a permission error is reported, stop and tell the user."
-            + applescript_note
         )
     if status == "feature_off":
         return (
@@ -1018,15 +1008,8 @@ def resolve_computer_tools(
     except Exception:  # noqa: BLE001 - a computer misconfig must never break a turn
         logger.warning("computer tools disabled (config error)", exc_info=True)
         return []
-    # AppleScript is the deterministic route for scriptable native apps
-    # (Pages/Numbers/Keynote). It runs `osascript` locally (no Electron bridge
-    # needed) but shares the master switch + execute-phase + HITL gate.
-    try:
-        from coworker.computer.applescript import build_applescript_tool
-
-        apple = build_applescript_tool()
-        if apple is not None:
-            tools.append(apple)
-    except Exception:  # noqa: BLE001 - a scripting misconfig must never break a turn
-        logger.warning("run_applescript tool unavailable", exc_info=True)
+    # NOTE: run_applescript is intentionally NOT mounted here. It is decoupled
+    # from the OS Computer Use master switch and mounted on macOS directly by
+    # build_workspace_tools (execute-phase + HITL gated), so users who only want
+    # deterministic app scripting do not need to enable desktop control.
     return tools

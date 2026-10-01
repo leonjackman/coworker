@@ -38,6 +38,9 @@ from ..workspace import DEFAULT_COMMAND_TIMEOUT_SECONDS, MAX_COMMAND_TIMEOUT_SEC
 
 
 MAX_ATTACHMENT_CHARS = 120_000
+# Office/PDF attachments are decoded and text-extracted instead of dumping the
+# base64 blob into context; this caps the extracted text on top of that.
+ATTACHMENT_EXTRACT_MAX_CHARS = 40_000
 # Per-call char budget for a referenced-session page (read_session). Each page
 # is bounded so a whole referenced transcript is reachable via offset paging —
 # the OLD single 60k head-cap silently dropped the session's TAIL (newest
@@ -696,7 +699,7 @@ def _open_checkpointer(checkpoints_dir: Any):
 
 
 
-_CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits"}
+_CHANGE_TOOL_NAMES = {"write_file", "replace_in_file", "apply_text_edits", "create_document", "edit_document", "convert_document"}
 
 # Upper bound for built tool descriptions (P2). Tool schemas ride on EVERY
 # request, so a long description is paid token-by-token on every model call of
@@ -709,10 +712,10 @@ MAX_TOOL_DESCRIPTION_CHARS = 650
 # <available_workflows>, so it MUST be in the allowlist (both discuss + execute)
 # or the phase gate silently strips it and the model improvises (writes a .md
 # "workflow" file instead of calling the tool) — see the 166ff5ee regression.
-_READ_ONLY_TOOLS = {"search_files", "read_file", "read_session", "memory_read", "load_skill", "workflow", "git_status", "web_search", "web_fetch", "browser", "computer_observe", "get_goal", "run_command_status"}
+_READ_ONLY_TOOLS = {"search_files", "read_file", "read_document", "read_session", "memory_read", "load_skill", "workflow", "git_status", "web_search", "web_fetch", "browser", "computer_observe", "get_goal", "run_command_status"}
 _PLAN_TOOLS = {"ask_user"}
 _MEMORY_TOOLS = {"memory"}
-_EXEC_TOOLS = {"run_command", "install_skill", "skill_manage", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal", "computer", "computer_script", "run_applescript"}
+_EXEC_TOOLS = {"run_command", "install_skill", "skill_manage", "delegate_task", "delegate_parallel", "create_team_member", "create_team", "use_worker", "use_workers", "update_goal", "computer", "computer_script", "run_applescript", "create_document", "edit_document", "convert_document"}
 
 # 子代理（worker）工具集在構造期就排除的委派/spawn 工具。把这些工具塞给子代理，
 # 会允许 worker 无限嵌套 spawn 更多 worker/team（单 agent 模式没有 org.max_depth
@@ -1350,6 +1353,35 @@ def _content_chars(content: Any) -> int:
     return len(content or "")
 
 
+def _extract_office_attachment(content: str, name: str) -> tuple[str, bool] | None:
+    """Extract readable text from an office/pdf attachment data URL.
+
+    The frontend sends binary attachments as base64 ``data:`` URLs; for
+    docx/xlsx/pptx/pdf we decode and extract text so the model gets usable
+    content instead of a raw base64 blob. Returns ``(text, truncated)`` or
+    ``None`` when the value is not a supported office/pdf data URL.
+    """
+    try:
+        from ..documents.common import decode_data_url, detect_format_or_none
+        from ..documents.extract import extract_text
+    except Exception:  # noqa: BLE001 - a missing optional dep must not break chat
+        return None
+    fmt = detect_format_or_none(name)
+    if fmt is None:
+        return None
+    decoded = decode_data_url(content)
+    if decoded is None:
+        return None
+    data, _mime = decoded
+    try:
+        text, truncated = extract_text(data, fmt, max_chars=ATTACHMENT_EXTRACT_MAX_CHARS)
+    except Exception:  # noqa: BLE001 - fall back to the raw-attachment note
+        return None
+    if not text.strip():
+        return None
+    return text, truncated
+
+
 def format_user_message(
     message: str,
     attachments: list[dict[str, Any]] | None = None,
@@ -1468,15 +1500,27 @@ def format_user_message(
                         }
                     )
             else:
-                safe = content[:MAX_ATTACHMENT_CHARS]
-                truncated = bool(attachment.get("truncated")) or len(content) > MAX_ATTACHMENT_CHARS
-                note = "\n[Attachment truncated by Coworker.]" if truncated else ""
-                blocks.append(
-                    {
-                        "type": "text",
-                        "text": f"\n--- {name} ({kind}, {size} bytes) ---\n{safe}{note}\n--- end {name} ---",
-                    }
-                )
+                extracted = _extract_office_attachment(content, name)
+                if extracted is not None:
+                    safe_text, extracted_truncated = extracted
+                    truncated = extracted_truncated or bool(attachment.get("truncated"))
+                    note = "\n[Document text truncated by Coworker.]" if truncated else ""
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"\n--- {name} ({kind}, {size} bytes; extracted text) ---\n{safe_text}{note}\n--- end {name} ---",
+                        }
+                    )
+                else:
+                    safe = content[:MAX_ATTACHMENT_CHARS]
+                    truncated = bool(attachment.get("truncated")) or len(content) > MAX_ATTACHMENT_CHARS
+                    note = "\n[Attachment truncated by Coworker.]" if truncated else ""
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"\n--- {name} ({kind}, {size} bytes) ---\n{safe}{note}\n--- end {name} ---",
+                        }
+                    )
         elif attachment.get("binary"):
             if exceeds_limit:
                 blocks.append(

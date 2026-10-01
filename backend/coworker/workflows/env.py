@@ -399,11 +399,19 @@ def build_tool_environment(
             agent_tools.extend(resolve_web_tools(data_dir))
         except Exception:  # noqa: BLE001
             pass
+        applescript_tools: list = []
+        try:
+            from coworker.computer.applescript import resolve_applescript_tools
+
+            applescript_tools = resolve_applescript_tools()
+        except Exception:  # noqa: BLE001
+            applescript_tools = []
         agent_tools.extend(
             build_workspace_tools(
                 workspace,
                 skill_manager=skill_manager,
                 web_tools=[],
+                applescript_tools=applescript_tools,
                 readonly=False,
             )
         )

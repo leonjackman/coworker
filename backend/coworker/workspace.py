@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import platform as _platform
-from .atomicio import append_jsonl_retained, trim_jsonl
+from .atomicio import append_jsonl_retained, atomic_write_bytes, trim_jsonl
 
 
 DEFAULT_IGNORED_DIRS = {
@@ -601,6 +601,7 @@ class Workspace:
         before: str | None,
         after: str | None,
         file_existed: bool = True,
+        binary: bool = False,
     ) -> None:
         if change_store is None:
             return
@@ -617,6 +618,7 @@ class Workspace:
                 before=before,
                 after=after,
                 file_existed=bool(file_existed),
+                binary=binary,
             )
         except Exception:
             # Change capture must never mask the tool's real outcome.
@@ -649,6 +651,66 @@ class Workspace:
         except Exception as exc:
             self.audit_tool_action("write_file", "error", {**details, "error": str(exc)[:240]}, audit_context)
             raise
+
+    def write_binary(
+        self,
+        file_path: str,
+        data: bytes,
+        tool_name: str = "write_document",
+        audit_context: dict[str, Any] | None = None,
+        change_store: Any = None,
+        turn_index: int = 1,
+    ) -> None:
+        """Atomically write raw ``bytes`` to a workspace file (docx/xlsx/pptx/pdf).
+
+        Mirrors :meth:`write_text` (staleness guard, atomic write, change capture,
+        fingerprint, audit) but records a ``binary`` change so the Changes panel
+        can revert/redo the raw bytes. ``before``/``after`` are stored base64.
+        """
+        details: dict[str, Any] = {"path": file_path, "bytes": len(data)}
+        before_b64: str | None = None
+        file_existed = False
+        try:
+            target = self.resolve_write_path(file_path)
+            details["path"] = self._safe_rel_path(target)
+            self._ensure_fresh(target)
+            if target.is_file():
+                before_b64 = base64.b64encode(target.read_bytes()).decode("ascii")
+                file_existed = True
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(target, data)
+            after_b64 = base64.b64encode(data).decode("ascii")
+            self._capture_change(
+                change_store,
+                audit_context,
+                turn_index,
+                tool_name,
+                details["path"],
+                "write",
+                before_b64,
+                after_b64,
+                file_existed=file_existed,
+                binary=True,
+            )
+            self._record_fingerprint(target)
+            self.audit_tool_action(tool_name, "success", details, audit_context)
+        except Exception as exc:
+            self.audit_tool_action(tool_name, "error", {**details, "error": str(exc)[:240]}, audit_context)
+            raise
+
+    def mark_read(self, file_path: str) -> None:
+        """Record a file's fingerprint so a later edit can detect external drift.
+
+        Document readers call this (``read_preview`` does it for text files) so
+        the staleness guard in :meth:`_ensure_fresh` has a baseline to compare
+        against when the agent subsequently edits the same document.
+        """
+        try:
+            target = self.resolve_read_path(file_path)
+        except (PathBoundaryError, OSError):
+            return
+        if target.is_file():
+            self._record_fingerprint(target)
 
     def replace_text(
         self,
@@ -1116,6 +1178,35 @@ class Workspace:
             # File never existed and still does not: nothing to revert.
             return {"status": "reverted", "path": file_path, "kind": kind, "added": 0, "removed": 0, "noop": True, **({"id": change_id} if change_id else {})}
 
+        # Binary documents (docx/xlsx/pptx/pdf): restore raw bytes, never text.
+        if change.get("binary"):
+            if after is None:
+                result["reason"] = "binary change has no recorded content"
+                return result
+            try:
+                after_bytes = base64.b64decode(after)
+                before_bytes = base64.b64decode(before) if before else b""
+            except (ValueError, TypeError):
+                result["reason"] = "corrupt binary change record"
+                return result
+            if not file_existed:
+                if target.is_file() and target.read_bytes() == after_bytes:
+                    target.unlink(missing_ok=True)
+                    self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
+                    return {"status": "reverted", "path": file_path, "kind": kind, "deleted": True, **({"id": change_id} if change_id else {})}
+                result["reason"] = "file changed after it was created; refusing to delete"
+                return result
+            if target.read_bytes() == after_bytes:
+                try:
+                    atomic_write_bytes(target, before_bytes)
+                except OSError as exc:
+                    result["reason"] = str(exc)[:200]
+                    return result
+                self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
+                return {"status": "reverted", "path": file_path, "kind": kind, **({"id": change_id} if change_id else {})}
+            result["reason"] = "file changed since this session edited it; refusing to overwrite"
+            return result
+
         current = target.read_text(encoding="utf-8", errors="replace")
 
         # New file: only a clean delete is safe.
@@ -1194,6 +1285,30 @@ class Workspace:
         except (PathBoundaryError, OSError) as exc:
             result["reason"] = str(exc)[:200]
             return result
+
+        # Binary documents: restore the recorded raw bytes (never text).
+        if change.get("binary"):
+            try:
+                after_bytes = base64.b64decode(after)
+                before_bytes = base64.b64decode(before) if before else b""
+            except (ValueError, TypeError):
+                result["reason"] = "corrupt binary change record"
+                return result
+            if file_existed:
+                if target.is_file() and target.read_bytes() != before_bytes:
+                    result["reason"] = "file changed since it was reverted; refusing to overwrite"
+                    return result
+            elif target.exists():
+                result["reason"] = "file recreated after the revert; refusing to overwrite"
+                return result
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(target, after_bytes)
+            except OSError as exc:
+                result["reason"] = str(exc)[:200]
+                return result
+            self._fingerprints.pop(self._safe_rel_path(target), None); self._persist_fingerprints()
+            return {"status": "restored", "path": file_path, "kind": kind, **({"id": change_id} if change_id else {})}
 
         if file_existed:
             if not target.is_file():

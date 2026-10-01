@@ -149,9 +149,18 @@ class ChangeStore:
         after: str | None,
         diff: dict[str, Any] | None = None,
         file_existed: bool = True,
+        binary: bool = False,
     ) -> dict[str, Any]:
-        """Append a change record for one write/edit tool application."""
-        computed = diff or compute_file_diff(before, after)
+        """Append a change record for one write/edit tool application.
+
+        For ``binary`` changes the ``before``/``after`` values are base64-encoded
+        file contents (not text): no text diff is computed and the record is
+        flagged ``binary`` so revert/redo restore the raw bytes instead of text.
+        """
+        if binary:
+            computed = {"added": 0, "removed": 0, "hunks": [], "truncated": False}
+        else:
+            computed = diff or compute_file_diff(before, after)
         with self._lock:
             path = self._session_path(session_id)
             entries = self._read_entries(path)
@@ -171,6 +180,8 @@ class ChangeStore:
                 "truncated": bool(computed.get("truncated")),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
+            if binary:
+                entry["binary"] = True
             if computed.get("hunks"):
                 entry["hunks"] = computed["hunks"]
 

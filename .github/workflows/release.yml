@@ -93,7 +93,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller -r backend/requirements.txt
+          python -m pip install pyinstaller pyinstaller-hooks-contrib -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           CHANNEL_FLAG=""
@@ -101,6 +101,16 @@ jobs:
             CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
           fi
           npx electron-builder --mac --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
+
+      - name: Verify frozen backend bundle
+        shell: bash
+        run: |
+          # Prove the packaged Python carries every Office/PDF dependency and
+          # its data files (templates/cmaps/fonts) + the pdfium native library.
+          # A failure here fails the release instead of a user's first request.
+          BIN=backend/dist/pybackend
+          [[ -x "$BIN" ]] || BIN=backend/dist/pybackend.exe
+          "$BIN" --selfcheck-documents
 
       - uses: actions/upload-artifact@v4
         with:
@@ -139,7 +149,7 @@ jobs:
           python -m venv .venv
           source .venv/Scripts/activate
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller -r backend/requirements.txt
+          python -m pip install pyinstaller pyinstaller-hooks-contrib -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           CHANNEL_FLAG=""
@@ -151,6 +161,15 @@ jobs:
           fi
           npx electron-builder --win --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
         shell: bash
+
+      - name: Verify frozen backend bundle
+        shell: bash
+        run: |
+          # Prove the packaged Python carries every Office/PDF dependency and
+          # its data files (templates/cmaps/fonts) + the pdfium native library.
+          BIN=backend/dist/pybackend
+          [[ -x "$BIN" ]] || BIN=backend/dist/pybackend.exe
+          "$BIN" --selfcheck-documents
 
       - uses: actions/upload-artifact@v4
         with:
@@ -200,7 +219,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller -r backend/requirements.txt
+          python -m pip install pyinstaller pyinstaller-hooks-contrib -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           CHANNEL_FLAG=""
@@ -211,6 +230,15 @@ jobs:
             CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
           fi
           npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
+
+      - name: Verify frozen backend bundle
+        shell: bash
+        run: |
+          # Prove the packaged Python carries every Office/PDF dependency and
+          # its data files (templates/cmaps/fonts) + the pdfium native library.
+          BIN=backend/dist/pybackend
+          [[ -x "$BIN" ]] || BIN=backend/dist/pybackend.exe
+          "$BIN" --selfcheck-documents
 
       - uses: actions/upload-artifact@v4
         with:
@@ -261,7 +289,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller -r backend/requirements.txt
+          python -m pip install pyinstaller pyinstaller-hooks-contrib -r backend/requirements.txt
           npm run build:frontend
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           CHANNEL_FLAG=""
@@ -272,6 +300,15 @@ jobs:
             CHANNEL_FLAG="-c.publish.channel=${BASH_REMATCH[1]}"
           fi
           npx electron-builder --linux AppImage deb --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
+
+      - name: Verify frozen backend bundle
+        shell: bash
+        run: |
+          # Prove the packaged Python carries every Office/PDF dependency and
+          # its data files (templates/cmaps/fonts) + the pdfium native library.
+          BIN=backend/dist/pybackend
+          [[ -x "$BIN" ]] || BIN=backend/dist/pybackend.exe
+          "$BIN" --selfcheck-documents
 
       - uses: actions/upload-artifact@v4
         with:

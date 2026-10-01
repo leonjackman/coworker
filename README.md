@@ -52,6 +52,8 @@
 | 🖥️ **Integrated Terminal** | Interactive PTY shell in the bottom panel, plus a live tool-audit feed |
 | 🔎 **Audit & Traces** | Tool-audit log and agent traces with export, clear, and retention caps |
 | ✏️ **Message Editing** | Edit or regenerate any user message — downstream code changes are rolled back and can be restored |
+| 📄 **Office & PDF Documents** | Read / create / edit / convert `docx`, `xlsx`, `pptx`, `pdf` through four unified tools (atomic writes, revertable changes); attached Office/PDF files are text-extracted instead of dumped as base64; PDF supports merge/split/rotate/delete/encrypt and Office→PDF |
+| 🍎 **macOS App Scripting** | `run_applescript` drives Pages / Numbers / Keynote / Finder deterministically and works **independently of the Computer Use master switch** (execute-phase + HITL gated; excluded from sub-agents) |
 | 📎 **File Attachments** | Send text or binary files in chat messages (default 25 MB limit, configurable 1–1024 MB); the agent reads content directly |
 | 🔗 **Session Cross-Reference** | Paste a session ID in chat so the agent can read context from other sessions |
 | 🛡️ **Sensitive File Protection** | Blocked reads of `.env`, `.pem`, `.key`, `id_rsa`, etc. and enforced workspace boundary for all file writes |

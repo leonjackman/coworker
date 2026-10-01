@@ -93,12 +93,10 @@ def test_resolve_empty_when_off_or_no_bridge(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(cbc, "computer_enabled", lambda: True)
     monkeypatch.setattr(cbc, "computer_available", lambda _d: True)
     names = [getattr(t, "name", "") for t in cbc.resolve_computer_tools(tmp_path, session_id="s")]
-    import sys
-
-    expected = ["computer_observe", "computer", "computer_script"]
-    if sys.platform == "darwin":
-        expected.append("run_applescript")
-    assert names == expected
+    # run_applescript is DECOUPLED from the Computer Use master switch now, so it
+    # is never part of the computer-use toolset (mounted separately on macOS).
+    assert names == ["computer_observe", "computer", "computer_script"]
+    assert "run_applescript" not in names
 
 
 # ---------------------------------------------------------------------------

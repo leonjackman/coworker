@@ -26,5 +26,21 @@ if ! "$PYTHON_BIN" -c "import PyInstaller" >/dev/null 2>&1; then
   ok "PyInstaller installed"
 fi
 
+# Pre-build gate: prove every Office/PDF dependency (and its data files) imports
+# and works in the source venv before freezing. A missing template/font/cmap or
+# an uninstalled package fails HERE with a clear message, not at user runtime.
+(cd "$ROOT_DIR/backend" && "$PYTHON_BIN" -c "from coworker.documents.selfcheck import run_documents_selfcheck; raise SystemExit(run_documents_selfcheck())") \
+  || fail "Document dependency self-check failed (fix backend/requirements.txt / run pip install)"
+ok "Document dependencies verified"
+
 (cd "$ROOT_DIR/backend" && rm -rf dist build && "$PYTHON_BIN" -m PyInstaller --clean --noconfirm pybackend.spec 2>&1 | tail -20)
 ok "Backend bundled"
+
+# Post-build gate: run the FROZEN binary's self-check so bundled data files
+# (docx/pptx templates, pdfminer cmaps, reportlab fonts) and the pdfium native
+# library are proven present inside the PyInstaller bundle.
+FROZEN_BIN="$ROOT_DIR/backend/dist/pybackend"
+[[ -x "$FROZEN_BIN" ]] || FROZEN_BIN="$ROOT_DIR/backend/dist/pybackend.exe"
+[[ -x "$FROZEN_BIN" ]] || fail "Frozen backend not found at backend/dist/pybackend[.exe]"
+"$FROZEN_BIN" --selfcheck-documents || fail "Frozen backend document self-check failed (missing bundled data/native lib)"
+ok "Frozen backend document stack verified"

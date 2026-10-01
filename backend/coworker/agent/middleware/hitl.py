@@ -181,7 +181,7 @@ def command_approval_middleware(
         return normalize_autonomy(state.get("autonomy")) != "autonomous"
 
     write_configs: dict[str, Any] = {}
-    for tool_name in ("write_file", "replace_in_file", "apply_text_edits"):
+    for tool_name in ("write_file", "replace_in_file", "apply_text_edits", "create_document", "edit_document", "convert_document"):
         write_configs[tool_name] = {
             "allowed_decisions": ["approve", "reject"],
             "description": "Coworker wants to modify a file.",

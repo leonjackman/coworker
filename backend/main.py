@@ -481,4 +481,11 @@ app.include_router(_notifications_api.router)
 app.include_router(_browser_api.router)
 
 if __name__ == "__main__":
+    # Packaging/CI gate: `pybackend --selfcheck-documents` imports and exercises
+    # the bundled Office/PDF stack (templates, cmaps, fonts, pdfium dylib) and
+    # exits, so a bad bundle fails at build time instead of on first user use.
+    if "--selfcheck-documents" in sys.argv:
+        from coworker.documents.selfcheck import run_documents_selfcheck
+
+        raise SystemExit(run_documents_selfcheck())
     uvicorn.run(app, host="127.0.0.1", port=9527)

@@ -398,34 +398,4 @@
 
 ## Unreleased
 
-本輪把工作流節點改造成「目標＝意圖 / 綁定」一層可見結構，並在 Studio 中可見、可編輯、可觀測。
-
-### 節點設置重設計（本次）
-
-- **「目標」就是節點的意圖**：步驟 `goal` 與 `description` 為同一值（解析/序列化雙向同步）；節點標籤以目標顯示。
-- **「成功標準」置於目標下方**：即機器驗證 `post`（合併 `success` 與 `binding.verify` 為單一清單）。
-- **「絕對遵守」移入行為分組**；移除獨立的「意圖」分組與白話 `success_text`。
-- **行為（Behavior / Binding）分組**：目標 → 成功標準 → 絕對遵守 → 動作＋動作欄位。
-- **高級設定重排**：定位（role/name/selector ＋ **可編輯的 fallback 階梯 JSON**）、移除重複的參數編輯器（參數以動作欄位為單一來源）、`foreach` 僅 loop 顯示、執行歷程保留。
-- 後端：`parser._parse_step` 統一 goal/description 並把 `success` 併入 `post`；`_step_to_yaml` 只輸出單一 `intent.what` 與 `binding.verify`；`validation` 的意圖必填改看 goal/description。
-
-### Intent / Binding（節點兩層）
-
-- 節點 YAML 為 `intent{what,success,absolute}` + `binding{action,target,params,verify,origin}`；`_parse_step` 攤平為 runtime 扁平欄位（向後相容舊扁平檔），`render_workflow` 重新分層輸出。
-- **Studio 檢查器（NodeInspector）改為上下兩區**：上「意圖」（`what`＝description、`success` 白話成功、`絕對遵守` 開關），下「行為 / 綁定」（動作＋欄位＋locator（進階）＋ `verify`）。
-- 畫布/列表節點以 `description`（意圖）為主標籤，並顯示 `絕對遵守` 徽章（11 語系）。
-- 節點 `success_text`、`origin`、`absolute`、`bypass` 已納入前端型別並可編輯。
-
-### 可觀測（每步執行狀態）
-
-- `workflows/.state.json` 記錄每節點最近一次 `status/resolved/error/at/origin/healed/heal_count/takeover`（由 run 事件 `self_heal`/`recover` 彙整）；`GET /workflows/{name}` 回傳 `state`。
-- Studio 檢查器「進階」頁顯示**執行歷程**（狀態、來源、已自動修復、Agent 接手、錯誤）；工作流清單/流程圖顯示 `已驗證 / 失敗 / 未解析` 徽章。
-
-### 驗證
-
-- `pytest` 664 passed（新增 `test_workflow_intent_binding.py`、`test_node_execution_contracts.py`、`test_workflow_state.py`）；`tsc --noEmit`、`vite build` 通過。
-- 真機：`deepseek-usage-export`（Intent/Binding v10）端到端成功，桌面產出 `DeepSeek_费用.csv` / `DeepSeek_用量.csv`。
-
-## 未發布內容
-
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）

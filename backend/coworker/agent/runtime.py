@@ -317,16 +317,42 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             logger.warning("computer tools disabled (config error)", exc_info=True)
             return []
 
+    def _applescript_tools_for(self, session_id: str) -> list[Any]:
+        """macOS AppleScript tool, independent of the Computer Use master switch.
+
+        Always mounted when the platform supports ``osascript``; the execute
+        phase gate + HITL middleware still govern when it can actually run.
+        """
+        try:
+            from coworker.computer.applescript import resolve_applescript_tools
+
+            return resolve_applescript_tools()
+        except Exception:  # noqa: BLE001 - a scripting misconfig must never break a turn
+            logger.warning("applescript tool unavailable", exc_info=True)
+            return []
+
     @property
     def _computer_capability_line(self) -> str:
-        """Capability summary injected into the system prompt (4 states)."""
+        """Capability summary injected into the system prompt (4 states).
+
+        Composed of the OS Computer Use state plus the (independent) macOS
+        AppleScript automation note, since run_applescript is mounted whenever
+        the platform supports it — not only when Computer Use is enabled.
+        """
         try:
             from coworker.computer.bridge_client import computer_capability_line
 
-            return computer_capability_line(self.data_dir)
+            line = computer_capability_line(self.data_dir)
         except Exception:  # noqa: BLE001
             logger.warning("computer capability line unavailable", exc_info=True)
-            return ""
+            line = ""
+        try:
+            from coworker.computer.applescript import applescript_capability_line
+
+            line = (line + applescript_capability_line()).strip()
+        except Exception:  # noqa: BLE001
+            logger.warning("applescript capability line unavailable", exc_info=True)
+        return line
 
     def _nudge_memory(self, session_id: str) -> None:
         """Phase 2: one call per settled turn; never blocks or raises.
@@ -980,6 +1006,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         web_tools = self._web_tools_for(session_id)
         browser_tool = self._browser_tool_for(session_id)
         computer_tools = self._computer_tools_for(session_id)
+        applescript_tools = self._applescript_tools_for(session_id)
         # 聊天模式是增强项，探测失败（如缺 project_store 的裸实例）绝不能阻断建图。
         try:
             chat_mode = self._resolve_project_dir() == CHAT_MEMORY_DIR
@@ -1001,6 +1028,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
             tuple(sorted(getattr(t, "name", "") for t in web_tools)),
             bool(browser_tool),
             tuple(sorted(getattr(t, "name", "") for t in computer_tools)),
+            tuple(sorted(getattr(t, "name", "") for t in applescript_tools)),
         )
         cached = self._graph_cache.get(key)
         if cached is not None:
@@ -1029,6 +1057,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 web_tools=web_tools,
                 browser_tool=browser_tool,
                 computer_tools=computer_tools,
+                applescript_tools=applescript_tools,
                 auto_apply_skills=auto_apply_skills,
                 use_worker_enabled=True,
                 language=language,

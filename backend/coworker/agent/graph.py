@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..changes import ChangeStore
+from ..documents.tools import build_document_tools
 from ..goal_feature import goal_feature
 from ..logger import get_logger
 from ..mcp.mcp import McpManager
@@ -103,6 +104,7 @@ def build_workspace_tools(
     web_tools: list | None = None,
     browser_tool: Any | None = None,
     computer_tools: list | None = None,
+    applescript_tools: list | None = None,
     auto_apply_skills: bool = False,
     # WorkerAgent 集成（单 agent 模式）
     use_worker_enabled: bool = False,
@@ -741,6 +743,12 @@ def build_workspace_tools(
         return json.dumps(goal.to_dict(), ensure_ascii=False)
 
     tools = [search_files, read_file, ask_user, replace_in_file, apply_text_edits, write_file, run_command, install_skill, load_skill, skill_manage, git_status]
+    # Office/PDF document tools (docx/xlsx/pptx/pdf). read_document is read-only;
+    # create/edit/convert are mutating and phase/HITL-gated like write_file.
+    try:
+        tools.extend(build_document_tools(workspace, audit_context, change_store))
+    except Exception:  # noqa: BLE001 - a document misconfig must never break tool building
+        logger.warning("document tools unavailable", exc_info=True)
     # Keep the agent-facing skill-write descriptions in lock-step with the user's
     # approval setting: never claim a write is staged when approval is off (it
     # applies immediately), and never claim it is immediate when approval is on.
@@ -783,6 +791,12 @@ def build_workspace_tools(
         # feature AND the Electron computer bridge is registered. NEVER mirrored
         # to worker/delegated sub-agents (see _CHILD_EXCLUDED_TOOLS).
         tools.extend(computer_tools)
+    if applescript_tools and not readonly:
+        # run_applescript is decoupled from the Computer Use master switch: the
+        # runtime mounts it on macOS whenever it is available (execute phase +
+        # HITL gated). It is passed explicitly so delegated sub-agents — which
+        # call build_workspace_tools without it — never receive OS scripting.
+        tools.extend(applescript_tools)
     if memory_store is not None and memory_rel:
         tools.append(memory_read)
         if not readonly:

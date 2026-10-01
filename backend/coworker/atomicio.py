@@ -33,6 +33,29 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write raw ``bytes`` to ``path`` via a sibling temp file + atomic rename.
+
+    Used by the document tools (docx/xlsx/pptx/pdf are binary) so a crash
+    mid-write can never leave a truncated Office/PDF file on disk.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def atomic_write_json(path: Path, payload: object, *, indent: int = 2) -> None:
     """Write a JSON-serialisable object atomically (with a trailing newline)."""
     import json
