@@ -17,29 +17,9 @@
 
 ---
 
-### 截图
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/main_dark.png" width="100%" alt="Coworker - 欢迎页">
-</p>
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat_light.png" width="100%" alt="Coworker - 对话页">
-</p>
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio_home.png" width="100%" alt="Coworker - 工作流工作室主頁">
-</p>
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio.png" width="100%" alt="Coworker - 工作流工作室">
-</p>
-
----
-
 ## 功能特点
 
-|  |  |  |  |
+| 功能 | 功能 | 功能 | 功能 |
 | --- | --- | --- | --- |
 | 🗨️ 流式对话 | 💬 内置聊天项目 | 📥 消息排队 & 插话 | 🔌 多模型支持 |
 | 🧠 长程记忆 | 👥 多 Agent 团队 ⚠️ | 👤 子代理 | 🎯 目标模式 |
@@ -53,6 +33,30 @@
 > 📖 **完整功能说明** → [FEATURES.zh-CN.md](FEATURES.zh-CN.md)
 
 > ⚠️ **多 Agent（实验性）** — 多 Agent 团队、部门与任务委派属于实验性能力，仍在积极开发中：功能尚未完善，行为可能随版本变化，且项目模式创建后不可更改。日常使用建议采用单 Agent 模式。
+
+---
+
+### 截图
+
+#### 主要界面
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/main_dark.png" width="100%" alt="Coworker - 欢迎页">
+</p>
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat_light.png" width="100%" alt="Coworker - 对话页">
+</p>
+
+#### 工作流工作室
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio_home.png" width="100%" alt="Coworker - 工作流工作室主頁">
+</p>
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio.png" width="100%" alt="Coworker - 工作流工作室">
+</p>
 
 ---
 

@@ -17,30 +17,10 @@
 
 ---
 
-### Screenshots
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/main_dark.png" width="100%" alt="Coworker - 欢迎页">
-</p>
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat_light.png" width="100%" alt="Coworker - 对话页">
-</p>
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio_home.png" width="100%" alt="Coworker - 工作流工作室主頁">
-</p>
-
-<p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio.png" width="100%" alt="Coworker - 工作流工作室">
-</p>
-
----
-
 ## Features
 
 
-|  |  |  |  |
+| Feature | Feature | Feature | Feature |
 | --- | --- | --- | --- |
 | 🗨️ Streaming Chat | 💬 Built-in Chat Project | 📥 Message Queue & Interject | 🔌 Multi-Provider |
 | 🧠 Long-Term Memory | 👥 Multi-Agent Teams ⚠️ | 👤 Sub-Agents | 🎯 Goal Mode |
@@ -54,6 +34,30 @@
 > 📖 **Full feature guide** → [FEATURES.md](FEATURES.md)
 
 > ⚠️ **Multi-Agent (Experimental)** — Multi-agent teams, departments, and delegation are an experimental capability still under active development: the feature set is not yet complete, behavior may change, and the project mode is immutable after creation. Prefer single-agent mode for daily work.
+
+---
+
+### Screenshots
+
+#### Main View
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/main_dark.png" width="100%" alt="Coworker - 欢迎页">
+</p>
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat_light.png" width="100%" alt="Coworker - 对话页">
+</p>
+
+#### Workflow Studio
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio_home.png" width="100%" alt="Coworker - 工作流工作室主頁">
+</p>
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio.png" width="100%" alt="Coworker - 工作流工作室">
+</p>
 
 ---
 
