@@ -23,6 +23,7 @@ import { WorkflowEditorApp } from './components/workflows/WorkflowEditorApp';
 import { SchedulesPanel } from './components/SchedulesPanel';
 import { MemoryPanel } from './components/MemoryPanel';
 import { CreateProjectDialog } from './components/CreateProjectDialog';
+import { RenameDialog } from './components/RenameDialog';
 import { ProjectSessionList } from './components/ProjectSessionList';
 import { FirstRunStart } from './components/FirstRunStart';
 import { NewChatHero } from './components/NewChatHero';
@@ -3280,16 +3281,44 @@ function App() {
     }
   };
 
-  const renameCurrentSession = async () => {
+  // Rename dialog state: `window.prompt` has no native UI inside the Electron
+  // renderer, so renaming silently did nothing on desktop. Use an in-app
+  // dialog instead (works in both web and desktop).
+  type RenameTarget =
+    | { kind: 'session'; sessionId: string; current: string }
+    | { kind: 'project'; projectId: string; current: string };
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const renameCurrentSession = () => {
     if (!sessionIdRef.current) return;
-    const currentTitle = currentSessionTitle(messages, sessions, sessionIdRef.current);
-    const title = window.prompt(t('titlebar.rename_session'), currentTitle);
-    if (!title || title.trim() === currentTitle) return;
+    setRenameError(null);
+    setRenameTarget({
+      kind: 'session',
+      sessionId: sessionIdRef.current,
+      current: currentSessionTitle(messages, sessions, sessionIdRef.current),
+    });
+  };
+
+  const submitRename = async (value: string) => {
+    if (!renameTarget) return;
+    setRenameBusy(true);
+    setRenameError(null);
     try {
-      await chatService.renameSession(sessionIdRef.current, title.trim());
-      await refreshSessions();
+      if (renameTarget.kind === 'session') {
+        await chatService.renameSession(renameTarget.sessionId, value);
+        await refreshSessions();
+      } else {
+        await chatService.renameProject(renameTarget.projectId, value);
+        await refreshProjects();
+      }
+      setRenameTarget(null);
     } catch (error) {
-      console.error('Failed to rename session:', error);
+      console.error('Failed to rename:', error);
+      setRenameError(translateError(error) || t('common.operation_failed'));
+    } finally {
+      setRenameBusy(false);
     }
   };
 
@@ -3302,17 +3331,11 @@ function App() {
 
   const createProject = () => setCreateProjectDialogOpen(true);
 
-  const renameProject = async (project: ProjectEntry) => {
+  const renameProject = (project: ProjectEntry) => {
     // 系统聊天项目不可重命名（后端同样拒绝）。
     if (project.is_chat) return;
-    try {
-      const name = window.prompt(t('sidebar.project_rename'), project.name);
-      if (!name || name.trim() === project.name) return;
-      await chatService.renameProject(project.id, name.trim());
-      await refreshProjects();
-    } catch (error) {
-      console.error('Failed to rename project:', error);
-    }
+    setRenameError(null);
+    setRenameTarget({ kind: 'project', projectId: project.id, current: project.name });
   };
 
   const deleteProject = async (projectId: string) => {
@@ -4598,6 +4621,19 @@ function App() {
         onCreate={createProjectWithWorkspace}
         projects={projects}
       />
+      {renameTarget && (
+        <RenameDialog
+          open
+          title={renameTarget.kind === 'session' ? t('titlebar.rename_session') : t('sidebar.project_rename')}
+          initialValue={renameTarget.current}
+          maxLength={renameTarget.kind === 'session' ? 40 : 60}
+          confirmLabel={t('dialog.confirm')}
+          busy={renameBusy}
+          error={renameError}
+          onClose={() => { if (!renameBusy) setRenameTarget(null); }}
+          onConfirm={(value) => void submitRename(value)}
+        />
+      )}
       <UpdateToastCard center={updateCenter} onOpenSettings={() => setActiveView('settings')} />
       <WorkflowEditorApp />
     </main>

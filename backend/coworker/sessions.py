@@ -486,10 +486,11 @@ class SessionStore:
     def rename(self, session_id: str, title: str) -> Session | None:
         session = self.require(session_id)
         cleaned = title.strip()
-        if cleaned:
-            session.title = cleaned[:40]
-            session.title_auto = False
-            self.save(session)
+        if not cleaned:
+            raise ValueError("session title is required")
+        session.title = cleaned[:40]
+        session.title_auto = False
+        self.save(session)
         return session
 
     def append_message(

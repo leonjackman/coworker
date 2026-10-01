@@ -125,6 +125,8 @@ async def rename_session(session_id: str, request: SessionRenameRequest):
         session = session_store.rename(session_id, request.title)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "session": session.public()}
 @router.post("/sessions/{session_id}/read")
 async def mark_session_read(session_id: str):
