@@ -396,6 +396,38 @@
 - 新增 `test_run_command_normalize.py`（複合命令走 shell、崩潰原字串回歸）、`test_reasoning_stream.py`（推理 token 空白保留），並擴充 `test_skill_self_authoring.py`（免審批工具分流、四處文案與設置一致）。
 - 全量後端測試通過；前端 `tsc --noEmit` 零錯誤、`vite build` 通過。
 
+## 0.7.0
+
+本版本推出 **工作流（Beta）** 與 **文件解析** 兩大新能力：可視化編輯與執行的 Workflow Studio、YAML 工作流引擎，以及 Office/PDF 的讀取、建立、編輯與轉換；另外新增瀏覽器控制面板與憑證保險庫、AppleScript 自動化，並修復 Shell 白名單繞過、桌面輸入串字等一批穩定性問題。
+
+### 新增
+
+- **工作流引擎（Beta）**：新增 `backend/coworker/workflows/`，以宣告式 YAML 定義可版本化工作流，支援版本歷史、草稿、匯入 / 匯出 / 回滾與內建範本；步驟具備契約化輸入輸出（`string|number|boolean|list|object|secret` 六型，secret 不落明文）、錯誤策略（abort / fail / skip / human / goto / agent / self_heal + 重試）、型別化人工關卡（核准 / 提問 / 可重試失敗）與 agent 步驟自動接手回寫；配套能力註冊表與靜態驗證（描述必填、GUI 語義定位、script 沙箱檢查），驗證器、執行器與前端共用同一份能力定義。
+- **Workflow Studio（Beta）**：全重做的可視化編輯器——頂欄選單、左 dock（節點 / 大綱 / 版本 / 範本 / 執行）、畫布、右屬性欄、底部問題 / 控制台 / 輸出 dock，支援框選多選、undo/redo、自動佈局、Command palette（⌘K）、Code(JSON) 雙向檢視、依輸入宣告生成的執行表單與能力面板參數說明；可在獨立 Electron 視窗編輯，保存後主視窗即時刷新。
+- **文件解析與編輯**：新增 `backend/coworker/documents/`，以 `read_document` / `create_document` / `edit_document` / `convert_document` 四個工具支援 **docx / xlsx / pptx / pdf** 的讀取、建立、原地編輯與轉換（Office→pdf、pdf→圖、圖片→pdf、多 pdf 合併）；聊天附件自動抽成文字（上限 4 萬字）再餵模型，取代整包 base64 佔用 context；`.doc/.xls/.ppt` 舊格式回報明確錯誤。
+- **瀏覽器控制面板與憑證保險庫**：新增歷史 / 下載 / 書籤管理與瀏覽器設定面板，資料原子落盤持久化；密碼以系統 `safeStorage`（Keychain / DPAPI）加密保存，明文永不回傳給 agent，agent 登入動作需使用者畫面核准（最長 90 秒）。
+- **AppleScript 自動化**：新增 `run_applescript` 工具（腳本經 STDIN 交給 `osascript`、不經 shell 字串），與桌面控制主開關解耦——未開啟桌面控制也可用，走 HITL 核准。
+- **其他**：App 可搜尋選擇器與 `GET /api/computer/apps`，文字 / 快捷鍵動作可指定目標 App；聊天輸入 `/` 指令卡可直接觸發工作流（Beta）；新增工作流自動審閱設定（啟用 / 嚴格度 / 需審批）。
+
+### 改動
+
+- **工作流（Beta）細化**：確定性失敗預設直接標 failed（只有 agent 類步驟才交由模型接手）；草稿保存不再被驗證阻擋，改由執行把關；agent 步驟預設無人值守執行，僅明確要求核准的步驟才暫停。
+- **電腦動作收斂單一來源**：動作目錄集中到 `computer/actions.py`，工具 schema 按動作個別校驗，快捷鍵不再被嗅探成文字。
+- **瀏覽器點擊語義優先**：`click` 依 selector → 文字 → 座標順序解析，`click_text` 支持 ARIA role 與可訪問名稱匹配，多候選一律回 `ambiguous_match` 而非亂點。
+- **打包與 CI**：建置前後各跑一次文件堆疊自我檢查，release CI 四平台增加凍結後端驗證步驟。
+- **小改動**：11 語言包清理 288 個未使用標籤；停止快捷鍵改為暫停 / 恢復切換且 tray 標籤同步；SkillsPanel 預設「已安裝」分頁；麵包屑支持三層逐層返回。
+
+### 修復
+
+- **重命名在桌面端靜默失敗**：Electron renderer 無原生 `window.prompt`，專案 / 會話改名點了沒反應；改為應用內 `RenameDialog`，並修後端 session 改名空白標題回 500（改回 400）。
+- **Shell 白名單繞過（資安）**：原只驗 `argv[0]`，`sh -c '任意命令'` 可繞過白名單；改為遞迴解析 shell 腳本、wrapper 與 `find -exec` 逐一比對，無法靜態驗證的直接拒絕。
+- **桌面操作未驗證不得宣告成功**：模型對未經驗證的點擊 / 輸入直接宣告成功時，強制補一次觀察核對才准收尾。
+- **其他**：斷線後回覆重複氣泡合併為單一訊息；純文字輸入不再 fallback 剪貼簿（修 `1+1` 變 `1+1×2`）；App 清單掃描補 cryptex 路徑（新版 Safari）；工作流（Beta）一批編輯器與執行修復（R1–R6 節點契約根治、命令失敗帶出 `rc` / stderr、模板參考容忍包裝層、開啟工作流連線消失等）。
+
+### 品質
+
+- 新增文件解析（約 40 case）、Shell 白名單繞過、驗證守衛、佔位合併等測試，並補工作流引擎對應測試；前端 `tsc --noEmit` 零錯誤。
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）

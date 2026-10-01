@@ -20,11 +20,19 @@
 ### Screenshots
 
 <p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/welcome-dark.png" width="100%" alt="Coworker - Welcome">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/main_dark.png" width="100%" alt="Coworker - 欢迎页">
 </p>
 
 <p align="center">
-  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat-light.png" width="100%" alt="Coworker - Chat">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/chat_light.png" width="100%" alt="Coworker - 对话页">
+</p>
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio_home.png" width="100%" alt="Coworker - 工作流工作室主頁">
+</p>
+
+<p align="center">
+  <img src="https://github.com/leonjackman/coworker/raw/dev/docs/screenshots/workflow_studio.png" width="100%" alt="Coworker - 工作流工作室">
 </p>
 
 ---
