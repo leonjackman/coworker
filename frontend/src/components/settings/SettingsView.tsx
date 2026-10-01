@@ -19,6 +19,9 @@ import { ShortcutsPage } from './ShortcutsPage';
 import { BrowserSettingsPage } from '../browser/BrowserSettingsPage';
 import { autonomyOptions, languageOptions, themeOptions } from './preference-options';
 
+// Cron scheduling is hidden from the UI pending rework; feature code is retained.
+const SHOW_WORKFLOW_SCHEDULER_SETTING = false;
+
 interface SettingsViewProps {
   themeSettings: ThemeSettings;
   autonomy: Autonomy;
@@ -393,9 +396,9 @@ export function SettingsView({
                 ],
                 onChange: (value) => onComputerUseEnabledChange(value === 'true'),
               },
-              {
+              ...(SHOW_WORKFLOW_SCHEDULER_SETTING ? [{
                 id: 'workflow_scheduler_enabled',
-                type: 'toggle',
+                type: 'toggle' as const,
                 label: t('settings.workflow_scheduler_enabled'),
                 description: t('settings.workflow_scheduler_enabled_desc'),
                 value: workflowSchedulerEnabled ? 'true' : 'false',
@@ -403,8 +406,8 @@ export function SettingsView({
                   { value: 'true', label: t('memory.enabled') },
                   { value: 'false', label: t('memory.disabled') },
                 ],
-                onChange: (value) => onWorkflowSchedulerEnabledChange(value === 'true'),
-              },
+                onChange: (value: string) => onWorkflowSchedulerEnabledChange(value === 'true'),
+              }] : []),
             ],
             footer: computerUseEnabled && window.electronAPI?.computerPermissionStatus ? (
               <ComputerPermPanel

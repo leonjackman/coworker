@@ -66,6 +66,9 @@ interface SessionRowProps {
 
 const DEFAULT_AGENT_ID = 'default_agent';
 
+// Cron scheduling is hidden from the UI pending rework; feature code is retained.
+const SHOW_SCHEDULES_NAV = false;
+
 const SIDEBAR_PROJECT_ORDER_KEY = 'coworker.sidebar.projectOrder';
 
 function loadProjectOrder(): string[] {
@@ -668,10 +671,12 @@ export function WorkspaceSidebar({
           <Workflow size={17} />
           {!collapsed && <span>{t('nav.workflows')}</span>}
         </button>
-        <button className={`sidebar-nav-item ${activeView === 'schedules' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('schedules')}>
-          <Clock size={17} />
-          {!collapsed && <span>{t('nav.schedules')}</span>}
-        </button>
+        {SHOW_SCHEDULES_NAV && (
+          <button className={`sidebar-nav-item ${activeView === 'schedules' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('schedules')}>
+            <Clock size={17} />
+            {!collapsed && <span>{t('nav.schedules')}</span>}
+          </button>
+        )}
       </nav>
 
       <Separator />
