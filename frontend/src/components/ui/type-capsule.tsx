@@ -2,12 +2,13 @@ import type { HTMLAttributes, ReactNode } from 'react';
 import { cn } from '../../lib/utils';
 import './type-capsule.css';
 
-export type SlashCommandType = 'sys' | 'skill' | 'mcp';
+export type SlashCommandType = 'sys' | 'skill' | 'mcp' | 'workflow';
 
 export const TYPE_CAPSULE_LABELS: Record<SlashCommandType, string> = {
   sys: 'sys',
   skill: 'skill',
   mcp: 'mcp',
+  workflow: 'workflow',
 };
 
 interface TypeCapsuleProps extends HTMLAttributes<HTMLSpanElement> {

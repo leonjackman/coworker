@@ -120,6 +120,9 @@ interface ChatInputProps {
     enabled?: boolean;
     commands?: Array<{ name: string; description?: string }>;
   }>;
+  /** Installed workflows, used to populate the "/" command card. Each workflow
+   *  is listed by its ORIGINAL name (may be non-English) and can be invoked. */
+  workflows?: Array<{ name: string; description?: string; status?: string }>;
   /** Called when the "/" command menu opens, so the parent can refresh the skill list. */
   onOpenCommands?: () => void;
   /** The committed command chip (a real inline element at the start of the editor). */
@@ -258,6 +261,7 @@ export function ChatInput({
   activeAgentId,
   onSelectAgent,
   skills = [],
+  workflows = [],
   onOpenCommands,
   commandChip = null,
   onCommandCommit,
@@ -461,14 +465,27 @@ export function ChatInput({
         ),
     [skills],
   );
+  // Installed workflows become "/workflow <original name>" entries, labelled by
+  // the "workflow" capsule so they are distinct from skills and sys commands.
+  const workflowCommandItems = useMemo<SlashCommandItem[]>(
+    () =>
+      (workflows ?? [])
+        .filter((workflow) => !workflow.status || workflow.status === 'active')
+        .map((workflow) => ({
+          command: `/workflow ${workflow.name}`,
+          description: workflow.description ?? "",
+          type: "workflow" as const,
+        })),
+    [workflows],
+  );
   const staticCommandItems = SLASH_COMMANDS.filter((command) => command !== '/goal' || goalEnabled).map((command) => ({
     command,
     description: t(`chat.command_${command.slice(1)}`),
     type: "sys" as const,
   }));
   const commandItems = useMemo<SlashCommandItem[]>(
-    () => [...staticCommandItems, ...skillSubCommandItems, ...skillCommandItems],
-    [staticCommandItems, skillSubCommandItems, skillCommandItems],
+    () => [...staticCommandItems, ...skillSubCommandItems, ...workflowCommandItems, ...skillCommandItems],
+    [staticCommandItems, skillSubCommandItems, workflowCommandItems, skillCommandItems],
   );
 
   // Leading slash token (text after the leading "/", up to whitespace) for

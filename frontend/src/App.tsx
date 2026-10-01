@@ -245,6 +245,9 @@ function App() {
   const [mcpTemplates, setMcpTemplates] = useState<McpTemplateEntry[]>([]);
   const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
   const [skillDiagnostics, setSkillDiagnostics] = useState<SkillDiagnostic[]>([]);
+  const [workflowEntries, setWorkflowEntries] = useState<
+    Array<{ name: string; description?: string; status?: string }>
+  >([]);
 
   // Global keyboard shortcuts — registry-driven (see keys/config.ts). Handlers
   // return true when they consumed the key so conditional shortcuts (e.g.
@@ -442,6 +445,23 @@ function App() {
   useEffect(() => {
     void refreshSkills();
   }, [refreshSkills]);
+
+  // Installed workflows, shown (and invokable) in the chat-input "/" command card
+  // by their original name — including non-English titles.
+  const refreshWorkflows = useCallback(async () => {
+    try {
+      const response = await chatService.listWorkflows();
+      setWorkflowEntries(
+        response.workflows.map((w) => ({ name: w.name, description: w.description, status: w.status })),
+      );
+    } catch {
+      // Non-fatal: the slash menu simply won't show workflow commands.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshWorkflows();
+  }, [refreshWorkflows]);
 
   // Global index of sub-command name -> owning package name, used to dispatch
   // the bare "/<command>" entries that the chat-input "/" card can insert.
@@ -1340,6 +1360,16 @@ function App() {
           workMode,
           autonomy,
         });
+        return;
+      }
+      if (chip.type === 'workflow') {
+        // The chip command is already "/workflow <original name>"; any text the
+        // user typed after it is passed through (JSON inputs for the run).
+        const prompt = input.trim();
+        setInput('');
+        setCommandChip(null);
+        commandChipRef.current = null;
+        handleSlashCommand(`${chip.command}${prompt ? ` ${prompt}` : ''}`);
         return;
       }
       return;
@@ -4422,7 +4452,11 @@ function App() {
                         {...(draftAgentId ? { activeAgentId: draftAgentId } : {})}
                         onSelectAgent={setDraftAgentId}
                         skills={skillEntries}
-                        onOpenCommands={refreshSkills}
+                        workflows={workflowEntries}
+                        onOpenCommands={() => {
+                          void refreshSkills();
+                          void refreshWorkflows();
+                        }}
                       />
                       )}
                     </div>

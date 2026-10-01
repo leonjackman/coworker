@@ -25,3 +25,8 @@
   background: var(--success);
   color: var(--success-foreground);
 }
+
+.type-capsule--workflow {
+  background: oklch(0.60 0.15 305);
+  color: #ffffff;
+}
