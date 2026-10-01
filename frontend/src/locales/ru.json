@@ -1556,5 +1556,16 @@
   "workflows.help_exact": "Только при поиске по тексту: требовать точного совпадения, чтобы не нажать другой элемент, лишь содержащий тот же текст. (Не связано с «абсолютным соблюдением».)",
   "workflows.help_absolute": "Жёсткое ограничение только для пользователя: цель/привязка узла выполняется строго как задано (без смены метода, самовосстановления, перехвата агентом).",
   "workflows.fld_role": "Роль",
-  "workflows.help_role": "ARIA-роль для ограничения (напр. button, link), чтобы попасть в нужный элемент."
+  "workflows.help_role": "ARIA-роль для ограничения (напр. button, link), чтобы попасть в нужный элемент.",
+  "workflows.act_newest": "Последний файл",
+  "workflows.fld_allow_failure": "Разрешить ошибку",
+  "workflows.fld_display": "Отображение",
+  "workflows.fld_max_chars": "Макс. символов",
+  "workflows.fld_max_results": "Макс. результатов",
+  "workflows.fld_ok_codes": "Коды успеха",
+  "workflows.fld_recursive": "Рекурсивно",
+  "workflows.fld_scroll_x": "Прокрутка X",
+  "workflows.fld_shell": "Использовать shell",
+  "workflows.fld_shot_height": "Высота снимка",
+  "workflows.fld_shot_width": "Ширина снимка"
 }

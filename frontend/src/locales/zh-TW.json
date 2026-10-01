@@ -1558,5 +1558,16 @@
   "workflows.help_exact": "僅在用文字定位時：要求元素文字完全相符，避免點到其他只是「包含」相同文字的元素。（與「絕對遵守」無關。）",
   "workflows.help_absolute": "僅使用者可設的硬約束：節點的目標/綁定必須照做——不換方法、不自癒、不交由 agent 接手。",
   "workflows.fld_role": "角色",
-  "workflows.help_role": "限定匹配的 ARIA 角色（如 button、link），有助鎖定正確控制項。"
+  "workflows.help_role": "限定匹配的 ARIA 角色（如 button、link），有助鎖定正確控制項。",
+  "workflows.act_newest": "最新檔案",
+  "workflows.fld_allow_failure": "允許失敗",
+  "workflows.fld_display": "顯示",
+  "workflows.fld_max_chars": "最大字元數",
+  "workflows.fld_max_results": "最大結果數",
+  "workflows.fld_ok_codes": "成功狀態碼",
+  "workflows.fld_recursive": "遞迴",
+  "workflows.fld_scroll_x": "水平捲動",
+  "workflows.fld_shell": "使用 shell",
+  "workflows.fld_shot_height": "截圖高度",
+  "workflows.fld_shot_width": "截圖寬度"
 }

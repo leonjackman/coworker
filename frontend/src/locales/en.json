@@ -1558,5 +1558,16 @@
   "workflows.help_exact": "Only when locating by text: require the element's text to match exactly, so it doesn't hit another element that merely contains the same text. (This is unrelated to “absolute-obey”.)",
   "workflows.help_absolute": "User-only hard constraint: the node's goal/binding must run exactly as specified — no method swap, no self-heal, no agent takeover.",
   "workflows.fld_role": "Role",
-  "workflows.help_role": "ARIA role to restrict matching (e.g. button, link). Helps target the right control."
+  "workflows.help_role": "ARIA role to restrict matching (e.g. button, link). Helps target the right control.",
+  "workflows.act_newest": "Newest file",
+  "workflows.fld_allow_failure": "Allow failure",
+  "workflows.fld_display": "Display",
+  "workflows.fld_max_chars": "Max chars",
+  "workflows.fld_max_results": "Max results",
+  "workflows.fld_ok_codes": "OK status codes",
+  "workflows.fld_recursive": "Recursive",
+  "workflows.fld_scroll_x": "Scroll X",
+  "workflows.fld_shell": "Use shell",
+  "workflows.fld_shot_height": "Screenshot height",
+  "workflows.fld_shot_width": "Screenshot width"
 }

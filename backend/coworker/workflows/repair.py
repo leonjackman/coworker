@@ -79,3 +79,69 @@ def suggest_repair(
 
     repaired = {k: v for k, v in data.items() if k in _ALLOWED and v is not None}
     return repaired or None
+
+
+_BINDING_SYSTEM = (
+    "You fill in the BINDING (the 'how') of a workflow step that only states its "
+    "INTENT (the goal / 'what'). Given the step's kind, its goal, and the list of "
+    "available actions and parameters for that kind, choose the concrete action, "
+    "parameters, and (for UI actions) a semantic locator. Return ONLY a JSON object "
+    '{"do": <action>, "params": {<object>}, "locator": {<object>}} using ONLY '
+    "actions/parameters that appear in the catalog. For GUI steps prefer a semantic "
+    'locator like {"role": "button", "name": "..."} or {"text": "..."}. Return {} if '
+    "you cannot confidently choose. Never include prose, markdown fences, or extra keys."
+)
+
+
+def suggest_binding(
+    step: Any,
+    registry: Any,
+    *,
+    provider_manager: Any | None = None,
+    llm: Any | None = None,
+    data_dir: Any | None = None,
+) -> dict[str, Any] | None:
+    """Resolve an intent-only step's binding from the capability catalog (P2).
+
+    Best-effort: returns ``{do, params, locator}`` (only present keys) or ``None``.
+    """
+    if llm is None:
+        from coworker.agent.headless import build_default_llm
+
+        llm = build_default_llm(provider_manager, data_dir)
+    if llm is None:
+        return None
+
+    kind = str(getattr(step, "kind", "") or "")
+    kspec = registry.kinds.get(kind) if registry is not None else None
+    catalog = []
+    if kspec is not None:
+        catalog = [
+            {"action": a.name, "params": [p.name for p in a.params]}
+            for a in kspec.actions
+        ]
+    payload = {
+        "kind": kind,
+        "goal": str(getattr(step, "goal", "") or getattr(step, "description", "") or ""),
+        "available_actions": catalog,
+    }
+    try:
+        response = llm.invoke(
+            [("system", _BINDING_SYSTEM), ("human", json.dumps(payload, ensure_ascii=False))]
+        )
+        content = response.content if hasattr(response, "content") else str(response)
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        data = _extract_json(content) or {}
+    except Exception as exc:  # noqa: BLE001 - resolution is best-effort
+        logger.warning("binding resolve llm call failed: %s", exc)
+        return None
+
+    out: dict[str, Any] = {}
+    if isinstance(data.get("do"), str) and data["do"].strip():
+        out["do"] = data["do"].strip()
+    if isinstance(data.get("params"), dict):
+        out["params"] = data["params"]
+    if isinstance(data.get("locator"), dict):
+        out["locator"] = data["locator"]
+    return out or None

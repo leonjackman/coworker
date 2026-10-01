@@ -403,12 +403,15 @@ def build_workspace_tools(
         a markdown file as a stand-in for a workflow.
 
         Authoring: a workflow must be atomic, user-readable nodes — one action per
-        node, a `description` on every node, a semantic locator (role/name) for GUI
-        steps, no `evaluate` DOM-clicking, no one-command-does-everything shell blobs,
-        and a verification step at the end. Call action=spec for the full spec and
-        action=capabilities for the valid kinds/actions/params, then action=validate
-        (static) and action=simulate (dry-run). create/update REJECT non-conforming
-        workflows with diagnostics; fix them and resubmit until status is ok.
+        node with a clear GOAL (the step's intent), a semantic locator for GUI steps
+        (browser `role`/`text`, computer `role`/`name`), no `evaluate` DOM-clicking,
+        no one-command-does-everything shell blobs, and a verification step at the
+        end. An INTENT-ONLY node (goal set, no `do`) is allowed: at run time the
+        agent resolves the binding, verifies it, and writes it back. Call action=spec
+        for the full spec and action=capabilities for the valid kinds/actions/params,
+        then action=validate (static) and action=simulate (dry-run). create/update
+        REJECT non-conforming workflows with diagnostics; fix them and resubmit until
+        status is ok.
 
         Skills in a workflow: a step {"kind":"skill","do":"<name>"} runs an
         EXISTING skill by exact name (must be in <available_skills>; a missing

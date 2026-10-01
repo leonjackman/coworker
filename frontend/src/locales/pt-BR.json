@@ -1556,5 +1556,16 @@
   "workflows.help_exact": "Somente ao localizar por texto: exigir correspondência exata para não clicar em outro elemento que apenas contém o mesmo texto. (Sem relação com «cumprimento absoluto».)",
   "workflows.help_absolute": "Restrição rígida apenas do usuário: o objetivo/vínculo do nó é executado exatamente como especificado (sem trocar de método, sem autorreparo, sem o agente assumir).",
   "workflows.fld_role": "Papel",
-  "workflows.help_role": "Papel ARIA a restringir (ex. button, link) para atingir o controle certo."
+  "workflows.help_role": "Papel ARIA a restringir (ex. button, link) para atingir o controle certo.",
+  "workflows.act_newest": "Arquivo mais recente",
+  "workflows.fld_allow_failure": "Permitir falha",
+  "workflows.fld_display": "Exibição",
+  "workflows.fld_max_chars": "Máx. caracteres",
+  "workflows.fld_max_results": "Máx. resultados",
+  "workflows.fld_ok_codes": "Códigos OK",
+  "workflows.fld_recursive": "Recursivo",
+  "workflows.fld_scroll_x": "Rolar X",
+  "workflows.fld_shell": "Usar shell",
+  "workflows.fld_shot_height": "Altura da captura",
+  "workflows.fld_shot_width": "Largura da captura"
 }

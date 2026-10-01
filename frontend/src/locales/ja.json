@@ -1558,5 +1558,16 @@
   "workflows.help_exact": "テキストで要素を探すときのみ: 文字の完全一致を要求し、同じ文字を含む別要素への誤クリックを防ぎます。（「絶対遵守」とは無関係。）",
   "workflows.help_absolute": "ユーザーのみ設定できるハード制約：ノードの目標/バインディングは指定どおりに実行します（手段の差し替え・自己修復・エージェント引き継ぎなし）。",
   "workflows.fld_role": "ロール",
-  "workflows.help_role": "一致させる ARIA ロール（例: button, link）。正しいコントロールの特定に役立ちます。"
+  "workflows.help_role": "一致させる ARIA ロール（例: button, link）。正しいコントロールの特定に役立ちます。",
+  "workflows.act_newest": "最新ファイル",
+  "workflows.fld_allow_failure": "失敗を許可",
+  "workflows.fld_display": "表示",
+  "workflows.fld_max_chars": "最大文字数",
+  "workflows.fld_max_results": "最大件数",
+  "workflows.fld_ok_codes": "成功ステータス",
+  "workflows.fld_recursive": "再帰的",
+  "workflows.fld_scroll_x": "横スクロール",
+  "workflows.fld_shell": "シェルを使用",
+  "workflows.fld_shot_height": "スクリーンショット高さ",
+  "workflows.fld_shot_width": "スクリーンショット幅"
 }

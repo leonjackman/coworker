@@ -1556,5 +1556,16 @@
   "workflows.help_exact": "Uniquement lors de la localisation par texte : exiger une correspondance exacte, pour éviter de cliquer un autre élément contenant le même texte. (Sans rapport avec le « respect absolu ».)",
   "workflows.help_absolute": "Contrainte stricte réservée à l’utilisateur : le but/la liaison du nœud s’exécute exactement comme spécifié (aucun changement de méthode, aucune auto-réparation, aucune reprise par l’agent).",
   "workflows.fld_role": "Rôle",
-  "workflows.help_role": "Rôle ARIA à restreindre (ex. button, link) pour cibler le bon contrôle."
+  "workflows.help_role": "Rôle ARIA à restreindre (ex. button, link) pour cibler le bon contrôle.",
+  "workflows.act_newest": "Fichier le plus récent",
+  "workflows.fld_allow_failure": "Autoriser l’échec",
+  "workflows.fld_display": "Affichage",
+  "workflows.fld_max_chars": "Nb max de caractères",
+  "workflows.fld_max_results": "Nb max de résultats",
+  "workflows.fld_ok_codes": "Codes de statut OK",
+  "workflows.fld_recursive": "Récursif",
+  "workflows.fld_scroll_x": "Défilement X",
+  "workflows.fld_shell": "Utiliser le shell",
+  "workflows.fld_shot_height": "Hauteur de capture",
+  "workflows.fld_shot_width": "Largeur de capture"
 }

@@ -63,6 +63,15 @@ class StepEnvironment:
         """
         return None
 
+    def supports_resolve(self) -> bool:
+        """Whether this environment can resolve an intent-only step's BINDING."""
+        return False
+
+    def resolve_binding(self, step: Any, context: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve the BINDING (do/params/locator) for a step that only states its
+        intent (goal). Returns replacement fields or ``None``. Default: unsupported."""
+        return None
+
     def evidence(self, name: str, data: Any) -> None:
         """Persist a piece of evidence (screenshot/snapshot/output). Default: no-op."""
         return None
@@ -89,6 +98,7 @@ class CallbackEnvironment(StepEnvironment):
         agentic_fn: Callable[..., Any] | None = None,
         human_fn: Callable[..., Any] | None = None,
         heal_fn: Callable[..., Any] | None = None,
+        resolve_fn: Callable[..., Any] | None = None,
         evidence_fn: Callable[..., Any] | None = None,
     ):
         self._command_fn = command_fn
@@ -101,6 +111,7 @@ class CallbackEnvironment(StepEnvironment):
         self._agentic_fn = agentic_fn
         self._human_fn = human_fn
         self._heal_fn = heal_fn
+        self._resolve_fn = resolve_fn
         self._evidence_fn = evidence_fn
 
     def command(self, argv: list[str], cwd: str = "", timeout: int = 30) -> Any:
@@ -155,6 +166,14 @@ class CallbackEnvironment(StepEnvironment):
         if self._heal_fn is None:
             return None
         return self._heal_fn(step, error, context)
+
+    def supports_resolve(self) -> bool:
+        return self._resolve_fn is not None
+
+    def resolve_binding(self, step: Any, context: dict[str, Any]) -> dict[str, Any] | None:
+        if self._resolve_fn is None:
+            return None
+        return self._resolve_fn(step, context)
 
     def evidence(self, name: str, data: Any) -> None:
         if self._evidence_fn is not None:
@@ -391,6 +410,18 @@ def build_tool_environment(
             data_dir=data_dir,
         )
 
+    def _resolve(step: Any, context: dict[str, Any]) -> dict[str, Any] | None:
+        from .capabilities import CapabilityRegistry
+        from .repair import suggest_binding
+
+        return suggest_binding(
+            step,
+            CapabilityRegistry.declared(),
+            provider_manager=provider_manager,
+            llm=llm,
+            data_dir=data_dir,
+        )
+
     def _evidence(name: str, data: Any) -> None:
         from .evidence import save_evidence
 
@@ -412,6 +443,8 @@ def build_tool_environment(
         human_fn=_human,
         agentic_fn=_agentic,
         heal_fn=_heal,
+        # Binding resolution needs a model; only enable it when one is available.
+        resolve_fn=_resolve if (llm is not None or provider_manager is not None) else None,
         evidence_fn=_evidence,
     )
 

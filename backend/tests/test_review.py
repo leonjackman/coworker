@@ -37,7 +37,7 @@ def test_invalid_proposal_is_not_staged(tmp_path):
         "action": "create",
         "name": "bad-one",
         "description": "d",
-        "steps": [{"kind": "tool", "params": {"seconds": 10}}],  # no do
+        "steps": [{"kind": "transform", "do": "not-a-real-action"}],  # unknown action
     }
     llm = _SeqLLM([verdict, verdict])  # main + repair both invalid
     result = asyncio.run(run_workflow_review(llm, manager, session_id="s", messages=[], parts=_parts()))
@@ -63,7 +63,7 @@ def test_valid_proposal_stages(tmp_path):
 def test_repair_round_recovers(tmp_path):
     manager = WorkflowManager(tmp_path)
     manager.enforce_conformance = False
-    bad = {"action": "create", "name": "fix-me", "description": "d", "steps": [{"kind": "tool"}]}
+    bad = {"action": "create", "name": "fix-me", "description": "d", "steps": [{"kind": "transform", "do": "not-a-real-action"}]}
     good = {"action": "create", "name": "fix-me", "description": "d", "steps": [{"kind": "set", "params": {"name": "k", "value": "v"}}]}
     llm = _SeqLLM([bad, good])
     result = asyncio.run(run_workflow_review(llm, manager, session_id="s", messages=[], parts=_parts()))

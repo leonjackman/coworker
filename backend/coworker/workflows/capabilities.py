@@ -31,6 +31,12 @@ DSL_VERSION = 2
 # Template reference roots allowed anywhere a string is templated.
 TEMPLATE_ROOTS = ("inputs", "steps", "vars", "env")
 
+#: Action kinds whose BINDING can be resolved by the agent from an intent-only
+#: step (goal set, no ``do``). 絕對遵守 nodes are excluded by callers.
+RESOLVABLE_INTENT_KINDS = frozenset(
+    {"browser", "computer", "app", "file", "transform", "http", "notify", "tool", "command"}
+)
+
 # Top-level YAML document keys (single source for the authoring spec).
 DOCUMENT_KEYS: tuple[dict[str, str], ...] = (
     {"name": "required — workflow name (letters/numbers/space/-/_)"},
@@ -653,6 +659,12 @@ class CapabilityRegistry:
             return ResolvedAction(step_id, kind, do, kind, params, "result_ok", locator), []
 
         if spec.requires_do and not do:
+            # Intent-only node: the binding is resolved by the agent at run time
+            # (P2). Allowed when the kind is resolvable, an intent is stated, and
+            # the node is not 絕對遵守 (whose binding must be explicit).
+            has_intent = bool(str(getattr(step, "goal", "") or getattr(step, "description", "") or "").strip())
+            if kind in RESOLVABLE_INTENT_KINDS and has_intent and not getattr(step, "absolute", False):
+                return ResolvedAction(step_id, kind, "", kind, params, "result_ok", locator), []
             return None, [Diagnostic(step_id, "do", "missing_do", f"{kind} step requires 'do'")]
 
         # `tool` actions are not enumerable offline: accept any name, validate
@@ -828,7 +840,9 @@ class CapabilityRegistry:
             "needed). Use `kind: computer do: script` (params.code, the cw-automa helper API) for "
             "intent-level steps, each script its OWN node.\n\n"
             "Rules (violations are REJECTED at create/update time):\n"
-            "- Every step needs a `description` (short human-readable label = the step's INTENT) — the Studio shows it.\n"
+            "- Every step needs an INTENT: `goal` (mirrors `description`), a short human-readable label.\n"
+            "- An intent-only node (`goal` set, no `do`) is allowed: the agent resolves and persists the "
+            "binding (`do`/`params`/`locator`) at run time.\n"
             "- A step may be marked `absolute: true` (絕對遵守) ONLY by the user; it freezes the existing "
             "intent/binding (no substitution / self-heal / agent takeover).\n"
             "- Atomic nodes: exactly one action per step. NEVER bundle a sequence into one `command` "

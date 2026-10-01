@@ -24,7 +24,7 @@ from typing import Any, Callable
 from coworker.logger import get_logger
 
 from .assertions import evaluate, evaluate_all
-from .capabilities import CapabilityRegistry, check_success
+from .capabilities import RESOLVABLE_INTENT_KINDS, CapabilityRegistry, check_success
 from .env import StepEnvironment
 from .events import RunEventEmitter
 from .model import (
@@ -567,6 +567,19 @@ class WorkflowExecutor:
         *works* wins. A successful fallback is drift: the descriptor is promoted
         and rewritten into the workflow (W15).
         """
+        # Intent-only node: no binding yet → let the agent resolve it, verify by
+        # running it, and persist the binding back (origin=agent). 絕對遵守 is
+        # exempt (its binding is frozen and must not be filled/changed).
+        if (
+            not step.do
+            and step.kind in RESOLVABLE_INTENT_KINDS
+            and not getattr(step, "absolute", False)
+            and state.env.supports_resolve()
+        ):
+            resolved = self._resolve_and_persist(state.workflow, step, run, state)
+            if resolved is not None:
+                return resolved
+
         from .model import Locator as _Locator
 
         parsed = _Locator.from_dict(step.locator) if step.locator else None
@@ -601,6 +614,48 @@ class WorkflowExecutor:
         if last_error is not None:
             raise last_error
         raise StepFailed(step.id, "no locator descriptor matched")
+
+    def _resolve_and_persist(
+        self, workflow: Workflow, step: Step, run: Run, state: "_State"
+    ) -> Any | None:
+        """Agent resolves an intent-only step's binding, runs+verifies it, and (on
+        success) writes the binding back to the workflow (origin=agent).
+
+        Returns the step result on success; ``None`` when no binding was produced
+        (the caller then reports the usual "requires action" error). A binding
+        that was produced but FAILED verification propagates the failure so the
+        normal recovery chain runs.
+        """
+        try:
+            binding = state.env.resolve_binding(step, run.context)
+        except Exception as exc:  # noqa: BLE001 - resolution is best-effort
+            state.emitter.emit("resolve", step_id=step.id, status="error", message=str(exc))
+            return None
+        if not isinstance(binding, dict):
+            return None
+        fields = {k: binding[k] for k in ("do", "params", "locator") if binding.get(k)}
+        if not fields:
+            return None
+        resolved = replace(step, **fields)
+        try:
+            resolved = replace(resolved, origin="agent")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            result = self._dispatch_action_once(resolved, run, state, resolved.locator)
+        except Exception as exc:  # noqa: BLE001 - verification failed → propagate
+            state.emitter.emit(
+                "resolve", step_id=step.id, status="failed",
+                message=str(exc), data={"binding": {k: fields[k] for k in fields}},
+            )
+            raise
+        state.emitter.emit(
+            "resolve", step_id=step.id, status="ok",
+            data={"binding": {k: fields[k] for k in fields}},
+        )
+        # Persist the resolved binding so the next run is deterministic.
+        self._record_patch(workflow, step, resolved, state)
+        return result
 
     def _dispatch_action_once(
         self, step: Step, run: Run, state: "_State", locator_raw: Any
@@ -744,6 +799,8 @@ class WorkflowExecutor:
             fields["params"] = patched.params
         if patched.do != old.do:
             fields["do"] = patched.do
+        if getattr(patched, "origin", "") != getattr(old, "origin", ""):
+            fields["origin"] = getattr(patched, "origin", "")
         if not fields:
             return
         try:

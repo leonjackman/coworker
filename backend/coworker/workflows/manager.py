@@ -749,7 +749,7 @@ def _patch_steps(steps: list[Step], step_id: str, fields: dict[str, Any]) -> lis
     for step in steps:
         if step.id == step_id:
             found = True
-            out.append(replace(step, **{k: v for k, v in fields.items() if k in {"locator", "params", "do"}}))
+            out.append(replace(step, **{k: v for k, v in fields.items() if k in {"locator", "params", "do", "origin"}}))
             continue
         then = _patch_steps(step.then, step_id, fields)
         else_ = _patch_steps(step.else_, step_id, fields)

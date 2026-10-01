@@ -1558,5 +1558,16 @@
   "workflows.help_exact": "Nur bei der Textsuche: exakte Übereinstimmung verlangen, damit nicht ein anderes Element mit gleichem Text getroffen wird. (Unabhängig von „Absolut befolgen“.)",
   "workflows.help_absolute": "Nur vom Nutzer setzbare harte Vorgabe: Ziel/Bindung des Knotens wird exakt ausgeführt (kein Methodenwechsel, keine Selbstreparatur, keine Agent-Übernahme).",
   "workflows.fld_role": "Rolle",
-  "workflows.help_role": "ARIA-Rolle zur Einschränkung (z. B. button, link), um das richtige Element zu treffen."
+  "workflows.help_role": "ARIA-Rolle zur Einschränkung (z. B. button, link), um das richtige Element zu treffen.",
+  "workflows.act_newest": "Neueste Datei",
+  "workflows.fld_allow_failure": "Fehler zulassen",
+  "workflows.fld_display": "Anzeige",
+  "workflows.fld_max_chars": "Max. Zeichen",
+  "workflows.fld_max_results": "Max. Ergebnisse",
+  "workflows.fld_ok_codes": "OK-Statuscodes",
+  "workflows.fld_recursive": "Rekursiv",
+  "workflows.fld_scroll_x": "Scrollen X",
+  "workflows.fld_shell": "Shell verwenden",
+  "workflows.fld_shot_height": "Screenshot-Höhe",
+  "workflows.fld_shot_width": "Screenshot-Breite"
 }
