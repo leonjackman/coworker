@@ -1519,5 +1519,20 @@
   "browser.site_data_desc": "内蔵ブラウザがサイトごとに保存した Cookie とローカルストレージ。",
   "browser.site_data_empty": "サイトデータはありません。",
   "browser.site_data_clear": "消去",
-  "browser.site_data_cookie_count": "Cookie {count} 件"
+  "browser.site_data_cookie_count": "Cookie {count} 件",
+  "workflows.act_login": "サインイン",
+  "workflows.act_list_bookmarks": "ブックマーク一覧",
+  "workflows.act_add_bookmark": "ブックマークを追加",
+  "workflows.act_remove_bookmark": "ブックマークを削除",
+  "workflows.act_list_history": "履歴一覧",
+  "workflows.act_clear_history": "履歴を消去",
+  "workflows.act_list_downloads": "ダウンロード一覧",
+  "workflows.act_clear_downloads": "ダウンロードを消去",
+  "workflows.act_list_permissions": "サイト権限一覧",
+  "workflows.act_list_sites": "サイト一覧",
+  "workflows.act_clear_site_data": "サイトデータを消去",
+  "workflows.fld_site": "サイト",
+  "workflows.fld_origin": "オリジン",
+  "workflows.act_unzip": "アーカイブを展開",
+  "workflows.act_zip": "アーカイブを作成"
 }

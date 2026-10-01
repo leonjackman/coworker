@@ -1517,5 +1517,20 @@
   "browser.site_data_desc": "內置瀏覽器按網站儲存嘅 Cookie 同本機儲存。",
   "browser.site_data_empty": "暫時未有網站資料。",
   "browser.site_data_clear": "清除",
-  "browser.site_data_cookie_count": "{count} 個 Cookie"
+  "browser.site_data_cookie_count": "{count} 個 Cookie",
+  "workflows.act_login": "登入",
+  "workflows.act_list_bookmarks": "列出書籤",
+  "workflows.act_add_bookmark": "加入書籤",
+  "workflows.act_remove_bookmark": "移除書籤",
+  "workflows.act_list_history": "列出記錄",
+  "workflows.act_clear_history": "清除記錄",
+  "workflows.act_list_downloads": "列出下載",
+  "workflows.act_clear_downloads": "清除下載",
+  "workflows.act_list_permissions": "列出網站權限",
+  "workflows.act_list_sites": "列出網站",
+  "workflows.act_clear_site_data": "清除網站資料",
+  "workflows.fld_site": "網站",
+  "workflows.fld_origin": "來源",
+  "workflows.act_unzip": "解壓縮壓縮檔",
+  "workflows.act_zip": "建立壓縮檔"
 }

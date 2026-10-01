@@ -46,6 +46,7 @@ def test_catalog_advertised_tool_is_gate_allowed(tmp_path):
     from coworker.workflows import WorkflowManager
 
     manager = WorkflowManager(tmp_path)
+    manager.enforce_conformance = False
     manager.create(
         "name: demo\ndescription: demo flow\nsteps:\n  - id: a\n    kind: set\n"
         "    params:\n      name: k\n      value: v\n"

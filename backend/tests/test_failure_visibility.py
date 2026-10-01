@@ -69,6 +69,7 @@ steps:
 
 def test_failure_message_contains_real_error_and_is_recorded(tmp_path: Path):
     manager = WorkflowManager(tmp_path)
+    manager.enforce_conformance = False
     manager.create(FLOW_ABORT)
     result = manager.run("vis-fail", env=ErrEnv())
     assert result["status"] == "failed"
@@ -81,6 +82,7 @@ def test_failure_message_contains_real_error_and_is_recorded(tmp_path: Path):
 
 def test_takeover_prompt_includes_step_params(tmp_path: Path):
     manager = WorkflowManager(tmp_path)
+    manager.enforce_conformance = False
     manager.create(FLOW_AGENT)
     env = ErrEnv(agentic=True)
     result = manager.run("vis-agent", env=env)

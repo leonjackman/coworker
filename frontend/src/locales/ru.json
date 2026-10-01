@@ -1517,5 +1517,20 @@
   "browser.site_data_desc": "Cookies и локальное хранилище, сохранённые встроенным браузером по сайтам.",
   "browser.site_data_empty": "Данные сайтов не сохранены.",
   "browser.site_data_clear": "Очистить",
-  "browser.site_data_cookie_count": "Cookies: {count}"
+  "browser.site_data_cookie_count": "Cookies: {count}",
+  "workflows.act_login": "Войти",
+  "workflows.act_list_bookmarks": "Список закладок",
+  "workflows.act_add_bookmark": "Добавить закладку",
+  "workflows.act_remove_bookmark": "Удалить закладку",
+  "workflows.act_list_history": "Список истории",
+  "workflows.act_clear_history": "Очистить историю",
+  "workflows.act_list_downloads": "Список загрузок",
+  "workflows.act_clear_downloads": "Очистить загрузки",
+  "workflows.act_list_permissions": "Список разрешений",
+  "workflows.act_list_sites": "Список сайтов",
+  "workflows.act_clear_site_data": "Очистить данные сайта",
+  "workflows.fld_site": "Сайт",
+  "workflows.fld_origin": "Источник",
+  "workflows.act_unzip": "Извлечь архив",
+  "workflows.act_zip": "Создать архив"
 }

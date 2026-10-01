@@ -48,9 +48,11 @@ _SYSTEM = (
     "Deduplication: if an existing workflow in <catalog> already covers this, respond with "
     "action=update using THAT exact name; otherwise action=create with a new lowercase, "
     "hyphen-separated, <=64 char name; if nothing is worth capturing, action=none.\n\n"
+    "Every step needs a short human-readable `description`; nodes are atomic (one action "
+    "each) and the last step VERIFIES the goal.\n\n"
     "Respond with ONLY a JSON object (no markdown):\n"
     '{{"action": "create"|"update"|"none", "name": "...", "description": "one sentence", '
-    '"steps": [{{"kind": "...", "do": "...", "params": {{...}}, "locator": {{...}}}}]}}'
+    '"steps": [{{"kind": "...", "do": "...", "description": "...", "params": {{...}}, "locator": {{...}}}}]}}'
 )
 
 _AGGRESSIVENESS: dict[str, str] = {

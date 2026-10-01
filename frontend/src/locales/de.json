@@ -1519,5 +1519,20 @@
   "browser.site_data_desc": "Vom eingebetteten Browser pro Website gespeicherte Cookies und lokaler Speicher.",
   "browser.site_data_empty": "Keine Website-Daten gespeichert.",
   "browser.site_data_clear": "Löschen",
-  "browser.site_data_cookie_count": "{count} Cookies"
+  "browser.site_data_cookie_count": "{count} Cookies",
+  "workflows.act_login": "Anmelden",
+  "workflows.act_list_bookmarks": "Lesezeichen auflisten",
+  "workflows.act_add_bookmark": "Lesezeichen hinzufügen",
+  "workflows.act_remove_bookmark": "Lesezeichen entfernen",
+  "workflows.act_list_history": "Verlauf auflisten",
+  "workflows.act_clear_history": "Verlauf löschen",
+  "workflows.act_list_downloads": "Downloads auflisten",
+  "workflows.act_clear_downloads": "Downloads löschen",
+  "workflows.act_list_permissions": "Website-Berechtigungen auflisten",
+  "workflows.act_list_sites": "Websites auflisten",
+  "workflows.act_clear_site_data": "Website-Daten löschen",
+  "workflows.fld_site": "Website",
+  "workflows.fld_origin": "Ursprung",
+  "workflows.act_unzip": "Archiv entpacken",
+  "workflows.act_zip": "Archiv erstellen"
 }

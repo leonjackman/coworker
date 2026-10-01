@@ -138,6 +138,42 @@ def _file(action: str, payload: dict[str, Any]) -> dict[str, Any]:
             "is_dir": path.is_dir() if exists else False,
             "size": path.stat().st_size if exists and path.is_file() else 0,
         }
+    if action == "unzip":
+        # Cross-platform archive extraction via stdlib — no `unzip`/shell, so a
+        # workflow stays atomic and does not need `platform: darwin`.
+        import zipfile
+
+        target = payload.get("to")
+        if not target:
+            raise RuntimeError("file unzip requires 'to' (destination directory)")
+        dest = _expand(target)
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(str(path)) as archive:
+            names = archive.namelist()
+            archive.extractall(str(dest))
+        items = sorted(str(p) for p in dest.rglob("*"))
+        return {"path": str(path), "to": str(dest), "names": names[:5000], "items": items[:5000], "count": len(names)}
+    if action == "zip":
+        import zipfile
+
+        target = payload.get("to")
+        if not target:
+            raise RuntimeError("file zip requires 'to' (output .zip path)")
+        archive_path = _expand(target)
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        added = 0
+        with zipfile.ZipFile(str(archive_path), "w", zipfile.ZIP_DEFLATED) as archive:
+            if path.is_dir():
+                for child in sorted(path.rglob("*")):
+                    if child.is_file():
+                        archive.write(str(child), arcname=str(child.relative_to(path)))
+                        added += 1
+            elif path.exists():
+                archive.write(str(path), arcname=path.name)
+                added += 1
+            else:
+                raise RuntimeError(f"file zip source not found: {path}")
+        return {"path": str(path), "to": str(archive_path), "count": added}
     raise RuntimeError(f"file has no action '{action}'")
 
 

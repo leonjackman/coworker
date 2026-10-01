@@ -53,6 +53,31 @@ def test_file_roundtrip(tmp_path: Path):
     assert str(p) in run_native("file", "glob", {"path": str(tmp_path), "pattern": "**/*.txt"})["items"]
 
 
+def test_file_zip_unzip_roundtrip(tmp_path: Path):
+    src = tmp_path / "data"
+    (src / "sub").mkdir(parents=True)
+    (src / "cost.csv").write_text("cost\n1\n")
+    (src / "sub" / "amount.csv").write_text("amount\n2\n")
+    archive = tmp_path / "out.zip"
+
+    zipped = run_native("file", "zip", {"path": str(src), "to": str(archive)})
+    assert archive.exists() and zipped["count"] == 2
+
+    dest = tmp_path / "extracted"
+    unzipped = run_native("file", "unzip", {"path": str(archive), "to": str(dest)})
+    assert unzipped["count"] == 2
+    assert (dest / "cost.csv").read_text().startswith("cost")
+    assert (dest / "sub" / "amount.csv").read_text().startswith("amount")
+
+
+def test_file_unzip_and_zip_registered():
+    reg = CapabilityRegistry.declared()
+    for action in ("unzip", "zip"):
+        spec = reg.action("file", action)
+        assert spec is not None
+        assert {p.name for p in spec.params} >= {"path", "to"}
+
+
 # ── http ─────────────────────────────────────────────────────────────────
 
 
@@ -121,6 +146,7 @@ def test_workflow_runs_transform_steps(tmp_path: Path):
     from coworker.workflows import WorkflowManager
 
     manager = WorkflowManager(tmp_path)
+    manager.enforce_conformance = False
     flow = """name: xform-flow
 description: transform steps
 steps:

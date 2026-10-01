@@ -73,6 +73,8 @@ _STEP_KEYS = frozenset(
         "as_name",
         "next",
         "description",
+        "bypass",
+        "bypass_reason",
         "then",
         "else",
         "body",
@@ -214,6 +216,8 @@ def _parse_step(raw: Any, index: int, diagnostics: list[str], scope: str) -> Ste
         else_=else_,
         body=body,
         description=str(raw.get("description") or ""),
+        bypass=[str(x) for x in _as_list(raw.get("bypass"))],
+        bypass_reason=str(raw.get("bypass_reason") or ""),
     )
 
 

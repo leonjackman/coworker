@@ -398,14 +398,17 @@ def build_workspace_tools(
         browser/app actions in order) written as YAML. Prefer running an existing
         workflow from <available_workflows> over re-doing its steps by hand.
         Actions: list / get / run / create / update / delete / validate / simulate /
-        render / capabilities / pending / approve / reject / runs. Only say a
+        render / capabilities / spec / pending / approve / reject / runs. Only say a
         workflow was created/updated when this tool returned status ok; never write
         a markdown file as a stand-in for a workflow.
 
-        Authoring: the system prompt has the YAML skeleton + rules. Before writing a
-        non-trivial workflow, call action=capabilities for the valid kinds/actions/
-        params, then action=validate (static) and action=simulate (dry-run) before
-        trusting it. create/update reject any invalid YAML and return diagnostics.
+        Authoring: a workflow must be atomic, user-readable nodes — one action per
+        node, a `description` on every node, a semantic locator (role/name) for GUI
+        steps, no `evaluate` DOM-clicking, no one-command-does-everything shell blobs,
+        and a verification step at the end. Call action=spec for the full spec and
+        action=capabilities for the valid kinds/actions/params, then action=validate
+        (static) and action=simulate (dry-run). create/update REJECT non-conforming
+        workflows with diagnostics; fix them and resubmit until status is ok.
 
         Skills in a workflow: a step {"kind":"skill","do":"<name>"} runs an
         EXISTING skill by exact name (must be in <available_skills>; a missing
@@ -438,6 +441,10 @@ def build_workspace_tools(
                 return json.dumps(workflow_manager.simulate(content, inputs), ensure_ascii=False)
             if action == "capabilities":
                 return json.dumps(workflow_manager.capabilities(), ensure_ascii=False)
+            if action == "spec":
+                return json.dumps(
+                    {"status": "ok", "spec": workflow_manager.authoring_spec()}, ensure_ascii=False
+                )
             if action == "render":
                 return json.dumps(workflow_manager.render(content), ensure_ascii=False)
             if action == "pending":

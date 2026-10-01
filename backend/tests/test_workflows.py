@@ -76,7 +76,11 @@ class FakeEnv(StepEnvironment):
 @pytest.fixture()
 def manager():
     with tempfile.TemporaryDirectory() as tmp:
-        yield WorkflowManager(Path(tmp))
+        mgr = WorkflowManager(Path(tmp))
+        # Engine mechanics tests seed deliberately minimal workflows; atomicity
+        # conformance is covered by tests/test_workflow_atomicity.py.
+        mgr.enforce_conformance = False
+        yield mgr
 
 
 SIMPLE = """---
@@ -609,6 +613,7 @@ def test_human_step_is_a_question_gate():
         ws.mkdir()
         env = build_tool_environment(workspace=Workspace(ws), tools=[], data_dir=Path(tmp))
         m = WorkflowManager(Path(tmp))
+        m.enforce_conformance = False
         m.create("""name: ask-flow
 description: ask a human
 steps:
@@ -1022,6 +1027,7 @@ def test_skill_reference_validation(tmp_path):
     from coworker.workflows import WorkflowValidationError
 
     mgr = WorkflowManager(tmp_path, skill_manager=FakeSkillManager({"my-skill"}))
+    mgr.enforce_conformance = False
     ok = mgr.create(
         "name: s-flow\ndescription: d\nsteps:\n  - id: a\n    kind: skill\n    do: my-skill\n"
     )
@@ -1042,6 +1048,7 @@ def test_subworkflow_reference_validation(tmp_path):
     from coworker.workflows import WorkflowValidationError
 
     mgr = WorkflowManager(tmp_path)
+    mgr.enforce_conformance = False
     mgr.create("name: base\ndescription: d\nsteps:\n  - id: a\n    kind: set\n    params:\n      name: k\n      value: v\n")
     ok = mgr.create(
         "name: parent\ndescription: d\nsteps:\n  - id: a\n    kind: subworkflow\n    do: base\n"

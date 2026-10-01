@@ -177,6 +177,149 @@ def validate_workflow(workflow: Workflow, registry: CapabilityRegistry) -> list[
     diags.extend(_validate_steps(workflow.steps, registry, set()))
     diags.extend(validate_templates(workflow, registry))
     diags.extend(validate_scripts(workflow))
+    diags.extend(validate_conformance(workflow, registry))
+    return diags
+
+
+# ── atomicity / Studio-readability conformance (write-time, all errors) ───
+# The workflow must be a graph of ATOMIC, USER-READABLE nodes so the visual
+# Studio can render every step as a friendly field form. Opaque authoring (raw
+# DOM-clicking JS, one-command-does-everything shell blobs, guessy file targets,
+# lone coordinates, missing labels) is rejected at create/update time. A step
+# may opt out of a specific check with ``bypass: [<code>]`` (+ a reason); that
+# downgrades the diagnostic to a visible warning instead of blocking.
+
+_SHELL_CHAIN = re.compile(r"&&|\|\||[|;]|\$\(|`|>>|<<|\|\s*\w")
+_MUTATING_JS = (
+    ".click(", ".click ()", "dispatchevent(", ".submit(", ".value =", ".value=",
+    ".innerhtml", "insertadjacenthtml", ".appendchild(", ".removechild(", ".setattribute(",
+)
+_NONDET_CMD = ("-mmin", "-mtime", "| head", "|head", "| tail", "|tail", "find ", "~/downloads", "$home/downloads")
+_MACOS_ONLY = ("unzip ", "open -a ", "/applications/", "$home/desktop", "~/desktop", "pbcopy", "pbpaste", "sips ")
+_GUI_KINDS = ("browser", "computer", "app")
+_SEMANTIC_LOCATOR_KEYS = ("role", "name", "selector", "ref", "identifier", "text")
+
+#: All conformance codes. They are hard ERRORS on the authoring path
+#: (create/update) but the engine can still hold/run grandfathered workflows, so
+#: the manager can be told to skip exactly these (never structural/capability
+#: errors) when seeding non-authoring fixtures.
+CONFORMANCE_CODES: frozenset[str] = frozenset({
+    "missing_verification",
+    "missing_description",
+    "mutating_evaluate",
+    "opaque_command",
+    "non_deterministic_target",
+    "missing_platform",
+    "coord_only_locator",
+    "unknown_tool",
+})
+
+
+def _has_verification(steps: list[Step]) -> bool:
+    for step in steps:
+        if step.kind == "assert" or step.post or step.success:
+            return True
+        for slot in (step.then, step.else_, step.body):
+            if slot and _has_verification(slot):
+                return True
+    return False
+
+
+def _conformance_diag(step: Step, code: str, field: str, message: str, diags: list[Diagnostic]) -> None:
+    severity = "warning" if code in (getattr(step, "bypass", None) or []) else "error"
+    diags.append(Diagnostic(step.id, field, code, message, severity=severity))
+
+
+def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> list[Diagnostic]:
+    """Atomic-node / Studio-readability rules. Errors block create/update."""
+    diags: list[Diagnostic] = []
+
+    if workflow.steps and not _has_verification(workflow.steps):
+        diags.append(
+            Diagnostic(
+                "", "steps", "missing_verification",
+                "the workflow has no verification step — add an `assert` node or a `post`/`success` "
+                "condition on a step that proves the goal (artifact exists / page shows the expected state)",
+            )
+        )
+
+    platform = (workflow.platform or "").strip().lower()
+    live_tools = bool(getattr(registry, "live_tools", False))
+
+    def walk(steps: list[Step]) -> None:
+        for step in steps:
+            if not (step.description or "").strip():
+                _conformance_diag(
+                    step, "missing_description", "description",
+                    "step has no description — every node needs a short human-readable label so it "
+                    "renders meaningfully in the Studio", diags,
+                )
+
+            if step.kind == "browser" and step.do == "evaluate":
+                expr = str((step.params or {}).get("expression") or "").lower()
+                if any(token in expr for token in _MUTATING_JS):
+                    _conformance_diag(
+                        step, "mutating_evaluate", "expression",
+                        "`evaluate` is being used to drive the page (click/submit/DOM mutation). Use a "
+                        "semantic interface action instead (click_text / click_selector / click with a "
+                        "role+name locator) so the node is readable and robust", diags,
+                    )
+
+            if step.kind == "command":
+                raw = (step.params or {}).get("command") or (step.params or {}).get("run") or step.do
+                joined = raw if isinstance(raw, str) else " ".join(str(x) for x in raw or [])
+                low = joined.lower()
+                # Shell text: a raw string command, or the script after a
+                # ``bash/sh -c`` wrapper (which is just as opaque as a blob).
+                shell_text = raw if isinstance(raw, str) else ""
+                if not shell_text and isinstance(raw, list) and len(raw) >= 3 and "-c" in [str(x) for x in raw[1:2]]:
+                    shell_text = " ".join(str(x) for x in raw[2:])
+                if shell_text and _SHELL_CHAIN.search(shell_text):
+                    _conformance_diag(
+                        step, "opaque_command", "command",
+                        "command bundles several actions with shell operators (| ; && $(…)) — split it "
+                        "into atomic nodes (command / file / transform) so each step is readable and "
+                        "independently verifiable", diags,
+                    )
+                if any(token in low for token in _NONDET_CMD):
+                    _conformance_diag(
+                        step, "non_deterministic_target", "command",
+                        "command targets files by a guessy search (find/-mmin/…|head/~/Downloads) — use "
+                        "file.glob/file.exists on an explicit path (or a declared input) instead", diags,
+                    )
+                if platform not in ("darwin", "macos") and any(token in low for token in _MACOS_ONLY):
+                    _conformance_diag(
+                        step, "missing_platform", "command",
+                        "command uses macOS-only utilities but the workflow declares no `platform: darwin`",
+                        diags,
+                    )
+
+            if step.kind in _GUI_KINDS:
+                locator = step.locator or {}
+                has_semantic = any(k in locator for k in _SEMANTIC_LOCATOR_KEYS)
+                has_coords = any(k in locator for k in ("coords", "x", "y", "pixel"))
+                if has_coords and not has_semantic:
+                    _conformance_diag(
+                        step, "coord_only_locator", "locator",
+                        "GUI step targets raw coordinates with no semantic identity (role/name/selector) — "
+                        "use a semantic locator so it survives UI changes, or set `bypass: [coord_only_locator]` "
+                        "with a reason when coordinates are genuinely required", diags,
+                    )
+
+            if step.kind == "tool" and live_tools:
+                do = (step.do or "").strip()
+                if do and registry.action("tool", do) is None:
+                    _conformance_diag(
+                        step, "unknown_tool", "do",
+                        f"tool '{do}' is not a registered tool — only real tools render in the Studio "
+                        "(use action=capabilities to see the valid set)", diags,
+                    )
+
+            for slot in (step.then, step.else_, step.body):
+                if slot:
+                    walk(slot)
+
+    walk(workflow.steps)
     return diags
 
 

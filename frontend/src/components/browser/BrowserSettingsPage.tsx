@@ -42,7 +42,11 @@ export function BrowserSettingsPage({ onBack }: { onBack: () => void }) {
 
   const patch = useCallback((next: BrowserSettingsPatch) => {
     setSettings((prev) => (prev ? { ...prev, ...next } : prev));
-    void api()?.browserSettingsSave(next).then((s) => setSettings(s));
+    void api()?.browserSettingsSave(next).then((s) => {
+      setSettings(s);
+      // Let the app react live (e.g. start/stop persisting browser tabs).
+      window.dispatchEvent(new CustomEvent('coworker-browser-settings-changed', { detail: s }));
+    });
   }, []);
 
   if (!settings) {

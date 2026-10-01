@@ -140,18 +140,15 @@ function App() {
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 860px)').matches,
   );
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(
-    () => {
-      const persisted = readPersistedBrowserTabs();
-      return !!persisted && persisted.tabs.some((tab) => !!tab.data?.url);
-    },
-  );
-  const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(
-    () => readPersistedBrowserTabs()?.tabs ?? [{ id: 'browser-1', kind: 'browser' }],
-  );
-  const [activeRightTabId, setActiveRightTabId] = useState<string>(
-    () => readPersistedBrowserTabs()?.activeId ?? 'browser-1',
-  );
+  // The embedded browser starts CLOSED with a single blank tab. Tab restore is
+  // opt-in (see the "restore tabs" setting): by default closing the app drops
+  // every tab and a fresh launch does not reopen the browser panel.
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [rightTabs, setRightTabs] = useState<RightPanelTab[]>(() => [{ id: 'browser-1', kind: 'browser' }]);
+  const [activeRightTabId, setActiveRightTabId] = useState<string>('browser-1');
+  // Flipped to true only when the user has enabled tab restore; gates both
+  // persisting and restoring so the default never leaves a leftover snapshot.
+  const restoreTabsEnabledRef = useRef(false);
   const browserHandlesRef = useRef<Map<string, BrowserViewHandle>>(new Map());
   // Synchronous mirror of `rightTabs` so tab helpers can read the current list
   // without state-async races (used by the search-tab open/close helpers).
@@ -3783,10 +3780,11 @@ function App() {
     rightTabsRef.current = rightTabs;
   }, [rightTabs]);
 
-  // Persist the open browser tabs (id/kind/url/title) so a restart restores the
-  // session. Ephemeral agent tabs are filtered out; an empty list never
-  // overwrites a good snapshot.
+  // Persist open browser tabs ONLY when the user opted into tab restore; a
+  // fresh launch never restores them otherwise. Ephemeral agent tabs are
+  // filtered out; an empty list never overwrites a good snapshot.
   useEffect(() => {
+    if (!restoreTabsEnabledRef.current) return;
     try {
       const tabs = rightTabs.filter(isPersistableBrowserTab);
       if (tabs.length === 0) return;
@@ -3797,24 +3795,49 @@ function App() {
     }
   }, [rightTabs, activeRightTabId]);
 
-  // Honor the "restore tabs" setting: when disabled, drop the snapshot and
-  // start from a single blank tab.
+  // Tab restore is opt-in. Default (disabled): clear any leftover snapshot and
+  // keep the browser closed on launch. Enabled: restore tabs and reopen the panel.
   useEffect(() => {
     const api = window.electronAPI;
     if (!api?.browserSettingsGet) return;
     void api.browserSettingsGet().then((settings) => {
-      if (settings && settings.restore_tabs === false) {
+      const enabled = !!settings?.restore_tabs;
+      restoreTabsEnabledRef.current = enabled;
+      if (!enabled) {
         try {
           localStorage.removeItem(BROWSER_TABS_STORAGE_KEY);
         } catch {
           // ignore
         }
-        setRightTabs([{ id: 'browser-1', kind: 'browser' }]);
-        setActiveRightTabId('browser-1');
-        setRightSidebarOpen(false);
+        return;
+      }
+      const persisted = readPersistedBrowserTabs();
+      if (persisted) {
+        setRightTabs(persisted.tabs);
+        setActiveRightTabId(persisted.activeId);
+        if (persisted.tabs.some((tab) => !!tab.data?.url)) setRightSidebarOpen(true);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Live-toggle support: the settings page broadcasts browser-settings changes.
+  // Enabling restore starts persisting from now on; disabling drops the snapshot.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const settings = (event as CustomEvent).detail as { restore_tabs?: boolean } | undefined;
+      const enabled = !!settings?.restore_tabs;
+      restoreTabsEnabledRef.current = enabled;
+      if (!enabled) {
+        try {
+          localStorage.removeItem(BROWSER_TABS_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener('coworker-browser-settings-changed', handler);
+    return () => window.removeEventListener('coworker-browser-settings-changed', handler);
   }, []);
 
   // Whether the configured web-search provider drives the embedded browser.

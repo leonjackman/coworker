@@ -17,7 +17,9 @@ SETTINGS_FILENAME = ".coworker_settings.json"
 BLOCK_KEY = "browser"
 
 DEFAULTS: dict[str, Any] = {
-    "restore_tabs": True,
+    # Default OFF: closing the app drops all browser tabs and a fresh launch
+    # does not reopen the embedded browser. Users can opt in via settings.
+    "restore_tabs": False,
     "download_dir": "",
     "ask_where_to_save": False,
     "password_manager_enabled": False,

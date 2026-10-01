@@ -64,7 +64,9 @@ STEP_KEYS: tuple[dict[str, str], ...] = (
     {"body": "sub-steps (loop/parallel)"},
     {"next": "explicit next step id (linear chain)"},
     {"approval": "bool — require human approval"},
-    {"description": "free text"},
+    {"description": "required — short human-readable node label (shown in the Studio)"},
+    {"bypass": "list of conformance codes to downgrade to warnings (e.g. [coord_only_locator])"},
+    {"bypass_reason": "why the bypass is justified"},
 )
 
 EXAMPLE_YAML = """name: my-flow
@@ -79,11 +81,13 @@ steps:
     do: navigate
     params:
       url: "{{inputs.url}}"
+    description: Open the page
   - id: "id:2"
     kind: command
     do: run
     params:
       command: echo done
+    description: Run the command
     post:
       - "equals result.return_code 0"
 """
@@ -367,6 +371,18 @@ BROWSER_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("browser", "scroll_to", (_p("selector"), _p("text")), target="browser", success="no_error"),
     ActionSpec("browser", "wait_for", (_p("selector"), _p("text"), _p("timeout_ms", "number")), target="browser", success="no_error"),
     ActionSpec("browser", "upload", (_p("files", "list", required=True), _p("selector")), target="browser", success="no_error"),
+    # Account / personal-data actions (agent-facing browser tool).
+    ActionSpec("browser", "login", (_p("site"), _p("username"), _p("submit", "boolean")), target="browser", success="no_error"),
+    ActionSpec("browser", "list_bookmarks", (), target="browser", success="no_error"),
+    ActionSpec("browser", "add_bookmark", (_p("url", required=True), _p("title")), target="browser", success="no_error"),
+    ActionSpec("browser", "remove_bookmark", (_p("url", required=True),), target="browser", success="no_error"),
+    ActionSpec("browser", "list_history", (_p("query"),), target="browser", success="no_error"),
+    ActionSpec("browser", "clear_history", (), target="browser", success="no_error"),
+    ActionSpec("browser", "list_downloads", (), target="browser", success="no_error"),
+    ActionSpec("browser", "clear_downloads", (), target="browser", success="no_error"),
+    ActionSpec("browser", "list_permissions", (), target="browser", success="no_error"),
+    ActionSpec("browser", "list_sites", (), target="browser", success="no_error"),
+    ActionSpec("browser", "clear_site_data", (_p("origin", required=True),), target="browser", success="no_error"),
 )
 
 _COMPUTER_LOCATOR = LocatorPolicy(keys=("ref", "coords"), maps={"ref": ("ref",), "coords": ("x", "y")})
@@ -446,6 +462,8 @@ FILE_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("file", "glob", (_p("path", required=True), _p("pattern")), target="file"),
     ActionSpec("file", "exists", (_p("path", required=True),), target="file"),
     ActionSpec("file", "stat", (_p("path", required=True),), target="file"),
+    ActionSpec("file", "unzip", (_p("path", required=True), _p("to", required=True)), target="file", success="no_error"),
+    ActionSpec("file", "zip", (_p("path", required=True), _p("to", required=True)), target="file", success="no_error"),
 )
 
 TRANSFORM_ACTIONS: tuple[ActionSpec, ...] = (
@@ -487,6 +505,8 @@ _OUTPUTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("file", "glob"): ("path", "items", "count"),
     ("file", "exists"): ("path", "exists"),
     ("file", "stat"): ("path", "exists", "is_dir", "size"),
+    ("file", "unzip"): ("path", "to", "names", "items", "count"),
+    ("file", "zip"): ("path", "to", "count"),
     ("transform", "json_path"): ("result",),
     ("transform", "json_parse"): ("result",),
     ("transform", "regex"): ("result", "matched", "groups"),
@@ -523,7 +543,7 @@ def _declared_kinds() -> dict[str, KindSpec]:
         KindSpec("tool", "action", True, actions=_with_outputs(TOOL_ACTIONS), open_actions=True, description="Call a workspace/web tool by name."),
         KindSpec("command", "action", False, actions=_with_outputs(COMMAND_ACTIONS), description="Run a local command (argv; shell requires opt-in)."),
         KindSpec("http", "action", True, actions=_with_outputs(HTTP_ACTIONS), description="Make an HTTP/API request."),
-        KindSpec("file", "action", True, actions=_with_outputs(FILE_ACTIONS), description="Read/write/move/delete/list local files."),
+        KindSpec("file", "action", True, actions=_with_outputs(FILE_ACTIONS), description="Read/write/move/delete/list/archive local files (incl. zip/unzip)."),
         KindSpec("transform", "action", True, actions=_with_outputs(TRANSFORM_ACTIONS), description="Transform data (json/regex/template/csv/base64/date)."),
         KindSpec("notify", "action", True, actions=_with_outputs(NOTIFY_ACTIONS), description="Desktop notification or outbound webhook."),
         KindSpec("skill", "agent", True, native_params=(_p("goal"),), agentic=True,
@@ -548,6 +568,10 @@ def _declared_kinds() -> dict[str, KindSpec]:
 @dataclass
 class CapabilityRegistry:
     kinds: dict[str, KindSpec] = field(default_factory=dict)
+    #: True when ``tool`` actions came from a LIVE tool map (introspected). Only
+    #: then can "is this a real tool?" be answered; offline declared specs are a
+    #: tiny fallback, so the unknown-tool conformance check is skipped there.
+    live_tools: bool = False
 
     @classmethod
     def declared(cls) -> "CapabilityRegistry":
@@ -570,7 +594,7 @@ class CapabilityRegistry:
         tools = _introspect_tools(tool_map)
         if tools:
             kinds["tool"] = KindSpec("tool", "action", True, actions=tools, open_actions=True, description="Call a workspace/web tool by name.")
-        return cls(kinds=kinds)
+        return cls(kinds=kinds, live_tools=True)
 
     def kind(self, kind: str) -> KindSpec | None:
         return self.kinds.get(kind)
@@ -705,14 +729,39 @@ class CapabilityRegistry:
             "(artifact exists and is non-empty / page shows the expected state), not "
             "just a zero exit code."
         )
+        lines.append(
+            "Every step needs a `description` (short human-readable label). Atomic nodes only: "
+            "one action per step — never a shell blob (| ; && $(...)) or a click/submit `evaluate`. "
+            "GUI steps use a semantic locator (role/name), not raw coordinates; target files by "
+            "explicit path. Violations are rejected at save time."
+        )
         return "\n".join(lines)
 
-    def authoring_text(self) -> str:
-        """Compact, always-on authoring spec (YAML skeleton + rules + example).
+    def authoring_pointer(self) -> str:
+        """Short, always-on pointer injected into the system prompt.
 
-        Injected into the agent's system prompt so it can author a valid workflow
-        without first fetching the full capability catalog (which stays on-demand
-        via ``action=capabilities``)."""
+        The full authoring spec (skeleton + rules + example) is long (~1.2k
+        tokens) and, when injected on every model call, dominates the fixed
+        prompt cost. Conformance is now enforced by the validator at write time,
+        so the prompt only needs to point at the on-demand spec/validator.
+        """
+        return (
+            "\n\n## Workflow authoring (YAML)\n"
+            "Author or modify workflows ONLY with the `workflow` tool (action create/update, full "
+            "YAML `content`). Before writing, call `workflow` action=spec for the exact skeleton/"
+            "rules and action=capabilities for the valid kinds/actions/params. A workflow must be "
+            "atomic, user-readable nodes: one action per node, a `description` on every node, a "
+            "semantic locator for GUI steps, and a verification step at the end. create/update are "
+            "validated at write time and return diagnostics — fix them and resubmit until status ok."
+        )
+
+    def authoring_text(self) -> str:
+        """Full authoring spec (YAML skeleton + rules + example), fetched on demand.
+
+        No longer injected on every model call (that was a fixed ~1.2k-token cost);
+        it is returned by ``workflow`` action=spec when the agent is about to
+        author, and enforced by the validator at write time.
+        """
         doc = "\n".join(f"  - {k}: {v}" for d in DOCUMENT_KEYS for k, v in d.items())
         step = "\n".join(f"  - {k}: {v}" for d in STEP_KEYS for k, v in d.items())
         return (
@@ -738,23 +787,28 @@ class CapabilityRegistry:
             "  goal: 打開 Safari，導航到平台，點擊導出，點允許，等待下載完成\n"
             "```\n"
             "```yaml\n"
-            "# GOOD — one action per node\n"
-            "- id: \"id:1\"\n  kind: computer\n  do: launch_app\n  params: {app: Safari}\n"
-            "- id: \"id:2\"\n  kind: computer\n  do: script\n  params: {code: \"app.open('https://platform.deepseek.com')\"}\n"
-            "- id: \"id:3\"\n  kind: computer\n  do: click_ref\n  locator: {role: button, name: 导出}\n"
-            "- id: \"id:4\"\n  kind: computer\n  do: click_ref\n  locator: {role: button, name: 允许}\n"
-            "- id: \"id:5\"\n  kind: wait\n  params: {seconds: 8}\n"
+            "# GOOD — one action per node, each with a description and a semantic locator\n"
+            "- id: \"id:1\"\n  kind: computer\n  do: launch_app\n  params: {app: Safari}\n  description: 打开 Safari\n"
+            "- id: \"id:2\"\n  kind: browser\n  do: navigate\n  params: {url: \"{{inputs.url}}\"}\n  description: 打开用量页面\n"
+            "- id: \"id:3\"\n  kind: browser\n  do: click_text\n  params: {text: 导出}\n  description: 点击导出\n"
+            "- id: \"id:4\"\n  kind: wait\n  params: {seconds: 8}\n  description: 等待下载完成\n"
+            "- id: \"id:5\"\n  kind: file\n  do: exists\n  params: {path: \"{{steps.id4.path}}\"}\n  description: 确认导出文件已生成\n  post: [\"result.exists\"]\n"
             "```\n"
             "Notes: `click_ref`/`double_click_ref`/`right_click_ref`/`show`/`type_into` accept a "
             "semantic `locator: {role, name}` (resolved from a live AX snapshot — no runtime ref "
             "needed). Use `kind: computer do: script` (params.code, the cw-automa helper API) for "
             "intent-level steps, each script its OWN node.\n\n"
-            "Rules:\n"
+            "Rules (violations are REJECTED at create/update time):\n"
+            "- Every step needs a `description` (short human-readable label) — the Studio shows it.\n"
+            "- Atomic nodes: exactly one action per step. NEVER bundle a sequence into one `command` "
+            "shell blob (| ; && $(...)); split into command/file/transform nodes.\n"
             "- Valid kinds/actions/params come from the capability catalog: call the "
             "`workflow` tool with action=capabilities before authoring anything non-trivial.\n"
+            "- Prefer a real action node over `browser do: evaluate`; never use `evaluate` to click/"
+            "submit/mutate the DOM (use click_text/click_selector/click).\n"
+            "- GUI steps must use a semantic locator (role/name), not raw coordinates. Target files by "
+            "explicit path or file.glob/file.exists — never find/-mmin/…|head/~/Downloads guesses.\n"
             "- command runs argv WITHOUT a shell; add params.shell: true only for pipes/globs/$(...).\n"
-            "- browser click needs x/y (or a coords locator from a snapshot); computer click_ref "
-            "needs a ref OR a role/name locator.\n"
             "- computer launch_app 'app' accepts a display name (Calculator), a bundle id "
             "(com.apple.calculator) or an .app path; localized names resolve automatically.\n"
             "- Templates may only reference {{inputs.<declared>}}, {{steps.<id>.<field>}} "

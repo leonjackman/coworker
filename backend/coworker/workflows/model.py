@@ -97,6 +97,11 @@ class Step:
     else_: list["Step"] = field(default_factory=list)
     body: list["Step"] = field(default_factory=list)
     description: str = ""
+    # Explicit, auditable opt-out of specific conformance lints (e.g. a GUI step
+    # that genuinely can only be targeted by coordinates). Only the listed codes
+    # are downgraded from error to warning; everything else still blocks.
+    bypass: list[str] = field(default_factory=list)
+    bypass_reason: str = ""
 
     @property
     def bind(self) -> str:
@@ -137,6 +142,10 @@ class Step:
             data["next"] = self.next
         if self.description:
             data["description"] = self.description
+        if self.bypass:
+            data["bypass"] = list(self.bypass)
+        if self.bypass_reason:
+            data["bypass_reason"] = self.bypass_reason
         if self.then:
             data["then"] = [s.to_dict() for s in self.then]
         if self.else_:

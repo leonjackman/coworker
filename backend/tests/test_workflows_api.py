@@ -18,6 +18,10 @@ os.environ["COWORKER_LOG_LEVEL"] = "WARNING"
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+# These integration tests exercise API mechanics with minimal fixtures; atomicity
+# conformance is covered by tests/test_workflow_atomicity.py.
+main.workflow_manager.enforce_conformance = False
+
 from coworker.agent.graph import build_workspace_tools  # noqa: E402
 from coworker.workspace import Workspace  # noqa: E402
 
@@ -111,6 +115,7 @@ def test_agent_tool_list_and_run():
         from coworker.workflows import WorkflowManager
 
         manager = WorkflowManager(Path(tmp) / "data")
+        manager.enforce_conformance = False
         manager.create(FLOW)
         tools = build_workspace_tools(ws, workflow_manager=manager)
         workflow_tool = next((t for t in tools if getattr(t, "name", "") == "workflow"), None)

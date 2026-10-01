@@ -1517,5 +1517,20 @@
   "browser.site_data_desc": "내장 브라우저가 사이트별로 저장한 쿠키와 로컬 저장소.",
   "browser.site_data_empty": "저장된 사이트 데이터가 없습니다.",
   "browser.site_data_clear": "지우기",
-  "browser.site_data_cookie_count": "쿠키 {count}개"
+  "browser.site_data_cookie_count": "쿠키 {count}개",
+  "workflows.act_login": "로그인",
+  "workflows.act_list_bookmarks": "북마크 목록",
+  "workflows.act_add_bookmark": "북마크 추가",
+  "workflows.act_remove_bookmark": "북마크 제거",
+  "workflows.act_list_history": "기록 목록",
+  "workflows.act_clear_history": "기록 지우기",
+  "workflows.act_list_downloads": "다운로드 목록",
+  "workflows.act_clear_downloads": "다운로드 지우기",
+  "workflows.act_list_permissions": "사이트 권한 목록",
+  "workflows.act_list_sites": "사이트 목록",
+  "workflows.act_clear_site_data": "사이트 데이터 지우기",
+  "workflows.fld_site": "사이트",
+  "workflows.fld_origin": "출처",
+  "workflows.act_unzip": "압축 풀기",
+  "workflows.act_zip": "압축 만들기"
 }

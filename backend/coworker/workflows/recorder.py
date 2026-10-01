@@ -32,9 +32,16 @@ def normalize_capture(raw: dict[str, Any]) -> dict[str, Any]:
     elif kind not in VALID_KINDS:
         kind = _infer_kind(raw)
     step["kind"] = kind
-    for key in ("do", "params", "locator", "pre", "post", "on_error", "timeout", "approval"):
+    for key in ("do", "params", "locator", "pre", "post", "success", "on_error", "timeout", "approval"):
         if raw.get(key) is not None:
             step[key] = raw[key]
+    # Every node needs a human-readable label (Studio shows it). Recorded steps
+    # often lack one; seed a basic label the review/agent can refine.
+    description = str(raw.get("description") or "").strip()
+    if not description:
+        label = str(raw.get("do") or kind or "step")
+        description = f"{kind}: {label}"
+    step["description"] = description
     return step
 
 
@@ -186,6 +193,11 @@ def _tool_to_step(tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
         return {"kind": "command", "do": "run", "params": params}
     if tool == "browser":
         action = str(args.get("action") or "navigate")
+        # Never record a raw `evaluate` blob as a workflow node: it is opaque and
+        # (when it mutates the DOM) non-conformant. Such turns should be re-authored
+        # as semantic interface actions instead.
+        if action == "evaluate":
+            return None
         if reg.action("browser", action) is None:
             return None
         return {"kind": "browser", "do": action, "params": _clean({k: v for k, v in args.items() if k != "action"})}

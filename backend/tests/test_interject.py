@@ -47,7 +47,14 @@ def _clear_state() -> None:
     steer_inbox.clear_all()
 
     # Drop the throwaway session dir so each test starts clean.
+    # SAFETY: never unlink sessions unless the data dir is provably a test dir.
+    # A full pytest run previously bound `main` to the REAL user data dir and
+    # this loop deleted the user's real sessions — see tests/conftest.py.
+    from tests.conftest import is_isolated_data_dir
+
     data_dir = Path(main.settings.data_dir)
+    if not is_isolated_data_dir(data_dir):
+        return
     sessions_dir = data_dir / "sessions"
     if sessions_dir.exists():
         for f in sessions_dir.glob("*.json"):

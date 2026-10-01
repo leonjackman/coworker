@@ -194,6 +194,7 @@ class WorkflowArgs(BaseModel):
         "simulate",
         "render",
         "capabilities",
+        "spec",
         "pending",
         "approve",
         "reject",
@@ -202,11 +203,14 @@ class WorkflowArgs(BaseModel):
         description=(
             "Workflow operation. list = catalog; get = one workflow's steps; "
             "run = execute deterministically by name (inputs optional); "
-            "create/update = save a workflow from full YAML content; delete = remove; "
-            "validate/render = check or canonicalize YAML; simulate = dry-run a "
-            "workflow and report the exact action/args per step; capabilities = the "
-            "valid kinds/actions/params to author against; pending = drafts awaiting "
-            "approval; approve/reject = resolve a draft; runs = run history."
+            "create/update = save a workflow from full YAML content (validated at write "
+            "time; returns diagnostics you must fix and resubmit until status ok); "
+            "delete = remove; validate/render = check or canonicalize YAML; "
+            "simulate = dry-run a workflow and report the exact action/args per step; "
+            "capabilities = the valid kinds/actions/params to author against; "
+            "spec = the full authoring spec (skeleton + rules + example); "
+            "pending = drafts awaiting approval; approve/reject = resolve a draft; "
+            "runs = run history."
         )
     )
     name: str = Field(default="", description="Workflow name (required for get/run/create/update/delete/approve/reject/runs).")

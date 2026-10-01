@@ -5,7 +5,7 @@ from __future__ import annotations
 from coworker.workflows.capabilities import CapabilityRegistry
 from coworker.workflows.parser import parse_workflow
 from coworker.workflows.simulation import simulate_workflow
-from coworker.workflows.validation import validate_workflow
+from coworker.workflows.validation import CONFORMANCE_CODES, validate_workflow
 
 
 def _wf(steps_block: str, extra: str = ""):
@@ -16,7 +16,13 @@ def _wf(steps_block: str, extra: str = ""):
 
 
 def _codes(workflow):
-    return {d.code for d in validate_workflow(workflow, CapabilityRegistry.declared())}
+    # Structural/capability checks only; atomicity conformance is covered by
+    # tests/test_workflow_atomicity.py.
+    return {
+        d.code
+        for d in validate_workflow(workflow, CapabilityRegistry.declared())
+        if d.code not in CONFORMANCE_CODES
+    }
 
 
 def test_missing_do_is_rejected():
@@ -73,7 +79,9 @@ def test_shell_metachars_require_shell_flag():
 
 def test_bundled_agentic_goal_is_warning_not_error():
     wf = _wf(
-        "  - id: a\n    kind: agentic\n    goal: 打開 Safari 然後導航到平台並點擊導出，再等待下載完成\n"
+        "  - id: a\n    kind: agentic\n    description: 执行导出流程\n"
+        "    goal: 打開 Safari 然後導航到平台並點擊導出，再等待下載完成\n"
+        "  - id: b\n    kind: assert\n    description: 验证完成\n    post: [ok]\n"
     )
     diags = validate_workflow(wf, CapabilityRegistry.declared())
     bundled = [d for d in diags if d.code == "might_bundle_actions"]

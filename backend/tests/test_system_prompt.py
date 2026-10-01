@@ -224,17 +224,35 @@ def test_system_assembler_injects_workflow_authoring_spec(tmp_path: Path):
     from coworker.agent.middleware.system_assembler import SystemAssembler
     from coworker.workflows import WorkflowManager
 
+    manager = WorkflowManager(tmp_path)
     asm = SystemAssembler(
         capabilities="",
         workspace=Workspace(tmp_path),
         memory_manager=_FakeMemoryManager(),
         skill_manager=None,
-        workflow_manager=WorkflowManager(tmp_path),
+        workflow_manager=manager,
     )
     out = str(asm._overrides(_assembler_request())["system_message"].content or "")
-    # The authoring spec is injected even with no saved workflows.
+    # The SHORT authoring pointer is injected even with no saved workflows...
     assert "Workflow authoring" in out
-    assert "Top-level keys" in out
+    assert "action=spec" in out
+    # ...but the heavy full spec (skeleton/rules/example) is NOT injected on
+    # every model call (token slimming) — it is fetched on demand.
+    assert "Top-level keys" not in out
+    assert "Top-level keys" in manager.authoring_spec()
+
+
+def test_workflow_authoring_pointer_is_small(tmp_path: Path):
+    """Token regression: the always-on workflow block must stay a short pointer;
+    the heavy full spec is fetched on demand (action=spec)."""
+    from coworker.context import estimate_text_tokens
+    from coworker.workflows import WorkflowManager
+
+    manager = WorkflowManager(tmp_path)
+    pointer = manager.authoring_block()
+    full = manager.authoring_spec()
+    assert estimate_text_tokens(pointer) < 250
+    assert estimate_text_tokens(full) > estimate_text_tokens(pointer) * 3
 
 
 def test_system_assembler_hides_skills_in_discuss(tmp_path: Path):

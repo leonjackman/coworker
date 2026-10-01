@@ -1517,5 +1517,20 @@
   "browser.site_data_desc": "Cookies et stockage local enregistrés par site par le navigateur intégré.",
   "browser.site_data_empty": "Aucune donnée de site.",
   "browser.site_data_clear": "Effacer",
-  "browser.site_data_cookie_count": "{count} cookies"
+  "browser.site_data_cookie_count": "{count} cookies",
+  "workflows.act_login": "Se connecter",
+  "workflows.act_list_bookmarks": "Lister les favoris",
+  "workflows.act_add_bookmark": "Ajouter un favori",
+  "workflows.act_remove_bookmark": "Supprimer un favori",
+  "workflows.act_list_history": "Lister l’historique",
+  "workflows.act_clear_history": "Effacer l’historique",
+  "workflows.act_list_downloads": "Lister les téléchargements",
+  "workflows.act_clear_downloads": "Effacer les téléchargements",
+  "workflows.act_list_permissions": "Lister les autorisations",
+  "workflows.act_list_sites": "Lister les sites",
+  "workflows.act_clear_site_data": "Effacer les données de site",
+  "workflows.fld_site": "Site",
+  "workflows.fld_origin": "Origine",
+  "workflows.act_unzip": "Extraire l’archive",
+  "workflows.act_zip": "Créer une archive"
 }

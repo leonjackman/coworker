@@ -27,7 +27,7 @@ from .parser import is_valid_name, parse_workflow, renumber_steps, render_workfl
 from .registry import WorkflowRegistry
 from .simulation import simulate_workflow
 from .store import WorkflowStore
-from .validation import validate_workflow
+from .validation import CONFORMANCE_CODES, validate_workflow
 
 logger = get_logger(__name__)
 
@@ -56,6 +56,10 @@ class WorkflowManager:
         self.executor = WorkflowExecutor(self.store, secrets=secrets, listener=listener)
         # Used to validate that `skill` steps reference real skills (hard check).
         self.skill_manager = skill_manager
+        # Authoring conformance (atomic, Studio-readable nodes) is enforced on
+        # create/update. The engine can still load/run grandfathered workflows, so
+        # this can be turned off when seeding non-authoring fixtures.
+        self.enforce_conformance = True
         # Capability registry: single source of truth for kinds/actions/params.
         # Declared by default; the agent/scheduler may upgrade it with live tool
         # schemas via ``use_tools`` so validation matches the real environment.
@@ -91,7 +95,16 @@ class WorkflowManager:
         return self.registry.prompt_block()
 
     def authoring_block(self) -> str:
-        """Always-on workflow authoring spec (independent of existing workflows)."""
+        """Always-on workflow authoring POINTER (independent of existing workflows).
+
+        Deliberately short: the full spec is ~1.2k tokens and used to be injected
+        on every model call. Conformance is enforced at write time, so the prompt
+        only points at the on-demand spec (``authoring_spec``) + validator.
+        """
+        return self.capabilities_registry.authoring_pointer()
+
+    def authoring_spec(self) -> str:
+        """Full authoring spec, fetched on demand via ``workflow`` action=spec."""
         return self.capabilities_registry.authoring_text()
 
     # ── mutations ───────────────────────────────────────────────────────
@@ -108,7 +121,7 @@ class WorkflowManager:
                "status": "active", "source": "user", "fingerprint": current_fingerprint()}
         )
         saved = self.store.save(workflow, archive=overwrite)
-        return {"status": "ok", "workflow": saved.to_dict(include_steps=False)}
+        return self._ok_with_diagnostics(saved)
 
     def update(self, name: str, content: str, *, draft: bool = False) -> dict[str, Any]:
         existing = self.store.get(name)
@@ -129,7 +142,7 @@ class WorkflowManager:
         saved = self.store.save(workflow)
         if workflow.name != name:
             self.store.delete(name)
-        return {"status": "ok", "workflow": saved.to_dict(include_steps=False)}
+        return self._ok_with_diagnostics(saved)
 
     def delete(self, name: str) -> dict[str, Any]:
         removed = self.store.delete(name)
@@ -590,9 +603,29 @@ class WorkflowManager:
         walk(workflow.steps)
         return diags
 
+    def _ok_with_diagnostics(self, workflow: Workflow) -> dict[str, Any]:
+        """A create/update success payload that ALSO carries diagnostics.
+
+        Warnings (bypassed conformance checks, advisory notes) are surfaced to
+        the caller — the agent must fix them and resubmit rather than believing
+        a warning-free save.
+        """
+        diags = self._all_diagnostics(workflow)
+        return {
+            "status": "ok",
+            "workflow": workflow.to_dict(include_steps=False),
+            "diagnostics": [d.to_dict() for d in diags],
+            "warnings": [str(d) for d in diags if d.severity == "warning"],
+        }
+
     def _all_diagnostics(self, workflow: Workflow) -> list[Diagnostic]:
         diags = validate_workflow(workflow, self.capabilities_registry)
         diags.extend(self._reference_diagnostics(workflow))
+        if not getattr(self, "enforce_conformance", True):
+            # The engine can hold/run grandfathered workflows; conformance is an
+            # authoring gate. When disabled (non-authoring fixtures), drop exactly
+            # the conformance diagnostics — never structural/capability errors.
+            diags = [d for d in diags if d.code not in CONFORMANCE_CODES]
         return diags
 
     def _all_errors(self, workflow: Workflow) -> list[str]:

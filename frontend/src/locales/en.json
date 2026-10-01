@@ -1519,5 +1519,20 @@
   "browser.site_data_desc": "Cookies and local storage the embedded browser has saved, by site.",
   "browser.site_data_empty": "No site data stored.",
   "browser.site_data_clear": "Clear",
-  "browser.site_data_cookie_count": "{count} cookies"
+  "browser.site_data_cookie_count": "{count} cookies",
+  "workflows.act_login": "Sign in",
+  "workflows.act_list_bookmarks": "List bookmarks",
+  "workflows.act_add_bookmark": "Add bookmark",
+  "workflows.act_remove_bookmark": "Remove bookmark",
+  "workflows.act_list_history": "List history",
+  "workflows.act_clear_history": "Clear history",
+  "workflows.act_list_downloads": "List downloads",
+  "workflows.act_clear_downloads": "Clear downloads",
+  "workflows.act_list_permissions": "List site permissions",
+  "workflows.act_list_sites": "List sites",
+  "workflows.act_clear_site_data": "Clear site data",
+  "workflows.fld_site": "Site",
+  "workflows.fld_origin": "Origin",
+  "workflows.act_unzip": "Extract archive",
+  "workflows.act_zip": "Create archive"
 }

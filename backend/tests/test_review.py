@@ -32,6 +32,7 @@ def _parts():
 
 def test_invalid_proposal_is_not_staged(tmp_path):
     manager = WorkflowManager(tmp_path)
+    manager.enforce_conformance = False
     verdict = {
         "action": "create",
         "name": "bad-one",
@@ -46,6 +47,7 @@ def test_invalid_proposal_is_not_staged(tmp_path):
 
 def test_valid_proposal_stages(tmp_path):
     manager = WorkflowManager(tmp_path)
+    manager.enforce_conformance = False
     verdict = {
         "action": "create",
         "name": "good-one",
@@ -60,6 +62,7 @@ def test_valid_proposal_stages(tmp_path):
 
 def test_repair_round_recovers(tmp_path):
     manager = WorkflowManager(tmp_path)
+    manager.enforce_conformance = False
     bad = {"action": "create", "name": "fix-me", "description": "d", "steps": [{"kind": "tool"}]}
     good = {"action": "create", "name": "fix-me", "description": "d", "steps": [{"kind": "set", "params": {"name": "k", "value": "v"}}]}
     llm = _SeqLLM([bad, good])

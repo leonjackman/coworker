@@ -1519,5 +1519,20 @@
   "browser.site_data_desc": "内嵌浏览器按站点保存的 Cookie 与本地存储。",
   "browser.site_data_empty": "暂无站点数据。",
   "browser.site_data_clear": "清除",
-  "browser.site_data_cookie_count": "{count} 个 Cookie"
+  "browser.site_data_cookie_count": "{count} 个 Cookie",
+  "workflows.act_login": "登录",
+  "workflows.act_list_bookmarks": "列出书签",
+  "workflows.act_add_bookmark": "添加书签",
+  "workflows.act_remove_bookmark": "移除书签",
+  "workflows.act_list_history": "列出历史",
+  "workflows.act_clear_history": "清除历史",
+  "workflows.act_list_downloads": "列出下载",
+  "workflows.act_clear_downloads": "清除下载",
+  "workflows.act_list_permissions": "列出站点权限",
+  "workflows.act_list_sites": "列出站点",
+  "workflows.act_clear_site_data": "清除站点数据",
+  "workflows.fld_site": "站点",
+  "workflows.fld_origin": "来源",
+  "workflows.act_unzip": "解压压缩包",
+  "workflows.act_zip": "创建压缩包"
 }
