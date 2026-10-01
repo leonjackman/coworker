@@ -4,6 +4,7 @@ import type { AppView, OrgRosterEntry, ProjectEntry, SessionBadgeMap, SessionSum
 import { t } from '../lib/i18n';
 import { displayProjectName } from '../lib/projectName';
 import { formatTimeAgo } from '../lib/utils';
+import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { Tooltip } from './ui/tooltip';
@@ -670,6 +671,7 @@ export function WorkspaceSidebar({
         <button className={`sidebar-nav-item ${activeView === 'workflows' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('workflows')}>
           <Workflow size={17} />
           {!collapsed && <span>{t('nav.workflows')}</span>}
+          {!collapsed && <Badge variant="outline" className="sidebar-nav-item__beta">beta</Badge>}
         </button>
         {SHOW_SCHEDULES_NAV && (
           <button className={`sidebar-nav-item ${activeView === 'schedules' ? 'sidebar-nav-item--active' : ''}`} type="button" onClick={() => onViewChange('schedules')}>

@@ -1671,7 +1671,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
                 <DockTab id="templates" label={t('workflows.panel_templates')} active={leftTab} onSelect={setLeftTab} />
               </div>
               <div className="wfs-dock__body">
-                {leftTab === 'nodes' ? <NodePalette onAdd={(k) => addKind(k)} onDragKind={() => undefined} /> : null}
+                {leftTab === 'nodes' ? <NodePalette onDragKind={() => undefined} /> : null}
                 {leftTab === 'outline' ? (
                   <OutlinePanel steps={steps} selectedId={selectedId} onSelect={(k) => setSelectedId(k)} />
                 ) : null}

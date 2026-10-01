@@ -50,10 +50,8 @@ export interface StudioCommand {
 
 // ── Node palette ──────────────────────────────────────────────────────
 export function NodePalette({
-  onAdd,
   onDragKind,
 }: {
-  onAdd: (kind: string) => void;
   onDragKind: (kind: string) => void;
 }) {
   const [search, setSearch] = useState('');
@@ -100,7 +98,6 @@ export function NodePalette({
                     e.dataTransfer.effectAllowed = 'copy';
                     onDragKind(kind);
                   }}
-                  onClick={() => onAdd(kind)}
                   title={desc}
                 >
                   <span className="wfs-palette__item-icon" style={{ color: kindStripe(kind) }}>
