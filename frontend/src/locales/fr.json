@@ -1554,5 +1554,7 @@
   "workflows.section_control": "Contrôle",
   "workflows.step_timeout": "Délai (s)",
   "workflows.help_exact": "Uniquement lors de la localisation par texte : exiger une correspondance exacte, pour éviter de cliquer un autre élément contenant le même texte. (Sans rapport avec le « respect absolu ».)",
-  "workflows.help_absolute": "Contrainte stricte réservée à l’utilisateur : le but/la liaison du nœud s’exécute exactement comme spécifié (aucun changement de méthode, aucune auto-réparation, aucune reprise par l’agent)."
+  "workflows.help_absolute": "Contrainte stricte réservée à l’utilisateur : le but/la liaison du nœud s’exécute exactement comme spécifié (aucun changement de méthode, aucune auto-réparation, aucune reprise par l’agent).",
+  "workflows.fld_role": "Rôle",
+  "workflows.help_role": "Rôle ARIA à restreindre (ex. button, link) pour cibler le bon contrôle."
 }

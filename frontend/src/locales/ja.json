@@ -1556,5 +1556,7 @@
   "workflows.section_control": "制御",
   "workflows.step_timeout": "タイムアウト（秒）",
   "workflows.help_exact": "テキストで要素を探すときのみ: 文字の完全一致を要求し、同じ文字を含む別要素への誤クリックを防ぎます。（「絶対遵守」とは無関係。）",
-  "workflows.help_absolute": "ユーザーのみ設定できるハード制約：ノードの目標/バインディングは指定どおりに実行します（手段の差し替え・自己修復・エージェント引き継ぎなし）。"
+  "workflows.help_absolute": "ユーザーのみ設定できるハード制約：ノードの目標/バインディングは指定どおりに実行します（手段の差し替え・自己修復・エージェント引き継ぎなし）。",
+  "workflows.fld_role": "ロール",
+  "workflows.help_role": "一致させる ARIA ロール（例: button, link）。正しいコントロールの特定に役立ちます。"
 }

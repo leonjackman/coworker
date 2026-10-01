@@ -1556,5 +1556,7 @@
   "workflows.section_control": "Control",
   "workflows.step_timeout": "Tiempo límite (s)",
   "workflows.help_exact": "Solo al localizar por texto: exigir coincidencia exacta para no pulsar otro elemento que solo contiene el mismo texto. (No tiene relación con «cumplimiento absoluto».)",
-  "workflows.help_absolute": "Restricción estricta solo para el usuario: el objetivo/enlace del nodo se ejecuta tal cual (sin cambiar de método, sin autorreparación, sin que el agente tome el control)."
+  "workflows.help_absolute": "Restricción estricta solo para el usuario: el objetivo/enlace del nodo se ejecuta tal cual (sin cambiar de método, sin autorreparación, sin que el agente tome el control).",
+  "workflows.fld_role": "Rol",
+  "workflows.help_role": "Rol ARIA a restringir (p. ej. button, link) para acertar el control correcto."
 }

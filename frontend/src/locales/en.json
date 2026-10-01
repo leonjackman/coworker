@@ -1556,5 +1556,7 @@
   "workflows.section_control": "Control",
   "workflows.step_timeout": "Timeout (s)",
   "workflows.help_exact": "Only when locating by text: require the element's text to match exactly, so it doesn't hit another element that merely contains the same text. (This is unrelated to “absolute-obey”.)",
-  "workflows.help_absolute": "User-only hard constraint: the node's goal/binding must run exactly as specified — no method swap, no self-heal, no agent takeover."
+  "workflows.help_absolute": "User-only hard constraint: the node's goal/binding must run exactly as specified — no method swap, no self-heal, no agent takeover.",
+  "workflows.fld_role": "Role",
+  "workflows.help_role": "ARIA role to restrict matching (e.g. button, link). Helps target the right control."
 }

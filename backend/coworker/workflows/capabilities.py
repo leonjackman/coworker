@@ -378,7 +378,7 @@ BROWSER_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("browser", "screenshot", (), target="browser", success="no_error"),
     ActionSpec(
         "browser", "click",
-        (_p("x", "number"), _p("y", "number"), _p("selector"), _p("text"), _p("exact", "boolean")),
+        (_p("x", "number"), _p("y", "number"), _p("selector"), _p("text"), _p("exact", "boolean"), _p("role")),
         target="browser", success="observable_change",
         # Semantic target first: a selector or text (role/name-ish) is preferred;
         # raw coords are the last resort in a fallback ladder.
@@ -394,7 +394,7 @@ BROWSER_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("browser", "reload", (), target="browser", success="no_error"),
     ActionSpec("browser", "evaluate", (_p("expression", required=True),), target="browser", success="no_error"),
     ActionSpec("browser", "click_selector", (_p("selector", required=True),), target="browser", success="observable_change"),
-    ActionSpec("browser", "click_text", (_p("text", required=True), _p("exact", "boolean")), target="browser", success="observable_change"),
+    ActionSpec("browser", "click_text", (_p("text", required=True), _p("exact", "boolean"), _p("role")), target="browser", success="observable_change"),
     ActionSpec("browser", "scroll_to", (_p("selector"), _p("text")), target="browser", success="no_error"),
     ActionSpec("browser", "wait_for", (_p("selector"), _p("text"), _p("timeout_ms", "number")), target="browser", success="no_error"),
     ActionSpec("browser", "upload", (_p("files", "list", required=True), _p("selector")), target="browser", success="no_error"),

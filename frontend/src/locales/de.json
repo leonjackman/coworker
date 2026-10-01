@@ -1556,5 +1556,7 @@
   "workflows.section_control": "Steuerung",
   "workflows.step_timeout": "Zeitlimit (s)",
   "workflows.help_exact": "Nur bei der Textsuche: exakte Übereinstimmung verlangen, damit nicht ein anderes Element mit gleichem Text getroffen wird. (Unabhängig von „Absolut befolgen“.)",
-  "workflows.help_absolute": "Nur vom Nutzer setzbare harte Vorgabe: Ziel/Bindung des Knotens wird exakt ausgeführt (kein Methodenwechsel, keine Selbstreparatur, keine Agent-Übernahme)."
+  "workflows.help_absolute": "Nur vom Nutzer setzbare harte Vorgabe: Ziel/Bindung des Knotens wird exakt ausgeführt (kein Methodenwechsel, keine Selbstreparatur, keine Agent-Übernahme).",
+  "workflows.fld_role": "Rolle",
+  "workflows.help_role": "ARIA-Rolle zur Einschränkung (z. B. button, link), um das richtige Element zu treffen."
 }

@@ -1554,5 +1554,7 @@
   "workflows.section_control": "제어",
   "workflows.step_timeout": "타임아웃(초)",
   "workflows.help_exact": "텍스트로 요소를 찾을 때만: 문자가 완전히 일치하도록 요구하여 같은 텍스트를 포함한 다른 요소를 잘못 클릭하는 것을 방지합니다. ('절대 준수'와 무관합니다.)",
-  "workflows.help_absolute": "사용자만 설정하는 강한 제약: 노드의 목표/바인딩을 지정대로 실행합니다(방법 교체·자동 복구·에이전트 인계 없음)."
+  "workflows.help_absolute": "사용자만 설정하는 강한 제약: 노드의 목표/바인딩을 지정대로 실행합니다(방법 교체·자동 복구·에이전트 인계 없음).",
+  "workflows.fld_role": "역할",
+  "workflows.help_role": "일치시킬 ARIA 역할(예: button, link). 올바른 컨트롤을 찾는 데 도움이 됩니다."
 }

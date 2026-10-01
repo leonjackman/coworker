@@ -1554,5 +1554,7 @@
   "workflows.section_control": "控制",
   "workflows.step_timeout": "逾時（秒）",
   "workflows.help_exact": "僅在用文字定位時：要求元素文字完全相符，避免點到其他只係「包含」相同文字嘅元素。（與「絕對遵守」無關。）",
-  "workflows.help_absolute": "僅使用者可設嘅硬約束：節點嘅目標/綁定必須照做——唔換方法、唔自癒、唔交畀 agent 接手。"
+  "workflows.help_absolute": "僅使用者可設嘅硬約束：節點嘅目標/綁定必須照做——唔換方法、唔自癒、唔交畀 agent 接手。",
+  "workflows.fld_role": "角色",
+  "workflows.help_role": "限定匹配嘅 ARIA 角色（例如 button、link），有助鎖定正確控制項。"
 }

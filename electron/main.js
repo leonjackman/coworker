@@ -1231,14 +1231,18 @@ class BrowserController {
     return { ok: true };
   }
 
-  // Resolve an element's viewport center by CSS selector or (visible) text, then
-  // click it. Lets a workflow target a semantic element without pixel coords.
-  async _locate(selector, text, exact) {
+  // Resolve an element's viewport center by CSS selector, or by semantic
+  // role + accessible name / text. Prefers exact name matches, maps a label
+  // onto its control ancestor, and is STRICT: more than one candidate (or a
+  // layout container) fails loudly instead of silently mis-clicking.
+  async _locate(selector, text, exact, role) {
     const sel = JSON.stringify(String(selector || ''));
     const txt = JSON.stringify(String(text || ''));
+    const wantRole = JSON.stringify(String(role || '').toLowerCase());
     const expr = `(() => {
       const selector = ${sel};
       const target = ${txt};
+      const wantRole = ${wantRole};
       const exact = ${exact ? 'true' : 'false'};
       const INTERACTIVE = 'a,button,input,textarea,select,summary,[role="button"],[role="link"],[onclick],[contenteditable],[tabindex]';
       const isInteractive = (n) => { try { return n.matches(INTERACTIVE); } catch (e) { return false; } };
@@ -1251,7 +1255,35 @@ class BrowserController {
         } catch (e) { return false; }
       };
       const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();
-      const labelOf = (n) => norm(n.innerText || n.value || n.getAttribute('aria-label') || n.getAttribute('title') || '');
+      const implicitRole = (n) => {
+        const tag = (n.tagName || '').toLowerCase();
+        const type = (n.getAttribute('type') || '').toLowerCase();
+        if (tag === 'a') return n.hasAttribute('href') ? 'link' : '';
+        if (tag === 'button') return 'button';
+        if (tag === 'select') return 'combobox';
+        if (tag === 'textarea') return 'textbox';
+        if (tag === 'input') {
+          if (type === 'submit' || type === 'button' || type === 'reset') return 'button';
+          if (type === 'checkbox') return 'checkbox';
+          if (type === 'radio') return 'radio';
+          if (type === 'search') return 'searchbox';
+          return 'textbox';
+        }
+        return '';
+      };
+      const roleOf = (n) => ((n.getAttribute('role') || '') + '').toLowerCase() || implicitRole(n) || '';
+      // Accessible name (Playwright-ish): aria-label > aria-labelledby > labels
+      // > placeholder > title > innerText > value.
+      const accName = (n) => {
+        let labelled = '';
+        const ids = n.getAttribute('aria-labelledby');
+        if (ids) {
+          labelled = ids.split(/\\s+/).map((id) => { const el = document.getElementById(id); return el ? (el.innerText || el.value || '') : ''; }).join(' ');
+        }
+        let label = '';
+        try { if (n.labels && n.labels.length) label = Array.from(n.labels).map((l) => l.innerText || '').join(' '); } catch (e) {}
+        return norm(n.getAttribute('aria-label') || labelled || label || n.getAttribute('placeholder') || n.getAttribute('title') || n.innerText || n.value || '');
+      };
       const rectOf = (n) => n.getBoundingClientRect();
       const describe = (el) => {
         el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -1261,8 +1293,9 @@ class BrowserController {
           x: Math.round(r.x + r.width / 2),
           y: Math.round(r.y + r.height / 2),
           tag: (el.tagName || '').toLowerCase(),
-          role: el.getAttribute('role') || '',
-          text: norm(el.innerText || el.value || el.getAttribute('aria-label') || '').slice(0, 80),
+          role: roleOf(el),
+          name: accName(el).slice(0, 80),
+          text: norm(el.innerText || el.value || '').slice(0, 80),
           interactive: isInteractive(el),
           width: Math.round(r.width),
           height: Math.round(r.height),
@@ -1273,72 +1306,91 @@ class BrowserController {
         const el = document.querySelector(selector);
         return el ? describe(el) : { found: false, reason: 'selector_not_found' };
       }
+
+      const ALL = 'a,button,input,textarea,select,summary,[role],[onclick],[contenteditable],[tabindex],label,span,div,p';
+      let nodes = Array.from(document.querySelectorAll(ALL)).filter(visible);
+      if (wantRole) nodes = nodes.filter((n) => roleOf(n) === wantRole);
+      if (wantRole && !target) {
+        if (!nodes.length) return { found: false, reason: 'role_not_found' };
+        if (nodes.length > 1) return { found: false, reason: 'ambiguous_match', count: nodes.length, names: nodes.slice(0, 5).map((n) => accName(n).slice(0, 40)) };
+        return describe(nodes[0]);
+      }
       if (!target) return { found: false, reason: 'no_target' };
 
-      // Candidate pool: interactive elements first (Playwright-style), then text
-      // containers. Never treat a wrapper whose text merely CONTAINS the label
-      // as the target when a more specific descendant/interactive node matches.
-      const ALL = 'a,button,input,textarea,select,summary,[role="button"],[role="link"],[onclick],[contenteditable],[tabindex],label,span,div,p';
-      const nodes = Array.from(document.querySelectorAll(ALL)).filter(visible);
-      const labelMatch = (n) => { const t = labelOf(n); return exact ? t === target : (t && t.includes(target)); };
-      let matches = nodes.filter(labelMatch);
+      const isExact = (n) => accName(n) === target;
+      const isContains = (n) => { const t = accName(n); return t && t.includes(target); };
+      // Prefer exact matches even when the caller left exact off.
+      let matches = nodes.filter(isExact);
+      if (!matches.length) {
+        if (exact) return { found: false, reason: 'text_not_found' };
+        matches = nodes.filter(isContains);
+      }
       if (!matches.length) return { found: false, reason: 'text_not_found' };
 
-      // Drop ancestors that contain another match (the wrapper), keeping the
-      // most specific nodes.
+      // Keep the most specific nodes (drop wrappers that contain another match).
       const leaves = matches.filter((n) => !matches.some((o) => o !== n && n.contains(o)));
       let pool = leaves.length ? leaves : matches;
-
-      // Prefer interactive targets over passive text spans.
       const interactive = pool.filter(isInteractive);
       if (interactive.length) pool = interactive;
 
-      // Among the remaining, pick the smallest box (the actual control).
-      pool.sort((a, b) => { const ra = rectOf(a), rb = rectOf(b); return ra.width * ra.height - rb.width * rb.height; });
+      // STRICT uniqueness: several distinct candidates → ambiguous (fail, so the
+      // recovery chain runs instead of clicking the wrong element).
+      if (pool.length > 1) {
+        return {
+          found: false,
+          reason: 'ambiguous_match',
+          count: pool.length,
+          names: pool.slice(0, 5).map((n) => accName(n).slice(0, 40)),
+        };
+      }
+
       let el = pool[0];
 
-      // A label is often a bare span inside the real control (e.g. a <span>
-      // "导出" inside <div class="ds-button">). Climb to the nearest ancestor
-      // that is a control/role so we click the button, not the little label.
+      // Map a bare label (e.g. a <span> inside a button) onto its control.
       const CONTROL = 'a,button,input,textarea,select,summary,[role],[onclick],[tabindex],[contenteditable]';
       const isControl = (n) => {
         try { return n.matches(CONTROL) || /(^|[\\s-])(btn|button)/i.test(String(n.className || '')); } catch (e) { return false; }
       };
       for (let i = 0; i < 5 && el.parentElement; i += 1) {
         const parent = el.parentElement;
-        if (labelMatch(parent) && (isControl(parent) || isInteractive(parent))) el = parent;
+        if ((isExact(parent) || isContains(parent)) && (isControl(parent) || isInteractive(parent))) el = parent;
         else break;
       }
 
-      // Ambiguity guard: a huge non-interactive box almost certainly means we
-      // latched onto a page/layout container, not the control the author meant.
+      // A huge non-interactive box means we latched onto a layout container.
       const r = rectOf(el);
       const vw = window.innerWidth || document.documentElement.clientWidth || 0;
       const vh = window.innerHeight || document.documentElement.clientHeight || 0;
-      // Only judge ambiguity when we actually know the viewport. A hidden panel
-      // reports 0x0, which must not flag every element as a container.
       if (vw > 0 && vh > 0 && !isInteractive(el) && (r.width * r.height) > 0.6 * vw * vh) {
-        return { found: false, reason: 'ambiguous_container', tag: (el.tagName || '').toLowerCase(), text: labelOf(el).slice(0, 80) };
+        return { found: false, reason: 'ambiguous_container', tag: (el.tagName || '').toLowerCase(), text: accName(el).slice(0, 80) };
       }
       return describe(el);
     })()`;
     return this._eval(expr);
   }
 
+  _locateError(prefix, info) {
+    const parts = [(info && info.reason) || 'unknown'];
+    if (info && info.count) parts.push(`count=${info.count}`);
+    const names = (info && (info.names || (info.name ? [info.name] : []))) || [];
+    if (names.length) parts.push(`names=${names.slice(0, 5).join('|')}`);
+    return `${prefix}:${parts.join(' ')}`;
+  }
+
   async clickSelector(selector) {
     if (!this.guest) throw new Error('browser_not_attached');
-    const info = await this._locate(selector, '', false);
-    if (!info || !info.found) throw new Error(`element_not_found:${(info && info.reason) || 'unknown'}`);
+    const info = await this._locate(selector, '', false, '');
+    if (!info || !info.found) throw new Error(this._locateError('element_not_found', info));
     const res = await this.click(info.x, info.y);
     return { ...res, target: info };
   }
 
-  async clickText(text, exact = false) {
+  async clickText(text, exact = false, role = '') {
     if (!this.guest) throw new Error('browser_not_attached');
-    const info = await this._locate('', text, exact);
-    // A wrapper-only match ("ambiguous_container") is a real failure, not a
-    // silent success — otherwise we'd click a page container and report ok.
-    if (!info || !info.found) throw new Error(`text_not_found:${(info && info.reason) || 'unknown'}`);
+    const info = await this._locate('', text, exact, role);
+    // Wrapper-only ("ambiguous_container") or several-match ("ambiguous_match")
+    // failures are real failures, not silent successes.
+    if (!info || !info.found) throw new Error(this._locateError('text_not_found', info));
     const res = await this.click(info.x, info.y);
     return { ...res, target: info };
   }
@@ -1631,7 +1683,7 @@ async function handleBridgeRequest(method, url, payload) {
     case '/click_selector':
       return browserController.clickSelector(payload.selector);
     case '/click_text':
-      return browserController.clickText(payload.text, Boolean(payload.exact));
+      return browserController.clickText(payload.text, Boolean(payload.exact), payload.role);
     case '/scroll_to':
       return browserController.scrollTo(payload.selector, payload.text);
     case '/wait_for':

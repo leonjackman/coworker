@@ -1554,5 +1554,7 @@
   "workflows.section_control": "Controle",
   "workflows.step_timeout": "Tempo limite (s)",
   "workflows.help_exact": "Somente ao localizar por texto: exigir correspondência exata para não clicar em outro elemento que apenas contém o mesmo texto. (Sem relação com «cumprimento absoluto».)",
-  "workflows.help_absolute": "Restrição rígida apenas do usuário: o objetivo/vínculo do nó é executado exatamente como especificado (sem trocar de método, sem autorreparo, sem o agente assumir)."
+  "workflows.help_absolute": "Restrição rígida apenas do usuário: o objetivo/vínculo do nó é executado exatamente como especificado (sem trocar de método, sem autorreparo, sem o agente assumir).",
+  "workflows.fld_role": "Papel",
+  "workflows.help_role": "Papel ARIA a restringir (ex. button, link) para atingir o controle certo."
 }

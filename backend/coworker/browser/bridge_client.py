@@ -263,8 +263,8 @@ class BridgeClient:
     def click_selector(self, selector: str) -> dict[str, Any]:
         return self._call("POST", "/click_selector", {"selector": str(selector)})
 
-    def click_text(self, text: str, exact: bool = False) -> dict[str, Any]:
-        return self._call("POST", "/click_text", {"text": str(text), "exact": bool(exact)})
+    def click_text(self, text: str, exact: bool = False, role: str = "") -> dict[str, Any]:
+        return self._call("POST", "/click_text", {"text": str(text), "exact": bool(exact), "role": str(role)})
 
     def scroll_to(self, selector: str = "", text: str = "") -> dict[str, Any]:
         return self._call("POST", "/scroll_to", {"selector": str(selector), "text": str(text)})
@@ -442,6 +442,7 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
         max_items: int = Field(80, description="For 'snapshot': max interactive elements to list (default 80).")
         selector: str = Field("", description="For 'click_selector'/'scroll_to'/'upload': a CSS selector.")
         exact: bool = Field(False, description="For 'click_text': match the element text exactly.")
+        role: str = Field("", description="For 'click_text'/'click' by text: restrict to this ARIA role (e.g. 'button', 'link').")
         timeout_ms: int = Field(15000, description="For 'wait_for': max wait in milliseconds.")
         files: list[str] = Field(default_factory=list, description="For 'upload': absolute file paths to attach.")
         site: str = Field("", description="For 'login': the site/origin to sign in to (defaults to the current page).")
@@ -467,6 +468,7 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
         max_items: int = 80,
         selector: str = "",
         exact: bool = False,
+        role: str = "",
         timeout_ms: int = 15000,
         files: list[str] | None = None,
         site: str = "",
@@ -516,7 +518,7 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
                 if selector:
                     result = client.click_selector(selector)
                 elif text:
-                    result = client.click_text(text, exact)
+                    result = client.click_text(text, exact, role)
                 else:
                     result = client.act("click", x=x, y=y)
             elif action == "type":
@@ -536,7 +538,7 @@ def build_browser_tool(data_dir: Path | str | None, *, vision: bool = False, ses
             elif action == "click_selector":
                 result = client.click_selector(selector)
             elif action == "click_text":
-                result = client.click_text(text, exact)
+                result = client.click_text(text, exact, role)
             elif action == "scroll_to":
                 result = client.scroll_to(selector, text)
             elif action == "wait_for":
