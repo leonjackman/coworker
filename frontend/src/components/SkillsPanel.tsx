@@ -64,7 +64,7 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
 
   // Tab within list view: 'installed' | 'market'
   type ListTab = 'installed' | 'market';
-  const [listTab, setListTab] = useState<ListTab>('market');
+  const [listTab, setListTab] = useState<ListTab>('installed');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -267,7 +267,7 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
           <div className="skills-header__actions">
             {listTab === 'installed' ? (
                 <Button variant="secondary" onClick={() => setListTab('market')} className="skills-header__tab-btn">
-                  返回{t('skills.market')}
+                  {t('skills.go_to_market')}
                 </Button>
               ) : (
               <Button variant="secondary" onClick={() => setListTab('installed')} className="skills-header__tab-btn">
@@ -335,7 +335,7 @@ export function SkillsPanel({ skills, diagnostics, setSkills, setDiagnostics, on
             {/* ── Installed grid (grouped by bundle) ── */}
             {visibleSkills.length === 0 ? (
               <div className="skill-empty">
-                <p>{skills.length === 0 ? t('skills.empty') : t('skills.no_match')}</p>
+                <p>{skills.length === 0 ? t('skills.empty_installed') : t('skills.no_match')}</p>
               </div>
             ) : (
               <div className="skills-bundles">

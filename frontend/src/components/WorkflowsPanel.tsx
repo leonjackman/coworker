@@ -147,23 +147,47 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
     });
   }, [refresh, reopenDetail, subPage, detail?.name]);;
 
+  const bundleOf = useCallback((wf: WorkflowEntry): string => {
+    if (wf.source === 'agent') return 'agent-learned';
+    return 'custom';
+  }, []);
+
+  const bundleLabel = useCallback(
+    (bundle: string): string => {
+      switch (bundle) {
+        case 'agent-learned':
+          return t('workflows.bundle_agent_learned');
+        case 'custom':
+          return t('workflows.bundle_custom');
+        default:
+          return bundle;
+      }
+    },
+    [t],
+  );
+
   const categories = useMemo<CategoryTabItem[]>(() => {
     const items: CategoryTabItem[] = [{ id: 'all', label: t('workflows.cat_all'), count: workflows.length }];
-    const sources = new Map<string, number>();
-    for (const wf of workflows) sources.set(wf.source, (sources.get(wf.source) ?? 0) + 1);
-    for (const [source, count] of sources) items.push({ id: source, label: source, count });
-    const manual = workflows.filter((w) => w.triggers.includes('manual') || w.triggers.length === 0).length;
-    const scheduled = workflows.filter((w) => w.triggers.some((x) => x.startsWith('cron'))).length;
-    if (scheduled > 0) items.push({ id: 'scheduled', label: t('workflows.scheduled'), count: scheduled });
-    if (manual > 0) items.push({ id: 'manual', label: t('workflows.manual'), count: manual });
+    const counts = new Map<string, number>();
+    for (const wf of workflows) {
+      const bundle = bundleOf(wf);
+      counts.set(bundle, (counts.get(bundle) ?? 0) + 1);
+    }
+    if (counts.size <= 1) return items;
+    const order = ['agent-learned', 'custom'];
+    for (const bundle of order) {
+      const count = counts.get(bundle);
+      if (count && count > 0) items.push({ id: bundle, label: bundleLabel(bundle), count });
+    }
+    for (const [bundle, count] of counts) {
+      if (!order.includes(bundle) && count > 0) items.push({ id: bundle, label: bundleLabel(bundle), count });
+    }
     return items;
-  }, [workflows]);
+  }, [workflows, bundleOf, bundleLabel]);
 
   const visible = useMemo(() => {
     let list = workflows;
-    if (filter === 'scheduled') list = list.filter((w) => w.triggers.some((x) => x.startsWith('cron')));
-    else if (filter === 'manual') list = list.filter((w) => w.triggers.includes('manual') || w.triggers.length === 0);
-    else if (filter !== 'all') list = list.filter((w) => w.source === filter);
+    if (filter !== 'all') list = list.filter((w) => bundleOf(w) === filter);
     const needle = search.trim().toLowerCase();
     if (needle) {
       list = list.filter(
@@ -171,7 +195,7 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       );
     }
     return list;
-  }, [workflows, filter, search]);
+  }, [workflows, filter, search, bundleOf]);
 
   const openDetail = useCallback(async (wf: WorkflowEntry) => {
     setSubPage('detail');
@@ -299,22 +323,6 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       setRunBusy(false);
     }
   }, [runTarget, runInputs, refresh, loadRunDetail]);
-
-  const recordFromSession = useCallback(async () => {
-    if (!sessionId) return;
-    setMessageType('ok');
-    setMessage(t('workflows.recording'));
-    try {
-      const result = await chatService.recordFromSession(sessionId);
-      const action = (result.review?.action as string) || 'none';
-      setMessageType('ok');
-      setMessage(action === 'create' ? t('workflows.record_staged') : t('workflows.record_none'));
-      await refresh();
-    } catch (error) {
-      setMessageType('error');
-      setMessage(translateError(error));
-    }
-  }, [sessionId, refresh]);
 
   const clearNotifications = useCallback(async () => {
     try {
@@ -790,15 +798,6 @@ export function WorkflowsPanel({ sessionId }: { sessionId?: string | undefined }
       description={t('workflows.subtitle')}
       action={
         <>
-          {sessionId && (
-            <Button variant="secondary" onClick={() => void recordFromSession()} disabled={loading}>
-              <Wand2 size={14} />
-              {t('workflows.record_from_session')}
-            </Button>
-          )}
-          <Button variant="secondary" onClick={() => setSubPage('templates')} disabled={loading}>
-            {t('workflows.from_template')}
-          </Button>
           <Button
             variant="secondary"
             onClick={() => importInputRef.current?.click()}
