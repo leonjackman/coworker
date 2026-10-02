@@ -26,6 +26,9 @@ export function useGlobalShortcuts(handlers: GlobalShortcutHandlers) {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      // Never consume keys that belong to an active IME composition (e.g. the
+      // Escape that cancels a candidate window, or first keydown of a compose).
+      if (event.isComposing) return;
       // Leave terminal keystrokes alone (Ctrl+C / Ctrl+K / … belong to the shell).
       if (isInsideXterm(event.target)) return;
       // While a shortcut is being re-bound in the settings page, the recorder

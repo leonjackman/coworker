@@ -39,6 +39,8 @@ import { Tooltip } from "./ui/tooltip";
 import { ContextMenu } from "./ui/context-menu";
 import { SidebarScrollbar } from "./ui/sidebar-scrollbar";
 import { TypeCapsule, TYPE_CAPSULE_LABELS, type SlashCommandType } from "./ui/type-capsule";
+import { detectLeadSlash } from "./composer/detectLeadSlash";
+import { useImeSafeEditor } from "./composer/useImeSafeEditor";
 
 /** 焦点不能被抢走的输入上下文（opencode 的 isEditableTarget 语义）：真正的
  *  文本框/可编辑区、按钮。事件落在这些元素上时按键属于"控件自身的键盘操作"，
@@ -268,8 +270,24 @@ export function ChatInput({
   apiRef,
 }: ChatInputProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const editorRef = useRef<HTMLDivElement>(null);
-  const isComposingRef = useRef(false);
+  // IME-safe editing kernel: owns the editable DOM, composition state machine
+  // and caret operations. onReconcile is a hoisted declaration below. All the
+  // returned methods are referentially stable (useCallback), so they are safe
+  // to use as effect dependencies without re-triggering every render.
+  const {
+    editorRef,
+    isComposing,
+    readText,
+    handleInput: handleEditorInput,
+    handleCompositionStart,
+    handleCompositionEnd,
+    syncExternalValue,
+    reanchorChip,
+    caretAfterChip,
+    stripLeadingCommand,
+    clearText,
+    insertText,
+  } = useImeSafeEditor({ onReconcile: handleReconcile });
   const menuRef = useRef<HTMLDivElement>(null);
   const [showCommands, setShowCommands] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -308,6 +326,8 @@ export function ChatInput({
       // 焦点已在输入框：Escape 移出焦点（把方向键/滚轮还给页面）；
       // 其余键保持原位，输入框正常处理。
       if (document.activeElement === editorRef.current) {
+        // Never interfere with an active IME composition (Escape cancels it).
+        if (event.isComposing) return;
         if (event.key === "Escape") editorRef.current?.blur();
         return;
       }
@@ -342,6 +362,7 @@ export function ChatInput({
     // 窗口切回时若没有活动选区，把焦点交还输入框，方便直接续打。
     const onWindowFocus = () => {
       if (disabled || hasOpenOverlay()) return;
+      if (isComposing()) return;
       if (isEditableTarget(document.activeElement)) return;
       const selection = window.getSelection();
       if (selection && !selection.isCollapsed) return;
@@ -418,15 +439,12 @@ export function ChatInput({
       setShowCommands(false);
       return;
     }
-    const nonWs = value.search(/\S/);
-    const startsSlash = nonWs === 0 && value.charAt(0) === "/";
-    const firstToken = startsSlash ? value.slice(1).split(/\s/)[0] ?? "" : "";
-    const commandCommitted = startsSlash && value.length > firstToken.length + 1;
     // Pop only while a NEW leading command is being typed (starts with "/" and
     // no whitespace after it yet). A committed command (followed by whitespace)
     // closes the menu; mid-string "/" never pops (industry: commands at start).
     // "/skill" is a legacy typed command, not a menu entry — never pop for it.
-    if (commandCommitted || !startsSlash || firstToken === "skill") {
+    const match = detectLeadSlash(value);
+    if (!match || match.committed) {
       setShowCommands(false);
     } else {
       setShowCommands(true);
@@ -494,8 +512,7 @@ export function ChatInput({
   // package name, the description, or the type capsule (case-insensitive).
   // When nothing matches, fall back to showing ALL commands so the card still
   // pops (e.g. "/" inserted at the head of existing text).
-  const nonWs = value.search(/\S/);
-  const commandQuery = nonWs === 0 && value.charAt(0) === "/" ? value.slice(1).split(/\s/)[0] ?? "" : "";
+  const commandQuery = detectLeadSlash(value)?.query ?? "";
   const queryLower = commandQuery.toLowerCase();
   const filteredItems = commandItems.filter((item) => {
     if (!queryLower) return true;
@@ -573,6 +590,8 @@ export function ChatInput({
   }
 
   function handlePaste(event: ClipboardEvent<HTMLDivElement>) {
+    // Never mutate the editor during an IME composition.
+    if (isComposing()) return;
     const pasted = event.clipboardData.getData("text/plain");
     if (!pasted) return;
     // contentEditable would paste rich HTML by default — force plain text so
@@ -589,157 +608,34 @@ export function ChatInput({
     if (editor && chip && selection && !selection.isCollapsed && selection.containsNode(chip, true)) {
       onCommandCommit?.(null);
       onChange?.("");
-      Array.from(editor.childNodes).forEach((node) => {
-        if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
-        editor.removeChild(node);
-      });
+      clearText();
     }
-    document.execCommand("insertText", false, pasted);
+    insertText(pasted);
   }
 
   function removeReference(id: string) {
     onReferencesChange(references.filter((reference) => reference.id !== id));
   }
 
-  /** Read the composer text, skipping the (non-editable) command chip. Block
-   *  elements and <br> are normalised back to newlines. */
-  function getPromptText(editor: HTMLElement): string {
-    const parts: string[] = [];
-    const collect = (parent: Node, out: string[]) => {
-      parent.childNodes.forEach((child) => {
-        if (child.nodeType === Node.TEXT_NODE) {
-          out.push(child.nodeValue ?? "");
-          return;
-        }
-        if (child.nodeType !== Node.ELEMENT_NODE) return;
-        const el = child as HTMLElement;
-        if (el.dataset.commandChip !== undefined) return;
-        if (el.tagName === "BR") {
-          out.push("\n");
-          return;
-        }
-        collect(child, out);
-        if (/^(DIV|P|LI)$/.test(el.tagName)) out.push("\n");
-      });
-    };
-    collect(editor, parts);
-    return parts.join("");
-  }
-
-  /** Set the composer text, keeping the chip (if any) at the head. Only used
-   *  for external value changes (edit-mode hydrate / send reset) — user typing
-   *  never goes through React, so the caret never jumps. */
-  function hydrateText(editor: HTMLElement, text: string) {
-    Array.from(editor.childNodes).forEach((node) => {
-      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
-      editor.removeChild(node);
-    });
-    if (!text) return; // leave the editor truly empty so the placeholder shows
-    const textNode = document.createTextNode(text);
-    const chip = editor.querySelector("[data-command-chip]");
-    if (chip) chip.after(textNode);
-    else editor.appendChild(textNode);
-  }
-
-  /** Chrome leaves a <br>/empty <div> behind when a contentEditable is cleared.
-   *  Normalise that back to a truly empty editor so the :empty placeholder
-   *  shows and a fresh "/cmd" typed afterwards still auto-commits. */
-  function normalizeEmptyEditor(editor: HTMLElement) {
-    let empty = true;
-    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      if ((walker.currentNode as Text).nodeValue?.trim()) {
-        empty = false;
-        break;
-      }
-    }
-    if (!empty) return;
-    Array.from(editor.childNodes).forEach((node) => {
-      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
-      editor.removeChild(node);
-    });
-  }
-
   // Sync externally-driven `value` (edit mode / send reset) into the
-  // uncontrolled editor, but never clobber the user's in-flight typing.
+  // uncontrolled editor, but never clobber the user's in-flight typing or an
+  // active IME composition (the kernel replays the latest value afterwards).
   useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    if (getPromptText(editor) === value) return;
-    hydrateText(editor, value);
-  }, [value]);
+    syncExternalValue(value);
+  }, [value, syncExternalValue]);
 
   // The chip is a React-managed child; React appends it, so re-anchor it to the
   // head of the editor after it renders, and pull any caret parked at the very
   // start (e.g. the commit-time caret landed before the chip rendered) to right
   // after the chip so subsequent typing continues the prompt.
   useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor || !commandChip) return;
-    const chip = editor.querySelector("[data-command-chip]");
-    if (chip && editor.firstChild !== chip) editor.prepend(chip);
+    if (!commandChip) return;
     // Re-focus after the chip renders so the caret stays active: for skill chips
     // the chip only mounts once an async validation resolves, so the focus we
     // applied at commit time is lost when this contentEditable re-renders.
-    focusAfterChip();
-  }, [commandChip]);
-
-  /** Remove the leading "/token " text currently being typed (the raw command
-   *  that a commit replaces with the chip). The token part is optional so a bare
-   *  "/" typed before picking a command is also cleared. Returns whether any
-   *  text was cut. */
-  function stripLeadingCommand(editor: HTMLElement): boolean {
-    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-    const node = walker.nextNode();
-    if (!node) return false;
-    const text = node.nodeValue ?? "";
-    const match = /^\/[A-Za-z0-9_.-]*\s?/.exec(text);
-    if (!match) return false;
-    const rest = text.slice(match[0].length);
-    if (rest) node.nodeValue = rest;
-    else node.parentNode?.removeChild(node);
-    return true;
-  }
-
-  /** Place the caret right after the chip (start of the prompt text). */
-  function focusAfterChip() {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.focus();
-    const selection = window.getSelection();
-    if (!selection) return;
-    const range = document.createRange();
-    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-    const chip = editor.querySelector("[data-command-chip]");
-    let firstText: Text | null = null;
-    while (walker.nextNode()) {
-      const candidate = walker.currentNode as Text;
-      if (chip && chip.contains(candidate)) continue;
-      firstText = candidate;
-      break;
-    }
-    if (firstText) {
-      range.setStart(firstText, 0);
-      range.collapse(true);
-    } else if (chip) {
-      // chip is the only content — park the caret right after it so typing
-      // continues the prompt instead of landing inside the chip or before it.
-      range.setStartAfter(chip);
-      range.collapse(true);
-    } else if (editor.childNodes.length > 0) {
-      const last = editor.lastChild as ChildNode;
-      range.setStart(
-        last,
-        last.nodeType === Node.TEXT_NODE ? (last as Text).nodeValue?.length ?? 0 : last.childNodes.length,
-      );
-      range.collapse(true);
-    } else {
-      range.setStart(editor, 0);
-      range.collapse(true);
-    }
-    selection.removeAllRanges();
-    selection.addRange(range);
-  }
+    reanchorChip();
+    caretAfterChip();
+  }, [commandChip, reanchorChip, caretAfterChip]);
 
   /** Commit a command: strip the typed leading token, lift the chip up to the
    *  parent (which validates/executes), and park the caret after the chip. */
@@ -748,19 +644,15 @@ export function ChatInput({
       setShowCommands(false);
       return;
     }
-    const editor = editorRef.current;
-    let stripped = false;
-    if (editor && !commandChip) {
-      stripped = stripLeadingCommand(editor);
-    }
+    const stripped = !commandChip ? stripLeadingCommand() : false;
     setShowCommands(false);
-    if (stripped && editor) onChange(getPromptText(editor));
+    if (stripped) onChange(readText());
     onCommandCommit?.({
       command: item.command,
       type: item.type,
       ...(item.packageName ? { packageName: item.packageName } : {}),
     });
-    requestAnimationFrame(focusAfterChip);
+    requestAnimationFrame(() => caretAfterChip());
   }
 
   /** A delete/cut/drag operation whose selection contains the chip would strip
@@ -768,6 +660,8 @@ export function ChatInput({
    *  crashes with "removeChild not a child" on the next unmount). Intercept and
    *  drop the chip through the parent instead, clearing the remaining text. */
   function handleBeforeInput(event: React.FormEvent<HTMLDivElement>) {
+    // Never intercept IME edits (composition text deletion).
+    if (isComposing()) return;
     const editor = editorRef.current;
     const chip = editor?.querySelector("[data-command-chip]");
     if (!editor || !chip) return;
@@ -779,20 +673,14 @@ export function ChatInput({
     event.preventDefault();
     onCommandCommit?.(null);
     onChange?.("");
-    Array.from(editor.childNodes).forEach((node) => {
-      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.commandChip !== undefined) return;
-      editor.removeChild(node);
-    });
+    clearText();
   }
 
-  function handleEditorInput() {
-    const editor = editorRef.current;
-    if (!editor) return;
-    normalizeEmptyEditor(editor);
-    const text = getPromptText(editor);
-    // Auto-commit: a fully-typed known command token followed by a space turns
-    // into the chip at once (no menu interaction needed).
-    if (!commandChip && !isComposingRef.current) {
+  /** Non-composing reconcile (invoked by the IME-safe kernel): auto-commit a
+   *  fully-typed known command token followed by a space, else sync the text.
+   *  Declared as a hoisted function so it can be handed to the kernel above. */
+  function handleReconcile(text: string) {
+    if (!commandChip && !isComposing()) {
       const match = /^\/([A-Za-z0-9][A-Za-z0-9_.-]*)\s/.exec(text);
       if (match) {
         const item = commandItems.find((candidate) => candidate.command.slice(1) === match[1]);
@@ -808,6 +696,10 @@ export function ChatInput({
   function handleEditorKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     const editor = editorRef.current;
     if (!editor) return;
+    // While an IME composition is active every key belongs to the IME: never
+    // intercept, preventDefault, or otherwise touch the editor (this is what
+    // keeps third-party candidate windows alive).
+    if (event.nativeEvent.isComposing || isComposing()) return;
     if (showCommands && displayedItems.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -819,7 +711,7 @@ export function ChatInput({
         setCommandIndex((index) => (index - 1 + displayedItems.length) % displayedItems.length);
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
+      if (event.key === "Enter" && !event.shiftKey) {
         // Commit only on a genuine filter match; the fallback "show all" list
         // must not hijack unknown "/..." input (that falls through to send).
         if (filteredItems.length > 0) {
@@ -848,10 +740,10 @@ export function ChatInput({
         }
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !isComposingRef.current) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       // Sync the latest DOM text into the parent before sending.
-      onChange(getPromptText(editor));
+      onChange(readText());
       if (isThinking && !editing) {
         // Agent is streaming: default to queueing the message (it auto-sends
         // after the stream finishes). An empty composer does nothing.
@@ -869,7 +761,7 @@ export function ChatInput({
     }
     if (event.key === "Tab") {
       event.preventDefault();
-      document.execCommand("insertText", false, "  ");
+      insertText("  ");
     }
   }
 
@@ -1008,13 +900,20 @@ export function ChatInput({
             className="composer__editor"
             contentEditable={!disabled}
             suppressContentEditableWarning
+            role="textbox"
+            aria-multiline="true"
+            aria-autocomplete="list"
+            aria-controls={showCommands ? "composer-slash-menu" : undefined}
+            aria-expanded={showCommands || undefined}
+            aria-haspopup="listbox"
+            aria-activedescendant={showCommands ? `composer-slash-option-${activeCommandIndex}` : undefined}
             data-placeholder={t("chat.placeholder")}
             onInput={handleEditorInput}
             onBeforeInput={handleBeforeInput}
             onPaste={handlePaste}
             onKeyDown={handleEditorKeyDown}
-            onCompositionStart={() => { isComposingRef.current = true; }}
-            onCompositionEnd={() => { isComposingRef.current = false; handleEditorInput(); }}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
             onContextMenu={(event) => {
               if (disabled) return;
               event.preventDefault();
@@ -1188,12 +1087,20 @@ export function ChatInput({
       </CardSlot>
 
       {showCommands && displayedItems.length > 0 && (
-        <SidebarScrollbar ref={menuRef} className="slash-menu">
+        <SidebarScrollbar
+          ref={menuRef}
+          className="slash-menu"
+          id="composer-slash-menu"
+          role="listbox"
+        >
           <div className="slash-menu-content">
             {displayedItems.map((item, index) => (
               <button
                 type="button"
                 key={`${item.type}:${item.command}:${item.packageName ?? ''}`}
+                id={`composer-slash-option-${index}`}
+                role="option"
+                aria-selected={index === activeCommandIndex}
                 className={index === activeCommandIndex ? "slash-menu__item slash-menu__item--active" : "slash-menu__item"}
                 onMouseEnter={() => setCommandIndex(index)}
                 onClick={() => commitCommand(item)}

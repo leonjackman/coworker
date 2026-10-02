@@ -344,11 +344,15 @@ function startAutoUpdateTimer() {
 // macOS: keep hardware acceleration so the embedded browser's compositor
 // hit-testing works (disabling GPU(-compositing) broke mouse clicks in the
 // <webview> — with GPU off every click needed Cmd+click, with GPU on plain
-// clicks work). Retain the InputMethodServiceOverlay switch as the IME crash
-// workaround. Set COWORKER_GPU_DISABLE=1 to restore the fully-disabled GPU
+// clicks work). Set COWORKER_GPU_DISABLE=1 to restore the fully-disabled GPU
 // config if the IMKCFRunLoopWakeUpReliable crash appears.
+//
+// NOTE: a previous `disable-features=InputMethodServiceOverlay` switch was
+// removed — that feature name does not exist in the Electron/Chromium build
+// (verified absent from the macOS framework binary), so it was a no-op and its
+// "IME crash workaround" comment was misleading. The working remedy is the
+// opt-in GPU-disable path below.
 if (process.platform === 'darwin') {
-  app.commandLine.appendSwitch('disable-features', 'InputMethodServiceOverlay');
   if (process.env.COWORKER_GPU_DISABLE === '1') {
     app.commandLine.appendSwitch('ignore-gpu-blocklist');
     app.commandLine.appendSwitch('disable-software-rasterizer');
