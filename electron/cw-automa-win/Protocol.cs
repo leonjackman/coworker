@@ -10,7 +10,8 @@ namespace CwAutomaWin;
 internal sealed class HelperError : Exception
 {
     public string Code { get; }
-    public HelperError(string code, string message) : base(message) { Code = code; }
+    public string Hint { get; }
+    public HelperError(string code, string message, string hint = null) : base(message) { Code = code; Hint = hint; }
 }
 
 internal static class Responder
@@ -32,10 +33,11 @@ internal static class Responder
         Emit(new Dictionary<string, object> { ["id"] = id, ["ok"] = true, ["result"] = result });
     }
 
-    public static void Fail(int id, string error, string code = null)
+    public static void Fail(int id, string error, string code = null, string hint = null)
     {
         var obj = new Dictionary<string, object> { ["id"] = id, ["ok"] = false, ["error"] = error };
         if (code != null) obj["error_code"] = code;
+        if (hint != null) obj["hint"] = hint;
         Emit(obj);
     }
 }

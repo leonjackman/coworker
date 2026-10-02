@@ -1,9 +1,11 @@
 # Windows Computer Use — Development & Handoff
 
 > Audience: the agent (or engineer) continuing Windows computer-use development on a Windows machine.
-> Status: **complete first implementation**. macOS is unchanged and verified green; the Windows
-> helper is **written but not yet compiled** (no `dotnet` on the macOS dev machine) — first task on
-> Windows is to build it and fix any compile errors.
+> Status: **Windows helper builds and passes contract conformance.** macOS is unchanged and verified
+> green. On Windows: the helper compiles (one FlaUI `Focus()` return-type fix), `ping` +
+> `automation-conformance.js` pass, the DIP→physical mapping matches Electron
+> `screen.dipToScreenPoint` at 150% scale, and `uipi_blocked` detection is implemented. Remaining:
+> multi-monitor validation, full-app end-to-end (`computer_observe`/`computer_script`), packaging.
 
 ---
 
@@ -164,6 +166,11 @@ physicalX = monitor.physical.x + (x - electronDisplay.bounds.x) * (monitor.physi
 This avoids needing the absolute DIP origin to match. **Validate on mixed-DPI / multi-monitor.** If
 pairing-by-index is wrong, use the monitor's device name / relative position to match instead.
 
+> Validated on a single 3840×2160 @150% monitor: `WinDriver._toPhysical` matched Electron's
+> `screen.dipToScreenPoint` exactly for all sampled points. A cleaner alternative to index-pairing,
+> if a multi-monitor discrepancy appears, is to call `screen.dipToScreenPoint()` directly (it is
+> Windows-only and already reflects the correct monitor).
+
 ### Cursor behaviour difference
 macOS never moves the real cursor (per-PID events). Windows has no equivalent, so **coordinate
 fallback actions move the real mouse**. Ref/pattern actions (Invoke/SetValue) do not. If "hands-off"
@@ -209,14 +216,17 @@ Enable Settings → Computer Use, then exercise `computer_observe` (snapshot/scr
 
 ## 7. Known risks / TODO on Windows (validate in this order)
 
-1. **Compile the C# helper and fix compile errors.** It was authored on macOS without a
-   `dotnet` toolchain. Likely spots: FlaUI pattern property names (`el.Patterns.*.PatternOrDefault`),
-   `AutomationElement.ControlType`, `TreeWalkerFactory`. Prefer `dynamic` locals already used in
-   `UiaActions.cs` to avoid namespace guessing.
-2. **DPI / multi-monitor mapping** (see §5). Test 100% + 150% scaling and a secondary monitor.
-3. **UIPI / elevation**: a non-elevated helper cannot drive elevated windows. Detect integrity
-   mismatch and return `{error_code:"uipi_blocked", hint:...}` (not yet implemented — currently the
-   action just fails). Also confirm the app is not blocked by `UIPI` on `SendInput`.
+1. ~~**Compile the C# helper and fix compile errors.**~~ **DONE.** One error fixed: FlaUI
+   `AutomationElement.Focus()` returns `void`, not `bool` (`UiaActions.FocusElement`). Also switched
+   DPI awareness from `app.manifest` to `Application.SetHighDpiMode(PerMonitorV2)` (clears the
+   WinForms `WFAC010` warning) and added `bin/`/`obj/` to `.gitignore`.
+2. **DPI / multi-monitor mapping** (see §5). 150% single-monitor **validated** (matches Electron's
+   `dipToScreenPoint`). Still to test: 100% scaling and a **secondary monitor** — index-pairing is
+   the only untested assumption.
+3. **UIPI / elevation** — **IMPLEMENTED.** `Elevation.cs` compares the helper's token elevation with
+   the target pid; `snapshot` / `act` / `input_text` / `type_text` throw `uipi_blocked` (+ `hint`)
+   before touching the UI, and `Input.Send` maps `SendInput` `ERROR_ACCESS_DENIED` (5) to the same
+   error. Verified: SYSTEM processes → `uipi_blocked`; medium-integrity apps unaffected.
 4. **UIA tree quality**: Electron/Chromium apps may expose a thin UIA tree; canvas/games expose
    almost nothing. Coordinate fallback (`click_coords`) is the escape hatch. Consider enabling
    Chromium's UIA (`--force-renderer-accessibility`) for `webview` content if needed.
@@ -249,10 +259,11 @@ macOS:
 - [ ] `backend/venv/bin/python -m pytest backend/tests/test_computer_use.py -q`
 
 Windows:
-- [ ] `npm run build:automa-win` (fix compile errors)
-- [ ] manual `ping` smoke
-- [ ] `node scripts/automation-conformance.js electron/cw-automa-win/bin/cwautoma-win.exe`
-- [ ] end-to-end: `computer_observe` snapshot + screenshot, `computer click_ref`/`type_into`,
-      `computer_script` on Notepad / Calculator
-- [ ] multi-monitor + mixed DPI click accuracy
-- [ ] `state` reports `platform: win32`; pause hotkey `Ctrl+Shift+Esc` works
+- [x] `npm run build:automa-win` (compiles clean; requires the .NET 8 **SDK**, not just the runtime)
+- [x] manual `ping` smoke
+- [x] `node scripts/automation-conformance.js electron/cw-automa-win/bin/cwautoma-win.exe`
+- [~] end-to-end: helper-level `snapshot` + `input_text`/`set_value` verified on Notepad; full-app
+      `computer_observe` screenshot + `computer_script` still to run
+- [~] multi-monitor + mixed DPI click accuracy: 150% single-monitor mapping verified; secondary
+      monitor TBD
+- [ ] `state` reports `platform: win32`; pause hotkey `Ctrl+Shift+Esc` works (code path present)

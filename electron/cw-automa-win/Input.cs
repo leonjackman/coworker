@@ -73,7 +73,17 @@ internal static class Input
         U = new InputUnion { ki = new KEYBDINPUT { wVk = vk, wScan = scan, dwFlags = flags, time = 0, dwExtraInfo = IntPtr.Zero } }
     };
 
-    private static void Send(params INPUT[] inputs) => SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    private static void Send(params INPUT[] inputs)
+    {
+        uint inserted = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (inserted == 0 && Marshal.GetLastWin32Error() == 5)
+        {
+            throw new HelperError(
+                "uipi_blocked",
+                "input injection was blocked by UIPI; the foreground window is elevated",
+                "Run CoWorker as administrator to control elevated windows.");
+        }
+    }
 
     private static (int, int) Normalize(int x, int y)
     {

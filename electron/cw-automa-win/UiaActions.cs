@@ -15,6 +15,7 @@ internal static class UiaActions
     public static Dictionary<string, object> Act(UIA3Automation automation, UiaTree tree, int pid, string reference, string op, JsonElement paramsEl)
     {
         if (string.IsNullOrEmpty(reference)) throw new HelperError("param_error", "act requires a ref");
+        Elevation.EnsureNotBlocked(pid);
         var el = tree.Find(pid, reference)
                  ?? throw new HelperError("computer_error", $"no UIA element for ref {reference} in pid {pid}");
 
@@ -101,7 +102,7 @@ internal static class UiaActions
 
     public static bool FocusElement(AutomationElement el)
     {
-        try { return el.Focus(); } catch { return false; }
+        try { el.Focus(); return true; } catch { return false; }
     }
 
     private static dynamic SafeInvoke(AutomationElement el)

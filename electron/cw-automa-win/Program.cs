@@ -7,6 +7,7 @@
 using System.Drawing;
 using System.Text;
 using System.Text.Json;
+using System.Windows.Forms;
 using FlaUI.UIA3;
 
 namespace CwAutomaWin;
@@ -33,7 +34,11 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        // Ensure the working directory is sane and DPI is per-monitor (manifest).
+        // Per-monitor DPI v2 (must precede any window creation) so coordinates and
+        // UIA bounding boxes are consistent on mixed-DPI/multi-monitor setups.
+        try { Application.SetHighDpiMode(HighDpiMode.PerMonitorV2); } catch { /* ignore */ }
+
+        // Ensure the working directory is sane.
         try { Directory.SetCurrentDirectory(AppContext.BaseDirectory); } catch { /* ignore */ }
 
         Automation = new UIA3Automation();
@@ -66,7 +71,7 @@ internal static class Program
         }
         catch (HelperError he)
         {
-            Responder.Fail(id, $"{he.Code}: {he.Message}", he.Code);
+            Responder.Fail(id, $"{he.Code}: {he.Message}", he.Code, he.Hint);
         }
         catch (JsonException)
         {
@@ -157,6 +162,7 @@ internal static class Program
             {
                 string text = Params.Str(p, "text");
                 int pid = ResolveActPid(p);
+                if (pid > 0) Elevation.EnsureNotBlocked(pid);
                 if (pid > 0) { AppInventory.FocusApp(pid.ToString(), false); }
                 string rf = Params.Str(p, "ref");
                 if (!string.IsNullOrEmpty(rf))
@@ -372,6 +378,7 @@ internal static class Program
         string requestedApp = Params.Str(p, "app");
         int pid = ResolveAppPid(requestedApp);
         if (pid <= 0) throw new HelperError("no_target", $"No running application matches '{requestedApp}'");
+        Elevation.EnsureNotBlocked(pid);
 
         string appName = AppName(pid);
         string frontName = AppName(AppInventory.FrontmostPid());
@@ -467,6 +474,7 @@ internal static class Program
     {
         int pid = ResolveActPid(p);
         if (pid <= 0) throw new HelperError("no_target", "input_text requires a running app");
+        Elevation.EnsureNotBlocked(pid);
         string rf = Params.Str(p, "ref");
         string text = Params.Str(p, "text");
         bool submit = Params.Bool(p, "submit", false);

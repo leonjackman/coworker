@@ -73,3 +73,7 @@ frontend/.vite/
 frontend/assets
 certifi/
 
+# .NET build output (Windows computer-use helper)
+electron/cw-automa-win/bin/
+electron/cw-automa-win/obj/
+
