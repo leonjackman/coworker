@@ -428,6 +428,33 @@
 
 - 新增文件解析（約 40 case）、Shell 白名單繞過、驗證守衛、佔位合併等測試，並補工作流引擎對應測試；前端 `tsc --noEmit` 零錯誤。
 
+## 0.7.1
+
+本版本聚焦輸入體驗與 Windows 桌面體驗：抽出 IME 安全輸入核心並補齊無障礙屬性，Windows 啟動器與 macOS / Linux 對齊，並把工具列整合進視窗標題列（保留原生最小化 / 最大化 / 關閉、移除 File/Edit 原生選單）。
+
+### 新增
+
+- **無障礙（ARIA）**：`contentEditable` 輸入框與 `/` 指令選單補上完整 ARIA（`role`、`aria-controls`、`aria-expanded`、`aria-haspopup`、`aria-activedescendant`、`role=option`、`aria-selected`）；側邊欄捲軸元件透傳 `id` / `role` / `aria-label`，讓輔助技術能正確關聯與導覽。
+- **Windows 一鍵啟動器**：新增 `coworker_desktop.bat`，雙擊即可繞過 PowerShell 執行原則並呼叫 `coworker_desktop.ps1`，與 macOS 的雙擊 `.command` 體驗一致。
+- **Windows 自訂標題列**：主視窗與工作流編輯器視窗改用原生 Window Controls Overlay（WCO），自繪標題列直接充當視窗標題列，保留系統最小化 / 最大化 / 關閉按鈕，並維持拖拽移動、邊緣縮放與視窗貼靠；`File / Edit / View / Window / Help` 原生選單移除。
+
+### 改動
+
+- **抽出 IME 安全編輯器核心**：新增 `useImeSafeEditor` hook，集中管理 contentEditable DOM、組字（composition）狀態、游標操作與外部值同步；`ChatInput` 改用它，移除 80+ 行內聯邏輯。
+- **IME 組字期間不觸發全局快捷鍵**：全局快捷鍵改以 `isComposing` 守衛，中文 / 日文等輸入法選字時不會誤觸快捷鍵。
+- **Windows 啟動器與 macOS / Linux 對齊**：`coworker_desktop.ps1` 重寫——改用 `npm.cmd`（避開執行原則對 `npm.ps1` 的封鎖）、以戳記判斷依賴是否過期（僅在需要時 `pip install` / `npm install`）、前端輸入未變時跳過重建（`COWORKER_FORCE_BUILD=1` 可強制重建）、遞迴終止整個進程樹，並在後端意外結束時一併關閉桌面端。
+- **標題列隨主題變色**：WCO 顏色於執行期依標題列實際計算色同步（含主題 / 預設切換），避免原生按鈕區與自訂標題列出現色差。
+- **標題列安全區**：Windows 自訂標題列右側預留原生按鈕區寬度，確保右側工具按鈕不會被最小化 / 最大化 / 關閉按鈕遮擋。
+
+### 修復
+
+- 修正 Windows 上因 PowerShell 執行原則封鎖 `npm.ps1` 而無法透過啟動器拉起桌面的問題。
+- 移除 `electron/main.js` 中不存在的 `InputMethodServiceOverlay` disable-features 開關（Electron / Chromium 並無此 feature，該行實為 no-op 且註解誤導）。
+
+### 品質
+
+- 前端 `tsc --noEmit` 零錯誤、`vite build` 通過；Electron 主進程與 preload 通過 `node --check`。
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）

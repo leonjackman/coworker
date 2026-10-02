@@ -106,19 +106,32 @@ Clone the repository and run the development environment (see [below](#developme
 
 ## Quick Start
 
-### Desktop App (macOS, from source)
+### Desktop App (from source)
+
+macOS / Linux:
 
 ```bash
-./coworker_desktop.command
+./coworker_desktop.command     # macOS
+./coworker_desktop.sh          # Linux
 ```
 
-This script installs dependencies, builds the frontend, starts the backend (FastAPI), and launches the Electron app.
+Windows (pick one):
 
-For smoke-testing without opening the desktop window:
+```powershell
+coworker_desktop.bat           # double-click, or run from cmd (bypasses the PS execution policy)
+.\coworker_desktop.ps1         # run from a PowerShell session that allows local scripts
+```
+
+Each launcher prepares the Python venv and Node dependencies, rebuilds the frontend only when its inputs changed, starts the backend (FastAPI), and launches the Electron app once the backend is healthy.
+
+Useful flags:
 
 ```bash
-COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
+COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command   # backend only (smoke test)
+COWORKER_FORCE_BUILD=1  ./coworker_desktop.command   # force a frontend rebuild
 ```
+
+On Windows set the same values as environment variables, e.g. `$env:COWORKER_SKIP_DESKTOP="1"; .\coworker_desktop.ps1`.
 
 For all platforms, download the pre-built installer from [GitHub Releases](https://github.com/leonjackman/coworker/releases).
 

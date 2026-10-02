@@ -105,19 +105,32 @@ Coworker 是一款本地优先、功能全面的 AI 编程助手。与传统云�
 
 ## 快速开始
 
-### 桌面应用 (macOS, 从源码运行)
+### 桌面应用（从源码运行）
+
+macOS / Linux：
 
 ```bash
-./coworker_desktop.command
+./coworker_desktop.command     # macOS
+./coworker_desktop.sh          # Linux
 ```
 
-该脚本会自动安装依赖、构建前端、启动后端（FastAPI）并打开 Electron 应用。
+Windows（任选其一）：
 
-免打开桌面的冒烟测试：
+```powershell
+coworker_desktop.bat           # 双击，或在 cmd 中运行（自动绕过 PowerShell 执行策略）
+.\coworker_desktop.ps1         # 在允许执行本地脚本的 PowerShell 会话中运行
+```
+
+各启动器都会准备 Python venv 与 Node 依赖，仅在前端输入有变化时重建前端，启动后端（FastAPI），待后端就绪后打开 Electron 应用。
+
+常用开关：
 
 ```bash
-COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command
+COWORKER_SKIP_DESKTOP=1 ./coworker_desktop.command   # 仅启动后端（冒烟测试）
+COWORKER_FORCE_BUILD=1  ./coworker_desktop.command   # 强制重建前端
 ```
+
+Windows 下以环境变量方式设置，例如：`$env:COWORKER_SKIP_DESKTOP="1"; .\coworker_desktop.ps1`。
 
 所有平台均可通过 [GitHub Releases](https://github.com/leonjackman/coworker/releases) 下载预构建安装包使用。
 
