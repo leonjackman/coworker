@@ -48,6 +48,11 @@ body:has(.wfe-root) [data-radix-popper-content-wrapper] {
   padding-left: 84px;
 }
 
+/* Windows: leave room for the native Window Controls Overlay (min/max/close). */
+.wfs-topbar--win {
+  padding-right: 138px;
+}
+
 .wfs-topbar button,
 .wfs-topbar input,
 .wfs-topbar select,

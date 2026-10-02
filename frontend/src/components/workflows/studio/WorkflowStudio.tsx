@@ -49,6 +49,7 @@ import {
 } from '../../ui/dropdown-menu';
 import { t, translateError } from '../../../lib/i18n';
 import { isEditableTarget } from '../../../lib/dom';
+import { useTitlebarOverlay } from '../../../lib/useTitlebarOverlay';
 import { chatService } from '../../../services/chatService';
 import {
   buildGraph,
@@ -2268,6 +2269,8 @@ interface TopbarProps {
   onRun: () => void;
 }
 
+const isWinPlatform = typeof window !== 'undefined' && window.electronAPI?.platform === 'win32';
+
 function StudioTopbar({
   isWindow,
   isMac,
@@ -2283,8 +2286,17 @@ function StudioTopbar({
   onSave,
   onRun,
 }: TopbarProps) {
+  const topbarRef = useRef<HTMLDivElement | null>(null);
+  // Mirror the macOS traffic-light inset on Windows: keep the native window
+  // controls overlay (top-right) clear of the toolbar buttons, and sync the
+  // overlay colors to this bar's theme.
+  useTitlebarOverlay(topbarRef, 44);
+
   return (
-    <div className={`wfs-topbar${isWindow ? ' wfs-topbar--window' : ''}${isWindow && isMac ? ' wfs-topbar--mac' : ''}`}>
+    <div
+      ref={isWindow ? topbarRef : undefined}
+      className={`wfs-topbar${isWindow ? ' wfs-topbar--window' : ''}${isWindow && isMac ? ' wfs-topbar--mac' : ''}${isWindow && isWinPlatform ? ' wfs-topbar--win' : ''}`}
+    >
       <button
         type="button"
         className="wfs-topbar__back"

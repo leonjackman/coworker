@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose protected methods to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  setTitlebarOverlay: (payload) => ipcRenderer.send('titlebar-overlay', payload),
   getRuntimeConfig: () => ipcRenderer.invoke('get-runtime-config'),
   clipboardReadText: () => ipcRenderer.invoke('clipboard-read-text'),
   clipboardWriteText: (text) => ipcRenderer.invoke('clipboard-write-text', text),

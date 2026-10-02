@@ -11,8 +11,10 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
+import { useRef } from 'react';
 import type { AppView, ContextUsage } from '../types';
 import { t } from '../lib/i18n';
+import { useTitlebarOverlay } from '../lib/useTitlebarOverlay';
 import { Button } from './ui/button';
 import {
   DropdownMenu,
@@ -103,6 +105,7 @@ function ContextBudgetIndicator({ usage }: { usage: ContextUsage }) {
 }
 
 const isMacInset = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
+const isWinInset = typeof window !== 'undefined' && window.electronAPI?.platform === 'win32';
 
 export function WorkspaceTitlebar({
   status,
@@ -128,9 +131,15 @@ export function WorkspaceTitlebar({
   const title = titleForView(activeView, sessionTitle);
   const displayProject = truncate(projectName, 12);
   const displayTitle = truncate(title, 15);
+  const headerRef = useRef<HTMLElement | null>(null);
+
+  useTitlebarOverlay(headerRef, 46);
 
   return (
-    <header className={`workspace-titlebar ${isMacInset ? 'workspace-titlebar--mac-inset' : ''}`}>
+    <header
+      ref={headerRef}
+      className={`workspace-titlebar${isMacInset ? ' workspace-titlebar--mac-inset' : ''}${isWinInset ? ' workspace-titlebar--win-inset' : ''}`}
+    >
       <div className="workspace-titlebar__left">
         <Tooltip content={sidebarCollapsed ? t('titlebar.sidebar_show') : t('titlebar.sidebar_hide')}>
           <Button

@@ -91,6 +91,7 @@ declare global {
   interface Window {
     electronAPI?: {
       platform: string;
+      setTitlebarOverlay: (payload: { color?: string; symbolColor?: string; height?: number }) => void;
       clipboardReadText: () => Promise<string>;
       clipboardWriteText: (text: string) => Promise<void>;
       getRuntimeConfig: () => Promise<RuntimeConfig>;

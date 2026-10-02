@@ -829,6 +829,10 @@
     padding-left: 80px;
   }
 
+  .workspace-titlebar--win-inset {
+    padding-right: 138px;
+  }
+
   .workspace-titlebar__center,
   .workspace-titlebar__right {
     width: 100%;

@@ -114,6 +114,13 @@
   padding-left: 80px;
 }
 
+/* Windows: the native Window Controls Overlay draws min/max/close over the
+   top-right corner; reserve that space so the title bar buttons never sit
+   underneath them. The controls are ~138px wide at every DPI (CSS px == DIP). */
+.workspace-titlebar--win-inset {
+  padding-right: 138px;
+}
+
 .workspace-titlebar__left,
 .workspace-titlebar__center,
 .workspace-titlebar__right {

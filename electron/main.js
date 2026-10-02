@@ -382,6 +382,14 @@ let backendProcess = null;
 
 const BRAND_ASSET_DIR = path.join(__dirname, '../assets/brand/png');
 
+// Windows Window Controls Overlay (WCO). The renderer draws the custom title
+// bar underneath; these colors are only the initial fallback and are replaced
+// at runtime via the `titlebar-overlay` IPC so the overlay always matches the
+// active app theme. Heights match each window's own top bar (46px main, 44px
+// workflow editor) so the native buttons sit vertically centered.
+const MAIN_WINDOW_OVERLAY = { color: '#111417', symbolColor: '#c8ccd2', height: 46 };
+const WORKFLOW_EDITOR_OVERLAY = { color: '#111417', symbolColor: '#c8ccd2', height: 44 };
+
 function themedMonochromeAssetPath(name) {
   const tone = nativeTheme.shouldUseDarkColors ? 'white' : 'black';
   return path.join(BRAND_ASSET_DIR, `${name}-${tone}.png`);
@@ -619,12 +627,23 @@ function createWindow() {
     show: false,
     icon: themedMonochromeAssetPath('cw-icon'),
     backgroundColor: '#111417',
+    // Custom title bar on every desktop platform:
+    //  - macOS: hide the title bar but keep the traffic lights (hidden inset).
+    //  - Windows: hide the title bar/menu area and use the native Window
+    //    Controls Overlay so the min/max/close buttons stay native at the
+    //    top-right while the renderer draws the rest of the bar.
+    //  - Linux: leave the default frame (no WCO support there).
     ...(process.platform === 'darwin'
       ? {
           titleBarStyle: 'hidden',
           trafficLightPosition: { x: 14, y: 14 },
         }
-      : {}),
+      : process.platform === 'win32'
+        ? {
+            titleBarStyle: 'hidden',
+            titleBarOverlay: MAIN_WINDOW_OVERLAY,
+          }
+        : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -763,6 +782,33 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// ---------------------------------------------------------------------------
+// Window chrome (Windows Window Controls Overlay)
+// ---------------------------------------------------------------------------
+// The renderer draws the custom title bar and keeps the native overlay buttons
+// in sync with the active theme. On macOS/Linux these are no-ops.
+ipcMain.on('titlebar-overlay', (event, payload) => {
+  if (process.platform !== 'win32' || !payload) {
+    return;
+  }
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || typeof win.setTitleBarOverlay !== 'function') {
+    return;
+  }
+  const next = {};
+  if (typeof payload.color === 'string') next.color = payload.color;
+  if (typeof payload.symbolColor === 'string') next.symbolColor = payload.symbolColor;
+  if (Number.isFinite(payload.height)) next.height = payload.height;
+  try {
+    win.setTitleBarOverlay(next);
+  } catch (e) {
+    // Older Electron builds may reject symbolColor; retry with color only.
+    if (next.color) {
+      try { win.setTitleBarOverlay({ color: next.color, height: next.height }); } catch { /* ignore */ }
+    }
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Built-in browser (embedded <webview>)
@@ -2397,6 +2443,13 @@ async function reconcileStaleDownloads() {
 }
 
 app.whenReady().then(async () => {
+  // macOS keeps its native application menu (Cmd+Q, Cmd+C/V, app menu). On
+  // Windows/Linux the default File/Edit/View/Window/Help menu would otherwise
+  // sit above the custom title bar, so remove it entirely.
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+  }
+
   setupAutoUpdater();
   startAutoUpdateTimer();
 
@@ -2575,11 +2628,14 @@ function openWorkflowEditorWindow(name, isNew) {
     show: false,
     backgroundColor: '#111417',
     icon: themedMonochromeAssetPath('cw-icon'),
-    // Same window chrome approach as the main window: a hidden-inset title bar
-    // with the traffic lights, so the renderer draws its own draggable top bar.
+    // Same window chrome approach as the main window: hidden title bar with
+    // either the macOS traffic lights (hiddenInset) or, on Windows, the native
+    // Window Controls Overlay, so the renderer draws its own draggable top bar.
     ...(process.platform === 'darwin'
       ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 16 } }
-      : {}),
+      : process.platform === 'win32'
+        ? { titleBarStyle: 'hidden', titleBarOverlay: WORKFLOW_EDITOR_OVERLAY }
+        : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
