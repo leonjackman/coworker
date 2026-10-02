@@ -45,13 +45,13 @@ class Action:
 
 _TEXT_DESC = "The literal text to enter. Any characters are allowed (including '+'); use press_hotkey for keyboard shortcuts."
 _REF_DESC = "Element ref from the latest computer_observe snapshot."
-_MODS_DESC = 'Modifier keys from cmd, ctrl, alt, shift (e.g. ["cmd"] for Cmd+Space).'
-_APP_DESC = "Target app to act on (display name or bundle id); empty = the frontmost app. Use this so input does not land in the wrong window."
+_MODS_DESC = 'Modifier keys from cmd, ctrl, alt, shift (e.g. ["cmd"] for Cmd+Space; use "ctrl"/"alt" on Windows).'
+_APP_DESC = "Target app to act on (macOS display name or bundle id; Windows process name, exe, or window title); empty = the frontmost app. Use this so input does not land in the wrong window."
 
 COMPUTER_ACTIONS: tuple[Action, ...] = (
     Action(
         "launch_app",
-        (Param("app", required=True, description="App display name (e.g. Calculator), bundle id (com.apple.calculator), or .app path; localized names resolve automatically."),),
+        (Param("app", required=True, description="macOS app display name (e.g. Calculator) / bundle id (com.apple.calculator) / .app path; Windows process name or exe path (e.g. notepad, calc.exe). Localized names resolve automatically."),),
         description="Open an installed app.",
         observation_free=True,
     ),
@@ -106,7 +106,7 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
         ),
         description="Scroll a specific app at a point.",
     ),
-    Action("go_back", (), description="Back (Cmd+[).", observation_free=True),
+    Action("go_back", (), description="Back (Cmd+[ on macOS, Alt+Left on Windows).", observation_free=True),
     Action("show", (Param("ref", description=_REF_DESC),), description="Reveal/scroll to an element.", locator="ref"),
     Action(
         "click_coords",

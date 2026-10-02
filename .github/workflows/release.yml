@@ -83,6 +83,11 @@ jobs:
           npm run build:automa
           test -x electron/cw-automa/build/cw-automa || { echo "::error::cw-automa helper was not built"; exit 1; }
 
+      - name: Verify computer-use helper contract
+        # Conformance: the helper must answer ping with the capability set and
+        # return the shared result shapes (UI calls are best-effort on CI).
+        run: node scripts/automation-conformance.js electron/cw-automa/build/cw-automa
+
       - name: Build
         env:
           APPLE_API_KEY: /Users/runner/signing-security/api-key.p8
@@ -137,6 +142,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - name: Install dependencies
         run: |
           npm ci
@@ -151,6 +160,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pyinstaller pyinstaller-hooks-contrib -r backend/requirements.txt
           npm run build:frontend
+          npm run build:automa-win
           python -m PyInstaller --clean --noconfirm --distpath backend/dist --workpath backend/build backend/pybackend.spec
           CHANNEL_FLAG=""
           # Prerelease tags (e.g. v1.1.0-beta.1, v1.1.0-rc.1) build into their
@@ -161,6 +171,12 @@ jobs:
           fi
           npx electron-builder --win --config electron-builder.config.json --publish never $CHANNEL_FLAG -c.extraMetadata.version="${APP_VERSION#v}"
         shell: bash
+
+      - name: Verify Windows computer-use helper
+        shell: bash
+        run: |
+          test -f electron/cw-automa-win/bin/cwautoma-win.exe || { echo "::error::cwautoma-win helper was not built"; exit 1; }
+          node scripts/automation-conformance.js electron/cw-automa-win/bin/cwautoma-win.exe
 
       - name: Verify frozen backend bundle
         shell: bash

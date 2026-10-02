@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -273,11 +274,12 @@ ObserveAction = Literal["state", "displays", "screenshot", "snapshot", "app_stat
 # Derived from the action catalog (coworker.computer.actions) — never hand-listed.
 ComputerAction = Literal[*_AGENT_ACTION_NAMES]
 
-# The macOS Accessibility (AX) element tree is the PRIMARY observation surface:
-# it only needs the Accessibility permission (NOT Screen Recording), and gives
-# the agent a real searchable element list with stable refs — so it acts by ref
-# instead of guessing pixel coordinates. Screen Recording is a secondary, visual
-# complement. When the AX tree is unavailable the mutating tools fail closed.
+# The platform accessibility element tree (macOS Accessibility/AX, Windows UI
+# Automation) is the PRIMARY observation surface: it gives the agent a real
+# searchable element list with stable refs — so it acts by ref instead of
+# guessing pixel coordinates. Screen Recording (macOS) / screenshots are a
+# secondary, visual complement. When the tree is unavailable the mutating tools
+# fail closed.
 
 
 def _json_cap(result: dict[str, Any], limit: int = COMPUTER_OUTPUT_MAX_CHARS) -> str:
@@ -424,11 +426,11 @@ def build_computer_tools(
         return hist.count(signature) >= _LOOP_LIMIT
 
     class ObserveArgs(BaseModel):
-        action: ObserveAction = Field(..., description="Read-only: state = permissions/platform/frontmost; displays = list displays; screenshot = capture the chosen display (visual, needs Screen Recording); snapshot = Accessibility element tree (text + refs) — the reliable observation, needs only Accessibility permission.")
+        action: ObserveAction = Field(..., description="Read-only: state = permissions/platform/frontmost; displays = list displays; screenshot = capture the chosen display (visual); snapshot = accessibility element tree (macOS AX / Windows UIA: text + refs) — the reliable observation.")
         display: int = Field(0, ge=0, description="For 'screenshot': display index to capture (see displays list; 0 = primary).")
         max_width: int = Field(max_shot_width, ge=320, le=2048, description="For 'screenshot': max screenshot width in pixels (higher = clearer but more tokens).")
-        depth: int = Field(6, ge=1, le=10, description="For 'snapshot'/'app_state': Accessibility tree depth.")
-        app: str = Field("", description="For 'app_state': target app display name or bundle id; empty = frontmost app.")
+        depth: int = Field(6, ge=1, le=10, description="For 'snapshot'/'app_state': accessibility tree depth.")
+        app: str = Field("", description="For 'app_state': target app (macOS display name or bundle id; Windows process name, exe, or window title); empty = frontmost app.")
 
     # The tool schema is GENERATED from the action catalog, so a param name can
     # never drift from the workflow registry. LangChain cannot express a
@@ -631,6 +633,8 @@ def build_computer_tools(
                 float(args.scroll_x or 0), float(args.scroll_y or 0),
             )
         if action == "go_back":
+            if sys.platform == "win32":
+                return client.ax_press("left", ["alt"])
             return client.ax_press("[", ["cmd"])
         if action == "click_coords":
             return client.ax_coords(float(args.x or 0), float(args.y or 0),
@@ -743,16 +747,16 @@ def build_computer_tools(
 
     @tool(args_schema=ObserveArgs)
     def computer_observe(action: str, display: int = 0, max_width: int = max_shot_width, depth: int = 6, app: str = "") -> str | list:
-        """Inspect the user's real desktop: Accessibility snapshot, screenshot, or state.
+        """Inspect the user's real desktop: accessibility snapshot, screenshot, or state.
 
-        Read-only. PREFER ``app_state`` (or ``snapshot``) — it returns the Accessibility
-        element tree as text with stable [ref]s and only needs the Accessibility permission
-        (works even without Screen Recording), so you can act on real elements by ref.
-        ``app_state`` adds the key window's title/frame and a ``changed`` flag plus the
-        ``removed`` refs (incremental diff), so you can skip re-reasoning an unchanged UI.
-        ``screenshot`` is the visual complement (needs Screen Recording). ``state`` returns
-        platform, permissions and the current frontmost app. The snapshot is your source of
-        truth: never claim an action "worked" unless the re-observed snapshot shows it.
+        Read-only. PREFER ``app_state`` (or ``snapshot``) — it returns the platform
+        accessibility element tree (macOS Accessibility/AX, Windows UI Automation) as text
+        with stable [ref]s, so you can act on real elements by ref. ``app_state`` adds the
+        key window's title/frame and a ``changed`` flag plus the ``removed`` refs
+        (incremental diff), so you can skip re-reasoning an unchanged UI. ``screenshot`` is
+        the visual complement. ``state`` returns platform, permissions and the current
+        frontmost app. The snapshot is your source of truth: never claim an action "worked"
+        unless the re-observed snapshot shows it.
         """
         return _observe_impl(action, display, max_width, depth, app)
 
@@ -769,10 +773,10 @@ def build_computer_tools(
         shot_height (and display) from that computer_observe screenshot result. After
         every action read the returned after_preview and only claim what it confirms.
 
-        For typing (type_into / type_text): the ref MUST point to an AXTextField or
-        AXTextArea element (look for ``AXTextField`` or ``AXTextArea`` in the snapshot).
-        Clicking an AXStaticText / AXButton / AXGroup will NOT make it editable — those
-        are display elements, not input fields.
+        For typing (type_into / type_text): the ref MUST point to a text field —
+        macOS AXTextField / AXTextArea, Windows Edit / Document / ComboBox. Clicking a
+        static label or a button will NOT make it editable — those are display elements,
+        not input fields.
         """
         action = str(kwargs.get("action") or "")
         invalid = _validate_action_args(action, kwargs)
@@ -928,16 +932,16 @@ def build_computer_tools(
 
     @tool(args_schema=ScriptArgs)
     def computer_script(code: str = "", reset: bool = False, timeout_ms: int = 0) -> str | list:
-        """Drive the desktop with a persistent JavaScript session (primary macOS surface).
+        """Drive the desktop with a persistent JavaScript session (primary structure-first surface).
 
-        This is the preferred way to control macOS apps: you write JS that binds an app
+        This is the preferred way to control apps: you write JS that binds an app
         (``await cua.getApp('Music')``) and then observes and acts on it in ONE call —
         including loops and conditional logic — so a multi-step task (click a field, type,
         press Return, verify) does not need a tool round-trip per step. Bindings persist
         across calls; set ``reset=true`` to start fresh. Native calls are re-validated by
         the app (pause gate, permissions, app identity), so nothing here bypasses safety.
 
-        The input ladder is AX-first: prefer ``app.setValue(ref, text)`` (most
+        The input ladder is accessibility-first: prefer ``app.setValue(ref, text)`` (most
         deterministic), then ``app.typeText(text, {submit})``, then ``app.paste(text)``.
         Always re-observe (``app.getAXState()``) and check the result before claiming
         success. If a call fails twice the same way, stop and ask the user.

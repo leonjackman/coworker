@@ -7,6 +7,7 @@
   "files": [
     "electron/**/*",
     "!electron/cw-automa/**",
+    "!electron/cw-automa-win/**",
     "assets/**/*",
     "frontend/dist/**/*"
   ],
@@ -68,7 +69,16 @@
         "arch": ["x64"]
       }
     ],
-    "icon": "assets/brand/png/cw-icon-blue-white-background.png"
+    "icon": "assets/brand/png/cw-icon-blue-white-background.png",
+    "extraResources": [
+      {
+        "from": "electron/cw-automa-win/bin",
+        "to": "cw-automa-win",
+        "filter": [
+          "cwautoma-win.exe"
+        ]
+      }
+    ]
   },
   "linux": {
     "artifactName": "${productName}-${version}-linux-${arch}.${ext}",

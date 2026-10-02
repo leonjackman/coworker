@@ -30,6 +30,8 @@
 
 const { app, screen, desktopCapturer, clipboard, globalShortcut, powerMonitor, shell, systemPreferences } = require('electron');
 
+const { createDriver } = require('./automation');
+
 // ── Coordinate contract (pure helpers, unit-tested) ────────────────────────
 
 // shot-space (x,y in the JPEG the model saw) -> display-local point space.
@@ -114,18 +116,18 @@ class DesktopController {
     this._stopPauseListener = null;
     this._stopAccel = null;
     this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
-    this._adapter = null;
+    this._driver = null;
     this._script = null;
   }
 
-  // Lazy AutomationAdapter (native cw-automa AX helper). Structure-first source
-  // of truth for computer use; native macOS only.
-  _adapterInstance() {
-    if (this._adapter === null) {
-      const { AutomationAdapter } = require('./automation-adapter');
-      this._adapter = new AutomationAdapter();
+  // Lazy platform driver (HelperDriver). The factory picks the OS-specific
+  // native helper (macOS cw-automa / Windows cwautoma-win); the JSON-RPC
+  // contract and everything above it is shared.
+  _driverInstance() {
+    if (this._driver === null) {
+      this._driver = createDriver();
     }
-    return this._adapter;
+    return this._driver;
   }
 
   // ── Pause / resume (human preemption) ────────────────────────────────
@@ -133,13 +135,13 @@ class DesktopController {
     this.paused = !!paused;
     this.pauseReason = paused ? reason : '';
     try {
-      const adapter = this._adapterInstance();
+      const driver = this._driverInstance();
       if (this.paused) {
         // Park the native virtual cursor + switch the status pill to "paused".
-        adapter.cursorHide().catch(() => {});
-        adapter.hudPause(true).catch(() => {});
+        driver.cursorHide().catch(() => {});
+        driver.hudPause(true).catch(() => {});
       } else {
-        adapter.hudPause(false).catch(() => {});
+        driver.hudPause(false).catch(() => {});
       }
     } catch (e) { /* helper unavailable */ }
     try { if (this._onPauseChange) this._onPauseChange(this.paused, this.pauseReason); } catch (e) { /* ignore */ }
@@ -225,7 +227,7 @@ class DesktopController {
     if (typeof label === 'string' && label) this._stopLabel = label;
     // Push the (possibly rebound) label to the native status pill so it always
     // shows the user's real shortcut, never a hardcoded glyph.
-    try { this._adapterInstance().setStopLabel(this._stopLabel).catch(() => {}); } catch (e) { /* ignore */ }
+    try { this._driverInstance().setStopLabel(this._stopLabel).catch(() => {}); } catch (e) { /* ignore */ }
     return { ok: true, acceler: this._stopAccel || null, label: this._stopLabel || '' };
   }
 
@@ -326,7 +328,7 @@ class DesktopController {
   // the synthetic input, so macOS attributes accessibility to it), with
   // Electron's own prompt as a fallback when the helper is unavailable.
   _promptAccessibility() {
-    try { this._adapterInstance().requestPermission('accessibility').catch(() => {}); } catch (e) { /* ignore */ }
+    try { this._driverInstance().requestPermission('accessibility').catch(() => {}); } catch (e) { /* ignore */ }
     try { systemPreferences.isTrustedAccessibilityClient(true); } catch (e) { /* ignore */ }
   }
 
@@ -474,7 +476,7 @@ class DesktopController {
       throw err;
     }
     const action = String(args.action || '');
-    const adapter = this._adapterInstance();
+    const driver = this._driverInstance();
     const shot = args.shot || null;
     const displayIndex = Number(args.display) || 0;
 
@@ -495,30 +497,30 @@ class DesktopController {
         case 'right_click': {
           const pt = toPoint(args.x, args.y);
           const kind = action === 'double_click' ? 'double' : (action === 'right_click' ? 'right' : 'left');
-          await adapter.clickPoint(pt.x, pt.y, kind);
+          await driver.clickPoint(pt.x, pt.y, kind);
           break;
         }
         case 'move': {
           const pt = toPoint(args.x, args.y);
-          await adapter.cursorMove(pt.x, pt.y);
+          await driver.cursorMove(pt.x, pt.y);
           break;
         }
         case 'drag': {
           const p1 = toPoint(args.x, args.y);
           const p2 = toPoint(args.x2, args.y2);
-          await adapter.dragPoint(p1.x, p1.y, p2.x, p2.y, String(args.button || 'left'));
+          await driver.dragPoint(p1.x, p1.y, p2.x, p2.y, String(args.button || 'left'));
           break;
         }
         case 'scroll': {
-          await adapter.scroll(Number(args.dx) || 0, Number(args.dy) || 0);
+          await driver.scroll(Number(args.dx) || 0, Number(args.dy) || 0);
           break;
         }
         case 'type': {
-          await adapter.type(String(args.text || ''));
+          await driver.type(String(args.text || ''));
           break;
         }
         case 'key': {
-          await adapter.press(String(args.key || ''), Array.isArray(args.modifiers) ? args.modifiers : []);
+          await driver.press(String(args.key || ''), Array.isArray(args.modifiers) ? args.modifiers : []);
           break;
         }
         case 'clipboard_set': {
@@ -526,7 +528,7 @@ class DesktopController {
           break;
         }
         case 'paste': {
-          await adapter.press('v', ['cmd']);
+          await driver.press('v', [isDarwin() ? 'cmd' : 'ctrl']);
           break;
         }
         default: {
@@ -544,52 +546,48 @@ class DesktopController {
     }
   }
 
-  // ── Structure-first automation surface (native cw-automa) ─────────────
-  // Observation + actuation by Accessibility element ref; coordinates are an
-  // explicit fallback. The helper moves its virtual cursor as it acts.
+  // ── Structure-first automation surface (native helper) ────────────────
+  // Observation + actuation by accessibility element ref (macOS AX / Windows
+  // UIA); coordinates are an explicit fallback. Platform differences live
+  // entirely in the driver (see electron/automation/).
 
   async axSnapshot(depth = 6) {
-    if (process.platform !== 'darwin') return { frontmost: '', refs: 0, text: '', error: 'not on macOS' };
-    const adapter = this._adapterInstance();
-    return adapter.snapshotText(depth);
+    const driver = this._driverInstance();
+    if (!driver.supported) return { frontmost: '', refs: 0, text: '', error: `computer use is not supported on ${process.platform}` };
+    return driver.snapshotText(depth);
   }
 
-  // get_app_state: key-window AX tree + window info + incremental AX diff.
+  // get_app_state: key-window accessibility tree + window info + incremental diff.
   async axAppState(app = '', depth = 6) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
-    return this._adapterInstance().getAppState(app, depth);
+    return this._driverInstance().getAppState(app, depth);
   }
 
   async axAct(ref, op, params = {}) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().act({ ref, op, ...params });
+    return this._driverInstance().act({ ref, op, ...params });
   }
 
   async axPress(key, modifiers) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().press(key, modifiers);
+    return this._driverInstance().press(key, modifiers);
   }
 
   async axType(text) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().type(text);
+    return this._driverInstance().type(text);
   }
 
   async axLaunch(app) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().launch(app);
+    return this._driverInstance().launch(app);
   }
 
   // click_coords: (x,y) are in the SCREENSHOT pixel space the model saw, mapped
-  // to display point space (the exact shotToPoint contract). Pass shot_width/
+  // to display-local point space (the exact shotToPoint contract). Pass shot_width/
   // shot_height/display from the computer_observe screenshot result. Without a
-  // shot the coordinates are treated as raw display points.
+  // shot the coordinates are treated as raw display points. The driver maps
+  // display-local points into the injection space (DIP -> physical on Windows).
   async axClickCoords(x, y, opts = {}) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
     let gx = Number(x);
     let gy = Number(y);
@@ -604,28 +602,27 @@ class DesktopController {
       gx = pt.x;
       gy = pt.y;
     }
-    return this._adapterInstance().clickCoords(gx, gy);
+    return this._driverInstance().clickCoords(gx, gy);
   }
 
   async axScroll(dx, dy) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().scroll(dx, dy);
+    return this._driverInstance().scroll(dx, dy);
   }
 
   async axScrollTo(app, dx, dy, x, y) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().scrollTo(app, dx, dy, x, y);
+    return this._driverInstance().scrollTo(app, dx, dy, x, y);
   }
 
   async axFrontmost() {
-    if (process.platform !== 'darwin') return { pid: -1, app: '' };
-    return this._adapterInstance().frontmost();
+    const driver = this._driverInstance();
+    if (!driver.supported) return { pid: -1, app: '' };
+    return driver.frontmost();
   }
 
   adapterState() {
-    const diag = this._adapter ? this._adapter.diagnose() : { binary: '', exists: false, ready: false };
+    const diag = this._driver ? this._driver.diagnose() : { binary: '', exists: false, ready: false };
     return { ok: true, platform: process.platform, paused: this.paused, ...diag };
   }
 
@@ -634,54 +631,46 @@ class DesktopController {
   // re-validated here (paused gate + app identity) before it reaches the helper.
 
   async axListApps(scope = 'running') {
-    if (process.platform !== 'darwin') return { apps: [] };
-    return this._adapterInstance().listApps(scope);
+    const driver = this._driverInstance();
+    if (!driver.supported) return { apps: [] };
+    return driver.listApps(scope);
   }
 
   async axResolveApp(app) {
-    if (process.platform !== 'darwin') return { selector: app, pid: null };
-    return this._adapterInstance().resolveApp(app);
+    const driver = this._driverInstance();
+    if (!driver.supported) return { selector: app, pid: null };
+    return driver.resolveApp(app);
   }
 
   async axFocusApp(app) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().focusApp(app);
+    return this._driverInstance().focusApp(app);
   }
 
   async axInputText(opts = {}) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().inputText(opts);
+    return this._driverInstance().inputText(opts);
   }
 
   async axPressTo(app, key, modifiers, repeat) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().pressKeyTo(app, key, modifiers, repeat);
-  }
-
-  async axScrollTo(app, dx, dy, x, y) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
-    this._ensureNotPaused();
-    return this._adapterInstance().scrollTo(app, dx, dy, x, y);
+    return this._driverInstance().pressKeyTo(app, key, modifiers, repeat);
   }
 
   async axDragTo(app, x1, y1, x2, y2) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().dragTo(app, x1, y1, x2, y2);
+    return this._driverInstance().dragTo(app, x1, y1, x2, y2);
   }
 
   async axClickPointTo(app, x, y) {
-    if (process.platform !== 'darwin') throw new Error('not on macOS');
     this._ensureNotPaused();
-    return this._adapterInstance().clickPointTo(app, x, y);
+    return this._driverInstance().clickPointTo(app, x, y);
   }
 
   async axUiSettle(opts = {}) {
-    if (process.platform !== 'darwin') return { settled: true };
-    return this._adapterInstance().uiSettle(opts);
+    const driver = this._driverInstance();
+    if (!driver.supported) return { settled: true };
+    return driver.uiSettle(opts);
   }
 
   // Dispatch table for native calls coming from the JS worker. Anything not
@@ -697,16 +686,14 @@ class DesktopController {
       }
       case 'screenshot': return this.screenshot({ display: Number(args.display) || 0, maxWidth: Number(args.max_width) || 1024, quality: 60 });
       case 'act': {
-        if (process.platform !== 'darwin') throw new Error('not on macOS');
         this._ensureNotPaused();
         const extra = {};
         if (args.value !== undefined) extra.value = String(args.value);
-        return this._adapterInstance().actFor(String(args.app || ''), String(args.ref || ''), String(args.op || 'click'), extra);
+        return this._driverInstance().actFor(String(args.app || ''), String(args.ref || ''), String(args.op || 'click'), extra);
       }
       case 'input_text': {
-        if (process.platform !== 'darwin') throw new Error('not on macOS');
         this._ensureNotPaused();
-        return this._adapterInstance().inputText({
+        return this._driverInstance().inputText({
           app: String(args.app || ''),
           ref: String(args.ref || ''),
           text: String(args.text || ''),
@@ -737,8 +724,9 @@ class DesktopController {
   }
 
   async scriptRun(code, opts = {}) {
-    if (process.platform !== 'darwin') {
-      return { blocks: [{ type: 'text', text: 'computer script is macOS-only' }], error: 'unsupported_platform' };
+    const driver = this._driverInstance();
+    if (!driver.supported) {
+      return { blocks: [{ type: 'text', text: `computer script is not supported on ${process.platform}` }], error: 'unsupported_platform' };
     }
     this._ensureNotPaused();
     return this._scriptInstance().run(code, opts);
@@ -754,9 +742,9 @@ class DesktopController {
       try { this._script.close(); } catch (e) { /* ignore */ }
       this._script = null;
     }
-    if (this._adapter) {
-      try { this._adapter.close(); } catch (e) { /* ignore */ }
-      this._adapter = null;
+    if (this._driver) {
+      try { this._driver.close(); } catch (e) { /* ignore */ }
+      this._driver = null;
     }
   }
 }

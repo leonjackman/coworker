@@ -21,6 +21,22 @@ import Foundation
 // Commands are serialized on this queue; AppKit/window work is hopped to main.
 let controlQueue = DispatchQueue(label: "cw-automa.control")
 
+/// Every method this helper implements. Advertised via `ping` so the TS layer
+/// can feature-detect (`driver.supports(method)`) instead of branching on the
+/// host OS. Keep in sync with the dispatch switch in `handleRequest`.
+let helperMethods: [String] = [
+    "ping", "frontmost", "displays", "snapshot", "get_app_state", "act",
+    "list_apps", "resolve_app", "focus_app", "launch",
+    "input_text", "type_text", "press_hotkey", "press_key",
+    "click_coords", "click_point", "drag_point", "scroll", "scroll_to",
+    "drag_to", "click_point_to",
+    "ui_settle",
+    "cursor_move", "cursor_show", "cursor_hide", "cursor_park", "cursor_debug",
+    "cursor_demo", "cursor_position",
+    "hud_show", "hud_pause", "hud_hide", "set_stop_label",
+    "permissions", "permissions_request",
+]
+
 /// Last logical point any pointer action targeted — the anchor for a scroll
 /// that carries no explicit point. Serialized on `controlQueue`.
 var lastPointerPoint: CGPoint = {
@@ -96,7 +112,12 @@ func handleRequest(_ req: Request) {
         switch req.method {
 
         case "ping":
-            Responder.ok(req.id, ["platform": "darwin", "version": 2])
+            Responder.ok(req.id, [
+                "platform": "darwin",
+                "version": 3,
+                "methods": helperMethods,
+                "features": ["overlay": true, "physical_displays": false, "ax": true, "uia": false],
+            ])
 
         case "frontmost":
             Responder.ok(req.id, [
