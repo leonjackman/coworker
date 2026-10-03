@@ -229,7 +229,18 @@ def validate_spec(spec: str) -> tuple[bool, str]:
             if len(rest.split(None, 1)) != 2:
                 return False, f"assertion '{spec}': expected '{op} <ref> <value>' (two arguments)"
             return True, ""
-    # Bare reference (truthiness) — valid form; resolution happens at runtime.
+    # Bare reference (truthiness) — valid ONLY for a plain ref. A spec that
+    # contains a space or a comparison operator matches no known form (the author
+    # probably meant `equals <ref> <value>`); reject it at authoring so it cannot
+    # pass validation and then fail at run time.
+    if re.search(r"[<>=!]|\s", token):
+        return False, (
+            f"assertion '{spec}': unsupported form. Use one of: "
+            "ok / not_error · contains <text> · not_contains <text> · "
+            "equals <ref> <value> · not_equals <ref> <value> · matches <ref> <regex> · "
+            "exists <ref> · file_exists <path> · not_file_exists <path> · "
+            "file_contains <path> <text> · exit_code <n> · <ref> (truthiness)"
+        )
     return True, ""
 
 

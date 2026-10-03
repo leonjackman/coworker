@@ -94,3 +94,28 @@ def test_script_action_dispatches_to_computer_script():
     env.app("script", {"code": "app.open('x')", "reset": True}, None)
     assert script.calls[-1]["code"] == "app.open('x')"
     assert script.calls[-1]["reset"] is True
+
+
+def test_app_script_thrown_cell_is_not_silent_success(monkeypatch, tmp_path):
+    """A thrown/timed-out cell must raise, not return empty blocks as success."""
+    from coworker.computer import bridge_client
+
+    class _FakeClient:
+        def __init__(self, data_dir):
+            pass
+
+        def ax_script(self, code, timeout):
+            return {
+                "blocks": [], "result": None, "text": "",
+                "error": "cell threw", "errorName": "ReferenceError",
+            }
+
+    monkeypatch.setattr(bridge_client, "ComputerClient", _FakeClient)
+    script = _FakeTool("computer_script", {"ok": True})
+    env = build_tool_environment(workspace=None, tools=[script], data_dir=str(tmp_path))
+    try:
+        env.app("script", {"code": "app.nope()"}, None)
+    except RuntimeError as exc:
+        assert "ReferenceError" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("a thrown script cell must not report success")

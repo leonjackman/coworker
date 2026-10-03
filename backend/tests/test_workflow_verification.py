@@ -25,6 +25,18 @@ def test_validate_spec_accepts_and_rejects():
     assert validate_spec("contains")[0] is False
 
 
+def test_validate_spec_rejects_expression_syntax():
+    # Models often write C-style expressions; there is no expression grammar,
+    # so these must be rejected at authoring (not fail at run time).
+    for bad in (
+        "result.return_code != 0",
+        "steps.id:1.stdout != ''",
+        "vars.x == 1 && vars.y",
+        "result.count > 0",
+    ):
+        assert validate_spec(bad)[0] is False, bad
+
+
 def test_authoring_flags_malformed_assertion():
     wf, diags = parse_workflow(
         "name: t\ndescription: d\nsteps:\n"

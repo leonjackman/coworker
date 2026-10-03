@@ -373,12 +373,30 @@ def build_workspace_tools(
             return _error_result(exc, "skill_manage")
 
     def _build_workflow_env() -> Any:
-        """Compose a StepEnvironment from the mounted tools (shared bridge)."""
+        """Compose a StepEnvironment from the mounted tools (shared bridge).
+
+        A workflow run is deterministic, NOT an interactive model loop, so the
+        interactive-loop guard must never block a legitimate re-run. Swap the
+        agent's interactive computer tools for the non-interactive variants
+        (``interactive=False`` disables the guard); everything else is shared.
+        """
+        from ..computer.bridge_client import resolve_computer_tools
         from ..workflows.env import build_tool_environment
 
+        _computer_names = {"computer", "computer_observe", "computer_script"}
+        env_tools = [t for t in tools if getattr(t, "name", "") not in _computer_names]
+        if worker_data_dir is not None:
+            try:
+                env_tools.extend(
+                    resolve_computer_tools(
+                        worker_data_dir, session_id=worker_session_id, interactive=False
+                    )
+                )
+            except Exception:  # noqa: BLE001 - a computer misconfig must never break workflow runs
+                pass
         return build_tool_environment(
             workspace=workspace,
-            tools=tools,
+            tools=env_tools,
             skill_manager=skill_manager,
             audit_context=audit_context,
             llm=worker_llm,

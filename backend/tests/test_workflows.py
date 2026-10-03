@@ -189,7 +189,9 @@ steps:
     manager.create(flow)
     env = FakeEnv(command=lambda argv, cwd, timeout: {"return_code": 0})
     manager.run("shell-cmd", env=env)
-    assert env.calls[0] == ("command", ["sh", "-c", "echo hi"])
+    from coworker.platform import shell_wrap_command
+
+    assert env.calls[0] == ("command", shell_wrap_command("echo hi"))
 
 
 def test_agentic_step_uses_goal_as_prompt(manager):

@@ -71,9 +71,9 @@ STEP_KEYS: tuple[dict[str, str], ...] = (
     {"do": "the action/tool/skill name (see capabilities)"},
     {"params": "mapping of action parameters (see capabilities)"},
     {"locator": "semantic target descriptor: selector / ref / coords (GUI steps)"},
-    {"pre": "list of pre-condition specs"},
-    {"post": "list of post-condition specs, e.g. \"equals result.return_code 0\""},
-    {"success": "list of success specs (like post)"},
+    {"pre": "list of pre-condition specs (forms below)"},
+    {"post": "list of post-condition specs (forms below), e.g. \"equals result.return_code 0\""},
+    {"success": "list of success specs (same forms as post)"},
     {"goal": "natural-language goal (agentic/skill steps)"},
     {"mode": "auto | agent (agent hands the step to the model)"},
     {"on_error": "{retry, then: abort|skip|human|agent|goto:<id>}"},
@@ -870,7 +870,23 @@ class CapabilityRegistry:
             "submit/mutate the DOM (use click_text/click_selector/click).\n"
             "- GUI steps must use a semantic locator (role/name), not raw coordinates. Target files by "
             "explicit path or file.glob/file.exists — never find/-mmin/…|head/~/Downloads guesses.\n"
-            "- command runs argv WITHOUT a shell; add params.shell: true only for pipes/globs/$(...).\n"
+            "- command runs argv WITHOUT a shell; add params.shell: true only for pipes/globs/$(...). "
+            "The command MUST be an allowlisted program (git, node, python, tar, unzip, get-childitem, …); "
+            "do NOT paste a shell one-liner. For OS automation prefer the native-script tools: `tool` kind "
+            "`run_powershell` (Windows) / `run_applescript` (macOS) — one script per node, with its own "
+            "`platform`. Use `kind: computer do: script` (params.code, cw-automa helper API) for intent-level "
+            "GUI automation.\n"
+            "- Assertions (`pre`/`post`/`success`) are short declarative specs — valid forms: `ok`, "
+            "`not_error`, `contains <text>`, `not_contains <text>`, `equals <ref> <value>`, "
+            "`not_equals <ref> <value>`, `matches <ref> <regex>`, `exists <ref>`, `file_exists <path>`, "
+            "`not_file_exists <path>`, `file_contains <path> <text>`, `exit_code <n>`, or a bare `<ref>` "
+            "(truthiness). A ref is `result.<field>`, `context.<x>`, `{{steps.<id>.<field>}}` or "
+            "`{{inputs.<name>}}`. There is NO expression syntax (`!=`, `==`, `&&`); write "
+            "`equals result.return_code 0`, not `result.return_code != 1`.\n"
+            "- The current date/time is provided in the system prompt (do not call `computer_observe` just "
+            "to read the clock). For a RUNTIME timestamp inside a workflow use a `command`/native-script "
+            "step (`date`, or `run_powershell` with `Get-Date`) — do not read the clock via the GUI, and "
+            "do not hardcode a timestamp you intend to be dynamic.\n"
             "- computer launch_app 'app' accepts a display name (Calculator), a bundle id "
             "(com.apple.calculator) or an .app path; localized names resolve automatically.\n"
             "- Templates may only reference {{inputs.<declared>}}, {{steps.<id>.<field>}} "

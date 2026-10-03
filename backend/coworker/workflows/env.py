@@ -324,6 +324,13 @@ def build_tool_environment(
                     if isinstance(res, dict):
                         if res.get("error_code"):
                             raise RuntimeError(str(res.get("error") or res.get("error_code")))
+                        # The worker reports a THROWN cell (and timeouts) via
+                        # `error`/`errorName` (computer-repl.js), NOT `error_code`.
+                        # Dropping it made a failed/no-op script report SUCCESS with
+                        # empty blocks — a silent false-success. Surface it.
+                        if res.get("error"):
+                            name = str(res.get("errorName") or "Error")
+                            raise RuntimeError(f"computer script failed ({name}): {res.get('error')}")
                         return {
                             "blocks": res.get("blocks") or [],
                             "result": res.get("result"),

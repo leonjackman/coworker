@@ -236,6 +236,7 @@ CONFORMANCE_CODES: frozenset[str] = frozenset({
     "missing_description",
     "mutating_evaluate",
     "opaque_command",
+    "unrunnable_command",
     "non_deterministic_target",
     "missing_platform",
     "coord_only_locator",
@@ -316,21 +317,26 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
                     )
 
             if step.kind == "command":
-                raw = (step.params or {}).get("command") or (step.params or {}).get("run") or step.do
+                params = step.params or {}
+                raw = params.get("command") or params.get("run") or step.do
                 joined = raw if isinstance(raw, str) else " ".join(str(x) for x in raw or [])
                 low = joined.lower()
+                # `shell: true` is an EXPLICIT opt-in for pipes/redirects/globs —
+                # do not then reject the same metacharacters as "opaque".
+                shell_opt_in = bool(params.get("shell"))
                 # Shell text: a raw string command, or the script after a
                 # ``bash/sh -c`` wrapper (which is just as opaque as a blob).
                 shell_text = raw if isinstance(raw, str) else ""
                 if not shell_text and isinstance(raw, list) and len(raw) >= 3 and "-c" in [str(x) for x in raw[1:2]]:
                     shell_text = " ".join(str(x) for x in raw[2:])
-                if shell_text and _SHELL_CHAIN.search(shell_text):
+                if shell_text and not shell_opt_in and _SHELL_CHAIN.search(shell_text):
                     _conformance_diag(
                         step, "opaque_command", "command",
                         "command bundles several actions with shell operators (| ; && $(…)) — split it "
                         "into atomic nodes (command / file / transform) so each step is readable and "
                         "independently verifiable", diags,
                     )
+                _check_command_runnable(step, raw, shell_opt_in, diags)
                 if any(token in low for token in _NONDET_CMD):
                     _conformance_diag(
                         step, "non_deterministic_target", "command",
@@ -543,6 +549,64 @@ def _check_shell_need(step: Step, diags: list[Diagnostic]) -> None:
                 "command contains shell metacharacters (| & ; < > $( `) — add params.shell: true to run it through a shell",
             )
         )
+
+
+def _check_command_runnable(step: Step, raw: Any, shell_opt_in: bool, diags: list[Diagnostic]) -> None:
+    """Fail at AUTHORING when the command could never run at RUN time.
+
+    ``workspace.run_command`` validates every program a shell/wrapper invokes
+    against the per-platform allowlist. A command that is an unwrappable shell
+    (interactive/script) OR names a program unknown to EVERY supported OS can
+    never run — reject it here with a hint to the sanctioned alternatives,
+    instead of letting a "validated" workflow fail mid-run.
+    """
+    try:
+        import shlex
+
+        from coworker.platform import (
+            SHELL_UNVALIDATABLE,
+            allowed_commands,
+            shell_wrap_command,
+            wrapped_program_names,
+        )
+
+        if isinstance(raw, str):
+            try:
+                argv = shlex.split(raw)
+            except ValueError:
+                argv = [raw]
+        elif isinstance(raw, list):
+            argv = [str(x) for x in raw]
+        else:
+            argv = [str(raw)]
+        if not argv:
+            return
+        if shell_opt_in:
+            argv = shell_wrap_command(" ".join(argv))
+        universal = (
+            set(allowed_commands("darwin"))
+            | set(allowed_commands("win32"))
+            | set(allowed_commands("linux"))
+        )
+        programs = wrapped_program_names(argv)
+        if not programs:  # a direct command: validate the program itself
+            name = os.path.basename(str(argv[0]).replace("\\", "/")).strip("\"'`$")
+            if name.lower().endswith(".exe"):
+                name = name[:-4]
+            programs = [name]
+        for program in programs:
+            if program == SHELL_UNVALIDATABLE or program.lower() not in universal:
+                _conformance_diag(
+                    step, "unrunnable_command", "command",
+                    f"command program '{program}' cannot run on any supported OS (or is an "
+                    "unvalidatable shell blob) — use a supported program, or the native-script route: "
+                    "a `tool` step (`run_powershell` on Windows / `run_applescript` on macOS), or a "
+                    "`computer`/`browser` step",
+                    diags,
+                )
+                return
+    except Exception:  # noqa: BLE001 - a validator hiccup must never block authoring
+        return
 
 
 def _check_bundled_goal(step: Step, diags: list[Diagnostic]) -> None:

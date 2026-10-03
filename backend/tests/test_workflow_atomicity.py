@@ -77,6 +77,47 @@ def test_non_deterministic_target_is_error():
     assert "non_deterministic_target" in _codes(diags)
 
 
+def test_shell_opt_in_allows_compound_command():
+    # `shell: true` is the explicit opt-in for pipes/chains — the same
+    # metacharacters must not then be rejected as `opaque_command`.
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: \"echo a && echo b\", shell: true}\n  description: chain\n  post: [ok]\n"
+    ))
+    assert "opaque_command" not in _codes(diags)
+
+
+def test_unrunnable_direct_command_is_error():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: \"definitely_not_a_real_program --version\"}\n"
+        "  description: run\n  post: [ok]\n"
+    ))
+    assert "unrunnable_command" in _codes(diags)
+
+
+def test_powershell_script_blob_is_unrunnable():
+    # A raw PowerShell one-liner smuggles a non-program (`dt=Get-Date`) past the
+    # allowlist; it must be flagged at authoring, with a native-script hint.
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: 'powershell -Command \"$dt=Get-Date; $dt\"'}\n"
+        "  description: read clock\n  post: [ok]\n"
+    ))
+    assert "unrunnable_command" in _codes(diags)
+
+
+def test_platform_specific_command_is_not_unrunnable():
+    # `find` is Unix-only: valid once the platform is declared, so it must not
+    # be flagged as universally unrunnable.
+    head = _HEAD.replace("steps:\n", "platform: darwin\nsteps:\n")
+    diags = _diags(head + (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: \"find . -name x\"}\n  description: find\n  post: [ok]\n"
+    ))
+    assert "unrunnable_command" not in _codes(diags)
+
+
 def test_missing_platform_is_error():
     diags = _diags(_HEAD + (
         "- id: \"id:1\"\n  kind: command\n  do: run\n"

@@ -730,7 +730,12 @@ class WorkflowExecutor:
             cwd = str(payload.get("cwd") or "")
             timeout = int(payload.get("timeout") or step.timeout)
             if payload.get("shell"):
-                argv = ["sh", "-c", " ".join(argv) if isinstance(argv, list) else str(argv)]
+                # Platform shell: `sh -c` on Unix, PowerShell on Windows (the old
+                # hardcoded `sh` never existed on Windows).
+                from coworker.platform import shell_wrap_command
+
+                text = " ".join(argv) if isinstance(argv, list) else str(argv)
+                argv = shell_wrap_command(text)
             result = env.command(list(argv), cwd=cwd, timeout=timeout)
             return _enforce_success(step, resolved_action, result, payload, state)
         if kind == "tool":
