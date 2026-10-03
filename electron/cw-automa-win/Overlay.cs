@@ -166,7 +166,7 @@ internal static class Overlay
 
         private bool _paused;
         private bool _shown;
-        private string _stopLabel = "Ctrl + Shift + Esc";
+        private string _stopLabel = "Ctrl + Alt + Shift + Esc";
 
         public HudForm()
         {

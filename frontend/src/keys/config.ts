@@ -10,6 +10,8 @@ export type ShortcutMod = 'Meta' | 'Control' | 'None';
 export interface ShortcutBinding {
   key: string;
   mod: ShortcutMod;
+  /** Whether the Alt key must also be held (in addition to `mod`). */
+  alt?: boolean;
   /** Whether the Shift key must also be held. */
   shift?: boolean;
 }
@@ -69,7 +71,12 @@ export const SHORTCUT_REGISTRY: readonly ShortcutDefinition[] = [
     id: 'stop-computer-control',
     labelKey: 'shortcuts.stop_computer_control',
     descriptionKey: 'shortcuts.stop_computer_control_desc',
-    defaultBinding: { key: 'Escape', mod: modKey(), shift: true },
+    // Windows reserves Ctrl+Shift+Esc (Task Manager) and Ctrl+Alt+Del etc., so
+    // `globalShortcut.register` refuses it. Use Ctrl+Alt+Shift+Esc there; macOS
+    // keeps Cmd+Shift+Esc (⌘⇧⎋).
+    defaultBinding: modKey() === 'Meta'
+      ? { key: 'Escape', mod: 'Meta', shift: true }
+      : { key: 'Escape', mod: 'Control', alt: true, shift: true },
   },
   {
     id: 'regenerate',

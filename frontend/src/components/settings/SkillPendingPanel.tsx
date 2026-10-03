@@ -26,6 +26,8 @@ export function SkillPendingPanel({ onChanged }: SkillPendingPanelProps) {
   const load = useCallback(async () => {
     try {
       const response = await chatService.listPendingSkills();
+      // Backend blip: keep the current view rather than showing an error/empty.
+      if (response.error_code) return;
       setPending(response.pending);
       setError(null);
     } catch (err) {

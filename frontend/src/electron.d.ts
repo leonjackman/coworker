@@ -110,7 +110,7 @@ declare global {
       testProvider: (payload: { base_url: string; api_key: string; model: string }) => Promise<{ status: string; result: ProviderTestResult }>;
       fetchProviderModels: (payload: { base_url: string; api_key: string; provider_type: string }) => Promise<{ status: string; models: string[]; error?: string }>;
       listSessions: () => Promise<SessionsListResponse>;
-      listActiveSessions: () => Promise<string[]>;
+      listActiveSessions: () => Promise<string[] | null>;
       markSessionRead: (sessionId: string) => Promise<{ status: string; session: SessionDetailResponse['session'] | null }>;
       createSession: (payload: CreateSessionRequest) => Promise<SessionResponse>;
       deleteSession: (sessionId: string) => Promise<{ status: string }>;

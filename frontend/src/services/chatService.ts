@@ -151,7 +151,7 @@ export interface ChatService {
   getProviderTemplates: () => Promise<{ status: string; templates: Array<{ key: string; name: string; base_url: string; icon: string | null }>; order: string[]; icon_aliases: Record<string, string | null> }>;
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
   listSessions: () => Promise<SessionsListResponse>;
-  listActiveSessions: () => Promise<string[]>;
+  listActiveSessions: () => Promise<string[] | null>;
   markSessionRead: (sessionId: string) => Promise<void>;
   createSession: (request: CreateSessionRequest) => Promise<SessionResponse>;
   deleteSession: (sessionId: string) => Promise<void>;
@@ -387,8 +387,9 @@ class ElectronChatService implements ChatService {
     return window.electronAPI.listSessions();
   }
 
-  async listActiveSessions(): Promise<string[]> {
+  async listActiveSessions(): Promise<string[] | null> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
+    // null = backend transiently unreachable; the caller keeps its prior set.
     return window.electronAPI.listActiveSessions();
   }
 

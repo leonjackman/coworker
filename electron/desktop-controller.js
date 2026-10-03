@@ -22,7 +22,8 @@
 //
 // Safety: the controller can be paused (human preemption). `powerMonitor`
 // lock/suspend pauses automatically; unlock resumes an auto pause. A user
-// hotkey (Cmd/Ctrl+Shift+Escape) and the tray item toggle a manual pause.
+// hotkey (⌘⇧Esc on macOS / Ctrl+Alt+Shift+Esc on Windows) and the tray item
+// toggle a manual pause.
 // While paused every injection is rejected with computer_paused so the agent
 // tells the user instead of fighting for the pointer.
 
@@ -115,7 +116,7 @@ class DesktopController {
     this._onPauseChange = null;
     this._stopPauseListener = null;
     this._stopAccel = null;
-    this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
+    this._stopLabel = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Alt + Shift + Esc';
     this._driver = null;
     this._script = null;
   }
@@ -201,8 +202,10 @@ class DesktopController {
     // Default yield-control combo: Cmd/Ctrl+Shift+Escape. The renderer syncs the
     // user's configured shortcut via setStopShortcut(), which re-registers this
     // key so the OS hotkey always matches what the user sees in Settings.
-    const accel = process.platform === 'darwin' ? 'Command+Shift+Escape' : 'Control+Shift+Escape';
-    const label = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Shift + Esc';
+    // Windows reserves Ctrl+Shift+Esc (Task Manager), so a bare Ctrl+Shift+Esc
+    // registration silently fails there. Add Alt to get an un-set combo.
+    const accel = process.platform === 'darwin' ? 'Command+Shift+Escape' : 'Control+Alt+Shift+Escape';
+    const label = process.platform === 'darwin' ? '⌘ + ⇧ Esc' : 'Ctrl + Alt + Shift + Esc';
     this.setStopShortcut(accel, label, true);
   }
 
@@ -215,11 +218,20 @@ class DesktopController {
       try { globalShortcut.unregister(this._stopAccel); } catch (e) { /* ignore */ }
       this._stopAccel = null;
     }
+    let registered = true;
     if (accel) {
+      registered = false;
       try {
         const ok = globalShortcut.register(accel, () => this.togglePaused('user'));
-        if (!ok) console.warn('[computer] stop shortcut registration failed:', accel);
-        else this._stopAccel = accel;
+        if (ok) {
+          this._stopAccel = accel;
+          registered = true;
+        } else {
+          console.warn(
+            `[computer] stop shortcut "${accel}" is unavailable (reserved by the OS?) — ` +
+            'choose a different combo in Settings → Shortcuts.'
+          );
+        }
       } catch (e) {
         console.warn('[computer] stop shortcut unavailable:', (e && e.message) || e);
       }
@@ -228,7 +240,7 @@ class DesktopController {
     // Push the (possibly rebound) label to the native status pill so it always
     // shows the user's real shortcut, never a hardcoded glyph.
     try { this._driverInstance().setStopLabel(this._stopLabel).catch(() => {}); } catch (e) { /* ignore */ }
-    return { ok: true, acceler: this._stopAccel || null, label: this._stopLabel || '' };
+    return { ok: registered, acceler: this._stopAccel || null, label: this._stopLabel || '' };
   }
 
   // ── Observation ──────────────────────────────────────────────────────

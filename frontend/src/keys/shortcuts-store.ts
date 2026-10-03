@@ -118,7 +118,9 @@ export function hasCustomBinding(id: string): boolean {
 }
 
 export function bindingsEqual(a: ShortcutBinding, b: ShortcutBinding): boolean {
-  return keysMatch(a.key, b.key) && a.mod === b.mod && (a.shift ?? false) === (b.shift ?? false);
+  return keysMatch(a.key, b.key) && a.mod === b.mod
+    && (a.alt ?? false) === (b.alt ?? false)
+    && (a.shift ?? false) === (b.shift ?? false);
 }
 
 /** Enforce strict matching: expected modifiers present and no extra modifier pressed. */
@@ -129,13 +131,14 @@ export function eventMatchesBinding(event: KeyboardEvent, binding: ShortcutBindi
   if (!keysMatch(event.key, binding.key)) return false;
   const shift = binding.shift ?? false;
   if (shift !== event.shiftKey) return false;
+  const alt = binding.alt ?? false;
   if (binding.mod === 'None') {
-    return !event.metaKey && !event.ctrlKey && !event.altKey;
+    return !event.metaKey && !event.ctrlKey && (alt ? event.altKey : !event.altKey);
   }
   if (binding.mod === 'Meta') {
-    return event.metaKey && !event.ctrlKey && !event.altKey;
+    return event.metaKey && !event.ctrlKey && (alt ? event.altKey : !event.altKey);
   }
-  return event.ctrlKey && !event.metaKey && !event.altKey;
+  return event.ctrlKey && !event.metaKey && (alt ? event.altKey : !event.altKey);
 }
 
 function keysMatch(a: string, b: string): boolean {
@@ -159,8 +162,9 @@ const SAFE_PLAIN_KEYS = new Set([
  */
 export function bindingFromKeyEvent(event: KeyboardEvent): ShortcutBinding | null {
   if (MODIFIER_KEYS.has(event.key)) return null;
-  if (event.metaKey) return { key: event.key, mod: 'Meta', shift: event.shiftKey };
-  if (event.ctrlKey) return { key: event.key, mod: 'Control', shift: event.shiftKey };
+  const alt = event.altKey;
+  if (event.metaKey) return { key: event.key, mod: 'Meta', shift: event.shiftKey, ...(alt ? { alt: true } : {}) };
+  if (event.ctrlKey) return { key: event.key, mod: 'Control', shift: event.shiftKey, ...(alt ? { alt: true } : {}) };
   if (SAFE_PLAIN_KEYS.has(event.key)) return { key: event.key, mod: 'None' };
   return null;
 }
@@ -203,7 +207,8 @@ export function formatBinding(binding: ShortcutBinding): string {
     return `${shift}${keyLabel(binding.key)}`.trim();
   }
   const mod = binding.mod === 'Meta' ? '⌘' : 'Ctrl';
-  return `${mod} + ${shift}${keyLabel(binding.key)}`;
+  const alt = binding.alt ? 'Alt + ' : '';
+  return `${mod} + ${alt}${shift}${keyLabel(binding.key)}`;
 }
 
 function keyLabel(key: string): string {

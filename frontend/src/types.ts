@@ -639,6 +639,8 @@ export interface WorkspaceBranchResponse {
   is_repo: boolean;
   branch: string | null;
   workspace?: string;
+  /** Set by the desktop bridge when the backend was transiently unreachable. */
+  error_code?: string;
 }
 
 /** One entry in the dashboard's static builtin tool catalog. */
@@ -744,6 +746,8 @@ export interface CommandApproval {
 export interface CommandApprovalsResponse {
   status: string;
   approvals: CommandApproval[];
+  /** Set by the desktop bridge when the backend was transiently unreachable. */
+  error_code?: string;
 }
 
 export interface CommandApprovalResponse {
@@ -1243,6 +1247,8 @@ export interface PendingSkill {
 export interface PendingSkillsResponse {
   status: string;
   pending: PendingSkill[];
+  /** Set by the desktop bridge when the backend was transiently unreachable. */
+  error_code?: string;
 }
 
 export interface PendingSkillResponse {

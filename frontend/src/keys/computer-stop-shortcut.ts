@@ -34,6 +34,7 @@ export function bindingToAccelerator(binding: ShortcutBinding): string {
   const mods: string[] = [];
   if (binding.mod === 'Meta') mods.push('Command');
   else if (binding.mod === 'Control') mods.push('Control');
+  if (binding.alt) mods.push('Alt');
   if (binding.shift) mods.push('Shift');
   const key = keyAccel(binding.key);
   if (!key) return '';

@@ -266,7 +266,9 @@ Windows:
       `computer_observe` screenshot + `computer_script` still to run
 - [~] multi-monitor + mixed DPI click accuracy: 150% single-monitor mapping verified; secondary
       monitor TBD
-- [ ] `state` reports `platform: win32`; pause hotkey `Ctrl+Shift+Esc` works (code path present)
+- [ ] `state` reports `platform: win32`; pause hotkey `Ctrl+Alt+Shift+Esc` works
+      (Windows reserves Ctrl+Shift+Esc for Task Manager, so the default adds Alt;
+      the Electron `globalShortcut` must actually register — see §11)
 
 ---
 
@@ -301,3 +303,27 @@ not patched at the call site:
 
 Contract additions (additive, §3): `launch` → `{launched, ok, pid}`; error code `stale_ref`;
 `state` → `{…, now, now_iso, timezone, utc_offset_minutes}`.
+
+---
+
+## 11. Runtime-log robustness fixes
+
+From a launch log full of noise — a functional bug plus several amplifier bugs:
+
+- **Emergency "stop computer control" never registered on Windows.** The default was
+  `Ctrl+Shift+Esc`, which Windows reserves for Task Manager, so `globalShortcut.register`
+  returned false; `setStopShortcut` also always returned `ok:true`, hiding the failure. The
+  binding model now supports **Alt** (`ShortcutBinding.alt`), and the default is
+  `Ctrl+Alt+Shift+Esc` on Windows (`Cmd+Shift+Esc` on macOS). `setStopShortcut` returns the real
+  registration result and logs an actionable warning.
+- **`ipcMain.handle` rejections flooded the console** whenever the backend was briefly
+  unreachable: the 5 s pollers (`list-command-approvals`, `list-pending-skills`,
+  `get-workspace-branch`, `list-active-sessions`) threw, and Electron prints a full stack per
+  rejected handler. Polled read handlers now return a graceful fallback via
+  `requestBackendMarked` (with `error_code:'backend_unreachable'`) or `null`, and the renderer
+  **keeps its prior state** on that marker instead of clearing badges/branch.
+- **`bridge registration deferred: Cannot read properties of null (reading 'port')`** was a
+  startup race — `server.address()` is null until the async `listen` callback. Registration now
+  waits for `'listening'` (`whenServerListening`).
+- **`webContents.canGoBack/canGoForward` deprecation** — migrated to
+  `webContents.navigationHistory.*` via a `navHistory()` shim with an old-API fallback.

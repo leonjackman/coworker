@@ -875,6 +875,21 @@ const BROWSER_OUTPUT_MAX_CHARS = 50000;
 const BROWSER_TRUNCATION_NOTE =
   '\n[content truncated by Coworker to fit context; use scroll + targeted evaluate to read more]';
 
+/**
+ * Navigation API shim: Electron ≥ 32 exposes `webContents.navigationHistory`
+ * and deprecates the direct `canGoBack/canGoForward/goBack/goForward` methods.
+ * Use the new API when present, fall back to the old one on older builds.
+ */
+function navHistory(webContents) {
+  if (webContents && webContents.navigationHistory) return webContents.navigationHistory;
+  return {
+    canGoBack: () => webContents.canGoBack(),
+    canGoForward: () => webContents.canGoForward(),
+    goBack: () => webContents.goBack(),
+    goForward: () => webContents.goForward(),
+  };
+}
+
 class BrowserController {
   constructor() {
     this.guests = new Map(); // webContentsId -> webContents
@@ -1072,8 +1087,8 @@ class BrowserController {
   async back() {
     await this._waitForGuest();
     const g = this.guest;
-    if (g && g.canGoBack()) {
-      g.goBack();
+    if (g && navHistory(g).canGoBack()) {
+      navHistory(g).goBack();
       await this._waitForLoad();
     }
     return this.getState();
@@ -1082,8 +1097,8 @@ class BrowserController {
   async forward() {
     await this._waitForGuest();
     const g = this.guest;
-    if (g && g.canGoForward()) {
-      g.goForward();
+    if (g && navHistory(g).canGoForward()) {
+      navHistory(g).goForward();
       await this._waitForLoad();
     }
     return this.getState();
@@ -1092,11 +1107,12 @@ class BrowserController {
   async getState() {
     const g = this.guest;
     if (!g) return { url: '', title: '', canGoBack: false, canGoForward: false, loading: false };
+    const nav = navHistory(g);
     return {
       url: g.getURL() || '',
       title: g.getTitle() || '',
-      canGoBack: g.canGoBack(),
-      canGoForward: g.canGoForward(),
+      canGoBack: nav.canGoBack(),
+      canGoForward: nav.canGoForward(),
       loading: g.isLoading(),
     };
   }
@@ -1805,8 +1821,27 @@ function startBrowserBridge() {
   return server;
 }
 
+/** Resolve once `server` is accepting connections (or reject on a listen error). */
+function whenServerListening(server) {
+  if (server.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      server.removeListener('listening', onListening);
+      server.removeListener('error', onError);
+    };
+    const onListening = () => { cleanup(); resolve(); };
+    const onError = (err) => { cleanup(); reject(err); };
+    server.once('listening', onListening);
+    server.once('error', onError);
+  });
+}
+
 async function registerBrowserBridge(server) {
   try {
+    // `startBrowserBridge` returns before the async listen callback fires, so
+    // server.address() is null here — wait for 'listening' instead of reading
+    // `.port` off null (which produced a confusing "registration deferred").
+    await whenServerListening(server);
     const port = server.address().port;
     await requestBackend('/api/browser/bridge', 'POST', { port, token: browserBridgeToken }, 3000);
     console.log('[browser] bridge registered with backend');
@@ -2031,6 +2066,7 @@ function startComputerBridge() {
 
 async function registerComputerBridge(server) {
   try {
+    await whenServerListening(server);
     const port = server.address().port;
     await requestBackend('/api/computer/bridge', 'POST', { port, token: computerBridgeToken }, 3000);
     console.log('[computer] bridge registered with backend');
@@ -2107,10 +2143,10 @@ ipcMain.handle('browser:menu-action', (event, action) => {
         g.reload();
         break;
       case 'back':
-        if (g.canGoBack()) g.goBack();
+        if (navHistory(g).canGoBack()) navHistory(g).goBack();
         break;
       case 'forward':
-        if (g.canGoForward()) g.goForward();
+        if (navHistory(g).canGoForward()) navHistory(g).goForward();
         break;
       default:
         return { ok: false, error: 'unknown_action' };
@@ -2591,14 +2627,35 @@ function requestBackend(pathname, method = 'GET', payload = undefined, timeoutMs
  * `ipcMain.handle` rejection. Only use for READ/idempotent queries — never for
  * mutations, where a silent fallback would hide a real failure.
  */
+function isTransientBackendError(err) {
+  const msg = String((err && err.message) || err || '');
+  return /ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|socket hang up|timed out|Failed to connect|empty response/i.test(msg);
+}
+
 async function requestBackendOr(pathname, fallback, { method = 'GET', payload = undefined, timeoutMs = 10000 } = {}) {
   try {
     return await requestBackend(pathname, method, payload, timeoutMs);
   } catch (err) {
-    const msg = String(err?.message || err || '');
-    const transient = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|timed out|Failed to connect|empty response/i.test(msg);
-    if (transient) {
+    if (isTransientBackendError(err)) {
       return fallback;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Like `requestBackendOr` but marks the fallback with `error_code:
+ * 'backend_unreachable'` so the renderer can keep its prior state instead of
+ * clearing it. Used by frequently-polled read handlers: without this a backend
+ * restart makes `ipcMain.handle` reject and Electron prints a full stack for
+ * EVERY poll (the log storm). Never use for mutations.
+ */
+async function requestBackendMarked(pathname, fallback, { method = 'GET', payload = undefined, timeoutMs = 10000 } = {}) {
+  try {
+    return await requestBackend(pathname, method, payload, timeoutMs);
+  } catch (err) {
+    if (isTransientBackendError(err)) {
+      return { ...fallback, error_code: 'backend_unreachable' };
     }
     throw err;
   }
@@ -3150,9 +3207,16 @@ ipcMain.handle('session-mark-read', async (event, sessionId) => {
 });
 
  ipcMain.handle('list-active-sessions', async () => {
-   const envelope = await requestBackendOr('/sessions/active', { session_ids: [] });
    // Backend returns {status, session_ids}; unwrap so the renderer receives string[].
-   return Array.isArray(envelope?.session_ids) ? envelope.session_ids : [];
+   // On a transient backend blip return null (not []) so the renderer keeps its
+   // prior active set instead of clearing every running badge.
+   try {
+     const envelope = await requestBackend('/sessions/active');
+     return Array.isArray(envelope?.session_ids) ? envelope.session_ids : [];
+   } catch (err) {
+     if (isTransientBackendError(err)) return null;
+     throw err;
+   }
  });
 
 ipcMain.handle('create-session', async (event, payload) => {
@@ -3314,7 +3378,7 @@ ipcMain.handle('list-agent-traces', async (event, limit) => {
 });
 
 ipcMain.handle('list-command-approvals', async () => {
-  return requestBackend('/command-approvals');
+  return requestBackendMarked('/command-approvals', { status: 'ok', approvals: [] });
 });
 
 ipcMain.handle('get-session-changes', async (event, sessionId) => {
@@ -3333,7 +3397,10 @@ ipcMain.handle('get-workspace-branch', async (event, projectId) => {
   const params = new URLSearchParams();
   if (projectId) params.set('project_id', projectId);
   const query = params.toString();
-  return requestBackend(`/workspace/branch${query ? `?${query}` : ''}`);
+  return requestBackendMarked(
+    `/workspace/branch${query ? `?${query}` : ''}`,
+    { status: 'ok', is_repo: false, branch: null },
+  );
 });
 
 ipcMain.handle('get-project-dashboard', async (event, projectId) => {
@@ -3463,7 +3530,7 @@ ipcMain.handle('delete-skill', (event, name) =>
 );
 ipcMain.handle('scan-skills', () => requestBackend('/skills/scan', 'POST', {}));
 ipcMain.handle('validate-skill', (event, payload) => requestBackend('/skills/validate', 'POST', payload));
-ipcMain.handle('list-pending-skills', () => requestBackend('/skills/pending', 'GET'));
+ipcMain.handle('list-pending-skills', () => requestBackendMarked('/skills/pending', { status: 'ok', pending: [] }, { method: 'GET' }));
 ipcMain.handle('get-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}`, 'GET'));
 ipcMain.handle('update-pending-skill', (event, name, content) => requestBackend(`/skills/pending/${encodeURIComponent(name)}`, 'PUT', { content }));
 ipcMain.handle('approve-pending-skill', (event, name) => requestBackend(`/skills/pending/${encodeURIComponent(name)}/approve`, 'POST', {}));

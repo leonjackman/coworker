@@ -966,17 +966,21 @@ function App() {
           chatService.listCommandApprovals(),
         ]);
         if (cancelled) return;
-        setBackendActiveSessionIds(new Set(active));
-        const bySession = new Map<string, CommandApproval[]>();
-        for (const approval of approvals.approvals) {
-          if (approval.status !== 'pending') continue;
-          const sessionId = approval.context?.session_id;
-          if (typeof sessionId !== 'string' || !sessionId) continue;
-          const list = bySession.get(sessionId);
-          if (list) list.push(approval);
-          else bySession.set(sessionId, [approval]);
+        // null / error_code = backend transiently unreachable: KEEP the prior
+        // state instead of clearing every running/approval badge during a restart.
+        if (Array.isArray(active)) setBackendActiveSessionIds(new Set(active));
+        if (!approvals.error_code) {
+          const bySession = new Map<string, CommandApproval[]>();
+          for (const approval of approvals.approvals) {
+            if (approval.status !== 'pending') continue;
+            const sessionId = approval.context?.session_id;
+            if (typeof sessionId !== 'string' || !sessionId) continue;
+            const list = bySession.get(sessionId);
+            if (list) list.push(approval);
+            else bySession.set(sessionId, [approval]);
+          }
+          setPendingBySession(bySession);
         }
-        setPendingBySession(bySession);
       } catch {
         /* 静默失败：下一次轮询重试，不打断指示器既有状态 */
       } finally {
@@ -4106,6 +4110,8 @@ function App() {
       }
       try {
         const res = await chatService.getWorkspaceBranch(currentProjectId);
+        // Backend blip: keep the prior branch status instead of clearing it.
+        if (res.error_code) return;
         if (!cancelled) setBranchStatus({ isRepo: res.is_repo, branch: res.branch });
       } catch {
         if (!cancelled) setBranchStatus({ isRepo: false, branch: null });
@@ -4187,6 +4193,8 @@ function App() {
   const refreshPendingSkillCount = useCallback(async (): Promise<number> => {
     try {
       const response = await chatService.listPendingSkills();
+      // Backend blip: keep the prior badge (return -1 = "unknown", never 0).
+      if (response.error_code) return -1;
       const count = response.pending.length;
       setPendingSkillCount(count);
       return count;
