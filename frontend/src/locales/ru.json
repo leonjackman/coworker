@@ -227,6 +227,7 @@
   "settings.computer_permission_input": "Ввод и управление (Спец. возможности)",
   "settings.computer_permission_open": "Открыть системные настройки",
   "settings.computer_permission_recheck": "Проверить",
+  "settings.computer_permission_win_note": "В Windows не требуется разрешение на запись экрана или спец. возможности — захват и ввод работают сразу. Чтобы управлять окнами, запущенными от имени администратора, запустите CoWorker от имени администратора.",
   "settings.permission_granted": "Предоставлено",
   "settings.permission_denied": "Отклонено",
   "settings.permission_pending": "Ещё не предоставлено",

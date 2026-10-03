@@ -229,6 +229,7 @@
   "settings.computer_permission_input": "输入与控制（辅助功能）",
   "settings.computer_permission_open": "打开系统设置",
   "settings.computer_permission_recheck": "重新检查",
+  "settings.computer_permission_win_note": "Windows 无需授予屏幕录制或辅助功能权限，截图与输入开箱即用。若要控制以管理员身份运行的窗口，请以管理员身份启动 CoWorker。",
   "settings.permission_granted": "已授权",
   "settings.permission_denied": "已拒绝",
   "settings.permission_pending": "尚未授权",

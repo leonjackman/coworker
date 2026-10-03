@@ -252,6 +252,7 @@
   "settings.computer_permission_input": "Saisie et contrôle (Accessibilité)",
   "settings.computer_permission_open": "Ouvrir les réglages système",
   "settings.computer_permission_recheck": "Revérifier",
+  "settings.computer_permission_win_note": "Windows n'exige aucune autorisation de capture d'écran ou d'accessibilité — la capture et la saisie fonctionnent directement. Pour contrôler des fenêtres exécutées en administrateur, lancez CoWorker en administrateur.",
   "settings.permission_granted": "Accordé",
   "settings.permission_denied": "Refusé",
   "settings.permission_pending": "Pas encore accordé",

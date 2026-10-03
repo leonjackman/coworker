@@ -294,6 +294,7 @@
   "settings.computer_permission_input": "Entrada y control (Accesibilidad)",
   "settings.computer_permission_open": "Abrir ajustes del sistema",
   "settings.computer_permission_recheck": "Volver a comprobar",
+  "settings.computer_permission_win_note": "Windows no requiere permisos de grabación de pantalla ni de accesibilidad: la captura y la entrada funcionan directamente. Para controlar ventanas ejecutadas como administrador, inicie CoWorker como administrador.",
   "settings.permission_granted": "Concedido",
   "settings.permission_denied": "Denegado",
   "settings.permission_pending": "Aún no concedido",

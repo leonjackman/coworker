@@ -474,6 +474,13 @@
   justify-content: flex-end;
 }
 
+.cu-perm-panel__note {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .update-panel {
   margin: 4px 14px 14px;
   padding: 12px 14px;

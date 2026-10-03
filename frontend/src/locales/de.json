@@ -227,6 +227,7 @@
   "settings.computer_permission_input": "Eingabe & Steuerung (Bedienungshilfen)",
   "settings.computer_permission_open": "Systemeinstellungen öffnen",
   "settings.computer_permission_recheck": "Erneut prüfen",
+  "settings.computer_permission_win_note": "Windows benötigt keine Berechtigung für Bildschirmaufnahme oder Bedienungshilfen — Aufnahme und Eingabe funktionieren sofort. Um Fenster mit Administratorrechten zu steuern, starten Sie CoWorker als Administrator.",
   "settings.permission_granted": "Erteilt",
   "settings.permission_denied": "Verweigert",
   "settings.permission_pending": "Noch nicht erteilt",

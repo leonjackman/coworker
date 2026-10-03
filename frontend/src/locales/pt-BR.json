@@ -227,6 +227,7 @@
   "settings.computer_permission_input": "Entrada e controle (Acessibilidade)",
   "settings.computer_permission_open": "Abrir ajustes do sistema",
   "settings.computer_permission_recheck": "Verificar novamente",
+  "settings.computer_permission_win_note": "O Windows não exige permissão de gravação de tela ou acessibilidade — captura e entrada funcionam de imediato. Para controlar janelas executadas como administrador, inicie o CoWorker como administrador.",
   "settings.permission_granted": "Concedida",
   "settings.permission_denied": "Negada",
   "settings.permission_pending": "Ainda não concedida",

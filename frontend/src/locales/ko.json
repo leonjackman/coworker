@@ -499,6 +499,7 @@
   "settings.computer_permission_input": "입력 및 제어(손쉬운 사용)",
   "settings.computer_permission_open": "시스템 설정 열기",
   "settings.computer_permission_recheck": "다시 확인",
+  "settings.computer_permission_win_note": "Windows에서는 화면 기록/손쉬운 사용 권한이 필요하지 않습니다(캡처와 입력이 바로 동작). 관리자 권한으로 실행 중인 창을 제어하려면 CoWorker를 관리자 권한으로 실행하세요.",
   "settings.permission_granted": "허용됨",
   "settings.permission_denied": "거부됨",
   "settings.permission_pending": "아직 허용 안 됨",

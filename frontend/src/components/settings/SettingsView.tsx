@@ -198,12 +198,15 @@ export function SettingsView({
     };
   }, []);
 
-  // OS Computer Use permission list: shown under the master-switch toggle when
-  // it is ON. Reads live TCC status (desktop only) and re-checks on focus so a
-  // change made in System Settings is reflected as soon as the user returns.
+  // OS Computer Use permission list: the two macOS TCC permissions (Screen
+  // Recording + Accessibility). macOS-only — Windows has no user-granted
+  // capture/input permission, so the panel (and its TCC polling) is gated to
+  // darwin; Windows instead shows a short elevation note.
+  const isMac = (typeof window !== 'undefined' && window.electronAPI?.platform) === 'darwin';
+  const isWin = (typeof window !== 'undefined' && window.electronAPI?.platform) === 'win32';
   const [cuPerms, setCuPerms] = useState<{ screen?: string; input?: string }>({});
   const refreshCuPerms = async () => {
-    if (!computerUseEnabled || !window.electronAPI?.computerPermissionStatus) return;
+    if (!computerUseEnabled || !isMac || !window.electronAPI?.computerPermissionStatus) return;
     try {
       const r = await window.electronAPI.computerPermissionStatus();
       if (r?.ok && r.permissions) setCuPerms({ screen: r.permissions.screen, input: r.permissions.input });
@@ -213,12 +216,12 @@ export function SettingsView({
     void window.electronAPI?.computerPermissionOpenSettings?.(kind);
   };
   useEffect(() => {
-    if (!computerUseEnabled) return;
+    if (!computerUseEnabled || !isMac) return;
     refreshCuPerms();
     window.addEventListener('focus', refreshCuPerms);
     return () => window.removeEventListener('focus', refreshCuPerms);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [computerUseEnabled]);
+  }, [computerUseEnabled, isMac]);
 
   async function selectLanguage(language: string) {
     const allowed = ['zh', 'en', 'zh-TW', 'zh-HK', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru'];
@@ -409,14 +412,20 @@ export function SettingsView({
                 onChange: (value: string) => onWorkflowSchedulerEnabledChange(value === 'true'),
               }] : []),
             ],
-            footer: computerUseEnabled && window.electronAPI?.computerPermissionStatus ? (
-              <ComputerPermPanel
-                screen={cuPerms.screen}
-                input={cuPerms.input}
-                onOpen={openCuSettings}
-                onRefresh={refreshCuPerms}
-              />
-            ) : null,
+            footer: computerUseEnabled
+              ? (isMac && window.electronAPI?.computerPermissionStatus ? (
+                <ComputerPermPanel
+                  screen={cuPerms.screen}
+                  input={cuPerms.input}
+                  onOpen={openCuSettings}
+                  onRefresh={refreshCuPerms}
+                />
+              ) : isWin ? (
+                <div className="cu-perm-panel">
+                  <p className="cu-perm-panel__note">{t('settings.computer_permission_win_note')}</p>
+                </div>
+              ) : null)
+              : null,
           },
           {
             id: 'web',

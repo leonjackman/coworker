@@ -250,6 +250,7 @@
   "settings.computer_permission_input": "輸入與控制（輔助使用）",
   "settings.computer_permission_open": "開啟系統設定",
   "settings.computer_permission_recheck": "重新檢查",
+  "settings.computer_permission_win_note": "Windows 無需授予螢幕錄製或輔助使用權限，截圖與輸入開箱即用。若要控制以管理員身分執行的視窗，請以管理員身分啟動 CoWorker。",
   "settings.permission_granted": "已授權",
   "settings.permission_denied": "已拒絕",
   "settings.permission_pending": "尚未授權",

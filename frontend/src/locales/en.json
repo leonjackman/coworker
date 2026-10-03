@@ -229,6 +229,7 @@
   "settings.computer_permission_input": "Input & Control (Accessibility)",
   "settings.computer_permission_open": "Open System Settings",
   "settings.computer_permission_recheck": "Re-check",
+  "settings.computer_permission_win_note": "Windows needs no Screen Recording or Accessibility permission — capture and input work out of the box. To control windows that run as administrator, start CoWorker as administrator.",
   "settings.permission_granted": "Granted",
   "settings.permission_denied": "Denied",
   "settings.permission_pending": "Not granted yet",
