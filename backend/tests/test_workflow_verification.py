@@ -90,6 +90,18 @@ def test_assert_action_label_not_serialized():
     assert "result.exists" in text
 
 
+def test_resolve_js_escapes_quoted_and_json_encodes_bare():
+    from coworker.workflows.templating import resolve_js
+
+    ctx = {"steps": {"id:1": {"stdout": "MONTH=10|DAY=4\n"}, "id:2": {"result": "x"}, "id:3": {"count": 3}}}
+    # A newline inside a single-quoted JS string must be escaped, not raw.
+    out = resolve_js("const info = '{{steps.id:1.stdout}}';", ctx)
+    assert "\\n" in out and "\n" not in out
+    # An unquoted reference becomes a valid JS literal (string quoted, number bare).
+    assert resolve_js("await app.click({{steps.id:2.result}});", ctx) == 'await app.click("x");'
+    assert resolve_js("const n = {{steps.id:3.count}};", ctx) == "const n = 3;"
+
+
 def test_notify_body_from_dict_is_json_not_python_repr():
     from coworker.workflows.native import run_native
 

@@ -120,6 +120,56 @@ def resolve_string(value: str, context: dict[str, Any], secrets: SecretResolver 
     return _REF_RE.sub(_sub, value)
 
 
+def _stringify_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _escape_js(text: str, quote: str) -> str:
+    text = text.replace("\\", "\\\\")
+    if quote == "'":
+        text = text.replace("'", "\\'")
+    elif quote == '"':
+        text = text.replace('"', '\\"')
+    elif quote == "`":
+        text = text.replace("`", "\\`").replace("${", "\\${")
+    return (
+        text.replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def resolve_js(code: str, context: dict[str, Any], secrets: SecretResolver | None = None) -> str:
+    """Resolve template references inside JavaScript source *safely*.
+
+    A reference wrapped in a matching quote (``'{{x}}'``, ``"{{x}}"`` or a
+    backtick pair) is escaped for that quote; an unquoted reference is
+    JSON-encoded (always a valid JS literal). This stops a step output that
+    contains quotes/newlines from breaking the script with a ``SyntaxError`` —
+    the failure that made the model rewrite a workflow a dozen times.
+    """
+    if "{{" not in code:
+        return code
+
+    def _sub(match: re.Match[str]) -> str:
+        value = _lookup(match.group(1), context, secrets)
+        start, end = match.start(), match.end()
+        before = code[start - 1] if start > 0 else ""
+        after = code[end] if end < len(code) else ""
+        if before in ("'", '"', "`") and before == after:
+            return _escape_js(_stringify_value(value), before)
+        return json.dumps(value, ensure_ascii=False)
+
+    return _REF_RE.sub(_sub, code)
+
+
 def resolve(value: Any, context: dict[str, Any], secrets: SecretResolver | None = None) -> Any:
     """Recursively resolve templates in any JSON-like structure."""
     if isinstance(value, str):

@@ -36,7 +36,7 @@ from .model import (
     StepFailed,
     Workflow,
 )
-from .templating import TemplateError, resolve, resolve_bool
+from .templating import TemplateError, resolve, resolve_bool, resolve_js
 
 logger = get_logger(__name__)
 
@@ -522,6 +522,26 @@ class WorkflowExecutor:
             retryable=True,
         )
 
+    def _resolve_payload(self, step: Step, context: dict[str, Any]) -> dict[str, Any]:
+        """Resolve a step's params for execution.
+
+        ``computer`` script steps embed step outputs in JavaScript source, so
+        their ``code``/``script`` is resolved with the JS-aware resolver (values
+        are escaped / JSON-encoded) — a raw newline in a step output must never
+        break the script with a SyntaxError.
+        """
+        params = step.params or {}
+        if step.kind == "computer" and step.do in ("script", "run_script"):
+            resolved = resolve(params, context, self.secrets)
+            resolved = resolved if isinstance(resolved, dict) else dict(params)
+            for key in ("code", "script"):
+                raw = params.get(key)
+                if isinstance(raw, str):
+                    resolved[key] = resolve_js(raw, context, self.secrets)
+            return resolved
+        resolved = resolve(params, context, self.secrets)
+        return resolved if isinstance(resolved, dict) else dict(params)
+
     def _resolve_params(self, step: Step, run: Run) -> dict[str, Any]:
         """Resolve a step's params against the run context (best-effort)."""
         try:
@@ -722,7 +742,7 @@ class WorkflowExecutor:
         self, step: Step, run: Run, state: "_State", locator_raw: Any
     ) -> Any:
         context = run.context
-        payload = resolve(step.params, context, self.secrets) or {}
+        payload = self._resolve_payload(step, context)
         locator = resolve(locator_raw, context, self.secrets) if locator_raw else None
         env = state.env
         kind = step.kind

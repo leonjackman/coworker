@@ -194,6 +194,40 @@ steps:
     assert env.calls[0] == ("command", shell_wrap_command("echo hi"))
 
 
+def test_computer_script_code_is_js_escaped(manager):
+    """A newline in a step output must not break the script's string literal."""
+    flow = """name: js-safe
+description: d
+steps:
+  - id: "id:1"
+    kind: command
+    do: run
+    params: {command: "python get.py"}
+    description: get time
+  - id: "id:2"
+    kind: computer
+    do: script
+    params:
+      code: "const info = '{{steps.id:1.stdout}}'; cua.emitText(info);"
+    description: calculate
+  - id: "id:3"
+    kind: assert
+    post: ["result.asserted"]
+    description: verify
+"""
+    manager.create(flow)
+    env = FakeEnv(
+        command=lambda argv, cwd, timeout: {
+            "return_code": 0, "stdout": "a\nb", "stderr": "", "timed_out": False,
+        }
+    )
+    manager.run("js-safe", env=env)
+    app_calls = [c for c in env.calls if c[0] == "app"]
+    assert app_calls, env.calls
+    code = app_calls[0][2]["code"]
+    assert "a\\nb" in code and "a\nb" not in code
+
+
 def test_agentic_step_uses_goal_as_prompt(manager):
     """The agentic prompt must be the natural-language goal, not the do label."""
     flow = """name: ag-flow
