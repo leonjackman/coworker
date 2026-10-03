@@ -164,3 +164,18 @@ def test_still_nudges_when_observation_precedes_mutation():
         AIMessage(content="已成功"),
     ]
     assert _run(messages) is not None
+
+
+def test_runtime_emit_buffers_a_verification_part():
+    """The runtime's emit callback must buffer the frame as a ``verification``
+    part and drain it exactly once — this is what makes the notice persist into
+    done.parts (and render)."""
+    from coworker.agent.runtime import OpenAICompatibleStreamRuntime
+
+    rt = OpenAICompatibleStreamRuntime.__new__(OpenAICompatibleStreamRuntime)
+    rt._verification_buffer = []
+    emit = rt._verification_emit_live("s1")
+    emit({"type": "verification_required", "session_id": "s1"})
+    parts = rt._drain_verification_events()
+    assert parts == [{"type": "verification", "session_id": "s1"}]
+    assert rt._drain_verification_events() == []
