@@ -285,7 +285,13 @@ func handleRequest(_ req: Request) {
                         }
                     }
                 }
-                Responder.ok(req.id, ["launched": app])
+                // Best-effort pid so the caller can verify the launch with a strong
+                // identity signal (0 when the app is not up yet — the caller then
+                // resolves it itself).
+                let runningPid = NSWorkspace.shared.runningApplications
+                    .first(where: { $0.bundleURL?.standardizedFileURL == url.standardizedFileURL })?
+                    .processIdentifier ?? 0
+                Responder.ok(req.id, ["launched": app, "pid": Int(runningPid)])
             } else {
                 // No match: return a short candidate list so the caller can fix
                 // the name (or use a bundle id).
@@ -520,7 +526,7 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
     let ref = p.str("ref")
     let op = p.str("op", "click")
     guard let el = AX.find(app, ref: ref) else {
-        throw HelperError("computer_error", "no AX element for ref \(ref) in app \(pid)")
+        throw HelperError("stale_ref", "ref \(ref) no longer exists in app \(pid)")
     }
     let center = AX.center(el)
 

@@ -17,7 +17,7 @@ internal static class UiaActions
         if (string.IsNullOrEmpty(reference)) throw new HelperError("param_error", "act requires a ref");
         Elevation.EnsureNotBlocked(pid);
         var el = tree.Find(pid, reference)
-                 ?? throw new HelperError("computer_error", $"no UIA element for ref {reference} in pid {pid}");
+                 ?? throw new HelperError("stale_ref", $"ref {reference} no longer exists in pid {pid}");
 
         var rect = UiaTree.RectOf(el);
         Point center = rect.IsEmpty

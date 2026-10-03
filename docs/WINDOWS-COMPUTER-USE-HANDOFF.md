@@ -267,3 +267,37 @@ Windows:
 - [~] multi-monitor + mixed DPI click accuracy: 150% single-monitor mapping verified; secondary
       monitor TBD
 - [ ] `state` reports `platform: win32`; pause hotkey `Ctrl+Shift+Esc` works (code path present)
+
+---
+
+## 10. Root-cause fixes (post-first-implementation)
+
+Driven by a real Windows session (agent failed to drive Paint / Calculator). Fixed at the source,
+not patched at the call site:
+
+- **Ref vocabulary was macOS-only in shared strings.** The model-facing notes and the capability
+  line hardcoded `[axbutton:搜索#1]`, so the model invented an `ax…` prefix on Windows (whose helper
+  emits `button:…`), producing a cascade of `no UIA element` failures. `_element_note()` now names
+  both platforms AND emits the **real** refs read from the current snapshot (`_sample_refs`); it also
+  states the tree covers one window and points at `list_apps`/`app_state(app=…)`.
+- **Stale refs were undetectable on Windows.** Both helpers now return a dedicated
+  **`stale_ref`** error code (not generic `computer_error`); the backend self-heals by returning a
+  `fresh_snapshot` so the model re-picks a ref. Legacy string matching is retained for old helpers.
+- **`type_into` contradicted its own schema.** The catalog marks `ref` optional, but the runtime
+  hard-failed (`act requires a ref`) when neither `ref` nor `app` was given. With no ref it now types
+  into the focused field of `app` (or the frontmost app), i.e. it no longer needs a ref to fill a
+  search box you just focused.
+- **`computer_script(reset=true, code=…)` silently dropped the code.** It now resets and then runs
+  the code in the fresh session (a reset with no code stays a pure reset).
+- **`launch_app` could report success without launching.** Verification used "some window became
+  frontmost", so on Windows a missing program's shell error dialog counted as success. The Windows
+  helper now resolves the app (PATH / App Paths / shell alias, refusing unknown names instead of
+  handing them to the shell), waits for the real process, activates it, and returns a truthful
+  `{ok, pid}`; the backend verifies via that pid (falling back to `resolve_app`), never a bare
+  frontmost change. `ResolvePid` also strips a `.exe` suffix so `notepad.exe` resolves.
+- **No reliable clock.** `computer_observe state` now returns local `now`/`now_iso`/`timezone`/
+  `utc_offset_minutes`, and the capability line tells the model to use it for "current time" tasks
+  instead of guessing from web search.
+
+Contract additions (additive, §3): `launch` → `{launched, ok, pid}`; error code `stale_ref`;
+`state` → `{…, now, now_iso, timezone, utc_offset_minutes}`.

@@ -66,6 +66,58 @@ COMPUTER_OUTPUT_MAX_CHARS = 20_000
 
 _TRUNCATION_NOTE = "\n[content truncated by Coworker to fit context]"
 
+# Bracketed element refs in the model-facing tree, e.g. `[button:确定#1]`.
+_REF_TOKEN_RE = re.compile(r"\[([^\]\n]+)\]")
+
+
+def _sample_refs(snapshot_text: str, limit: int = 3) -> str:
+    """Comma-joined real refs taken from a snapshot, used as examples.
+
+    Deriving examples from the actual tree keeps them correct across platforms
+    (macOS `axbutton:…`, Windows `button:…`) instead of hardcoding one platform's
+    vocabulary into a shared note. Returns "" when the tree has no refs.
+    """
+    seen: list[str] = []
+    for match in _REF_TOKEN_RE.finditer(snapshot_text or ""):
+        ref = match.group(1).strip()
+        if ref and ref not in seen:
+            seen.append(ref)
+        if len(seen) >= limit:
+            break
+    return ", ".join(seen)
+
+
+def _element_note(snapshot_text: str, *, app_state: bool) -> str:
+    """Platform-neutral guidance attached to snapshot/app_state results.
+
+    Names BOTH platforms' ref vocabulary but never presents one platform's prefix
+    as THE format: the concrete refs are shown verbatim from ``snapshot_text``, so
+    the model copies real ids instead of inventing an `ax…` prefix on Windows
+    (which was the root cause of the earlier "no UIA element" ref failures).
+    """
+    samples = _sample_refs(snapshot_text)
+    parts = [
+        "Refs are opaque element ids of the form role:label#n, copied verbatim from the "
+        "square brackets in the tree (macOS looks like `axbutton:搜索#1`, Windows like "
+        "`button:确定#1`)."
+        + (f" Real refs in this view: {samples}." if samples else ""),
+        "ALWAYS act on the LATEST snapshot; if an action returns fresh_snapshot, re-pick a ref "
+        "from it. If the tree is empty/unavailable you cannot see the desktop — stop and do not "
+        "claim anything.",
+        "Only editable fields accept typing (macOS AXTextField/AXTextArea; Windows "
+        "Edit/Document/ComboBox). Buttons, labels and groups are for clicking only — clicking a "
+        "static label will not open a text field.",
+        "This tree covers ONE app window (the frontmost app, or the `app` you passed); use "
+        "list_apps / app_state(app=…) to target another app.",
+    ]
+    if app_state:
+        parts.insert(
+            1,
+            "'changed' false means the tree is identical to the previous read — reuse your prior "
+            "understanding and do not re-reason. If removed[] lists refs, they no longer exist.",
+        )
+    return " ".join(parts)
+
 
 def read_computer_bridge(data_dir: Path | str) -> Any:
     """Load the bridge info Electron registered at startup (may be absent)."""
@@ -241,9 +293,11 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "loops/conditions: app.getAXState() (AX tree text + integer indices), app.getScreenshot(), "
             "app.click(refOrIndex), app.typeText(text,{submit}), app.paste(text), app.setValue(ref,text), "
             "app.pressKey('cmd+f'), app.scroll(target,'down',pages), app.drag([x,y],[x,y]), app.settle(). "
-            "Element targets are observed refs (strings like 'axbutton:搜索#1') or INTEGER indices from the "
-            "SAME cell's getAXState (call it first). Bindings persist across calls; use computer_script(reset=true) "
-            "for a fresh session. No require/process/fs/network. "
+            "Element targets are opaque refs copied verbatim from the tree brackets (strings like "
+            "'role:label#n', e.g. macOS 'axbutton:搜索#1' / Windows 'button:确定#1') or INTEGER indices from "
+            "the SAME cell's getAXState (call it first). Bindings persist across calls; "
+            "computer_script(reset=true, code=…) resets the session and then runs code. "
+            "No require/process/fs/network. "
             "INPUT LADDER (AX-first): setValue (most deterministic) -> typeText -> paste. After any input, "
             "re-observe and confirm the field/result changed before claiming success; if AX readback is empty, "
             "trust the paste receipt/field change instead of retrying blindly. "
@@ -251,7 +305,9 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "(click_ref/type_into/press_hotkey/launch_app/click_coords). Open apps ONLY via launch_app or "
             "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey. type_text/type_into enter literal text — any characters. "
             "If an action fails the SAME way twice, STOP and ask the user instead of retry-looping. "
-            "NEVER claim an outcome you did not observe. If a permission error is reported, stop and tell the user."
+            "NEVER claim an outcome you did not observe. For the current local date/time call "
+            "computer_observe state (it returns `now`); never guess the time. If a permission error is "
+            "reported, stop and tell the user."
         )
     if status == "feature_off":
         return (
@@ -372,6 +428,12 @@ def _render_computer_error(result: dict[str, Any], client: Any = None) -> str:
         hint = (
             "The user paused computer use (or the screen locked). STOP acting on the "
             "desktop and tell the user you are waiting until they resume it."
+        )
+    elif code == "stale_ref":
+        hint = (
+            "That element ref no longer exists (the UI changed). Re-read the current "
+            "tree (computer_observe snapshot / app.getAXState) and pick a fresh ref; "
+            "do NOT reuse the old one."
         )
     if code in ("screen_permission", "input_permission"):
         hint = ""
@@ -528,29 +590,43 @@ def build_computer_tools(
         # Everything else: verified=null + the fresh observation, so the MODEL
         # decides by looking — exactly Anthropic's "evaluate after each step".
         if action == "launch_app":
-            after_pid = front_before_pid
-            name = ""
-            for _ in range(6):
-                time.sleep(0.4)
-                after_pid = _frontmost_pid()
-                name = _frontmost_name()
-                if after_pid is not None and after_pid != front_before_pid:
-                    break
-            verified = bool(after_pid) and after_pid != front_before_pid
-            changed = verified
-            preview = ""
-            if verified or (name and name):
-                st = _snapshot_text()
-                preview = "\n".join((st or "").split("\n")[:12])
+            # Strong verification only: "some window became frontmost" is NOT proof
+            # of a launch — on Windows a missing program opens a shell error dialog,
+            # which used to be counted as success. An app is confirmed launched when
+            # we can resolve a running instance for it (helper-reported pid, or our
+            # own resolve_app lookup as a fallback for older helpers).
+            pid: int | None = None
+            if isinstance(res, dict):
+                cand = res.get("pid")
+                if isinstance(cand, int) and cand > 0:
+                    pid = cand
+            if pid is None and app:
+                for _ in range(6):
+                    try:
+                        resolved = client.ax_resolve_app(app)
+                    except Exception:  # noqa: BLE001
+                        resolved = None
+                    if isinstance(resolved, dict):
+                        cand = resolved.get("pid")
+                        if isinstance(cand, int) and cand > 0:
+                            pid = cand
+                            break
+                    time.sleep(0.4)
+            verified = pid is not None
+            name = _frontmost_name()
+            st = _snapshot_text() or ""
+            preview = "\n".join(st.split("\n")[:12])
             note = (
-                f"Verified: frontmost changed to a different app ({name or '?'}). Confirm with computer_observe state."
+                f"Verified: \"{app}\" is running (pid {pid})."
                 if verified
-                else "Frontmost did NOT change to the requested app. Re-check with computer_observe state; do NOT assume it opened."
+                else f"Could NOT confirm \"{app}\" launched — no matching process/window appeared. "
+                "It may be a wrong name, or need an executable/path (Windows) rather than a "
+                "display name. Re-check with computer_observe state; do NOT assume it opened."
             )
             return json.dumps({
-                "ok": True, "action": action, "verified": verified, "changed": changed,
-                "frontmost_before_pid": front_before_pid, "frontmost_after_pid": after_pid,
-                "frontmost": name, "note": note, "after_preview": preview,
+                "ok": True, "action": action, "verified": verified, "pid": pid, "changed": verified,
+                "frontmost_before_pid": front_before_pid, "frontmost": name,
+                "note": note, "after_preview": preview,
             }, ensure_ascii=False)
 
         time.sleep(0.35)
@@ -614,9 +690,12 @@ def build_computer_tools(
             app = str(getattr(args, "app", "") or "")
             ref = str(args.ref or "")
             submit = bool(getattr(args, "submit", False))
-            if app and not ref:
-                return client.ax_input_text(app=app, text=str(args.text or ""), submit=submit)
-            return client.ax_act(ref, "type_into", text=str(args.text or ""), submit=submit)
+            if ref:
+                return client.ax_act(ref, "type_into", text=str(args.text or ""), submit=submit)
+            # No ref given: type into the focused field of the target app (or the
+            # frontmost app when `app` is empty). The action catalog marks `ref`
+            # optional, so this must not hard-fail — it mirrors `type_text`.
+            return client.ax_input_text(app=app, text=str(args.text or ""), submit=submit)
         if action == "type_text":
             app = str(getattr(args, "app", "") or "")
             if app:
@@ -671,6 +750,7 @@ def build_computer_tools(
         if action == "screenshot":
             return _screenshot_result(result, client, data_dir, session_id, vision, max_width)
         if action == "app_state":
+            snap_text = str(result.get("text") or "")
             return json.dumps(
                 {
                     "frontmost": result.get("frontmost") or "",
@@ -680,8 +760,8 @@ def build_computer_tools(
                     "changed": result.get("changed"),
                     "removed": result.get("removed") or [],
                     "window": result.get("window") or {},
-                    "snapshot": str(result.get("text") or ""),
-                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n). 'changed' false means the tree is identical to the previous read — reuse your prior understanding and do not re-reason. If removed[] lists refs, they no longer exist. ALWAYS act on the LATEST app_state. Element roles matter: AXTextField/AXTextArea accept typing (type_into); AXButton/AXStaticText/AXGroup are for clicking only — clicking a non-editable element will not open a text field.",
+                    "snapshot": snap_text,
+                    "note": _element_note(snap_text, app_state=True),
                 },
                 ensure_ascii=False,
             )
@@ -692,7 +772,7 @@ def build_computer_tools(
                     "frontmost": result.get("frontmost") or "",
                     "refs": result.get("refs") or 0,
                     "snapshot": snap_text,
-                    "note": "Refs are semantic identities like [axbutton:搜索#1] (role:label#n), so they survive most UI changes. ALWAYS act on the LATEST snapshot; if an action returns fresh_snapshot, re-pick a ref from it. If snapshot is empty/unavailable, you cannot see the desktop — stop and do not claim anything. Element roles matter: AXTextField/AXTextArea accept typing (type_into); AXButton/AXStaticText/AXGroup are for clicking only — clicking a non-editable element will not open a text field.",
+                    "note": _element_note(snap_text, app_state=False),
                 },
                 ensure_ascii=False,
             )
@@ -773,10 +853,12 @@ def build_computer_tools(
         shot_height (and display) from that computer_observe screenshot result. After
         every action read the returned after_preview and only claim what it confirms.
 
-        For typing (type_into / type_text): the ref MUST point to a text field —
-        macOS AXTextField / AXTextArea, Windows Edit / Document / ComboBox. Clicking a
-        static label or a button will NOT make it editable — those are display elements,
-        not input fields.
+        For typing: ``type_into`` takes an OPTIONAL ref — with a ref it types into that
+        text field (macOS AXTextField/AXTextArea; Windows Edit/Document/ComboBox); without a
+        ref it types into the focused field of ``app`` (or the frontmost app), so you never
+        need to invent a ref to fill a search box you just focused. ``type_text`` always
+        types into the frontmost/focused field. Clicking a static label or a button will NOT
+        make it editable — those are display elements, not input fields.
         """
         action = str(kwargs.get("action") or "")
         invalid = _validate_action_args(action, kwargs)
@@ -857,13 +939,20 @@ def build_computer_tools(
             return json.dumps({"error": str(exc)[:500], "error_code": "computer_error"}, ensure_ascii=False)
         if result.get("error_code"):
             error = str(result.get("error") or "")
-            # Self-healing loop for stale refs: the AX tree churns when UI state
-            # changes (popovers/menus), so a ref from an older snapshot is often
+            code = str(result.get("error_code") or "")
+            # Self-healing for stale refs: the accessibility tree churns when the
+            # UI changes (popovers/menus), so a ref from an older snapshot is often
             # gone. Instead of a dead end, re-read the CURRENT tree and hand it
-            # back so the model immediately picks a valid ref.
-            if result.get("error_code") == "computer_error" and ("no AX element for ref" in error or "accessibility_not_trusted" in error):
+            # back so the model immediately picks a valid ref. Both helpers report
+            # the dedicated `stale_ref` code; keep the legacy string match so older
+            # helper binaries (macOS AX / generic) still self-heal.
+            is_stale = code == "stale_ref" or (
+                code == "computer_error"
+                and ("no AX element for ref" in error or "no UIA element for ref" in error or "accessibility_not_trusted" in error)
+            )
+            if is_stale:
                 now = _snapshot_text()
-                payload = {"error": error, "error_code": result["error_code"]}
+                payload = {"error": error, "error_code": code or "stale_ref"}
                 if now is not None:
                     payload["fresh_snapshot"] = now[:COMPUTER_OUTPUT_MAX_CHARS]
                     payload["note"] = "The ref from your previous snapshot is stale (the UI changed). Re-pick a ref from fresh_snapshot above and retry."
@@ -886,7 +975,7 @@ def build_computer_tools(
                 "No require/process/fs/network. Persist across cells via globalThis."
             ),
         )
-        reset: bool = Field(False, description="Discard the worker and all bindings (fresh session).")
+        reset: bool = Field(False, description="Discard the worker and all bindings before running `code` (with no `code`, just reset the session).")
         timeout_ms: int = Field(0, ge=0, le=60000, description="Optional wall timeout for this cell (default 30s, cap 60s).")
 
     def _render_script_blocks(blocks: Any, client: Any, data_dir: Any, session_id: str, vision: bool) -> str | list:
@@ -938,7 +1027,8 @@ def build_computer_tools(
         (``await cua.getApp('Music')``) and then observes and acts on it in ONE call —
         including loops and conditional logic — so a multi-step task (click a field, type,
         press Return, verify) does not need a tool round-trip per step. Bindings persist
-        across calls; set ``reset=true`` to start fresh. Native calls are re-validated by
+        across calls; ``reset=true`` discards the worker and bindings, then runs ``code``
+        (if given) in the fresh session. Native calls are re-validated by
         the app (pause gate, permissions, app identity), so nothing here bypasses safety.
 
         The input ladder is accessibility-first: prefer ``app.setValue(ref, text)`` (most
@@ -952,7 +1042,11 @@ def build_computer_tools(
                 if isinstance(res, dict) and res.get("error_code"):
                     return _render_computer_error(res, client)
                 _recent["computer_script"].clear()
-                return json.dumps({"reset": True, "note": "Computer-use session reset."}, ensure_ascii=False)
+                # reset with no code is a pure session reset; reset + code resets
+                # FIRST and then runs the code in the fresh session (do not silently
+                # discard the code).
+                if not str(code or "").strip():
+                    return json.dumps({"reset": True, "note": "Computer-use session reset."}, ensure_ascii=False)
             if not str(code or "").strip():
                 return json.dumps({"error": "computer_script requires code (or reset=true)", "error_code": "param_error"}, ensure_ascii=False)
             if _loop_guard("computer_script", str(code)):

@@ -368,11 +368,20 @@ class DesktopController {
   async state() {
     this._ensureNotPaused();
     const perms = { input: inputPermission(), screen: screenPermission() };
+    // Authoritative wall-clock for the agent: tasks like "add month+day+hour+minute"
+    // must use the real local time, never a web-search guess. `now` is local ISO;
+    // `utc_offset_minutes` disambiguates if the model needs to convert.
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
     const result = {
       ok: true,
       platform: process.platform,
       paused: this.paused,
       pause_reason: this.pauseReason,
+      now: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+      now_iso: now.toISOString(),
+      timezone: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } })(),
+      utc_offset_minutes: -now.getTimezoneOffset(),
       permissions: {
         input: perms.input.status,
         screen: perms.screen.status,

@@ -148,9 +148,9 @@ internal static class Program
             case "launch":
             {
                 string app = Params.Str(p, "app");
-                bool ok = AppInventory.Launch(app);
+                int pid = AppInventory.Launch(app);
                 Overlay.Pulse();
-                Responder.Ok(id, new Dictionary<string, object> { ["launched"] = app, ["ok"] = ok });
+                Responder.Ok(id, new Dictionary<string, object> { ["launched"] = app, ["ok"] = pid > 0, ["pid"] = pid });
                 break;
             }
 

@@ -263,6 +263,26 @@ def test_script_reset(fake_client_factory):
     assert '"reset": true' in out.lower()
 
 
+def test_script_reset_then_runs_code(fake_client_factory):
+    """`reset=True` together with `code` resets the worker and THEN runs the code.
+    It must never silently discard the code (the old build returned early)."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    ran: dict[str, str] = {}
+
+    class _Recording(_FakeClient):
+        def ax_script(self, code, timeout_ms=0):
+            ran["code"] = code
+            return {"blocks": [{"type": "text", "text": "ran:" + code}], "error": None}
+
+    client = fake_client_factory(_Recording())
+    tool = _script_tool(build_computer_tools(Path("/tmp"), session_id="sess"))
+    out = tool.invoke({"code": "cua.emitText('x')", "reset": True})
+    assert client.reset_called is True
+    assert ran.get("code") == "cua.emitText('x')"
+    assert "ran:cua.emitText('x')" in out
+
+
 def test_script_requires_code(fake_client_factory):
     from coworker.computer.bridge_client import build_computer_tools
 
@@ -314,6 +334,22 @@ def test_observe_app_state_reports_window_and_diff(fake_client_factory):
     assert payload["window"]["title"] == "Test Window"
     assert payload["refs"] == 3
     assert _SNAP_TEXT in payload["snapshot"]
+
+
+def test_snapshot_note_includes_real_sample_refs(fake_client_factory):
+    """The ref examples in the note must come from the ACTUAL tree (so they match
+    the platform's vocabulary: `button:…` on Windows, `axbutton:…` on macOS),
+    never a hardcoded single-platform prefix."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    snap = "[window] Window \"TestApp\"\n  [button:确定#1] Button \"确定\" at (1,2)\n  [edit:搜索框#1] Edit at (3,4)"
+    fake_client_factory(_FakeClient(snapshot_text=snap))
+    (observe, _act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    note = json.loads(observe.invoke({"action": "snapshot"}))["note"]
+    assert "button:确定#1" in note
+    assert "edit:搜索框#1" in note
+    # scope guidance: the tree covers one window, point at list_apps/app_state
+    assert "list_apps" in note
 
 
 def test_observe_screenshot_vision_block(fake_client_factory):
@@ -407,6 +443,41 @@ def test_act_launch_app(fake_client_factory):
     assert "verified" in payload
 
 
+def test_launch_app_verified_when_helper_reports_pid(fake_client_factory):
+    """A launch is verified only by a strong identity signal — the running pid."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    class _Launched(_FakeClient):
+        def ax_launch(self, app):
+            return {"ok": True, "launched": app, "pid": 4242}
+
+    fake_client_factory(_Launched())
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    payload = json.loads(act.invoke({"action": "launch_app", "app": "Calculator"}))
+    assert payload["verified"] is True
+    assert payload["pid"] == 4242
+
+
+def test_launch_app_unverified_when_not_resolvable(fake_client_factory):
+    """A launch that cannot be confirmed (no pid / no resolved process) must NOT be
+    reported as success — the old build treated any frontmost change (e.g. a
+    Windows "cannot find" dialog) as proof of a launch."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    class _NotLaunched(_FakeClient):
+        def ax_launch(self, app):
+            return {"ok": False, "launched": app, "pid": -1}
+
+        def ax_resolve_app(self, app):
+            return {"selector": app}  # no pid
+
+    fake_client_factory(_NotLaunched())
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    payload = json.loads(act.invoke({"action": "launch_app", "app": "Preview"}))
+    assert payload["verified"] is False
+    assert "NOT confirm" in payload["note"]
+
+
 def test_act_type_text_is_always_literal(fake_client_factory):
     """Text actions type literal strings — '+' and key-name words are just text.
 
@@ -477,6 +548,32 @@ def test_stale_ref_self_heals_with_fresh_snapshot(fake_client_factory):
     assert "fresh_snapshot" in payload
     assert payload["fresh_snapshot"] == _SNAP_TEXT
     assert "stale" in payload["note"]
+
+
+def test_stale_ref_code_self_heals_with_fresh_snapshot(fake_client_factory):
+    """Both helpers report the dedicated `stale_ref` code; the backend must
+    self-heal on the CODE (not a macOS-only error string)."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient(ax_act=_PERM_ERR("stale_ref", "ref button:确定#1 no longer exists in pid 42")))
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    payload = json.loads(act.invoke({"action": "click_ref", "ref": "button:确定#1"}))
+    assert payload["error_code"] == "stale_ref"
+    assert payload["fresh_snapshot"] == _SNAP_TEXT
+    assert "stale" in payload["note"]
+
+
+def test_type_into_without_ref_types_into_focused_field(fake_client_factory):
+    """type_into's `ref` is optional in the catalog: with no ref it must fall back
+    to typing into the focused field, never a hard param_error."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    client = fake_client_factory(_FakeClient(snapshot_text=_SNAP_TEXT))
+    (_observe, act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = act.invoke({"action": "type_into", "text": "hello", "submit": True})
+    payload = json.loads(out)
+    assert payload.get("error_code") != "param_error"
+    assert ("input_text", "") in client.calls
 
 
 def test_type_into_passes_submit(fake_client_factory):

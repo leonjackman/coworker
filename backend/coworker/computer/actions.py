@@ -51,7 +51,7 @@ _APP_DESC = "Target app to act on (macOS display name or bundle id; Windows proc
 COMPUTER_ACTIONS: tuple[Action, ...] = (
     Action(
         "launch_app",
-        (Param("app", required=True, description="macOS app display name (e.g. Calculator) / bundle id (com.apple.calculator) / .app path; Windows process name or exe path (e.g. notepad, calc.exe). Localized names resolve automatically."),),
+        (Param("app", required=True, description="macOS: app display name (e.g. Calculator), bundle id (com.apple.calculator), or .app path. Windows: executable / App Paths name (e.g. notepad, mspaint, calc.exe) or a full path — localized display names do not resolve."),),
         description="Open an installed app.",
         observation_free=True,
     ),
@@ -72,11 +72,11 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
         "type_into",
         (
             Param("text", required=True, description=_TEXT_DESC),
-            Param("ref", description="Element ref of the input field (AXTextField/AXTextArea)."),
+            Param("ref", description="Element ref of the input field (macOS AXTextField/AXTextArea; Windows Edit/Document/ComboBox). Omit to type into the currently focused field of `app` (or the frontmost app)."),
             Param("submit", "boolean", description="Press Enter after typing (search/submit fields need it while focused)."),
             Param("app", description=_APP_DESC),
         ),
-        description="Type literal text into a focused field.",
+        description="Type literal text into a text field (by ref) or the focused field.",
         locator="ref",
     ),
     Action(

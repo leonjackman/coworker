@@ -2,6 +2,7 @@
 // Mirrors macOS AppInventory.swift with Windows process/window semantics.
 
 using System.Diagnostics;
+using Microsoft.Win32;
 
 namespace CwAutomaWin;
 
@@ -75,21 +76,42 @@ internal static class AppInventory
     // Windows has no cheap "installed apps" inventory; return running windows.
     public static List<Entry> Installed() => Running();
 
+    private static string StripExe(string s) =>
+        s.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? s.Substring(0, s.Length - 4) : s;
+
+    private static string TryFileName(string path)
+    {
+        try { return System.IO.Path.GetFileName(path) ?? ""; } catch { return ""; }
+    }
+
     public static int ResolvePid(string selector)
     {
         if (string.IsNullOrWhiteSpace(selector)) return -1;
         string s = selector.Trim();
         if (int.TryParse(s, out int numeric) && numeric > 0) return numeric;
+        // Process names never include ".exe" (e.g. "notepad"), so compare against a
+        // suffix-stripped form too — otherwise `notepad.exe` never resolves.
+        string bare = StripExe(s);
 
         var procs = Process.GetProcesses();
-        // 1) exact process name
-        foreach (var p in procs) { try { if (string.Equals(p.ProcessName, s, StringComparison.OrdinalIgnoreCase)) return p.Id; } catch { } }
+        // 1) exact process name (tolerating an optional .exe suffix)
+        foreach (var p in procs) { try { if (string.Equals(p.ProcessName, s, StringComparison.OrdinalIgnoreCase) || string.Equals(p.ProcessName, bare, StringComparison.OrdinalIgnoreCase)) return p.Id; } catch { } }
         // 2) window title contains
-        foreach (var p in procs) { try { if (!string.IsNullOrEmpty(p.MainWindowTitle) && p.MainWindowTitle.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0) return p.Id; } catch { } }
-        // 3) process-name suffix / substring
-        foreach (var p in procs) { try { if (p.ProcessName.IndexOf(s, StringComparison.OrdinalIgnoreCase) >= 0) return p.Id; } catch { } }
-        // 4) executable path
-        foreach (var p in procs) { try { if (string.Equals(TryPath(p), s, StringComparison.OrdinalIgnoreCase)) return p.Id; } catch { } }
+        foreach (var p in procs) { try { if (!string.IsNullOrEmpty(p.MainWindowTitle) && p.MainWindowTitle.IndexOf(bare, StringComparison.OrdinalIgnoreCase) >= 0) return p.Id; } catch { } }
+        // 3) process-name substring
+        foreach (var p in procs) { try { if (p.ProcessName.IndexOf(bare, StringComparison.OrdinalIgnoreCase) >= 0) return p.Id; } catch { } }
+        // 4) executable path (full path or file name)
+        foreach (var p in procs)
+        {
+            try
+            {
+                string path = TryPath(p);
+                if (string.Equals(path, s, StringComparison.OrdinalIgnoreCase)) return p.Id;
+                string file = TryFileName(path);
+                if (string.Equals(file, s, StringComparison.OrdinalIgnoreCase) || string.Equals(file, bare, StringComparison.OrdinalIgnoreCase)) return p.Id;
+            }
+            catch { }
+        }
         return -1;
     }
 
@@ -132,27 +154,104 @@ internal static class AppInventory
         return false;
     }
 
-    public static bool Launch(string app)
+    // A small set of Windows shell aliases that are not real files on PATH and are
+    // normally started via ShellExecute (Store/UWP stubs, protocol handlers).
+    private static readonly HashSet<string> ShellAliases = new(StringComparer.OrdinalIgnoreCase)
     {
-        if (string.IsNullOrWhiteSpace(app)) throw new HelperError("param_error", "launch requires app");
+        "calc", "calc.exe", "notepad", "explorer", "control", "taskmgr", "mspaint",
+        "snippingtool", "ms-settings", "shell:appsFolder",
+    };
+
+    /// <summary>Resolve an app token to a launchable executable path, or null.</summary>
+    private static string FindExecutable(string app)
+    {
         try
         {
-            Process.Start(new ProcessStartInfo(app) { UseShellExecute = true });
-            Thread.Sleep(300);
-            return true;
+            if (File.Exists(app)) return app;
+            // A path-like token that does not exist: never hand it to the shell
+            // (ShellExecute would pop a "Windows cannot find" dialog).
+            if (app.IndexOfAny(new[] { '\\', '/' }) >= 0) return null;
+
+            string name = app.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? app : app + ".exe";
+
+            foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(dir)) continue;
+                    var candidate = Path.Combine(dir.Trim(), name);
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch { /* bad PATH entry */ }
+            }
+
+            foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
+            {
+                try
+                {
+                    using var key = hive.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\" + name);
+                    if (key?.GetValue(null) is string full && !string.IsNullOrEmpty(full) && File.Exists(full))
+                        return full;
+                }
+                catch { /* inaccessible hive */ }
+            }
         }
-        catch
+        catch { /* ignore */ }
+        return null;
+    }
+
+    private static bool LooksLikeShellTarget(string app) =>
+        app.Contains(':') || ShellAliases.Contains(app);
+
+    /// <summary>
+    /// Launch an app and return the pid of the running instance, or -1 when it
+    /// could not be confirmed. Callers must treat 0/-1 as failure: the old helper
+    /// returned true whenever Process.Start did not throw, which reported success
+    /// even when Windows showed a "cannot find" dialog instead of launching.
+    /// </summary>
+    public static int Launch(string app)
+    {
+        if (string.IsNullOrWhiteSpace(app)) throw new HelperError("param_error", "launch requires app");
+        app = app.Trim();
+
+        string exe = FindExecutable(app);
+        if (exe != null)
+        {
+            try { Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }); }
+            catch (Exception e) { throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}"); }
+        }
+        else if (LooksLikeShellTarget(app))
+        {
+            try { Process.Start(new ProcessStartInfo(app) { UseShellExecute = true }); }
+            catch (Exception e) { throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}"); }
+        }
+        else
+        {
+            throw new HelperError(
+                "launch_failed",
+                $"could not resolve \"{app}\" to an executable",
+                "On Windows, launch_app takes an executable or App Paths entry (e.g. notepad, mspaint, calc.exe) " +
+                "or a full path — not a localized display name. Refusing to hand an unknown name to the shell.");
+        }
+
+        // Confirm the app actually started and, if so, bring it to the foreground.
+        int pid = -1;
+        for (int i = 0; i < 20; i++)
+        {
+            Thread.Sleep(200);
+            pid = ResolvePid(app);
+            if (pid > 0) break;
+        }
+        if (pid > 0)
         {
             try
             {
-                Process.Start(new ProcessStartInfo("cmd.exe", $"/c start \"\" \"{app}\"") { UseShellExecute = false, CreateNoWindow = true });
-                Thread.Sleep(300);
-                return true;
+                var p = Process.GetProcessById(pid);
+                p.Refresh();
+                if (p.MainWindowHandle != IntPtr.Zero) NativeMethods.ActivateWindow(p.MainWindowHandle);
             }
-            catch (Exception e)
-            {
-                throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}");
-            }
+            catch { /* exited already */ }
         }
+        return pid;
     }
 }
