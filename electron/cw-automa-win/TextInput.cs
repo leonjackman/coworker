@@ -68,11 +68,25 @@ internal static class TextInput
         return outcome;
     }
 
+    // The user's prior clipboard TEXT is captured and restored after the paste so
+    // agent typing does not silently destroy it (mirrors macOS Clipboard.paste).
+    // Only text is restorable via WinForms Clipboard; a prior image/non-text
+    // clipboard cannot be preserved and is left as the pasted text.
     public static void PasteText(string text)
     {
+        string prev = null;
+        bool hadText = false;
+        try { hadText = Clipboard.ContainsText(); if (hadText) prev = Clipboard.GetText(); }
+        catch { /* clipboard locked by another process */ }
+
         try { Clipboard.SetText(text ?? ""); }
-        catch { /* clipboard busy; try again */ Thread.Sleep(60); try { Clipboard.SetText(text ?? ""); } catch { } }
+        catch { Thread.Sleep(60); try { Clipboard.SetText(text ?? ""); } catch { } }
         Input.PressCombo("v", new[] { "ctrl" }, 1);
-        Thread.Sleep(80);
+        Thread.Sleep(120); // let the target read the clipboard before restoring
+
+        if (hadText && prev != null)
+        {
+            try { Clipboard.SetText(prev); } catch { /* leave pasted text */ }
+        }
     }
 }

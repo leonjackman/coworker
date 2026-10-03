@@ -215,12 +215,31 @@ internal static class Input
     }
 
     /// Type arbitrary text via Unicode key events (layout-independent).
+    ///
+    /// Iterates by Unicode SCALAR, not by UTF-16 code unit: a surrogate pair
+    /// (emoji, rare CJK) is emitted as high+low surrogate in ONE SendInput call
+    /// so the target composes it. Sending the two halves in separate calls (the
+    /// old behavior) left many apps with two replacement glyphs.
     public static void TypeUnicode(string text)
     {
         if (string.IsNullOrEmpty(text)) return;
-        foreach (char ch in text)
+        int i = 0;
+        while (i < text.Length)
         {
-            Send(Key(0, ch, KEYEVENTF_UNICODE), Key(0, ch, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+            if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+            {
+                ushort hi = text[i], lo = text[i + 1];
+                Send(
+                    Key(0, hi, KEYEVENTF_UNICODE), Key(0, hi, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
+                    Key(0, lo, KEYEVENTF_UNICODE), Key(0, lo, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+                i += 2;
+            }
+            else
+            {
+                ushort u = text[i];
+                Send(Key(0, u, KEYEVENTF_UNICODE), Key(0, u, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+                i += 1;
+            }
         }
     }
 }

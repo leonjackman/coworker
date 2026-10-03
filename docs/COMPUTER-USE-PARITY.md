@@ -57,34 +57,33 @@ divergence is printed as an expected warning).
 | `overlay` | true | true |
 | `physical_displays` | false (logical points) | true (physical px) |
 | `ax` / `uia` | true / false | false / true |
-| `input_model` | `per_pid` | `global` |
-| `background_input` | true | **false** |
-| `clipboard_restore` | true | **false** |
-| `target_confirmation` | true | **false** |
-| `unicode_graphemes` | true | **false** |
-| `middle_click` | **false** | true |
-| `keypad_keys` | true | **false** |
+| `input_model` | `per_pid` | `global` (P3 research) |
+| `background_input` | true | **false** (P3 research) |
+| `clipboard_restore` | true | true (P1 done) |
+| `target_confirmation` | true | **false** (P1 todo) |
+| `unicode_graphemes` | true | true (P1 done) |
+| `middle_click` | **false** (P1 todo) | true |
+| `keypad_keys` | true | **false** (P1 todo) |
 | `permission_model` | `tcc` | `uipi` |
 
-Bold = the lagging side. The P1 parity work flips the Windows flags to `true`
-(clipboard_restore, target_confirmation, unicode_graphemes) and adds mac-side
-`middle_click`/keypad tokens; when a flag flips, `_capability_notes()` guidance
-disappears automatically.
+Bold = the lagging side. When a flag flips, the corresponding
+`bridge_client._capability_notes()` guidance disappears automatically (it is
+derived from these values, not hardcoded).
 
 ---
 
 ## 3. Known gaps (bilateral)
 
 ### Windows behind macOS
-1. Coordinate injection moves the real pointer; no background input (`Input.cs` vs `Injection.swift` `postToPid`).
-2. `permissions` / `permissions_request` are placeholders (hardcoded granted); real gate is UIPI (`Program.cs`, `Elevation.cs`).
-3. Clipboard text entry does not restore the user clipboard; no paste receipt (`TextInput.cs` vs `TextInput.swift`).
-4. Unicode typed per UTF-16 code unit (emoji/surrogate unsafe) (`Input.cs`).
-5. `list_apps(scope='installed')` returns running apps (stub) (`AppInventory.cs`).
-6. `launch` cannot resolve localized display names / bundle ids (`AppInventory.cs`).
-7. `app_state` silently retargets to the frontmost app when the requested app is missing (`Program.cs`) instead of `no_target`.
-8. `scroll`/`scroll_to` anchor at the real cursor / ignore pid (`Program.cs`).
-9. `cursor_demo` ignores `seconds` (`Program.cs`).
+1. Coordinate injection moves the real pointer; no background input (`Input.cs` vs `Injection.swift` `postToPid`). — **P3 research** (documented via `input_model:global`).
+2. `permissions` / `permissions_request` are placeholders (hardcoded granted); real gate is UIPI (`Program.cs`, `Elevation.cs`). — *Windows has no TCC-equivalent; P3 makes UIPI a first-class permission state.*
+3. ~~Clipboard text entry does not restore the user clipboard~~ — **fixed P1** (`TextInput.PasteText` restores prior text). Paste *receipt* (`target_confirmation`) still todo.
+4. ~~Unicode typed per UTF-16 code unit~~ — **fixed P1** (`Input.TypeUnicode` groups surrogate pairs in one SendInput).
+5. ~~`list_apps(scope='installed')` returns running apps (stub)~~ — **fixed P1** (`AppInventory.Installed` enumerates Start Menu shortcuts + App Paths).
+6. ~~`launch` cannot resolve localized display names~~ — **fixed P1** (`launch` falls back to a Start Menu shortcut by display name; confirms via new windowed pid).
+7. ~~`app_state` silently retargets to the frontmost app~~ — **fixed P1** (`HandleSnapshot` strict `no_target`).
+8. `scroll`/`scroll_to` anchor at the real cursor / ignore pid; `scroll_to` defaults to (0,0) when x/y omitted (`Program.cs`). — **P1 todo**.
+9. ~~`cursor_demo` ignores `seconds`~~ — **fixed P1** (animates for the requested duration, bounded ≤15s).
 
 ### macOS behind Windows
 10. No middle-click (`main.swift` `click_point`); no keypad/`fn` tokens; `delete` semantics differ (`KeyMapping.swift` vs `Input.cs`); dead `realTypeInto`.

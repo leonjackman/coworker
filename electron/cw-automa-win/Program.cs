@@ -94,17 +94,17 @@ internal static class Program
                     ["version"] = 4,
                     ["methods"] = Methods,
                     // Bilateral capability manifest (Windows side). Keys are documented in
-                    // docs/COMPUTER-USE-PARITY.md. Values reflect CURRENT behavior; the P1
-                    // parity work flips clipboard_restore/target_confirmation/
-                    // unicode_graphemes to true and permission_model semantics.
+                    // docs/COMPUTER-USE-PARITY.md. Values reflect CURRENT behavior; P1 flips
+                    // them as parity lands (clipboard_restore + unicode_graphemes now done;
+                    // target_confirmation still false until a real paste receipt exists).
                     ["features"] = new Dictionary<string, object>
                     {
                         ["overlay"] = true, ["physical_displays"] = true, ["ax"] = false, ["uia"] = true,
                         ["input_model"] = "global",
                         ["background_input"] = false,
-                        ["clipboard_restore"] = false,
+                        ["clipboard_restore"] = true,
                         ["target_confirmation"] = false,
-                        ["unicode_graphemes"] = false,
+                        ["unicode_graphemes"] = true,
                         ["middle_click"] = true,
                         ["keypad_keys"] = false,
                         ["permission_model"] = "uipi",
@@ -321,10 +321,19 @@ internal static class Program
                 break;
 
             case "cursor_demo":
+            {
+                double seconds = Math.Clamp(Params.Dbl(p, "seconds", 3), 0.5, 15);
                 Overlay.ShowCursor();
-                Overlay.Pulse();
-                Responder.Ok(id, new Dictionary<string, object> { ["demo"] = true });
+                // Animate for the requested duration (bounds the call: ≤15s).
+                var deadline = DateTime.UtcNow.AddSeconds(seconds);
+                while (DateTime.UtcNow < deadline)
+                {
+                    Overlay.Pulse();
+                    Thread.Sleep(250);
+                }
+                Responder.Ok(id, new Dictionary<string, object> { ["demo"] = true, ["seconds"] = seconds });
                 break;
+            }
 
             case "cursor_position":
             {
@@ -388,7 +397,10 @@ internal static class Program
     {
         int depth = Params.Int(p, "depth", UiaTree.TreeDepth);
         string requestedApp = Params.Str(p, "app");
-        int pid = ResolveAppPid(requestedApp);
+        // STRICT: an explicitly requested app must resolve exactly. Never silently
+        // fall back to the frontmost app — that returned a DIFFERENT app's tree
+        // and let the model act on the wrong window (macOS throws no_target).
+        int pid = ResolveRequestedPid(requestedApp);
         if (pid <= 0) throw new HelperError("no_target", $"No running application matches '{requestedApp}'");
         Elevation.EnsureNotBlocked(pid);
 
@@ -505,6 +517,18 @@ internal static class Program
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+    /// <summary>
+    /// Resolve an explicitly-requested app selector to a pid. Returns -1 (never a
+    /// wrong-app fallback) when an explicit selector does not match. An empty
+    /// selector means "the frontmost app".
+    /// </summary>
+    private static int ResolveRequestedPid(string app)
+    {
+        if (string.IsNullOrEmpty(app)) return AppInventory.FrontmostPid();
+        if (int.TryParse(app, out int n) && n > 0) return n;
+        return AppInventory.ResolvePid(app);
+    }
+
     private static int ResolveAppPid(string app)
     {
         if (string.IsNullOrEmpty(app)) return AppInventory.FrontmostPid();

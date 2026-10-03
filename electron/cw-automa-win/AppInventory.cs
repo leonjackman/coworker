@@ -73,8 +73,92 @@ internal static class AppInventory
         return list;
     }
 
-    // Windows has no cheap "installed apps" inventory; return running windows.
-    public static List<Entry> Installed() => Running();
+    // A real "installed apps" inventory: Start Menu shortcuts (per-user + all
+    // users) plus the registry `App Paths` entries. This is the set a user can
+    // actually launch by name (including LOCALIZED Start Menu names), unlike the
+    // old stub that just returned running windows.
+    public static List<Entry> Installed()
+    {
+        var byName = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dir in new[]
+        {
+            SafeFolder(Environment.SpecialFolder.CommonStartMenu),
+            SafeFolder(Environment.SpecialFolder.StartMenu),
+        })
+        {
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+            // IgnoreInaccessible: Start Menu trees routinely contain a protected
+            // subfolder; without this the whole enumeration throws (and the old
+            // lazy form threw mid-iteration, so `installed` came back empty).
+            var opts = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = 0,
+                MatchCasing = MatchCasing.CaseInsensitive,
+            };
+            try
+            {
+                foreach (var lnk in Directory.EnumerateFiles(dir, "*.lnk", opts))
+                {
+                    try
+                    {
+                        string name = System.IO.Path.GetFileNameWithoutExtension(lnk);
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        if (!byName.ContainsKey(name))
+                            byName[name] = new Entry { AppId = name, DisplayName = name, Path = lnk, Pid = 0 };
+                    }
+                    catch { /* unreadable shortcut */ }
+                }
+            }
+            catch { /* keep whatever was enumerated */ }
+        }
+
+        foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
+        {
+            try
+            {
+                using var root = hive.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths");
+                if (root == null) continue;
+                foreach (var sub in root.GetSubKeyNames())
+                {
+                    try
+                    {
+                        using var key = root.OpenSubKey(sub);
+                        if (key?.GetValue(null) is not string full || string.IsNullOrEmpty(full)) continue;
+                        string name = System.IO.Path.GetFileNameWithoutExtension(sub);
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        if (!byName.ContainsKey(name))
+                            byName[name] = new Entry { AppId = name, DisplayName = name, Path = full, Pid = 0 };
+                    }
+                    catch { /* inaccessible entry */ }
+                }
+            }
+            catch { /* inaccessible hive */ }
+        }
+
+        var list = new List<Entry>(byName.Values);
+        list.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase));
+        return list;
+    }
+
+    private static string SafeFolder(Environment.SpecialFolder folder)
+    {
+        try { return Environment.GetFolderPath(folder); } catch { return ""; }
+    }
+
+    /// <summary>Start-Menu shortcut matching a (possibly localized) display name.</summary>
+    private static string FindInstalledShortcut(string name)
+    {
+        foreach (var e in Installed())
+        {
+            if (string.Equals(e.DisplayName, name, StringComparison.OrdinalIgnoreCase) &&
+                e.Path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) && File.Exists(e.Path))
+                return e.Path;
+        }
+        return null;
+    }
 
     private static string StripExe(string s) =>
         s.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? s.Substring(0, s.Length - 4) : s;
@@ -214,33 +298,46 @@ internal static class AppInventory
         if (string.IsNullOrWhiteSpace(app)) throw new HelperError("param_error", "launch requires app");
         app = app.Trim();
 
+        var before = new HashSet<int>();
+        foreach (var p in Process.GetProcesses()) { try { before.Add(p.Id); } catch { /* exited */ } }
+
         string exe = FindExecutable(app);
+        bool viaShortcut = false;
         if (exe != null)
         {
-            try { Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true }); }
-            catch (Exception e) { throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}"); }
+            Start(exe, app);
         }
         else if (LooksLikeShellTarget(app))
         {
-            try { Process.Start(new ProcessStartInfo(app) { UseShellExecute = true }); }
-            catch (Exception e) { throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}"); }
+            Start(app, app);
         }
         else
         {
-            throw new HelperError(
-                "launch_failed",
-                $"could not resolve \"{app}\" to an executable",
-                "On Windows, launch_app takes an executable or App Paths entry (e.g. notepad, mspaint, calc.exe) " +
-                "or a full path — not a localized display name. Refusing to hand an unknown name to the shell.");
+            // Localized Start Menu display name → launch its shortcut.
+            string lnk = FindInstalledShortcut(app);
+            if (lnk == null)
+            {
+                throw new HelperError(
+                    "launch_failed",
+                    $"could not resolve \"{app}\" to an executable",
+                    "On Windows, launch_app takes an executable or App Paths entry (e.g. notepad, mspaint, " +
+                    "calc.exe), a full path, or an installed Start Menu app name. Refusing to hand an unknown " +
+                    "name to the shell.");
+            }
+            viaShortcut = true;
+            Start(lnk, app);
         }
 
         // Confirm the app actually started and, if so, bring it to the foreground.
+        // A Start-Menu launch may register under a process name unrelated to the
+        // display name, so also accept a newly appeared windowed process.
         int pid = -1;
         for (int i = 0; i < 20; i++)
         {
             Thread.Sleep(200);
             pid = ResolvePid(app);
             if (pid > 0) break;
+            if (viaShortcut) { pid = FindNewWindowedPid(before); if (pid > 0) break; }
         }
         if (pid > 0)
         {
@@ -253,5 +350,21 @@ internal static class AppInventory
             catch { /* exited already */ }
         }
         return pid;
+    }
+
+    private static void Start(string target, string app)
+    {
+        try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); }
+        catch (Exception e) { throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}"); }
+    }
+
+    private static int FindNewWindowedPid(HashSet<int> before)
+    {
+        foreach (var p in Process.GetProcesses())
+        {
+            try { if (!before.Contains(p.Id) && p.MainWindowHandle != IntPtr.Zero) return p.Id; }
+            catch { /* access denied / exited */ }
+        }
+        return -1;
     }
 }

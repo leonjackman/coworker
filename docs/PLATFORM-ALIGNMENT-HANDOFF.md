@@ -31,8 +31,8 @@ manifest, failures are loud and early, and drift is caught by contract tests.
 
 | Phase | Scope | Status |
 |---|---|---|
-| **P0** | capability manifest + conformance + low-risk correctness fixes | **done** (see below) |
-| **P1** | Windows Computer Use B1 behavioral parity | pending |
+| **P0** | capability manifest + conformance + low-risk correctness fixes | **done** |
+| **P1** | Windows Computer Use B1 behavioral parity | **partial** (5/9 done — see below) |
 | **P2** | Workflow robustness (inference, gating, ActionSpec, compaction, circuit breaker) | pending |
 | **P3** | Capability-gate refactor; Windows input research; mac small gaps | pending |
 
@@ -58,24 +58,34 @@ manifest, failures are loud and early, and drift is caught by contract tests.
 
 ## P1 — Windows Computer Use B1 parity
 Files: `electron/cw-automa-win/{Program.cs,Input.cs,TextInput.cs,AppInventory.cs,UiaActions.cs,Overlay.cs}`.
-Each item flips a manifest flag in `Program.cs` (and notes can be removed from
-`bridge_client._capability_notes` when no longer true).
 
-1. **Permissions semantics** (`permissions`/`permissions_request`): report
-   capability + real state (UIPI/elevation), never hardcoded `granted`; make the
-   Electron non-darwin `inputPermission`/`screenPermission` (`desktop-controller.js`)
-   stop short-circuiting to `granted`. → manifest `permission_model: uipi` stays,
-   but the value becomes meaningful.
-2. **Clipboard restore + paste receipt** in `TextInput.cs` (mirror
-   `TextInput.swift`). Flip `clipboard_restore` / `target_confirmation`.
-3. **Unicode grapheme-safe typing** (`Input.cs`). Flip `unicode_graphemes`.
-4. **`list_apps(installed)`** real enumeration (`AppInventory.cs`).
-5. **`launch` localized-name/alias resolution** (`AppInventory.cs`).
-6. **`app_state` missing-app → `no_target`** (`Program.cs`), not frontmost fallback.
-7. **`scroll`/`scroll_to`** anchor + coordinate defaults (`Program.cs`).
-8. **`cursor_demo(seconds)`** honors duration (`Program.cs`).
-9. **mac small gaps**: middle-click, keypad/`fn` tokens, unify `delete`
-   semantics, delete dead `realTypeInto` (`cw-automa/src/*.swift`).
+**Done (verified: builds clean; conformance passes; `installed`=148, `no_target`
+and `cursor_demo` confirmed via a helper probe):**
+- **Clipboard restore** — `TextInput.PasteText` saves/restores prior text (item 3).
+- **Unicode grapheme/surrogate-safe typing** — `Input.TypeUnicode` groups
+  surrogate pairs in one `SendInput` (item 4). Flip `unicode_graphemes` ✅.
+- **`list_apps(installed)`** real inventory — Start Menu shortcuts + App Paths
+  (`AppInventory.Installed`) (item 5).
+- **`launch` localized display name** — falls back to a Start Menu shortcut,
+  confirmed via a newly appeared windowed pid (`AppInventory.Launch`) (item 6).
+- **`app_state`/`snapshot` strict `no_target`** — no silent frontmost retarget
+  (`Program.HandleSnapshot` + `ResolveRequestedPid`) (item 7).
+- **`cursor_demo(seconds)`** honors duration, bounded ≤15s (item 9 of old list).
+
+**Todo:**
+1. **Paste receipt / `target_confirmation`** — `TextInput` should confirm the
+   clipboard paste landed (readback/target-change), not optimistically `true`.
+2. **Permissions semantics** — surface UIPI/elevation as a first-class
+   permission state (keep `permission_model: uipi`).
+3. **`scroll`/`scroll_to`** anchor + coordinate defaults (mac falls back to the
+   last pointer; Windows defaults to (0,0) when x/y omitted).
+4. **mac small gaps** (do on macOS after the switch): middle-click, keypad/`fn`
+   tokens, unify `delete` semantics, remove dead `realTypeInto`.
+
+> Build note: the built exe is locked while the desktop app runs. Publish to a
+> temp dir (`-o <temp>`) or quit the app; then
+> `node scripts/automation-conformance.js <helper>` and the probe pattern in
+> `PLATFORM-ALIGNMENT-HANDOFF` verification.
 
 Acceptance: `node scripts/automation-conformance.js <helper>` green on both; the
 flipped flags documented in `COMPUTER-USE-PARITY.md`; real-machine E2E on Windows
