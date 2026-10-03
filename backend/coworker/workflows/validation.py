@@ -232,6 +232,7 @@ from .platform_support import MACOS_ONLY_TOKENS as _MACOS_ONLY  # noqa: E402
 from .platform_support import PLATFORM_ONLY_TOOLS as _PLATFORM_ONLY_TOOLS  # noqa: E402
 from .platform_support import WINDOWS_ONLY_TOKENS as _WINDOWS_ONLY  # noqa: E402
 from .platform_support import explicit_tags as _explicit_platform_tags  # noqa: E402
+from .platform_support import infer_platforms as _infer_platforms  # noqa: E402
 _GUI_KINDS = ("browser", "computer", "app")
 _SEMANTIC_LOCATOR_KEYS = ("role", "name", "selector", "ref", "identifier", "text")
 
@@ -289,6 +290,18 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
 
     explicit_platform = _explicit_platform_tags(workflow.platform)
     live_tools = bool(getattr(registry, "live_tools", False))
+
+    # Auto-inference: when the steps clearly imply exactly one OS but the author
+    # declared none, suggest setting it once at the top level (advisory).
+    inferred = _infer_platforms(workflow)
+    if len(inferred) == 1 and not explicit_platform:
+        tag = next(iter(inferred))
+        diags.append(Diagnostic(
+            "", "platform", "platform_suggestion",
+            f"steps use {tag}-only tools/commands — declare `platform: {tag}` at the top level "
+            "so the workflow is rejected up-front on other systems instead of failing at run time",
+            severity="warning",
+        ))
 
     def walk(steps: list[Step]) -> None:
         for step in steps:

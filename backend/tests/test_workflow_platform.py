@@ -51,6 +51,16 @@ def test_infer_platforms():
     assert ps.infer_platforms(_wf("", _step("browser", do="navigate", params={"url": "https://x"}))) == set()
 
 
+def test_native_script_tools_are_declared_in_catalog():
+    # Declared offline (not only via live introspection) and pinned to their OS.
+    from coworker.workflows.capabilities import CapabilityRegistry
+
+    names = {a.name for a in CapabilityRegistry.declared().actions("tool")}
+    assert "run_applescript" in names and "run_powershell" in names
+    assert ps.PLATFORM_ONLY_TOOLS["run_applescript"] == {"darwin"}
+    assert ps.PLATFORM_ONLY_TOOLS["run_powershell"] == {"win32"}
+
+
 def test_workflow_supports():
     other = "win32" if ps.current_tag() == "darwin" else "darwin"
     ok, declared, reason = ps.workflow_supports(_wf(other, _step("command", params={"command": ["echo"]})))

@@ -263,6 +263,54 @@ steps:
     assert "a\\nb" in code and "a\nb" not in code
 
 
+def test_repeated_failure_guidance(manager):
+    flow = """name: flaky
+description: d
+steps:
+  - id: "id:1"
+    kind: command
+    do: run
+    params: {command: "python x.py"}
+    description: run
+  - id: "id:2"
+    kind: assert
+    post: ["result.asserted"]
+    description: verify
+"""
+    manager.create(flow)
+    env = FakeEnv(
+        command=lambda argv, cwd, timeout: {
+            "return_code": 1, "stdout": "", "stderr": "boom", "timed_out": False,
+        }
+    )
+    manager.run("flaky", env=env)
+    assert manager.repeated_failure_guidance("flaky") == ""  # below threshold
+    manager.run("flaky", env=env)
+    manager.run("flaky", env=env)
+    guidance = manager.repeated_failure_guidance("flaky")
+    assert "STOP rewriting" in guidance and "id:1" in guidance
+
+
+def test_capabilities_view_is_compact(manager):
+    import json
+
+    full = json.dumps(manager.capabilities(), ensure_ascii=False)
+    overview = manager.capabilities_view()
+    assert "kind_overview" in overview and "kinds" not in overview
+    assert len(json.dumps(overview, ensure_ascii=False)) < len(full) // 5
+
+    comp = manager.capabilities_view(["computer"])
+    assert len(comp["kinds"]) == 1 and comp["kinds"][0]["kind"] == "computer"
+    assert all("params" in a and "action" in a for a in comp["kinds"][0]["actions"])
+    # Compact view drops the noisy per-action description.
+    assert all("description" not in a for a in comp["kinds"][0]["actions"])
+
+    verbose = manager.capabilities_view(["computer"], verbose=True)
+    assert len(verbose["kinds"]) == 1 and "step_keys" in verbose
+
+    assert manager.capabilities_view(["no-such-kind"])["unknown_kinds"] == ["no-such-kind"]
+
+
 def test_agentic_step_uses_goal_as_prompt(manager):
     """The agentic prompt must be the natural-language goal, not the do label."""
     flow = """name: ag-flow

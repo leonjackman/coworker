@@ -126,6 +126,21 @@ def test_missing_platform_is_error():
     assert "missing_platform" in _codes(diags)
 
 
+def test_platform_suggestion_advisory():
+    # An OS-specific step with NO declared platform → advisory to declare it once.
+    body = (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: \"osascript -e 'return 1'\"}\n  description: mac\n  post: [ok]\n"
+    )
+    diags = _diags(_HEAD + body)
+    assert "platform_suggestion" in _codes(diags, "warning")
+    assert "missing_platform" in _codes(diags)  # still an error until declared
+
+    # Declaring it clears the suggestion.
+    head = _HEAD.replace("steps:\n", "platform: darwin\nsteps:\n")
+    assert "platform_suggestion" not in _codes(_diags(head + body), "warning")
+
+
 def test_unzip_is_not_macos_only():
     # `unzip` is cross-platform (allowlisted everywhere); it must NOT demand
     # `platform: darwin`.

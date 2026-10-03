@@ -412,6 +412,8 @@ def build_workspace_tools(
         inputs: dict | None = None,
         run_id: str = "",
         resume: bool = False,
+        kinds: list[str] | None = None,
+        verbose: bool = False,
     ) -> str:
         """Author, inspect and deterministically run saved workflows.
 
@@ -429,8 +431,10 @@ def build_workspace_tools(
         no one-command-does-everything shell blobs, and a verification step at the
         end. An INTENT-ONLY node (goal set, no `do`) is allowed: at run time the
         agent resolves the binding, verifies it, and writes it back. Call action=spec
-        for the full spec and action=capabilities for the valid kinds/actions/params,
-        then action=validate (static) and action=simulate (dry-run). create/update
+        for the full spec and action=capabilities for the valid kinds/actions/params
+        (returns a tiny overview by default; pass kinds=[...] for the actions/params
+        of specific kinds — do not fetch every kind), then action=validate (static)
+        and action=simulate (dry-run). create/update
         REJECT non-conforming workflows with diagnostics; fix them and resubmit until
         status is ok.
 
@@ -469,7 +473,11 @@ def build_workspace_tools(
             if action == "simulate":
                 return json.dumps(workflow_manager.simulate(content, inputs), ensure_ascii=False)
             if action == "capabilities":
-                return json.dumps(workflow_manager.capabilities(), ensure_ascii=False)
+                # Compact by default (overview / per-kind) so the catalog is not
+                # re-replayed every turn; verbose=true returns the full schema.
+                return json.dumps(
+                    workflow_manager.capabilities_view(kinds, verbose), ensure_ascii=False
+                )
             if action == "spec":
                 return json.dumps(
                     {"status": "ok", "spec": workflow_manager.authoring_spec()}, ensure_ascii=False
@@ -486,6 +494,9 @@ def build_workspace_tools(
                 return json.dumps({"status": "ok", "runs": workflow_manager.list_runs(name)}, ensure_ascii=False)
             if action == "run":
                 env = _build_workflow_env()
+                # Circuit breaker: if this workflow already failed the same way N
+                # times in a row, tell the model to fix the step, not rewrite all.
+                guidance = workflow_manager.repeated_failure_guidance(name)
                 result = workflow_manager.run(
                     name,
                     inputs or {},
@@ -494,6 +505,8 @@ def build_workspace_tools(
                     resume=bool(resume),
                     trigger="agent",
                 )
+                if guidance:
+                    result["guidance"] = guidance
                 return json.dumps(result, ensure_ascii=False)
             return json.dumps({"status": "error", "message": f"unknown action: {action}"}, ensure_ascii=False)
         except Exception as exc:

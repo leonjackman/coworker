@@ -473,9 +473,22 @@ def _computer_actions() -> tuple[ActionSpec, ...]:
 COMPUTER_ACTIONS: tuple[ActionSpec, ...] = _computer_actions()
 
 # Arbitrary tool steps fall back to these when no live tool_map is available.
+# `run_applescript`/`run_powershell` are declared so the catalog (and OFFLINE
+# validation) always knows they exist and which OS each pins (see
+# PLATFORM_ONLY_TOOLS) — previously they were only visible via live introspection.
 TOOL_ACTIONS: tuple[ActionSpec, ...] = (
     ActionSpec("tool", "web_search", (_p("query", required=True), _p("max_results", "number")), target="web_search", success="no_error"),
     ActionSpec("tool", "web_fetch", (_p("url", required=True),), target="web_fetch", success="no_error"),
+    ActionSpec(
+        "tool", "run_applescript",
+        (_p("script", required=True), _p("timeout_seconds", "number")),
+        target="run_applescript", success="no_error",
+    ),
+    ActionSpec(
+        "tool", "run_powershell",
+        (_p("script", required=True), _p("timeout_seconds", "number")),
+        target="run_powershell", success="no_error",
+    ),
 )
 
 COMMAND_ACTIONS: tuple[ActionSpec, ...] = (
@@ -570,6 +583,8 @@ _OUTPUTS: dict[tuple[str, str], tuple[str, ...]] = {
     ("notify", "webhook"): ("status", "ok", "text", "json"),
     ("tool", "web_search"): ("results", "result"),
     ("tool", "web_fetch"): ("text", "result"),
+    ("tool", "run_applescript"): ("return_code", "stdout", "stderr", "timed_out"),
+    ("tool", "run_powershell"): ("return_code", "stdout", "stderr", "timed_out"),
     # computer/script returns the cell's rendered text (string), so it has no
     # sub-fields; declaring "result"/"text" lets the validator reject
     # `{{steps.<id>.outputs...}}` and unknown fields.
@@ -807,9 +822,10 @@ class CapabilityRegistry:
             "\n\n## Workflow authoring (YAML)\n"
             "Author or modify workflows ONLY with the `workflow` tool (action create/update, full "
             "YAML `content`). Before writing, call `workflow` action=spec for the exact skeleton/"
-            "rules and action=capabilities for the valid kinds/actions/params. A workflow must be "
-            "atomic, user-readable nodes: one action per node, a `description` on every node, a "
-            "semantic locator for GUI steps, and a verification step at the end. create/update are "
+            "rules and action=capabilities (a tiny overview; then action=capabilities kinds=[...] "
+            "for the actions/params of just the kinds you need — never fetch every kind). A workflow "
+            "must be atomic, user-readable nodes: one action per node, a `description` on every node, "
+            "a semantic locator for GUI steps, and a verification step at the end. create/update are "
             "validated at write time and return diagnostics — fix them and resubmit until status ok."
         )
 
@@ -918,6 +934,86 @@ class CapabilityRegistry:
             "example": EXAMPLE_YAML,
             "kinds": [k.to_dict() for k in self.kinds.values()],
         }
+
+    # ── compact views (agent tool) ───────────────────────────────────────
+    # `to_schema()` is ~50KB and is replayed on every model call once fetched;
+    # the agent-facing `workflow action=capabilities` returns one of these
+    # instead. The HTTP/Studio shape (`to_schema`) is unchanged.
+
+    def kind_overview(self) -> list[dict[str, Any]]:
+        """One tiny row per kind: family, action NAMES, platform."""
+        return [
+            {
+                "kind": k.kind,
+                "family": k.family,
+                "requires_do": k.requires_do,
+                "actions": [a.name for a in k.actions],
+                "platform": sorted(_kind_platforms(k)) or ["any"],
+            }
+            for k in self.kinds.values()
+        ]
+
+    def overview(self) -> dict[str, Any]:
+        """Tiny always-safe starting point: kinds + action names + a fetch hint."""
+        from .platform_support import ALL_TAGS, current_tag
+
+        return {
+            "dsl_version": DSL_VERSION,
+            "platform": current_tag(),
+            "platforms": list(ALL_TAGS),
+            "template_roots": list(TEMPLATE_ROOTS),
+            "kind_overview": self.kind_overview(),
+            "hint": "Call action=capabilities with kinds=[...] for a kind's actions/params; "
+            "add verbose=true for its full schema. Do not fetch every kind at once.",
+        }
+
+    def compact_schema(self, kinds: list[str] | None = None) -> dict[str, Any]:
+        """Compact per-kind schema: action params (name/type/required/default),
+        outputs, platform — without description/aliases/locator/success noise."""
+        from .platform_support import ALL_TAGS, current_tag
+
+        selected = (
+            list(self.kinds.values())
+            if not kinds
+            else [self.kinds[k] for k in kinds if k in self.kinds]
+        )
+        return {
+            "dsl_version": DSL_VERSION,
+            "platform": current_tag(),
+            "platforms": list(ALL_TAGS),
+            "template_roots": list(TEMPLATE_ROOTS),
+            "kinds": [_compact_kind(k) for k in selected],
+            "unknown_kinds": [k for k in (kinds or []) if k not in self.kinds],
+        }
+
+
+def _compact_param(p: ParamSpec) -> dict[str, Any]:
+    out: dict[str, Any] = {"type": p.type}
+    if p.required:
+        out["required"] = True
+    if p.default is not None:
+        out["default"] = p.default
+    return out
+
+
+def _compact_kind(k: KindSpec) -> dict[str, Any]:
+    return {
+        "kind": k.kind,
+        "family": k.family,
+        "requires_do": k.requires_do,
+        "platform": sorted(_kind_platforms(k)) or ["any"],
+        "native_params": [p.name for p in k.native_params],
+        "nested": list(k.nested),
+        "actions": [
+            {
+                "action": a.name,
+                "params": {p.name: _compact_param(p) for p in a.params},
+                "outputs": list(a.outputs),
+                "platform": _action_platforms(a.name) or ["any"],
+            }
+            for a in k.actions
+        ],
+    }
 
 
 # ── introspection helpers ────────────────────────────────────────────────

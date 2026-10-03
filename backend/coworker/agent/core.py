@@ -225,6 +225,17 @@ class WorkflowArgs(BaseModel):
     inputs: dict | None = Field(default=None, description="Input values for action=run (keys must match the workflow's declared inputs).")
     run_id: str = Field(default="", description="Resume a specific run id (optional, with action=run).")
     resume: bool = Field(default=False, description="Resume a previously interrupted run instead of starting fresh.")
+    kinds: list[str] | None = Field(
+        default=None,
+        description=(
+            "For action=capabilities: the kind(s) to describe (e.g. ['computer','file']). "
+            "Omit for a tiny overview of every kind + its action names. Fetch only what you need."
+        ),
+    )
+    verbose: bool = Field(
+        default=False,
+        description="For action=capabilities: return the FULL schema (not the compact view) for the requested kinds.",
+    )
 
 
 class GitStatusArgs(BaseModel):

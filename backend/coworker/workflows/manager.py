@@ -76,7 +76,26 @@ class WorkflowManager:
         self.executor.registry = self.capabilities_registry
 
     def capabilities(self) -> dict[str, Any]:
+        """Full capability schema (HTTP/Studio). ~50KB — unchanged shape."""
         return self.capabilities_registry.to_schema()
+
+    def capabilities_view(self, kinds: list[str] | None = None, verbose: bool = False) -> dict[str, Any]:
+        """Compact capability view for the agent tool.
+
+        No ``kinds`` → a tiny overview (kinds + action names). With ``kinds`` →
+        compact per-kind actions/params; ``verbose`` → the full schema for just
+        those kinds. Keeps the agent's context small instead of re-replaying the
+        ~50KB full catalog every turn.
+        """
+        requested = [str(k) for k in (kinds or []) if str(k).strip()]
+        if not requested:
+            return self.capabilities_registry.overview()
+        if verbose:
+            full = self.capabilities_registry.to_schema()
+            wanted = set(requested)
+            full["kinds"] = [k for k in full.get("kinds", []) if k.get("kind") in wanted]
+            return full
+        return self.capabilities_registry.compact_schema(requested)
 
     # ── catalog ─────────────────────────────────────────────────────────
 
@@ -608,6 +627,43 @@ class WorkflowManager:
 
     def list_runs(self, name: str = "", limit: int = 50) -> list[dict[str, Any]]:
         return self.store.list_runs(workflow=name, limit=limit)
+
+    #: Consecutive same-signature failures before the agent is told to STOP
+    #: rewriting the whole workflow (anti-thrash guard).
+    REPEAT_FAILURE_THRESHOLD = 3
+    _FAIL_STEP_RE = re.compile(r"step '([^']+)' failed", re.S)
+
+    def repeated_failure_guidance(self, name: str, *, threshold: int | None = None) -> str:
+        """A hard nudge when the SAME failure repeats — the circuit breaker.
+
+        Reads the run history (no session state) and, when the most recent N runs
+        all failed with the same normalized error at the same step, returns an
+        instruction to fix only that step instead of rewriting everything.
+        """
+        limit = threshold or self.REPEAT_FAILURE_THRESHOLD
+        runs = self.list_runs(name, limit=limit)
+        if len(runs) < limit:
+            return ""
+        sigs: list[tuple[str, str]] = []
+        step = ""
+        for run in runs[:limit]:
+            if run.get("status") != "failed":
+                return ""
+            err = str(run.get("error") or "")
+            match = self._FAIL_STEP_RE.search(err)
+            if match:
+                step = match.group(1)
+            detail = re.sub(r"\d+", "#", err.strip())[:200]
+            sigs.append((step, detail))
+        if len(set(sigs)) != 1:
+            return ""
+        where = f"step '{step}'" if step else "the same step"
+        return (
+            f"This workflow has failed the SAME way {limit} times in a row at {where}. "
+            "STOP rewriting the whole workflow. Fix ONLY that step (action=update with the "
+            "corrected YAML) and re-run; if it is a GUI/script step, prefer a deterministic "
+            "tool (command / run_powershell / file) or re-observe before acting."
+        )
 
     def read_evidence(self, run_id: str) -> list[dict[str, Any]]:
         from .evidence import read_index

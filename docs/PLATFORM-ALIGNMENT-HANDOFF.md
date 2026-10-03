@@ -33,7 +33,7 @@ manifest, failures are loud and early, and drift is caught by contract tests.
 |---|---|---|
 | **P0** | capability manifest + conformance + low-risk correctness fixes | **done** |
 | **P1** | Windows Computer Use B1 behavioral parity | **partial** (5/9 done — see below) |
-| **P2** | Workflow robustness (inference, gating, ActionSpec, compaction, circuit breaker) | pending |
+| **P2** | Workflow robustness (inference, gating, ActionSpec, compaction, circuit breaker) | **mostly done** (see below) |
 | **P3** | Capability-gate refactor; Windows input research; mac small gaps | pending |
 
 ### P0 — delivered
@@ -102,27 +102,26 @@ flipped flags documented in `COMPUTER-USE-PARITY.md`; real-machine E2E on Window
 Files: `workflows/platform_support.py`, `validation.py`, `capabilities.py`,
 `executor.py`, `manager.py`, `agent/graph.py`, `agent/core.py`.
 
-1. **Auto-infer platform**: wire `infer_platforms` into validation so an
-   undeclared but clearly macOS-only (or Windows-only) workflow is *suggested*
-   the tag (keep explicit platform required; add a `platform` suggestion to the
-   `missing_platform` diagnostic).
+1. **Auto-infer platform** — **done (advisory)**: `platform_suggestion` warning
+   when steps imply exactly one OS and none is declared (`validation.py`;
+   `infer_platforms` was previously only used by tests).
 2. **Linux/unsupported gating**: GUI `computer`/`app`/`browser` kinds are
    effectively mac+Windows only; mark them unavailable (or explicitly degraded)
-   where no bridge exists instead of failing mid-run.
-3. **Native-tool ActionSpec**: add declarative entries for `run_applescript`
-   (darwin) / `run_powershell` (win32) so offline validation catches unavailable
-   tools.
-4. **Capabilities payload compaction**: `workflow action=capabilities` currently
-   returns ~50KB (`capabilities.to_schema()`); add `kinds:[...]` + compact view at
-   the **agent tool layer** (`agent/core.py` `WorkflowArgs`, `agent/graph.py`) —
-   keep the HTTP shape (`api/workflows.py` → Studio) unchanged.
-5. **Iteration circuit breaker**: `workflow action=run` reads
-   `manager.list_runs(name, K)`; on ≥N same-signature consecutive failures, append
-   a `guidance` field ("same step failed N times — fix step X only, do not rewrite
-   the whole workflow"); plus reject a byte-identical `update` when the last run
-   failed (`no_change`).
-6. **JS-safe resolution generality**: any future script-bearing kind should use
-   `_resolve_payload` (document in `capabilities.py`).
+   where no bridge exists instead of failing mid-run. — **remaining** (the
+   run-time `platform_mismatch` gate already covers declared platforms; an
+   undeclared workflow on Linux still fails at run).
+3. **Native-tool ActionSpec** — **done**: `run_applescript`/`run_powershell`
+   declared in `TOOL_ACTIONS` with outputs + per-OS platform tags
+   (`capabilities.py`), so the catalog/offline validation knows them.
+4. **Capabilities payload compaction** — **done**: `capabilities_view(kinds,
+   verbose)` (manager) + `overview()`/`compact_schema()` (registry); agent tool
+   returns a 3.3KB overview by default or a per-kind compact view, instead of the
+   full 50KB (`graph.py`, `agent/core.py`). HTTP/Studio shape unchanged.
+5. **Iteration circuit breaker** — **done**: `manager.repeated_failure_guidance()`
+   reads run history and, on ≥N same-signature consecutive failures, the `run`
+   tool result carries `guidance` ("STOP rewriting; fix step X only"). (The
+   byte-identical `update` → `no_change` variant is still **remaining**.)
+
 
 ---
 
