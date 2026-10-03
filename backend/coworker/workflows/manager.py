@@ -490,8 +490,14 @@ class WorkflowManager:
         )
         # Only UNATTENDED (scheduled) runs raise a persisted "Run alert". Manual /
         # in-editor runs surface their result only inside the editor (transient,
-        # cleared on close, never persisted to the alert log).
-        if run.status in ("failed", "needs_human") and trigger.startswith("schedule"):
+        # cleared on close, never persisted to the alert log). A platform mismatch
+        # is not a failure — the schedule runner reports it as "skipped", so it
+        # must NOT raise a failure alert here.
+        if (
+            run.status in ("failed", "needs_human")
+            and trigger.startswith("schedule")
+            and not run.error.startswith("platform_mismatch:")
+        ):
             try:
                 from coworker.notifications import notify
 

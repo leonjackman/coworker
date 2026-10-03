@@ -104,7 +104,9 @@ class ScheduleEngine:
         attempts = max(0, schedule.retry_max) + 1
         for attempt in range(attempts):
             result = await self.runner.execute(schedule)
-            if result.get("status") == "ok":
+            # "skipped" (e.g. a workflow that targets another OS) is TERMINAL —
+            # never retry it.
+            if result.get("status") in ("ok", "skipped"):
                 break
             if attempt < attempts - 1 and schedule.retry_backoff > 0:
                 await asyncio.sleep(min(schedule.retry_backoff, 300))

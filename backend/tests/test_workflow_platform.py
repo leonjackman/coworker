@@ -84,3 +84,50 @@ steps:
     result = mgr.run("platform-gated")
     assert result["status"] == "failed"
     assert "platform_mismatch" in result["run"]["error"]
+
+
+def test_scheduled_platform_mismatch_does_not_alert(tmp_path: Path, monkeypatch):
+    """A platform mismatch on a scheduled run is a SKIP, so it must not raise a
+    failure alert (the runner reports 'skipped')."""
+    import coworker.notifications as notifications
+
+    alerts: list = []
+    monkeypatch.setattr(notifications, "notify", lambda *a, **k: alerts.append((a, k)))
+
+    from coworker.workflows import WorkflowManager
+
+    other = "win32" if ps.current_tag() == "darwin" else "darwin"
+    mgr = WorkflowManager(tmp_path)
+    mgr.enforce_conformance = False
+    mgr.create(
+        f"""
+name: platform-alert
+description: d
+platform: {other}
+steps:
+- id: id:1
+  kind: command
+  do: run
+  params: {{command: ["python", "-c", "print('hi')"]}}
+  description: run
+  post: [ok]
+"""
+    )
+    result = mgr.run("platform-alert", trigger="schedule:s1")
+    assert result["status"] == "failed"
+    assert alerts == []
+
+
+def test_schedule_runner_reports_skipped_on_platform_mismatch(tmp_path: Path):
+    from types import SimpleNamespace
+
+    from coworker.schedules.runner import ScheduleRunner
+
+    class _FakeManager:
+        def run(self, name, inputs, **kwargs):  # noqa: ANN001
+            return {"status": "failed", "run": {"run_id": "r1", "error": "platform_mismatch: nope"}}
+
+    runner = ScheduleRunner(workflow_manager=_FakeManager(), env_factory=lambda: None, data_dir=tmp_path)
+    schedule = SimpleNamespace(workflow="w", inputs={}, id="s1")
+    out = runner._run_workflow(schedule)
+    assert out["status"] == "skipped"

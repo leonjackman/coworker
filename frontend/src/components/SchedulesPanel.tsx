@@ -280,7 +280,9 @@ export function SchedulesPanel() {
     async (schedule: CronSchedule) => {
       try {
         const result = await chatService.runScheduleNow(schedule.id);
-        setMessageType(result.status === 'ok' ? 'ok' : 'error');
+        // "skipped" (e.g. a workflow targeting another OS) is not an error.
+        const failed = result.status === 'failed' || result.status === 'error';
+        setMessageType(failed ? 'error' : 'ok');
         setMessage(`${schedule.name}: ${result.status}`);
         await refresh();
       } catch (error) {

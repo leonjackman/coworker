@@ -153,7 +153,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   const [platform, setPlatform] = useState('');
   const [baselinePlatform, setBaselinePlatform] = useState('');
   // The OS this Studio is running on (for the compatibility badge / Run gate).
-  const [hostPlatform, setHostPlatform] = useState('linux');
+  // Seed from the renderer's platform so the gate is correct even before the
+  // capabilities response arrives.
+  const [hostPlatform, setHostPlatform] = useState(
+    () => (typeof window !== 'undefined' && window.electronAPI?.platform) || 'linux',
+  );
   const [version, setVersion] = useState<number | undefined>(undefined);
   const [inputs, setInputs] = useState<WorkflowEntry['inputs']>([]);
   const [triggers, setTriggers] = useState<string[]>(['manual']);
@@ -452,6 +456,9 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setStarted(false);
       setName('');
       setDescription('');
+      // A brand-new workflow must NOT inherit the previous document's platform.
+      setPlatform('');
+      setBaselinePlatform('');
       return;
     }
     let cancelled = false;
@@ -1535,6 +1542,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           recent={recentWorkflows}
           onBlank={() => {
             persistedNameRef.current = '';
+            setPlatform('');
+            setBaselinePlatform('');
             loadDocument({ name: '', description: '', steps: [], materialize: false });
           }}
           onOpen={() => setOpenDialog(true)}
