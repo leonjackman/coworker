@@ -4,9 +4,15 @@
 //
 // Both windows are topmost, tool-window, click-through, and never take focus,
 // so the agent's pointer is purely visual and the user's real input is free.
+//
+// HUD lifecycle (matches macOS StatusHUD): the pill is HIDDEN until the agent
+// actually does something (cursor move / action pulse / explicit hud_show), then
+// auto-hides after a short idle so it never lingers while CoWorker is idle.
+// Pausing switches it to a persistent red pill.
 
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Windows.Forms;
 
 namespace CwAutomaWin;
@@ -26,9 +32,12 @@ internal static class Overlay
             {
                 _cursor = new CursorForm();
                 _hud = new HudForm();
+                // Show then hide the cursor so its handle exists (used to marshal
+                // commands); force the HUD handle without ever showing it, so the
+                // pill stays invisible until the agent acts.
                 _cursor.Show();
-                _hud.Show();
                 _cursor.Hide();
+                _ = _hud.Handle;
                 _started = true;
                 Application.Run(new ApplicationContext());
             }
@@ -43,19 +52,19 @@ internal static class Overlay
     {
         var c = _cursor;
         if (c == null || c.IsDisposed) return;
-        try { c.BeginInvoke(action); } catch { /* shutting down */ }
+        try { c.BeginInvoke((Action)(() => { try { action(); } catch { /* never fault the UI loop */ } })); } catch { /* shutting down */ }
     }
 
-    public static void Move(int x, int y) => OnUi(() => _cursor.MoveTo(x, y));
+    public static void Move(int x, int y) => OnUi(() => { _cursor.MoveTo(x, y); _hud.ShowActive(); });
     public static void ShowCursor() => OnUi(() => _cursor.ShowCursor());
     public static void Hide() => OnUi(() => _cursor.HideCursor());
-    public static void Pulse() => OnUi(() => _cursor.Pulse());
-    public static void ClickFx() => OnUi(() => _cursor.Pulse());
+    public static void Pulse() => OnUi(() => { _cursor.Pulse(); _hud.ShowActive(); });
+    public static void ClickFx() => OnUi(() => { _cursor.Pulse(); _hud.ShowActive(); });
 
-    public static void HudShow() => OnUi(() => { _hud.Show(); _hud.Refresh(); });
-    public static void HudHide() => OnUi(() => _hud.Hide());
-    public static void HudPause(bool paused) => OnUi(() => { _hud.Paused = paused; _hud.Invalidate(); });
-    public static void SetLabel(string label) => OnUi(() => { _hud.StopLabel = label ?? ""; _hud.Invalidate(); });
+    public static void HudShow() => OnUi(() => _hud.ShowActive());
+    public static void HudHide() => OnUi(() => _hud.HideNow());
+    public static void HudPause(bool paused) => OnUi(() => { if (paused) _hud.ShowPaused(); else _hud.ShowActive(); });
+    public static void SetLabel(string label) => OnUi(() => _hud.SetLabel(label ?? ""));
 
     public static Point Current()
     {
@@ -143,36 +152,130 @@ internal static class Overlay
 
     private sealed class HudForm : OverlayForm
     {
-        public bool Paused;
-        public string StopLabel = "";
+        private const int PillHeight = 38;
+        private const int PadX = 15;
+        private const int DotD = 9;
+        private const int DotTitleGap = 11;
+        private const int TitleHintGap = 12;
+        private const int BottomMargin = 18;
+        private const int AutoHideMs = 4000;
+
+        private readonly System.Windows.Forms.Timer _hideTimer;
+        private readonly Font _titleFont = new Font("Segoe UI", 9.75f, FontStyle.Bold);
+        private readonly Font _hintFont = new Font("Segoe UI", 9f, FontStyle.Regular);
+
+        private bool _paused;
+        private bool _shown;
+        private string _stopLabel = "Ctrl + Shift + Esc";
 
         public HudForm()
         {
-            Width = 210;
-            Height = 34;
+            AutoScaleMode = AutoScaleMode.None;
+            Height = PillHeight;
+            Width = 300;
+            _hideTimer = new System.Windows.Forms.Timer { Interval = AutoHideMs };
+            _hideTimer.Tick += (s, e) => { _hideTimer.Stop(); HideNow(); };
+        }
+
+        public void SetLabel(string label)
+        {
+            if (!string.IsNullOrEmpty(label)) _stopLabel = label;
+            if (_shown) { Render(false); Invalidate(); }
+        }
+
+        public void ShowActive()
+        {
+            _paused = false;
+            Render(true);
+            _hideTimer.Stop();
+            _hideTimer.Start();
+        }
+
+        public void ShowPaused()
+        {
+            _paused = true;
+            _hideTimer.Stop();
+            Render(true);
+        }
+
+        public void HideNow()
+        {
+            _hideTimer.Stop();
+            _shown = false;
+            Visible = false;
+        }
+
+        private string Title() => _paused ? "CoWorker is paused" : "CoWorker is controlling";
+        private string Hint() => _paused ? $"{_stopLabel} to resume" : $"{_stopLabel} to pause";
+
+        private void Render(bool show)
+        {
+            using var g = CreateGraphics();
+            var titleSize = g.MeasureString(Title(), _titleFont);
+            var hintSize = g.MeasureString(Hint(), _hintFont);
+            int width = PadX + DotD + DotTitleGap + (int)Math.Ceiling(titleSize.Width)
+                        + TitleHintGap + (int)Math.Ceiling(hintSize.Width) + PadX;
+
             var wa = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 720);
-            Left = wa.Left + wa.Width / 2 - Width / 2;
-            Top = wa.Bottom - Height - 12;
+            int x = wa.Left + (wa.Width - width) / 2;
+            int y = wa.Bottom - PillHeight - BottomMargin;
+            SetBounds(x, y, width, PillHeight);
+
+            // Clip the window to the pill so the rounded corners are crisp (no
+            // transparency-key fringing around the antialiased edge).
+            using var path = Rounded(new Rectangle(0, 0, width, PillHeight), PillHeight / 2);
+            var old = Region;
+            Region = new Region(path);
+            old?.Dispose();
+
+            _shown = true;
+            if (show && !Visible) Visible = true;
+            Invalidate();
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            var rect = new Rectangle(0, 0, Width - 1, Height - 1);
-            using (var bg = new SolidBrush(Color.FromArgb(230, 20, 20, 24)))
-            using (var path = Rounded(rect, 12))
-                e.Graphics.FillPath(bg, path);
-            using (var pen = new Pen(Paused ? Color.FromArgb(255, 170, 60) : Color.FromArgb(60, 200, 120), 1.5f))
-            using (var path = Rounded(rect, 12))
-                e.Graphics.DrawPath(pen, path);
+            if (!_shown) return;
 
-            string text = Paused ? "CoWorker paused" : "CoWorker controlling";
-            if (!string.IsNullOrEmpty(StopLabel)) text += $"  ({StopLabel} to stop)";
-            using var fg = new SolidBrush(Color.White);
-            using var font = new Font("Segoe UI", 9f, FontStyle.Regular);
-            var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            e.Graphics.DrawString(text, font, fg, new RectangleF(0, 0, Width, Height), fmt);
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            var rect = new Rectangle(0, 0, Width, Height);
+
+            Color surface = _paused ? Color.FromArgb(255, 34, 18, 20) : Color.FromArgb(255, 20, 24, 33);
+            Color border = _paused ? Color.FromArgb(255, 198, 74, 74) : Color.FromArgb(255, 64, 120, 220);
+            Color dot = _paused ? Color.FromArgb(255, 255, 116, 116) : Color.FromArgb(255, 96, 158, 255);
+            Color titleColor = _paused ? Color.FromArgb(255, 255, 226, 226) : Color.FromArgb(255, 238, 243, 255);
+            Color hintColor = _paused ? Color.FromArgb(255, 206, 158, 158) : Color.FromArgb(255, 148, 162, 190);
+
+            using (var path = Rounded(rect, Height / 2))
+            using (var brush = new SolidBrush(surface))
+                g.FillPath(brush, path);
+            using (var path = Rounded(rect, Height / 2))
+            using (var pen = new Pen(border, 1.4f))
+                g.DrawPath(pen, path);
+
+            // Status indicator: a soft halo behind a solid dot.
+            int dcx = PadX + DotD / 2;
+            int dcy = Height / 2;
+            using (var halo = new SolidBrush(_paused ? Color.FromArgb(255, 60, 34, 34) : Color.FromArgb(255, 30, 42, 66)))
+                g.FillEllipse(halo, dcx - DotD / 2 - 3, dcy - DotD / 2 - 3, DotD + 6, DotD + 6);
+            using (var b = new SolidBrush(dot))
+                g.FillEllipse(b, dcx - DotD / 2, dcy - DotD / 2, DotD, DotD);
+
+            string title = Title();
+            string hint = Hint();
+            var titleSize = g.MeasureString(title, _titleFont);
+            var hintSize = g.MeasureString(hint, _hintFont);
+            float tx = PadX + DotD + DotTitleGap;
+            float ty = (Height - titleSize.Height) / 2f;
+            using (var tb = new SolidBrush(titleColor))
+                g.DrawString(title, _titleFont, tb, tx, ty);
+            float hx = tx + titleSize.Width + TitleHintGap;
+            float hy = (Height - hintSize.Height) / 2f;
+            using (var hb = new SolidBrush(hintColor))
+                g.DrawString(hint, _hintFont, hb, hx, hy);
         }
 
         private static GraphicsPath Rounded(Rectangle r, int radius)
