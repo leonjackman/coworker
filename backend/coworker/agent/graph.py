@@ -1130,11 +1130,13 @@ def build_coworker_agent_graph(
     except Exception:  # noqa: BLE001 - best-effort hook
         pass
 
-    def _cw_reset_per_turn(steer_emit: Any = None) -> None:
+    def _cw_reset_per_turn(steer_emit: Any = None, verification_emit: Any = None) -> None:
         """W1 (compile-cache prerequisite): reset every per-turn mutable
         middleware state so a compiled-once graph can be reused across turns.
 
-        Called by the runtime right before each ``astream``.
+        Called by the runtime right before each ``astream``. The per-turn emit
+        callbacks (steer + verification notices) are session/turn specific and
+        must not be pinned at compile time.
         """
         for mw in middleware:
             try:
@@ -1142,6 +1144,8 @@ def build_coworker_agent_graph(
                 if reset is not None:
                     if isinstance(mw, SteerInjectionMiddleware):
                         reset(steer_emit=steer_emit)
+                    elif isinstance(mw, VerificationGuardMiddleware):
+                        reset(emit=verification_emit)
                     else:
                         reset()
             except Exception:  # noqa: BLE001 - a reset failure must never break a turn

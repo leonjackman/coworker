@@ -807,6 +807,7 @@
   "chat.interject_queued_disabled": "Interject now (only while a task is running)",
   "chat.interject_badge": "Interject",
   "chat.steer_injected_label": "Steered",
+  "chat.verification_required_label": "Auto-verifying the desktop result…",
   "chat.command_goal": "Set a persistent goal (/goal <objective>)",
   "chat.goal_status_active": "Goal running",
   "chat.goal_status_done": "Goal complete",

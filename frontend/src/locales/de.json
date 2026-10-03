@@ -807,6 +807,7 @@
   "chat.interject_queued_disabled": "Jetzt einmischen (nur während einer Aufgabe läuft)",
   "chat.interject_badge": "Einwurf",
   "chat.steer_injected_label": "Einwurf erhalten",
+  "chat.verification_required_label": "Desktop-Ergebnis wird automatisch überprüft…",
   "chat.command_goal": "Ein Ziel setzen (/goal <Ziel>)",
   "chat.goal_status_active": "Ziel läuft",
   "chat.goal_status_done": "Ziel erreicht",

@@ -874,6 +874,7 @@
   "chat.interject_queued_disabled": "Intervenir ahora (solo mientras se ejecuta una tarea)",
   "chat.interject_badge": "Intervenir",
   "chat.steer_injected_label": "Intervención recibida",
+  "chat.verification_required_label": "Verificando automáticamente el resultado en el escritorio…",
   "sidebar.dashboard": "Panel",
   "dashboard.title": "Panel",
   "dashboard.overview": "Resumen",

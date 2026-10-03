@@ -1813,6 +1813,13 @@ function App() {
           localParts = applyStreamEventToParts(localParts, event);
           commit(localParts);
         }
+      } else if (event.type === 'verification_required') {
+        // The verification guard forced a re-check. Its nudge is an injected
+        // user-role message the user cannot see, so surface a visible notice.
+        if (!event.session_id || event.session_id === requestSessionId) {
+          localParts = applyStreamEventToParts(localParts, event);
+          commit(localParts);
+        }
       } else if (event.type === 'todos') {
         // Task list is keyed by session (works for background streams too): the
         // TodoBlock card above the composer shows it in every mode. The

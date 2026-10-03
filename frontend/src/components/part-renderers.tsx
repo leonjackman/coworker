@@ -120,6 +120,15 @@ export function OrderedParts({
           </span>
         </div>,
       );
+    } else if (part.type === 'verification') {
+      // The verification guard forced a re-check; the injected nudge is a hidden
+      // user-role message, so surface it here to keep the transcript coherent.
+      nodes.push(
+        <div key={`verification-${index}`} className="steer-notice" title={t('chat.verification_required_label')}>
+          <span className="steer-notice__icon" aria-hidden>⟳</span>
+          <span className="steer-notice__text">{t('chat.verification_required_label')}</span>
+        </div>,
+      );
     } else if (part.type === 'agent') {
       if (renderAgentBlock) {
         const RenderAgentBlock = renderAgentBlock;

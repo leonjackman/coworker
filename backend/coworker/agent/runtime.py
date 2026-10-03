@@ -181,6 +181,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         # Interjection (插話): consumed-steer frames buffered for persistence.
         # Mirrors ``_delegation_buffer`` — see ``_steer_emit_live``.
         self._steer_buffer: list[dict[str, Any]] = []
+        # Verification guard: the forced re-check nudge is a hidden HumanMessage,
+        # so a visible ``verification`` frame is buffered here for persistence —
+        # see ``_verification_emit_live``.
+        self._verification_buffer: list[dict[str, Any]] = []
         self.context_budget_chars, self.context_window_tokens, self.context_window_source, self.context_window_warning, self.max_output_tokens = _runtime_context_budget(provider, model_override)
         self.provider_vision = bool(getattr(provider, "vision", False))
         # W1 (compile-cache prerequisite): the compiled graph is cached per
@@ -595,6 +599,38 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         except Exception:  # noqa: BLE001
             return []
 
+    def _verification_emit_live(self, session_id: str):
+        """Verification-guard emit callback: buffer a visible notice.
+
+        The guard injects a hidden HumanMessage to force a re-check (it cannot use
+        a system message: Qwen/vLLM reject non-first system messages, and
+        ``NormalizeMessagesMiddleware`` downgrades them to human anyway). To keep
+        the model-visible conversation and the user-visible transcript in sync,
+        the timeout notice is buffered here and drained into ``parts`` as a
+        ``verification`` part (rendered as an inline notice), mirroring steer.
+        """
+
+        def _emit(event: dict[str, Any]) -> None:
+            try:
+                part = {**event, "type": "verification"}
+                self._verification_buffer.append(part)
+            except Exception:  # noqa: BLE001 - never break on buffer append
+                pass
+            try:
+                session_event_bus.publish(session_id, event)
+            except Exception:  # noqa: BLE001 - never break on a publish hiccup
+                pass
+
+        return _emit
+
+    def _drain_verification_events(self) -> list[dict[str, Any]]:
+        try:
+            events = list(self._verification_buffer)
+            self._verification_buffer.clear()
+            return events
+        except Exception:  # noqa: BLE001
+            return []
+
     def _goal_emit_live(self, session_id: str):
         """Goal-command emit callback: publish ``goal_updated`` to the session bus.
 
@@ -783,7 +819,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 self._steer_buffer.clear()
                 reset = getattr(graph, "_cw_reset_per_turn", None)
                 if reset is not None:
-                    reset(steer_emit=self._steer_emit_live(session_id))
+                    reset(
+                        steer_emit=self._steer_emit_live(session_id),
+                        verification_emit=self._verification_emit_live(session_id),
+                    )
             except Exception:  # noqa: BLE001 - a reset failure must never break a turn
                 logger.warning("per-turn graph reset failed for %s", session_id, exc_info=True)
 
@@ -809,6 +848,9 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         # "收到插話" notice persists and round-trips via done.parts.
                         for steer_event in self._drain_steer_events():
                             parts.append(steer_event)
+                        # Visible verification notices (the guard's forced re-check).
+                        for verification_event in self._drain_verification_events():
+                            parts.append(verification_event)
                         if stream_mode == "messages":
                             msg, _meta = chunk
                             # LangGraph's "messages" stream mode also captures the
@@ -1215,6 +1257,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         parts.append(delegate_event)
                     for steer_event in self._drain_steer_events():
                         parts.append(steer_event)
+                    for verification_event in self._drain_verification_events():
+                        parts.append(verification_event)
                     if stream_mode == "messages":
                         msg, _meta = chunk
                         # Same nested-sub-agent filter as _stream: worker / delegation

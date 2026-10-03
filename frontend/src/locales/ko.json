@@ -805,6 +805,7 @@
   "chat.interject_queued_disabled": "지금 간섭하기 (작업 실행 중에만)",
   "chat.interject_badge": "끼어들기",
   "chat.steer_injected_label": "끼어들기 수신",
+  "chat.verification_required_label": "데스크톱 작업 결과를 자동 확인 중…",
   "chat.command_goal": "목표 설정（/goal <목표>）",
   "chat.goal_status_active": "목표 실행 중",
   "chat.goal_status_done": "목표 완료",

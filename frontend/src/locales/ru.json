@@ -805,6 +805,7 @@
   "chat.interject_queued_disabled": "Вмешаться сейчас (только во время выполнения задачи)",
   "chat.interject_badge": "Вмешательство",
   "chat.steer_injected_label": "Вмешательство получено",
+  "chat.verification_required_label": "Автоматическая проверка результата на рабочем столе…",
   "chat.command_goal": "Установить цель (/goal <цель>)",
   "chat.goal_status_active": "Цель выполняется",
   "chat.goal_status_done": "Цель завершена",

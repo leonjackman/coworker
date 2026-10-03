@@ -18,6 +18,13 @@ def _click(verified=None, action="click_ref"):
     return ToolMessage(content=json.dumps(payload), name="computer", tool_call_id="t1")
 
 
+def _observe(error: bool = False):
+    payload = {"error": "no accessibility", "error_code": "computer_error"} if error else {
+        "frontmost": "App", "refs": 3, "snapshot": "[window] Window \"App\"",
+    }
+    return ToolMessage(content=json.dumps(payload), name="computer_observe", tool_call_id="o1")
+
+
 def _run(messages, done=False):
     state = {"messages": messages, "verification_guard_done": done}
     return VerificationGuardMiddleware().after_model(state, runtime=None)
@@ -105,3 +112,55 @@ def test_resets_at_user_boundary():
         AIMessage(content="已完成"),
     ]
     assert _run(messages) is None
+
+
+def test_emits_visible_notice_when_nudging():
+    """The injected nudge is a hidden user-role message, so the guard must EMIT a
+    visible ``verification_required`` frame (root fix for 'assistant answers an
+    invisible user turn')."""
+    events: list[dict] = []
+    mw = VerificationGuardMiddleware(emit=events.append)
+    messages = [
+        HumanMessage(content="save it"),
+        AIMessage(content="", tool_calls=[{"name": "computer", "args": {}, "id": "c1"}]),
+        _click(verified=None),
+        AIMessage(content="已保存"),
+    ]
+    result = mw.after_model(
+        {"messages": messages, "verification_guard_done": False, "session_id": "s1"}, runtime=None
+    )
+    assert result is not None and result["jump_to"] == "model"
+    assert events and events[0]["type"] == "verification_required"
+    assert events[0]["session_id"] == "s1"
+
+
+def test_no_emit_when_not_nudging():
+    events: list[dict] = []
+    mw = VerificationGuardMiddleware(emit=events.append)
+    messages = [HumanMessage(content="hi"), AIMessage(content="hello")]
+    assert mw.after_model({"messages": messages, "verification_guard_done": False}, runtime=None) is None
+    assert events == []
+
+
+def test_allows_when_observed_after_mutation():
+    """The agent's OWN re-observation (a successful computer_observe snapshot)
+    after the mutation satisfies the guard — no needless nudge."""
+    messages = [
+        HumanMessage(content="click it"),
+        AIMessage(content="", tool_calls=[{"name": "computer", "args": {}, "id": "c1"}]),
+        _click(verified=None),
+        _observe(),
+        AIMessage(content="已完成，显示为 60"),
+    ]
+    assert _run(messages) is None
+
+
+def test_still_nudges_when_observation_precedes_mutation():
+    messages = [
+        HumanMessage(content="click it"),
+        _observe(),
+        AIMessage(content="", tool_calls=[{"name": "computer", "args": {}, "id": "c1"}]),
+        _click(verified=None),
+        AIMessage(content="已成功"),
+    ]
+    assert _run(messages) is not None

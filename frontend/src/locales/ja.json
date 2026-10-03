@@ -807,6 +807,7 @@
   "chat.interject_queued_disabled": "今すぐ割り込み（タスク実行中のみ）",
   "chat.interject_badge": "割り込み",
   "chat.steer_injected_label": "割り込みを受信",
+  "chat.verification_required_label": "デスクトップ操作の結果を自動確認しています…",
   "chat.command_goal": "目標を設定（/goal <目標>）",
   "chat.goal_status_active": "ゴール実行中",
   "chat.goal_status_done": "ゴール完了",

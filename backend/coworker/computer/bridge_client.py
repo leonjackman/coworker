@@ -290,7 +290,7 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
         return (
             "OS Computer Use is ENABLED. PRIMARY surface = computer_script (persistent JavaScript): "
             "`const app = await cua.getApp('Music')` binds an app, then in ONE call observe + act, with "
-            "loops/conditions: app.getAXState() (AX tree text + integer indices), app.getScreenshot(), "
+            "loops/conditions: app.getAXState() (object with `.text` tree + `.refs`; there is no `.treeString`), "
             "app.click(refOrIndex), app.typeText(text,{submit}), app.paste(text), app.setValue(ref,text), "
             "app.pressKey('cmd+f'), app.scroll(target,'down',pages), app.drag([x,y],[x,y]), app.settle(). "
             "Element targets are opaque refs copied verbatim from the tree brackets (strings like "
@@ -966,7 +966,7 @@ def build_computer_tools(
             description=(
                 "JavaScript for the persistent computer-use worker. `cua` is the only global: "
                 "await cua.getApp('Safari'|bundleId|path) binds an app; then "
-                "app.getAXState({disableDiffing?}), app.getScreenshot(), app.getAXStateAndScreenshot(), "
+                "app.getAXState({disableDiffing?}) (returns an OBJECT: read `.text` for the tree, `.refs`; there is no `.treeString`), app.getAXStateText() (tree as text), app.getScreenshot(), app.getAXStateAndScreenshot(), "
                 "app.click(refOrIndex|[x,y]), app.drag([x,y],[x,y]), app.pressKey('cmd+s'), "
                 "app.scroll(target,'down',pages), app.typeText('hi',{submit?}), app.paste('hi'), "
                 "app.setValue(ref,'v'), app.focus(ref), app.settle(). "
@@ -1017,7 +1017,15 @@ def build_computer_tools(
         if saved:
             note = "This model has no vision; screenshots were saved to disk: " + ", ".join(saved)
             return json.dumps({"output": body, "note": note}, ensure_ascii=False)
-        return body or "(no output)"
+        # A cell that emits nothing is easy to misread as a failure. Say it ran,
+        # and point at the real readback API: `app.getAXState()` returns an OBJECT
+        # ({text, refs, ...}) — read `.text` / `app.getAXStateText()`; there is no
+        # `.treeString`.
+        return body or (
+            "The cell ran successfully but emitted no output. To read state use "
+            "`await app.getAXState()` (returns an object; read `.text` for the tree or "
+            "use `await app.getAXStateText()`), then `cua.emitText(...)` to show it."
+        )
 
     @tool(args_schema=ScriptArgs)
     def computer_script(code: str = "", reset: bool = False, timeout_ms: int = 0) -> str | list:

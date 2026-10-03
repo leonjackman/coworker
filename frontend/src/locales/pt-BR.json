@@ -805,6 +805,7 @@
   "chat.interject_queued_disabled": "Interromper agora (apenas enquanto uma tarefa está em execução)",
   "chat.interject_badge": "Intervenção",
   "chat.steer_injected_label": "Intervenção recebida",
+  "chat.verification_required_label": "Verificando automaticamente o resultado na área de trabalho…",
   "chat.command_goal": "Definir uma meta (/goal <objetivo>)",
   "chat.goal_status_active": "Meta em execução",
   "chat.goal_status_done": "Meta concluída",

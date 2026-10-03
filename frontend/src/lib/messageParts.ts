@@ -89,6 +89,13 @@ function mergeMessageParts(base: MessagePart[], extra: MessagePart[]): MessagePa
       if (!exists) {
         merged.push(part);
       }
+    } else if (part.type === 'verification') {
+      // The verification notice is added live via `verification_required` and
+      // also round-trips in done.parts; the guard fires at most once per turn, so
+      // dedupe by type.
+      if (!merged.some((p) => p.type === 'verification')) {
+        merged.push(part);
+      }
     } else {
       merged.push(part);
     }
@@ -171,6 +178,10 @@ function applyStreamEventToParts(parts: MessagePart[], event: StreamEvent): Mess
         ...(event.steer_id ? { steer_id: event.steer_id } : {}),
       };
       return [...parts, steerPart];
+    }
+    case 'verification_required': {
+      if (parts.some((p) => p.type === 'verification')) return parts;
+      return [...parts, { type: 'verification' }];
     }
     default:
       return parts;

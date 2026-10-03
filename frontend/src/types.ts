@@ -271,7 +271,17 @@ export interface PartSteer {
   steer_id?: string;
 }
 
-export type MessagePart = PartTool | PartReasoning | PartPlan | PartAgent | PartText | PartSteer;
+/** The verification guard forced one re-check after an unconfirmed desktop
+ *  action. The guard's nudge is an injected USER-role message (Qwen/vLLM reject
+ *  mid-conversation system messages), so it must be rendered visibly here —
+ *  otherwise the assistant appears to answer an invisible user turn. Persisted
+ *  via done.parts. */
+export interface PartVerification {
+  type: 'verification';
+  content?: string;
+}
+
+export type MessagePart = PartTool | PartReasoning | PartPlan | PartAgent | PartText | PartSteer | PartVerification;
 
 export interface ChatMessage {
   id: string;
@@ -842,6 +852,7 @@ export interface PendingRequest {
     | { type: 'idle_warning'; seconds_idle: number; session_id?: string }
     | { type: 'steer_admitted'; session_id?: string; steer_id?: string; content?: string }
     | { type: 'steer_injected'; session_id?: string; steer_id?: string; content?: string }
+    | { type: 'verification_required'; session_id?: string }
     | {
         type: 'revert_summary';
         session_id: string;
