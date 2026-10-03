@@ -24,6 +24,18 @@ from .templating import TemplateError, resolve_string
 
 AssertionResult = tuple[bool, str]
 
+#: ``kind: assert`` steps may put their condition in ``do`` (e.g.
+#: ``do: "equals result.return_code 0"``). But an authored ``binding.action`` of
+#: the kind itself (``assert``/``verify``/``check``) is an ACTION LABEL, not a
+#: condition — treating it as a spec made every canonical assert step fail with
+#: ``undefined ref 'assert'``. These labels are therefore ignored.
+ASSERT_ACTION_LABELS: frozenset[str] = frozenset({"assert", "verify", "check"})
+
+
+def is_assert_condition(token: Any) -> bool:
+    """True when an assert step's ``do`` is a real condition, not an action label."""
+    return bool(token) and str(token).strip().lower() not in ASSERT_ACTION_LABELS
+
 
 def _serialize(result: Any) -> str:
     if isinstance(result, str):
@@ -189,7 +201,11 @@ def evaluate(spec: str, result: Any, context: dict[str, Any]) -> AssertionResult
     try:
         value = _lookup_ref(token, result, context)
     except (KeyError, IndexError, TemplateError):
-        return False, f"assertion '{spec}' failed: undefined ref '{token}'"
+        return False, (
+            f"assertion '{spec}' failed: undefined ref '{token}' — a bare ref must be a real "
+            "step/context/input field; for a comparison use `equals <ref> <value>` "
+            "(there is no expression syntax: no !=, ==, >)"
+        )
     if isinstance(value, str):
         truthy = value.strip().lower() not in {"", "0", "false", "no", "off", "none", "null"}
     else:

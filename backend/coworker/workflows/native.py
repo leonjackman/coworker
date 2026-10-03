@@ -315,10 +315,29 @@ def _desktop_notification(title: str, body: str) -> str:
     return "none"
 
 
+def _as_text(value: Any) -> str:
+    """Coerce a notification field to clean text.
+
+    A bare template (``body: "{{steps.x}}"``) resolves to the raw step object
+    (dict/list); ``str()`` would leak a Python repr (single quotes, ``None``)
+    into the user-visible toast. JSON-encode structured values instead.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
 def _notify(action: str, payload: dict[str, Any], notifier: Any = None) -> dict[str, Any]:
     if action == "notification":
-        title = str(payload.get("title") or "CoWorker")
-        body = str(payload.get("body") or payload.get("message") or "")
+        title = _as_text(payload.get("title")) or "CoWorker"
+        body = _as_text(payload.get("body") or payload.get("message"))
         via = "none"
         # Preferred: the desktop app's Electron Notification (all OSes, respects
         # the tray / focus-assist). Falls back to the OS-native CLI.

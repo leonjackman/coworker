@@ -591,7 +591,13 @@ def _step_to_yaml(step: Step) -> dict[str, Any]:
         out["intent"] = intent
 
     binding: dict[str, Any] = {}
-    if step.do:
+    # A bare action label on an `assert` step ("assert"/"verify"/"check") is
+    # noise — never round-trip it as `binding.action`, or a canonical assert
+    # step re-reads it as a condition and fails with `undefined ref 'assert'`.
+    from .assertions import ASSERT_ACTION_LABELS
+
+    _is_label = step.kind == "assert" and str(step.do or "").strip().lower() in ASSERT_ACTION_LABELS
+    if step.do and not _is_label:
         binding["action"] = step.do
     if step.locator:
         binding["target"] = step.locator

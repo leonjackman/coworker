@@ -45,3 +45,58 @@ def test_authoring_flags_malformed_assertion():
     assert wf is not None, diags
     codes = {d.code for d in validate_workflow(wf, CapabilityRegistry.declared())}
     assert "bad_assertion" in codes
+
+
+def _success_specs(step):
+    from coworker.workflows.executor import WorkflowExecutor
+
+    return WorkflowExecutor._success_specs(step)
+
+
+def test_assert_action_label_is_not_a_condition():
+    """A canonical assert step (`binding.action: assert`) must not treat the
+    action label as a spec (it caused `undefined ref 'assert'` at run time)."""
+    from coworker.workflows.model import Step
+
+    step = Step(id="id:1", kind="assert", do="assert", post=["result.exists"], description="v")
+    assert _success_specs(step) == ["result.exists"]
+
+    # A real `do` condition still works.
+    step2 = Step(id="id:1", kind="assert", do="equals result.return_code 0", description="v")
+    assert _success_specs(step2) == ["equals result.return_code 0"]
+
+
+def test_authoring_rejects_assert_without_condition():
+    wf, diags = parse_workflow(
+        "name: t\ndescription: d\nsteps:\n"
+        "- id: id:1\n  kind: assert\n  do: assert\n  description: check\n"
+    )
+    assert wf is not None, diags
+    codes = {d.code for d in validate_workflow(wf, CapabilityRegistry.declared())}
+    assert "bad_assertion" in codes
+
+
+def test_assert_action_label_not_serialized():
+    from coworker.workflows.parser import parse_workflow, render_workflow
+
+    wf, diags = parse_workflow(
+        "name: t\ndescription: d\nsteps:\n"
+        "- id: id:1\n  kind: assert\n"
+        "  binding: {action: assert, verify: [\"result.exists\"]}\n  description: v\n"
+    )
+    assert wf is not None, diags
+    text = render_workflow(wf)
+    assert "action: assert" not in text
+    assert "result.exists" in text
+
+
+def test_notify_body_from_dict_is_json_not_python_repr():
+    from coworker.workflows.native import run_native
+
+    res = run_native(
+        "notify",
+        "notification",
+        {"title": "t", "body": {"blocks": [], "result": None, "text": ""}},
+        notifier=lambda title, body: {"ok": True},
+    )
+    assert res["body"] == '{"blocks": [], "result": null, "text": ""}'

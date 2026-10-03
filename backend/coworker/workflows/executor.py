@@ -409,8 +409,14 @@ class WorkflowExecutor:
 
     @staticmethod
     def _success_specs(step: Step) -> list[str]:
+        from .assertions import is_assert_condition
+
         specs = list(step.post) + list(step.success)
-        if step.kind == "assert" and step.do:
+        # `kind: assert` may carry its condition in `do`; but `do` is otherwise
+        # the ACTION label (e.g. "assert"), which must never be evaluated as a
+        # spec (that made every canonical assert step fail with `undefined ref
+        # 'assert'`).
+        if step.kind == "assert" and is_assert_condition(step.do):
             specs = [step.do, *specs]
         return specs
 

@@ -17,7 +17,7 @@ import subprocess
 import tempfile
 from typing import Any, Iterable
 
-from .assertions import validate_spec
+from .assertions import is_assert_condition, validate_spec
 from .capabilities import TEMPLATE_ROOTS, CapabilityRegistry, Diagnostic
 from .model import Step, Workflow
 from .parser import MAX_DESCRIPTION_LENGTH, MAX_NAME_LENGTH, is_valid_name
@@ -190,12 +190,20 @@ def validate_assertions(workflow: Workflow) -> list[Diagnostic]:
     def walk(steps: list[Step]) -> None:
         for step in steps:
             specs = list(step.pre) + list(step.post) + list(step.success)
-            if step.kind == "assert" and step.do:
+            if step.kind == "assert" and is_assert_condition(step.do):
                 specs = [step.do, *specs]
             for spec in specs:
                 ok, message = validate_spec(spec)
                 if not ok:
                     diags.append(Diagnostic(step.id, "post", "bad_assertion", message))
+            # An `assert` step with no real condition would pass VACUOUSLY (and
+            # still satisfy the "has verification" rule) — reject it.
+            if step.kind == "assert" and not specs:
+                diags.append(Diagnostic(
+                    step.id, "post", "bad_assertion",
+                    "assert step has no condition — set `post`/`success` (e.g. "
+                    "[\"result.exists\"]) or a `do` spec (e.g. \"equals result.return_code 0\")",
+                ))
             for slot in (step.then, step.else_, step.body):
                 if slot:
                     walk(slot)
