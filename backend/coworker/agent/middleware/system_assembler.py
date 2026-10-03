@@ -124,6 +124,38 @@ def _system_text(msg: Any) -> str:
     return str(content)
 
 
+def time_context_fragment(language: Any) -> str:
+    """A tiny, always-fresh "current local time" line for the system prompt.
+
+    The backend runs on the same host as the desktop, so ``datetime.now(
+    ).astimezone()`` is the user's real local time on every OS (mac/win/linux).
+    Recomputed on every model call by ``SystemAssembler`` (not cached), so it is
+    never stale — this is the reliable clock the agent otherwise lacks (a bare
+    ``date``/``Get-Date`` is unreliable through ``run_command`` on Windows, and
+    Computer Use may be off). Never raises.
+    """
+    try:
+        from datetime import datetime
+
+        now = datetime.now().astimezone()
+        iso = now.strftime("%Y-%m-%dT%H:%M:%S")
+        offset = now.strftime("%z")  # e.g. +0800
+        offset_fmt = f"{offset[:3]}:{offset[3:]}" if len(offset) == 5 else offset
+        tz = now.tzname() or ""
+    except Exception:  # noqa: BLE001 - a clock hiccup must never break the prompt
+        return ""
+    lang = str(language or "en").lower()
+    if lang.startswith("zh"):
+        return (
+            f"当前本机日期时间：{iso}（{tz}，UTC{offset_fmt}）。"
+            "凡涉及“当前时间/日期/今天/现在”的问题，一律以此为准，不要臆测、也不要依赖网络搜索。"
+        )
+    return (
+        f"Current local date/time: {iso} ({tz}, UTC{offset_fmt}). For any "
+        "current time/date question, use THIS value — never guess or rely on web search."
+    )
+
+
 class SystemAssembler(AgentMiddleware):
 
     def __init__(
@@ -275,6 +307,11 @@ class SystemAssembler(AgentMiddleware):
         workflows = self._workflows_section(is_discuss)
         if workflows:
             fragments.append((48, "workflows", workflows))
+        now_frag = time_context_fragment(language)
+        if now_frag:
+            # Lowest priority -> assembled LAST, so the large stable prefix above
+            # is never invalidated by the per-call timestamp (vLLM prefix cache).
+            fragments.append((40, "time", now_frag))
 
         fragments.sort(key=lambda f: f[0], reverse=True)
         content, budget_ok = self._compose(fragments)
@@ -284,7 +321,7 @@ class SystemAssembler(AgentMiddleware):
             # workspace, ...) so the fixed overhead can never stack into a bomb.
             # The dropped names are surfaced to the MODEL (never silent loss) so
             # it knows which context was omitted and how to fetch it on demand.
-            droppable = [f[1] for f in sorted(fragments, key=lambda f: f[0]) if f[1] not in ("behaviour", "phase")]
+            droppable = [f[1] for f in sorted(fragments, key=lambda f: f[0]) if f[1] not in ("behaviour", "phase", "time")]
             for name in droppable:
                 fragments = [f for f in fragments if f[1] != name]
                 content, budget_ok = self._compose(fragments)

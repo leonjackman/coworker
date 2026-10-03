@@ -309,9 +309,9 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "(click_ref/type_into/press_hotkey/launch_app/click_coords). Open apps ONLY via launch_app or "
             "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey. type_text/type_into enter literal text — any characters. "
             "If an action fails the SAME way twice, STOP and ask the user instead of retry-looping. "
-            "NEVER claim an outcome you did not observe. For the current local date/time call "
-            "computer_observe state (it returns `now`); never guess the time. If a permission error is "
-            "reported, stop and tell the user."
+            "NEVER claim an outcome you did not observe. For the current local date/time, rely on the "
+            "session time in your system context (never guess). If a permission error is reported, "
+            "stop and tell the user."
         )
     if status == "feature_off":
         return (
