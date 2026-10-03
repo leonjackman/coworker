@@ -287,10 +287,45 @@ def computer_capability_status(data_dir: Path | str | None) -> str:
     return "ok"
 
 
+def _capability_notes(features: Any) -> str:
+    """Adapt the model-facing guidance to what the helper actually advertises.
+
+    The helper reports its capability manifest on ``ping`` (surface: ``state()``
+    -> ``features``); we translate the gaps into concrete operating guidance so
+    the model does not assume macOS-grade behavior on Windows. As parity work
+    lands and a helper flips a flag, the corresponding note disappears.
+    """
+    if not isinstance(features, dict) or not features:
+        return ""
+    notes: list[str] = []
+    if features.get("input_model") == "global" or features.get("background_input") is False:
+        notes.append(
+            "Input is GLOBAL and moves the real pointer: the target app must be frontmost "
+            "(no background input)."
+        )
+    if features.get("clipboard_restore") is False:
+        notes.append("Text entry may overwrite the user's clipboard (it is not restored).")
+    if features.get("target_confirmation") is False:
+        notes.append("There is no paste receipt: always re-observe and confirm the field changed.")
+    if features.get("unicode_graphemes") is False:
+        notes.append("Emoji/surrogate-pair text may not type correctly; prefer plain text there.")
+    if features.get("permission_model") == "uipi":
+        notes.append(
+            "If an action fails with uipi_blocked, the target app is elevated — ask the user to "
+            "run CoWorker as administrator."
+        )
+    return ("PLATFORM CAPABILITIES: " + " ".join(notes)) if notes else ""
+
+
 def computer_capability_line(data_dir: Path | str | None) -> str:
     """Capability summary injected into the system prompt (4 states)."""
     status = computer_capability_status(data_dir)
     if status == "ok":
+        notes = ""
+        try:
+            notes = _capability_notes(ComputerClient(data_dir).state().get("features"))
+        except Exception:  # noqa: BLE001 - a missing manifest must not break the prompt
+            notes = ""
         return (
             "OS Computer Use is ENABLED. PRIMARY surface = computer_script (persistent JavaScript): "
             "`const app = await cua.getApp('Music')` binds an app, then in ONE call observe + act, with "
@@ -312,6 +347,7 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             "NEVER claim an outcome you did not observe. For the current local date/time, rely on the "
             "session time in your system context (never guess). If a permission error is reported, "
             "stop and tell the user."
+            + (" " + notes if notes else "")
         )
     if status == "feature_off":
         return (

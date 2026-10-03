@@ -808,3 +808,23 @@ def test_client_methods_exist():
     client = ComputerClient(None)
     assert hasattr(client, "request_permission")
     assert hasattr(client, "open_permission_settings")
+
+def test_capability_notes_reflect_manifest():
+    """The model-facing guidance is derived from the helper's advertised
+    capabilities, so a fully-capable (macOS) helper adds no caveats and a
+    degraded (Windows, pre-parity) helper adds them."""
+    from coworker.computer.bridge_client import _capability_notes
+
+    mac = {
+        "input_model": "per_pid", "background_input": True, "clipboard_restore": True,
+        "target_confirmation": True, "unicode_graphemes": True, "permission_model": "tcc",
+    }
+    assert _capability_notes(mac) == ""
+
+    win = {
+        "input_model": "global", "background_input": False, "clipboard_restore": False,
+        "target_confirmation": False, "unicode_graphemes": False, "permission_model": "uipi",
+    }
+    notes = _capability_notes(win)
+    assert "GLOBAL" in notes and "clipboard" in notes and "uipi_blocked" in notes
+    assert _capability_notes(None) == "" and _capability_notes({}) == ""

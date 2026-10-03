@@ -81,6 +81,23 @@ class HelperDriver {
     return !!(this.capabilities && this.capabilities.features && this.capabilities.features[name]);
   }
 
+  /** The advertised feature value (may be a string, e.g. input_model). */
+  featureValue(name, fallback = undefined) {
+    const f = this.capabilities && this.capabilities.features;
+    return f && name in f ? f[name] : fallback;
+  }
+
+  /** A shallow copy of the advertised feature manifest. */
+  features() {
+    return Object.assign({}, (this.capabilities && this.capabilities.features) || {});
+  }
+
+  /** Boot the helper (if needed) and return the negotiated capabilities. */
+  async ensureReady() {
+    try { await this._boot(); } catch (e) { /* unsupported/unavailable */ }
+    return { methods: this.capabilities.methods, features: this.features() };
+  }
+
   // ── Process / JSON-RPC plumbing ──────────────────────────────────────
   _spawn() {
     if (this._proc && !this._proc.killed) return;
@@ -205,9 +222,10 @@ class HelperDriver {
     return this.invoke('snapshot', params);
   }
 
-  async getAppState(app = '', depth = 6) {
+  async getAppState(app = '', depth = 6, disableDiff = false) {
     const params = { depth };
     if (app) params.app = app;
+    if (disableDiff) params.disable_diff = true;
     return this.invoke('get_app_state', params);
   }
 

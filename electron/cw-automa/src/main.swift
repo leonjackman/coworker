@@ -112,11 +112,24 @@ func handleRequest(_ req: Request) {
         switch req.method {
 
         case "ping":
+            // `features` is the bilateral capability manifest (macOS side). Every
+            // key is documented in docs/COMPUTER-USE-PARITY.md; the shared layer
+            // gates behavior on these values instead of on process.platform.
             Responder.ok(req.id, [
                 "platform": "darwin",
-                "version": 3,
+                "version": 4,
                 "methods": helperMethods,
-                "features": ["overlay": true, "physical_displays": false, "ax": true, "uia": false],
+                "features": [
+                    "overlay": true, "physical_displays": false, "ax": true, "uia": false,
+                    "input_model": "per_pid",
+                    "background_input": true,
+                    "clipboard_restore": true,
+                    "target_confirmation": true,
+                    "unicode_graphemes": true,
+                    "middle_click": false,
+                    "keypad_keys": true,
+                    "permission_model": "tcc",
+                ],
             ])
 
         case "frontmost":

@@ -121,9 +121,19 @@ def test_platform_specific_command_is_not_unrunnable():
 def test_missing_platform_is_error():
     diags = _diags(_HEAD + (
         "- id: \"id:1\"\n  kind: command\n  do: run\n"
-        "  params: {command: \"unzip archive.zip\"}\n  description: extract\n  post: [ok]\n"
+        "  params: {command: \"osascript -e 'return 1'\"}\n  description: mac only\n  post: [ok]\n"
     ))
     assert "missing_platform" in _codes(diags)
+
+
+def test_unzip_is_not_macos_only():
+    # `unzip` is cross-platform (allowlisted everywhere); it must NOT demand
+    # `platform: darwin`.
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: \"unzip archive.zip\"}\n  description: extract\n  post: [ok]\n"
+    ))
+    assert "missing_platform" not in _codes(diags)
 
 
 def test_windows_only_command_needs_platform():
@@ -146,7 +156,7 @@ def test_declared_platform_satisfies_missing_platform():
     head = _HEAD.replace("steps:\n", "platform: darwin\nsteps:\n")
     diags = _diags(head + (
         "- id: \"id:1\"\n  kind: command\n  do: run\n"
-        "  params: {command: \"unzip archive.zip\"}\n  description: extract\n  post: [ok]\n"
+        "  params: {command: \"osascript -e 'return 1'\"}\n  description: mac only\n  post: [ok]\n"
     ))
     assert "missing_platform" not in _codes(diags)
 

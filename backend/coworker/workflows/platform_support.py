@@ -116,8 +116,10 @@ def modifier_for(platform: str | None = None) -> str:
 # ── Platform-only detection (single source for validation + capabilities) ────
 
 #: Command substrings that only make sense on macOS.
+#: NOTE: `unzip` is intentionally NOT here — it is cross-platform (in the
+#: allowlist on every OS, and the native `file.unzip` action is stdlib-only).
 MACOS_ONLY_TOKENS: tuple[str, ...] = (
-    "unzip ", "open -a ", "osascript", "/applications/", "$home/desktop",
+    "open -a ", "osascript", "/applications/", "$home/desktop",
     "~/desktop", "pbcopy", "pbpaste", "sips ", "display notification",
 )
 

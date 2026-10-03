@@ -385,9 +385,20 @@ class DesktopController {
     // `utc_offset_minutes` disambiguates if the model needs to convert.
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
+    // Negotiated capability manifest — lets the backend/UI gate on what the
+    // helper ACTUALLY advertises instead of on process.platform.
+    let features = {};
+    let methods = null;
+    try {
+      const caps = await this._driverInstance().ensureReady();
+      features = caps.features || {};
+      methods = caps.methods || null;
+    } catch (e) { /* helper unavailable — leave the manifest empty */ }
     const result = {
       ok: true,
       platform: process.platform,
+      features,
+      methods,
       paused: this.paused,
       pause_reason: this.pauseReason,
       now: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
@@ -579,8 +590,8 @@ class DesktopController {
   }
 
   // get_app_state: key-window accessibility tree + window info + incremental diff.
-  async axAppState(app = '', depth = 6) {
-    return this._driverInstance().getAppState(app, depth);
+  async axAppState(app = '', depth = 6, disableDiff = false) {
+    return this._driverInstance().getAppState(app, depth, disableDiff);
   }
 
   async axAct(ref, op, params = {}) {
@@ -702,7 +713,11 @@ class DesktopController {
       case 'resolve_app': return this.axResolveApp(String(args.app || ''));
       case 'frontmost': return this.axFrontmost();
       case 'get_app_state': {
-        const res = await this.axAppState(String(args.app || ''), Number(args.depth) || 6);
+        const res = await this.axAppState(
+          String(args.app || ''),
+          Number(args.depth) || 6,
+          !!args.disable_diff
+        );
         return res;
       }
       case 'screenshot': return this.screenshot({ display: Number(args.display) || 0, maxWidth: Number(args.max_width) || 1024, quality: 60 });

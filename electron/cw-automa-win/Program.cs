@@ -91,11 +91,23 @@ internal static class Program
                 Responder.Ok(id, new Dictionary<string, object>
                 {
                     ["platform"] = "win32",
-                    ["version"] = 3,
+                    ["version"] = 4,
                     ["methods"] = Methods,
+                    // Bilateral capability manifest (Windows side). Keys are documented in
+                    // docs/COMPUTER-USE-PARITY.md. Values reflect CURRENT behavior; the P1
+                    // parity work flips clipboard_restore/target_confirmation/
+                    // unicode_graphemes to true and permission_model semantics.
                     ["features"] = new Dictionary<string, object>
                     {
                         ["overlay"] = true, ["physical_displays"] = true, ["ax"] = false, ["uia"] = true,
+                        ["input_model"] = "global",
+                        ["background_input"] = false,
+                        ["clipboard_restore"] = false,
+                        ["target_confirmation"] = false,
+                        ["unicode_graphemes"] = false,
+                        ["middle_click"] = true,
+                        ["keypad_keys"] = false,
+                        ["permission_model"] = "uipi",
                     },
                 });
                 break;
