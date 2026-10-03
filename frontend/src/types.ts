@@ -966,6 +966,8 @@ export interface WorkflowEntry {
   description: string;
   version: number;
   platform: string;
+  /** Normalized platform tags (["darwin","win32","linux"] = runs anywhere). */
+  platform_tags?: string[];
   inputs: WorkflowInputSpec[];
   outputs: Record<string, string>;
   triggers: string[];
@@ -1030,15 +1032,23 @@ export interface WorkflowCapabilityParam {
 export interface WorkflowCapabilityAction {
   name: string;
   params?: WorkflowCapabilityParam[];
+  outputs?: string[];
+  /** Platform tags this action is restricted to (["any"] = runs everywhere). */
+  platform?: string[];
 }
 
 export interface WorkflowCapabilityKind {
   kind: string;
   actions?: WorkflowCapabilityAction[];
+  /** Platform tags any of this kind's actions are restricted to. */
+  platform?: string[];
 }
 
 export interface WorkflowCapabilitiesResponse {
   dsl_version: number;
+  /** The OS the backend is running on: 'darwin' | 'win32' | 'linux'. */
+  platform?: string;
+  platforms?: string[];
   kinds: WorkflowCapabilityKind[];
 }
 

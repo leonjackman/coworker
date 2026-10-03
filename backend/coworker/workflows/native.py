@@ -20,10 +20,20 @@ from pathlib import Path
 from typing import Any
 
 
-def run_native(kind: str, action: str, payload: dict[str, Any]) -> Any:
+def run_native(
+    kind: str,
+    action: str,
+    payload: dict[str, Any],
+    *,
+    notifier: Any = None,
+) -> Any:
     handler = _HANDLERS.get(kind)
     if handler is None:
         raise RuntimeError(f"unsupported native step kind: {kind}")
+    # `notify` gets an optional Electron-backed notifier (preferred; consistent
+    # with the tray / DND). All other kinds are pure.
+    if kind == "notify":
+        return handler(action, payload or {}, notifier)
     return handler(action, payload or {})
 
 
@@ -264,23 +274,64 @@ def _transform(action: str, payload: dict[str, Any]) -> dict[str, Any]:
 # ── notify ───────────────────────────────────────────────────────────────
 
 
-def _desktop_notification(title: str, body: str) -> None:
+def _windows_toast(title: str, body: str) -> str:
+    """Best-effort Windows toast via PowerShell WinRT (no third-party deps).
+
+    Works in a headless/scheduled run (no Electron). Values are passed through
+    the environment so quoting/newlines can never break the PowerShell script.
+    """
+    ps = (
+        "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] > $null; "
+        "$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+        "[Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
+        "$x = $t.GetElementsByTagName('text'); "
+        "$x.Item(0).AppendChild($t.CreateTextNode($env:CW_TOAST_TITLE)) > $null; "
+        "$x.Item(1).AppendChild($t.CreateTextNode($env:CW_TOAST_BODY)) > $null; "
+        "$n = [Windows.UI.Notifications.ToastNotification]::new($t); "
+        "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('CoWorker').Show($n);"
+    )
+    env = dict(os.environ, CW_TOAST_TITLE=str(title), CW_TOAST_BODY=str(body))
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+        timeout=8, capture_output=True, text=True, shell=False, env=env,
+    )
+    return "powershell-toast" if completed.returncode == 0 else "none"
+
+
+def _desktop_notification(title: str, body: str) -> str:
+    """OS-native notification; returns the backend used, or "none"."""
     try:
         if sys.platform == "darwin":
             script = f"display notification {json.dumps(body)} with title {json.dumps(title)}"
             subprocess.run(["osascript", "-e", script], timeout=5, check=False)
-        elif sys.platform.startswith("linux"):
+            return "osascript"
+        if sys.platform.startswith("linux"):
             subprocess.run(["notify-send", title, body], timeout=5, check=False)
+            return "notify-send"
+        if sys.platform.startswith("win"):
+            return _windows_toast(title, body)
     except Exception:  # noqa: BLE001 - a notification must never fail the run
         pass
+    return "none"
 
 
-def _notify(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _notify(action: str, payload: dict[str, Any], notifier: Any = None) -> dict[str, Any]:
     if action == "notification":
         title = str(payload.get("title") or "CoWorker")
         body = str(payload.get("body") or payload.get("message") or "")
-        _desktop_notification(title, body)
-        return {"notified": True, "title": title, "body": body}
+        via = "none"
+        # Preferred: the desktop app's Electron Notification (all OSes, respects
+        # the tray / focus-assist). Falls back to the OS-native CLI.
+        if notifier is not None:
+            try:
+                res = notifier(title, body)
+                if isinstance(res, dict) and res.get("ok"):
+                    via = "electron"
+            except Exception:  # noqa: BLE001 - fall through to native
+                via = "none"
+        if via == "none":
+            via = _desktop_notification(title, body)
+        return {"notified": via != "none", "title": title, "body": body, "via": via}
     if action == "webhook":
         return _http(
             "request",

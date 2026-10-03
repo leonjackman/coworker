@@ -16,7 +16,7 @@ steps:
 - id: id:1
   kind: command
   do: run
-  params: {command: ["echo", "hi"]}
+  params: {command: ["python", "-c", "print('hi')"]}
   description: run
 - id: id:2
   kind: file
@@ -37,7 +37,7 @@ def test_state_file_records_step_status_and_origin(tmp_path: Path):
 
     state_path = mgr.state_path
     assert state_path.exists()
-    state = json.loads(state_path.read_text())[("state-flow")]
+    state = json.loads(state_path.read_text(encoding="utf-8"))[("state-flow")]
     assert state["id:1"]["status"] == "ok"
     assert state["id:1"]["origin"] == "user"
     assert state["id:2"]["status"] == "failed"

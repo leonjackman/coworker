@@ -199,6 +199,19 @@ class Workflow:
     updated_at: str = ""
 
     @property
+    def platform_tags(self) -> list[str]:
+        """Normalized platform tags this workflow targets (all tags = any)."""
+        from .platform_support import ALL_TAGS, parse_platforms
+
+        declared = parse_platforms(self.platform)
+        return [t for t in ALL_TAGS if t in declared]
+
+    def supports_current_platform(self) -> bool:
+        from .platform_support import workflow_supports
+
+        return workflow_supports(self)[0]
+
+    @property
     def input_names(self) -> list[str]:
         return [i.name for i in self.inputs]
 
@@ -218,6 +231,7 @@ class Workflow:
             "version": self.version,
             "schema_version": self.schema_version,
             "platform": self.platform,
+            "platform_tags": self.platform_tags,
             "inputs": [i.to_dict() for i in self.inputs],
             "outputs": dict(self.outputs),
             "triggers": list(self.triggers),

@@ -342,7 +342,9 @@ def build_tool_environment(
         if action in ("drag", "clipboard", "file_dialog"):
             if script is None:
                 raise RuntimeError("computer scripting is not available")
-            return script.invoke({"code": _computer_script_for(action, payload)})
+            from .platform_support import current_tag
+
+            return script.invoke({"code": _computer_script_for(action, payload, current_tag())})
         if comp is None:
             raise RuntimeError("computer use is not available")
         if action == "focus_window":
@@ -399,19 +401,19 @@ def build_tool_environment(
             agent_tools.extend(resolve_web_tools(data_dir))
         except Exception:  # noqa: BLE001
             pass
-        applescript_tools: list = []
+        native_script_tools: list = []
         try:
-            from coworker.computer.applescript import resolve_applescript_tools
+            from coworker.computer.native_script import resolve_native_script_tools
 
-            applescript_tools = resolve_applescript_tools()
+            native_script_tools = resolve_native_script_tools()
         except Exception:  # noqa: BLE001
-            applescript_tools = []
+            native_script_tools = []
         agent_tools.extend(
             build_workspace_tools(
                 workspace,
                 skill_manager=skill_manager,
                 web_tools=[],
-                applescript_tools=applescript_tools,
+                native_script_tools=native_script_tools,
                 readonly=False,
             )
         )
@@ -462,7 +464,17 @@ def build_tool_environment(
     def _native_action(kind: str, action: str, payload: dict[str, Any]) -> Any:
         from .native import run_native
 
-        return run_native(kind, action, payload)
+        notifier = None
+        if kind == "notify" and data_dir is not None:
+            def notifier(title: str, body: str) -> dict[str, Any]:  # noqa: F811
+                try:
+                    from coworker.computer.bridge_client import ComputerClient
+
+                    return ComputerClient(data_dir).notify(title, body)
+                except Exception:  # noqa: BLE001 - bridge down -> native fallback
+                    return {"ok": False}
+
+        return run_native(kind, action, payload, notifier=notifier)
 
     return CallbackEnvironment(
         command_fn=_command,
@@ -503,10 +515,18 @@ def _skill_prompt(name: str, body: str, goal: str, inputs: dict[str, Any]) -> st
     )
 
 
-def _computer_script_for(action: str, payload: dict[str, Any]) -> str:
-    """Generate cw-automa JS for the intent-level computer actions."""
+def _computer_script_for(action: str, payload: dict[str, Any], platform: str | None = None) -> str:
+    """Generate cw-automa JS for the intent-level computer actions.
+
+    Platform-aware: the primary modifier (``cmd`` on macOS, ``ctrl`` elsewhere)
+    and the file-dialog flow are chosen for the CURRENT OS so the same workflow
+    node runs on macOS, Windows and Linux.
+    """
     import json as _json
 
+    from .platform_support import modifier_for
+
+    mod = modifier_for(platform)
     app = _json.dumps(str(payload.get("app") or ""))
     if action == "drag":
         return (
@@ -516,37 +536,57 @@ def _computer_script_for(action: str, payload: dict[str, Any]) -> str:
         )
     if action == "clipboard":
         op = str(payload.get("op") or "paste")
-        if op == "copy":
+        if op in ("copy", "cut"):
+            key = "c" if op == "copy" else "x"
             return (
                 "(async () => { const app = await cua.getApp(" + app + "); "
-                "return await app.pressKey('cmd+c'); })()"
+                f"return await app.pressKey('{mod}+{key}'); }})()"
             )
         text = _json.dumps(str(payload.get("text") or ""))
         return "(async () => { const app = await cua.getApp(" + app + "); return await app.paste(" + text + "); })()"
     if action == "file_dialog":
         path = _json.dumps(str(payload.get("path") or ""))
+        if mod == "cmd":
+            # macOS: use the Finder "Go to Folder" sheet, then type the path.
+            return (
+                "(async () => { const app = await cua.getApp(" + app + "); "
+                "await app.pressKey('cmd+shift+g'); await app.settle(); "
+                "await app.typeText(" + path + "); await app.pressKey('enter'); return { ok: true }; })()"
+            )
+        # Windows / Linux: type the absolute path straight into the dialog's
+        # focused filename field, then confirm. (Works with standard common dialogs.)
         return (
             "(async () => { const app = await cua.getApp(" + app + "); "
-            "await app.pressKey('cmd+shift+g'); await app.settle(); "
-            "await app.typeText(" + path + "); await app.pressKey('enter'); return { ok: true }; })()"
+            "await app.typeText(" + path + "); await app.settle(); "
+            "await app.pressKey('enter'); return { ok: true }; })()"
         )
     raise RuntimeError(f"no script template for computer action '{action}'")
 
 
 _REF_ACTIONS = {"click_ref", "double_click_ref", "right_click_ref", "show", "type_into"}
-_REF_TOKEN = re.compile(r"\[?(ax[a-z_]+):([^\]\n#]*)#(\d+)\]?")
+# Accept BOTH the macOS `axbutton:label#n` and the Windows `button:label#n`
+# vocabulary (see AXTree.swift / UiaTree.cs `sig`).
+_REF_TOKEN = re.compile(r"\[?([A-Za-z_]+):([^\]\n#]*)#(\d+)\]?")
+
+
+def _normalize_role(role: str) -> str:
+    r = (role or "").strip().lower()
+    return r[2:] if r.startswith("ax") else r
 
 
 def _semantic_ref_from_text(text: str, role: str, name: str) -> str | None:
-    """Find an AX ref like ``axbutton:导出#1`` by role and/or label."""
-    role_norm = ""
-    if role:
-        role_l = role.strip().lower()
-        role_norm = role_l if role_l.startswith("ax") else f"ax{role_l}"
+    """Find an accessibility ref by role and/or label.
+
+    Roles are compared with the macOS ``ax`` prefix stripped and case-folded, so
+    an author's ``locator: {role: button, name: …}`` resolves on macOS
+    (``axbutton:…``) AND Windows/Linux UIA (``button:…``). Returns the ORIGINAL
+    matched ref token (the platform's real id).
+    """
+    role_norm = _normalize_role(role)
     name_l = (name or "").strip().lower()
     for m in _REF_TOKEN.finditer(text or ""):
         token_role, label, index = m.group(1), m.group(2), m.group(3)
-        if role_norm and token_role != role_norm:
+        if role_norm and _normalize_role(token_role) != role_norm:
             continue
         if name_l and name_l not in label.lower():
             continue

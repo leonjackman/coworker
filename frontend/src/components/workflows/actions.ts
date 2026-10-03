@@ -21,6 +21,8 @@ export interface WorkflowAction {
   action: string;
   labelKey: string;
   fields: ActionField[];
+  /** Platform tags from the backend capability catalog (["any"] = everywhere). */
+  platform?: string[];
 }
 
 const f = (key: string, type: FieldType = 'text'): ActionField => ({
@@ -100,6 +102,7 @@ export interface CapabilityAction {
   name: string;
   params?: CapabilityParam[];
   outputs?: string[];
+  platform?: string[];
 }
 
 export interface CapabilityKind {
@@ -150,6 +153,9 @@ export function setCapabilities(kinds: CapabilityKind[]): void {
         labelKey: `workflows.fld_${p.name}`,
         ...(p.description ? { help: p.description } : {}),
       })),
+      ...(a.platform && a.platform.length && !a.platform.includes('any')
+        ? { platform: a.platform }
+        : {}),
     }));
   }
   REMOTE_CATALOG = next;
@@ -159,6 +165,18 @@ export function setCapabilities(kinds: CapabilityKind[]): void {
 /** Declared result fields for a step (usable as {{steps.<id>.<field>}}). */
 export function outputsFor(kind: string, doValue: string): string[] {
   return REMOTE_OUTPUTS[kind]?.[doValue] ?? [];
+}
+
+export const PLATFORM_NAMES: Record<string, string> = {
+  darwin: 'macOS',
+  win32: 'Windows',
+  linux: 'Linux',
+};
+
+/** Human label for a platform tag list; '' when unconstrained ("any"). */
+export function platformLabel(tags?: string[]): string {
+  if (!tags || tags.length === 0 || tags.includes('any')) return '';
+  return tags.map((tag) => PLATFORM_NAMES[tag] ?? tag).join(' / ');
 }
 
 export function actionsFor(kind: string): WorkflowAction[] {

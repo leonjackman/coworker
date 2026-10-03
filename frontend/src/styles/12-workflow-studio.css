@@ -175,6 +175,26 @@ body:has(.wfe-root) [data-radix-popper-content-wrapper] {
 .wfs-save-state--saved { color: var(--success); }
 .wfs-save-state--error { color: var(--danger); }
 
+/* Platform declaration selector + "only <OS>" badge in the Studio topbar. */
+.wfs-platform-select {
+  padding: 4px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--material-border);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+.wfs-platform-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--destructive, #c0392b);
+  color: var(--destructive, #c0392b);
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0.9;
+}
+
 /* ── Main area: left dock | center | right dock ─────────────────────── */
 .wfs-main {
   display: flex;

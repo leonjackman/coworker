@@ -98,7 +98,8 @@ class TestResolveCommandName:
 
 class TestDefaultShell:
     def test_unix_uses_shell_env(self, monkeypatch):
-        monkeypatch.setattr("coworker.platform.is_windows", lambda platform=None: False)
+        # default_shell() keys off platform_tag(), not is_windows().
+        monkeypatch.setattr("coworker.platform.platform_tag", lambda platform=None: "linux")
         monkeypatch.setenv("SHELL", "/bin/fish")
         assert default_shell() == "/bin/fish"
 

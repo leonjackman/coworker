@@ -61,12 +61,17 @@ class ScheduleRunner:
         )
         status = result.get("status", "failed")
         run = result.get("run") or {}
+        error = str(run.get("error") or "")
         if status == "ok":
             return {"status": "ok", "run_id": run.get("run_id", ""), "output": f"workflow {schedule.workflow} ok"}
+        # A workflow that targets another OS is SKIPPED (not failed) on a schedule:
+        # it is not an error, just not applicable to this machine.
+        if error.startswith("platform_mismatch:"):
+            return {"status": "skipped", "run_id": run.get("run_id", ""), "output": error}
         return {
             "status": "failed",
             "run_id": run.get("run_id", ""),
-            "error": run.get("error") or f"workflow status: {status}",
+            "error": error or f"workflow status: {status}",
         }
 
     def _run_command(self, schedule: Schedule) -> dict[str, Any]:
@@ -99,19 +104,19 @@ class ScheduleRunner:
             tools.extend(resolve_web_tools(self.data_dir))
         except Exception:  # noqa: BLE001
             pass
-        applescript_tools: list[Any] = []
+        native_script_tools: list[Any] = []
         try:
-            from coworker.computer.applescript import resolve_applescript_tools
+            from coworker.computer.native_script import resolve_native_script_tools
 
-            applescript_tools = resolve_applescript_tools()
+            native_script_tools = resolve_native_script_tools()
         except Exception:  # noqa: BLE001
-            applescript_tools = []
+            native_script_tools = []
         tools.extend(
             build_workspace_tools(
                 workspace,
                 skill_manager=self.skill_manager,
                 web_tools=tools.copy(),
-                applescript_tools=applescript_tools,
+                native_script_tools=native_script_tools,
                 readonly=False,
             )
         )
@@ -163,10 +168,11 @@ def build_server_environment(
     except Exception:  # noqa: BLE001
         pass
     try:
-        # run_applescript is mounted independently of the Computer Use switch.
-        from coworker.computer.applescript import resolve_applescript_tools
+        # Native-script tool (run_applescript / run_powershell) is mounted
+        # independently of the Computer Use switch.
+        from coworker.computer.native_script import resolve_native_script_tools
 
-        tools.extend(resolve_applescript_tools())
+        tools.extend(resolve_native_script_tools())
     except Exception:  # noqa: BLE001
         pass
     root = Path(workspace_root)

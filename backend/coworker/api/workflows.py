@@ -234,7 +234,8 @@ class WorkflowStepsPayload(BaseModel):
     name: str
     description: str = ""
     version: int = 1
-    platform: str = ""
+    # str | list[str]: a canonical tag, comma/space list, or "any" / "" (all OSes).
+    platform: str | list[str] = ""
     inputs: list[dict[str, Any]] | None = None
     steps: list[dict[str, Any]] = Field(default_factory=list)
     triggers: list[str] | None = None

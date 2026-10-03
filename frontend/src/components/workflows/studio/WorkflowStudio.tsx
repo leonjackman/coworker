@@ -63,7 +63,7 @@ import {
 import { edgeTypes } from '../EditableEdge';
 import { WorkflowMiniMap } from '../WorkflowMiniMap';
 import { KIND_GROUPS, kindLabelKey } from '../kinds';
-import { setCapabilities } from '../actions';
+import { PLATFORM_NAMES, setCapabilities } from '../actions';
 import {
   CommandPalette,
   NamePrompt,
@@ -149,6 +149,11 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
   // ── document state ──────────────────────────────────────────────────
   const [name, setName] = useState(target.name);
   const [description, setDescription] = useState('');
+  // Workflow `platform` declaration: '' / 'any' = runs on every OS.
+  const [platform, setPlatform] = useState('');
+  const [baselinePlatform, setBaselinePlatform] = useState('');
+  // The OS this Studio is running on (for the compatibility badge / Run gate).
+  const [hostPlatform, setHostPlatform] = useState('linux');
   const [version, setVersion] = useState<number | undefined>(undefined);
   const [inputs, setInputs] = useState<WorkflowEntry['inputs']>([]);
   const [triggers, setTriggers] = useState<string[]>(['manual']);
@@ -257,9 +262,13 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     [library],
   );
   const dirty = useMemo(
-    () => docKey(name, description, steps, entry, exits) !== baseline,
-    [name, description, steps, entry, exits, baseline],
+    () => docKey(name, description, steps, entry, exits) !== baseline
+      || platformTagsOf(platform).join(',') !== platformTagsOf(baselinePlatform).join(','),
+    [name, description, steps, entry, exits, baseline, platform, baselinePlatform],
   );
+  const platformTags = useMemo(() => platformTagsOf(platform), [platform]);
+  const platformCompatible = platformTags.includes(hostPlatform);
+  const platformLabelText = platformCompatible ? '' : platformTags.map((x) => PLATFORM_NAMES[x] ?? x).join(' / ');
 
   const selectedPath = useMemo<StepPath>(() => (selectedId ? parsePath(selectedId) : []), [selectedId]);
   const selected = useMemo(() => locate(steps, selectedPath), [steps, selectedPath]);
@@ -431,6 +440,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       .getWorkflowCapabilities()
       .then((caps) => {
         if (caps?.kinds) setCapabilities(caps.kinds);
+        if (caps?.platform) setHostPlatform(caps.platform);
       })
       .catch(() => undefined);
     chatService.listWorkflowTemplates().then((r) => setTemplates(r.templates)).catch(() => undefined);
@@ -450,6 +460,8 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         const res = await chatService.getWorkflow(target.name);
         if (cancelled) return;
         const wf = res.workflow;
+        setPlatform(wf.platform || '');
+        setBaselinePlatform(wf.platform || '');
         const persisted = wf.state ?? {};
         setStepState(persisted);
         // Seed run status from the persisted last-run state so badges show even
@@ -917,6 +929,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           inputs: inputs ?? [],
           steps: finalSteps,
           triggers,
+          platform,
           entry: wiring.entry,
           exits: wiring.exits,
         };
@@ -941,6 +954,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         persistedNameRef.current = finalName;
         setName(finalName);
         setBaseline(docKey(finalName, description, steps, entryRef.current, exitsRef.current));
+        setBaselinePlatform(platform);
         historyRef.current = { snaps: [docKey(finalName, description, steps, entryRef.current, exitsRef.current)], index: 0 };
         syncHistoryFlags();
         try {
@@ -1068,6 +1082,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           inputs: inputs ?? [],
           steps: renumberWorkflowSteps(pruned.steps),
           triggers,
+          platform,
           entry: wiring.entry,
           exits: wiring.exits,
         });
@@ -1176,6 +1191,17 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
       setErrors([t('workflows.run_requires_save')]);
       return;
     }
+    if (!platformCompatible) {
+      setErrors([
+        t('workflows.platform_mismatch', {
+          platforms: platformTags.map((x) => PLATFORM_NAMES[x] ?? x).join(' / '),
+          current: PLATFORM_NAMES[hostPlatform] ?? hostPlatform,
+        }),
+      ]);
+      setBottomTab('problems');
+      setBottomOpen(true);
+      return;
+    }
     const { inputs: resolved, errors } = collectRunInputs(inputs, runInputs);
     if (Object.keys(errors).length > 0) {
       // Inline field errors are shown in the Output tab; just reveal it.
@@ -1223,7 +1249,7 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
     } finally {
       setRunBusy(false);
     }
-  }, [name, inputs, runInputs, steps, description, version, triggers, dirty, persist, loadRunDetail]);
+  }, [name, inputs, runInputs, steps, description, version, triggers, dirty, persist, loadRunDetail, platformCompatible, platformTags, hostPlatform]);
 
   const resolveHuman = useCallback(
     async (runId: string, stepId: string, approved: boolean) => {
@@ -1496,6 +1522,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
           canUndo={false}
           canRedo={false}
           menus={<span />}
+          platform={platform}
+          platformCompatible={platformCompatible}
+          platformLabel={platformLabelText}
+          onPlatformChange={setPlatform}
           onBack={goHome}
           onSave={() => save(false)}
           onRun={() => undefined}
@@ -1649,6 +1679,10 @@ export function WorkflowStudio({ target, mode = 'inapp', onClose, onSaved, openL
         canRedo={canRedo}
         saveState={saveState}
         menus={menus}
+        platform={platform}
+        platformCompatible={platformCompatible}
+        platformLabel={platformLabelText}
+        onPlatformChange={setPlatform}
         onBack={goHome}
         onSave={() => save(false)}
         onRun={() => {
@@ -2264,12 +2298,37 @@ interface TopbarProps {
   canRedo: boolean;
   saveState?: 'idle' | 'saving' | 'saved' | 'error';
   menus: React.ReactNode;
+  /** Current `platform` declaration ('' / 'any' = all OSes). */
+  platform: string;
+  /** False when the workflow targets a different OS than this machine. */
+  platformCompatible: boolean;
+  /** Human label of the required platforms when incompatible. */
+  platformLabel: string;
+  onPlatformChange: (value: string) => void;
   onBack: () => void;
   onSave: () => void;
   onRun: () => void;
 }
 
 const isWinPlatform = typeof window !== 'undefined' && window.electronAPI?.platform === 'win32';
+
+const PLATFORM_ALIASES: Record<string, string> = {
+  mac: 'darwin', macos: 'darwin', osx: 'darwin', darwin: 'darwin',
+  win: 'win32', windows: 'win32', win32: 'win32',
+  linux: 'linux',
+};
+
+/** Normalize a workflow `platform` declaration to canonical tags. */
+function platformTagsOf(value: string): string[] {
+  const raw = (value || '').trim().toLowerCase();
+  if (!raw || raw === 'any' || raw === '*') return ['darwin', 'win32', 'linux'];
+  const tags = raw
+    .replace(/,/g, ' ')
+    .split(/\s+/)
+    .map((token) => PLATFORM_ALIASES[token])
+    .filter((token): token is string => Boolean(token));
+  return tags.length ? Array.from(new Set(tags)) : ['darwin', 'win32', 'linux'];
+}
 
 function StudioTopbar({
   isWindow,
@@ -2282,6 +2341,10 @@ function StudioTopbar({
   canRedo,
   saveState,
   menus,
+  platform,
+  platformCompatible,
+  platformLabel,
+  onPlatformChange,
   onBack,
   onSave,
   onRun,
@@ -2314,6 +2377,21 @@ function StudioTopbar({
       </span>
       <div className="wfs-menubar">{menus}</div>
       <span className="wfs-topbar__spacer" />
+      {!platformCompatible ? (
+        <span className="wfs-platform-badge" title={platformLabel}>{platformLabel}</span>
+      ) : null}
+      <select
+        className="wfs-platform-select"
+        value={['darwin', 'win32', 'linux'].includes(platform.toLowerCase()) ? platform.toLowerCase() : ''}
+        onChange={(e) => onPlatformChange(e.target.value)}
+        title={t('workflows.platform')}
+        aria-label={t('workflows.platform')}
+      >
+        <option value="">{t('workflows.platform_any')}</option>
+        <option value="darwin">macOS</option>
+        <option value="win32">Windows</option>
+        <option value="linux">Linux</option>
+      </select>
       {saveState && saveState !== 'idle' ? (
         <span className={`wfs-save-state wfs-save-state--${saveState}`}>{saveStateLabel(saveState)}</span>
       ) : null}
@@ -2321,7 +2399,13 @@ function StudioTopbar({
         {busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
         {t('workflows.save')}
       </button>
-      <button type="button" className="wfs-toolbar-btn wfs-toolbar-btn--primary" onClick={onRun} title={`${t('workflows.run')} (⌘↵)`}>
+      <button
+        type="button"
+        className="wfs-toolbar-btn wfs-toolbar-btn--primary"
+        onClick={onRun}
+        disabled={!platformCompatible}
+        title={platformCompatible ? `${t('workflows.run')} (⌘↵)` : platformLabel}
+      >
         <Zap size={14} />
         {t('workflows.run')}
       </button>

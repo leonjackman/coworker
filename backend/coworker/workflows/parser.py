@@ -34,6 +34,13 @@ _ALLOWED_LITERAL = frozenset(" -_")
 MAX_NAME_LENGTH = 64
 
 
+def _canonical_platform(value: Any) -> str:
+    """Normalize a workflow ``platform`` (str/list/any/empty → canonical str)."""
+    from .platform_support import canonical
+
+    return canonical(value)
+
+
 def is_valid_name(name: str) -> bool:
     candidate = (name or "").strip()
     if not candidate or len(candidate) > MAX_NAME_LENGTH:
@@ -332,7 +339,7 @@ def parse_workflow(
         steps=steps,
         version=version,
         schema_version=schema_version,
-        platform=str(data.get("platform") or "").strip(),
+        platform=_canonical_platform(data.get("platform")),
         inputs=_parse_inputs(data.get("inputs")),
         outputs=outputs,
         triggers=triggers,

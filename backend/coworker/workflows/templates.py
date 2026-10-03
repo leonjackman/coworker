@@ -13,19 +13,15 @@ from __future__ import annotations
 
 from typing import Any
 
-_WRITE_SCRIPT = (
-    "import os,sys; p=os.path.expanduser(sys.argv[1]); "
-    "os.makedirs(os.path.dirname(p) or '.', exist_ok=True); "
-    "open(p,'w',encoding='utf-8').write(sys.argv[2]); print('SAVED',p)"
-)
-
 TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "web-research-report",
         "name": "Web research → save report",
         "description": "Search the web for a topic and save the results to a text file.",
         "category": "research",
-        "yaml": f"""name: web-research-report
+        # Cross-platform: uses the native `file` steps (no `python3`/shell), so it
+        # runs identically on macOS, Windows and Linux.
+        "yaml": """name: web-research-report
 description: Search the web for a topic and save the results to a file.
 version: 1
 inputs:
@@ -34,13 +30,14 @@ inputs:
     required: true
   path:
     type: string
-    default: "research/{{{{inputs.topic}}}}.txt"
+    default: "research/{{inputs.topic}}.txt"
 steps:
   - id: "id:1"
     kind: tool
     do: web_search
+    description: Search the web for the topic
     params:
-      query: "{{{{inputs.topic}}}}"
+      query: "{{inputs.topic}}"
       max_results: 5
     post:
       - "not_error"
@@ -48,17 +45,23 @@ steps:
       retry: 2
       then: abort
   - id: "id:2"
-    kind: command
+    kind: file
+    do: write
+    description: Write the search results to the report file
     params:
-      command:
-        - python3
-        - "-c"
-        - "{_WRITE_SCRIPT}"
-        - "{{{{inputs.path}}}}"
-        - "{{{{steps.id:1}}}}"
+      path: "{{inputs.path}}"
+      content: "{{steps.id:1.result}}"
+      mkdirs: true
     post:
-      - "equals result.return_code 0"
-      - "contains SAVED"
+      - "not_error"
+  - id: "id:3"
+    kind: file
+    do: exists
+    description: Verify the report file exists
+    params:
+      path: "{{inputs.path}}"
+    post:
+      - "equals result.exists true"
 """,
     },
     {

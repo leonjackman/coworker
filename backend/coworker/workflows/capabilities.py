@@ -31,6 +31,21 @@ DSL_VERSION = 2
 # Template reference roots allowed anywhere a string is templated.
 TEMPLATE_ROOTS = ("inputs", "steps", "vars", "env")
 
+
+def _action_platforms(name: str) -> list[str]:
+    """Platform tags an action is restricted to (empty = runs everywhere)."""
+    from .platform_support import PLATFORM_ONLY_TOOLS
+
+    tags = PLATFORM_ONLY_TOOLS.get(str(name or ""))
+    return sorted(tags) if tags else []
+
+
+def _kind_platforms(spec: "KindSpec") -> set[str]:
+    tags: set[str] = set()
+    for action in spec.actions:
+        tags |= set(_action_platforms(action.name))
+    return tags
+
 #: Action kinds whose BINDING can be resolved by the agent from an intent-only
 #: step (goal set, no ``do``). 絕對遵守 nodes are excluded by callers.
 RESOLVABLE_INTENT_KINDS = frozenset(
@@ -181,6 +196,7 @@ class ActionSpec:
             ),
             "success": self.success,
             "outputs": list(self.outputs),
+            "platform": _action_platforms(self.name) or ["any"],
             "description": self.description,
         }
 
@@ -213,6 +229,7 @@ class KindSpec:
             "nested": list(self.nested),
             "native_params": [p.__dict__ for p in self.native_params],
             "actions": [a.to_dict() for a in self.actions],
+            "platform": sorted(_kind_platforms(self)) or ["any"],
             "description": self.description,
         }
 
@@ -869,8 +886,12 @@ class CapabilityRegistry:
         )
 
     def to_schema(self) -> dict[str, Any]:
+        from .platform_support import ALL_TAGS, current_tag
+
         return {
             "dsl_version": DSL_VERSION,
+            "platform": current_tag(),
+            "platforms": list(ALL_TAGS),
             "template_roots": list(TEMPLATE_ROOTS),
             "document_keys": [dict(d) for d in DOCUMENT_KEYS],
             "step_keys": [dict(d) for d in STEP_KEYS],

@@ -103,6 +103,26 @@ class WorkflowExecutor:
                 trigger=trigger,
             )
 
+        # Platform gate: a workflow that targets a different OS must not run here.
+        # Only an EXPLICIT mismatch fails; the common cross-platform workflow
+        # (platform unset / "any") runs everywhere. Scheduled runs are skipped
+        # earlier in schedules/runner.py so they never reach this point.
+        if not resume:
+            from .platform_support import workflow_supports
+
+            ok, _declared, reason = workflow_supports(workflow)
+            if not ok:
+                run.status = "failed"
+                run.error = f"platform_mismatch: {reason}"
+                run.pending_step = ""
+                run.ended_at = _now()
+                emitter.emit("error", status="failed", message=run.error, data={"error_code": "platform_mismatch"})
+                try:
+                    self.store.save_run(run)
+                except Exception:  # noqa: BLE001 - a save hiccup must not mask the gate
+                    pass
+                return run
+
         run.status = "running"
         run.pending_step = ""
         emitter.emit(

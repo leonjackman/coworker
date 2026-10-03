@@ -41,7 +41,7 @@ require('./bootstrap');
   };
 })();
 
-const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage, nativeTheme, screen, shell, session, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, Tray, clipboard, dialog, nativeImage, nativeTheme, screen, shell, session, systemPreferences, Notification } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
@@ -1997,6 +1997,22 @@ async function handleComputerBridgeRequest(method, url, payload) {
     }
     case '/ax/js_reset': {
       return controller.scriptReset();
+    }
+    case '/notify': {
+      // Cross-platform desktop notification (used by the workflow `notify` step
+      // as the preferred backend; native CLI is the fallback when this bridge is
+      // unavailable, e.g. headless scheduled runs).
+      const title = String((payload && payload.title) || 'CoWorker');
+      const body = String((payload && payload.body) || '');
+      try {
+        if (!Notification.isSupported()) {
+          return { ok: false, error: 'notifications not supported', error_code: 'unsupported' };
+        }
+        new Notification({ title, body }).show();
+        return { ok: true, notified: true, title, body };
+      } catch (e) {
+        return { ok: false, error: String((e && e.message) || e), error_code: 'notify_failed' };
+      }
     }
     case '/pause': {
       const paused = payload && payload.paused !== undefined ? !!payload.paused : true;

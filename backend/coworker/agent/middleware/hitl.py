@@ -228,6 +228,12 @@ def command_approval_middleware(
             "description": "Coworker wants to run an AppleScript controlling a native app.",
             "when": _needs_computer_approval,
         },
+        # PowerShell drives native Windows apps / the system; same gate.
+        "run_powershell": {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "Coworker wants to run a PowerShell script controlling apps / the system.",
+            "when": _needs_computer_approval,
+        },
     }
 
     def _mcp_policy_for(tool_call: Any) -> dict[str, Any] | None:

@@ -311,6 +311,7 @@ class WorkflowManager:
     def render_steps(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Render a workflow from structured fields (used by the visual editor)."""
         from .parser import _parse_inputs, _parse_steps
+        from .platform_support import canonical as _canonical_platform
 
         diagnostics: list[str] = []
         steps = _parse_steps(payload.get("steps") or [], diagnostics, "steps")
@@ -319,7 +320,7 @@ class WorkflowManager:
             description=str(payload.get("description") or ""),
             steps=steps,
             version=int(payload.get("version") or 1),
-            platform=str(payload.get("platform") or ""),
+            platform=_canonical_platform(payload.get("platform")),
             inputs=_parse_inputs(payload.get("inputs")),
             triggers=[str(t) for t in (payload.get("triggers") or ["manual"])],
             status=str(payload.get("status") or "active"),

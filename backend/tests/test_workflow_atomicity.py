@@ -85,6 +85,31 @@ def test_missing_platform_is_error():
     assert "missing_platform" in _codes(diags)
 
 
+def test_windows_only_command_needs_platform():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: \"powershell -Command Get-Process\"}\n  description: ps\n  post: [ok]\n"
+    ))
+    assert "missing_platform" in _codes(diags)
+
+
+def test_platform_only_tool_needs_platform():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: tool\n  do: run_powershell\n"
+        "  params: {script: \"Get-Process\"}\n  description: ps\n  post: [ok]\n"
+    ))
+    assert "missing_platform" in _codes(diags)
+
+
+def test_declared_platform_satisfies_missing_platform():
+    head = _HEAD.replace("steps:\n", "platform: darwin\nsteps:\n")
+    diags = _diags(head + (
+        "- id: \"id:1\"\n  kind: command\n  do: run\n"
+        "  params: {command: \"unzip archive.zip\"}\n  description: extract\n  post: [ok]\n"
+    ))
+    assert "missing_platform" not in _codes(diags)
+
+
 def test_coord_only_locator_is_error_but_bypassable():
     body = (
         "- id: \"id:1\"\n  kind: computer\n  do: click_coords\n"

@@ -218,7 +218,12 @@ _MUTATING_JS = (
     ".innerhtml", "insertadjacenthtml", ".appendchild(", ".removechild(", ".setattribute(",
 )
 _NONDET_CMD = ("-mmin", "-mtime", "| head", "|head", "| tail", "|tail", "find ", "~/downloads", "$home/downloads")
-_MACOS_ONLY = ("unzip ", "open -a ", "/applications/", "$home/desktop", "~/desktop", "pbcopy", "pbpaste", "sips ")
+# Platform-only command tokens live in platform_support (single source, also used
+# by the live capability catalog).
+from .platform_support import MACOS_ONLY_TOKENS as _MACOS_ONLY  # noqa: E402
+from .platform_support import PLATFORM_ONLY_TOOLS as _PLATFORM_ONLY_TOOLS  # noqa: E402
+from .platform_support import WINDOWS_ONLY_TOKENS as _WINDOWS_ONLY  # noqa: E402
+from .platform_support import explicit_tags as _explicit_platform_tags  # noqa: E402
 _GUI_KINDS = ("browser", "computer", "app")
 _SEMANTIC_LOCATOR_KEYS = ("role", "name", "selector", "ref", "identifier", "text")
 
@@ -273,7 +278,7 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
             )
         )
 
-    platform = (workflow.platform or "").strip().lower()
+    explicit_platform = _explicit_platform_tags(workflow.platform)
     live_tools = bool(getattr(registry, "live_tools", False))
 
     def walk(steps: list[Step]) -> None:
@@ -332,10 +337,28 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
                         "command targets files by a guessy search (find/-mmin/…|head/~/Downloads) — use "
                         "file.glob/file.exists on an explicit path (or a declared input) instead", diags,
                     )
-                if platform not in ("darwin", "macos") and any(token in low for token in _MACOS_ONLY):
+                if any(token in low for token in _MACOS_ONLY) and "darwin" not in explicit_platform:
                     _conformance_diag(
                         step, "missing_platform", "command",
-                        "command uses macOS-only utilities but the workflow declares no `platform: darwin`",
+                        "command uses macOS-only utilities — declare `platform: darwin` (or a per-OS step)",
+                        diags,
+                    )
+                if any(token in low for token in _WINDOWS_ONLY) and "win32" not in explicit_platform:
+                    _conformance_diag(
+                        step, "missing_platform", "command",
+                        "command uses Windows-only utilities — declare `platform: win32` (or a per-OS step)",
+                        diags,
+                    )
+
+            # A platform-only tool (run_applescript / run_powershell) pins the OS.
+            if step.kind == "tool" and step.do in _PLATFORM_ONLY_TOOLS:
+                needed = _PLATFORM_ONLY_TOOLS[str(step.do)]
+                missing = needed - explicit_platform
+                if missing:
+                    _conformance_diag(
+                        step, "missing_platform", "do",
+                        f"tool '{step.do}' is only available on {'/'.join(sorted(needed))} — "
+                        f"declare `platform: {','.join(sorted(needed))}`",
                         diags,
                     )
 

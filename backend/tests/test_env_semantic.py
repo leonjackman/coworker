@@ -57,15 +57,28 @@ def test_app_click_ref_without_target_fails_closed():
         raise AssertionError("expected a fail-closed RuntimeError")
 
 
-def test_drag_and_clipboard_generate_script():
+def test_drag_and_clipboard_generate_script(monkeypatch):
     script = _FakeTool("computer_script", {"ok": True})
     env = build_tool_environment(workspace=None, tools=[script])
     env.app("drag", {"app": "Safari", "x1": 1, "y1": 2, "x2": 3, "y2": 4}, None)
     assert "app.drag([1, 2], [3, 4])" in script.calls[-1]["code"]
     env.app("clipboard", {"op": "paste", "text": "hi", "app": "Safari"}, None)
     assert "app.paste" in script.calls[-1]["code"]
+    # The clipboard chord follows the CURRENT platform (cmd on macOS / ctrl else).
+    monkeypatch.setattr("coworker.workflows.platform_support.current_tag", lambda: "darwin")
+    env.app("clipboard", {"op": "copy", "app": "Safari"}, None)
+    assert "cmd+c" in script.calls[-1]["code"]
+    monkeypatch.setattr("coworker.workflows.platform_support.current_tag", lambda: "win32")
+    env.app("clipboard", {"op": "copy", "app": "Notepad"}, None)
+    assert "ctrl+c" in script.calls[-1]["code"]
+    # The file dialog is platform-aware: macOS Go-to-Folder vs type-the-path.
+    monkeypatch.setattr("coworker.workflows.platform_support.current_tag", lambda: "darwin")
     env.app("file_dialog", {"path": "/tmp/x", "app": "Safari"}, None)
     assert "cmd+shift+g" in script.calls[-1]["code"]
+    monkeypatch.setattr("coworker.workflows.platform_support.current_tag", lambda: "win32")
+    env.app("file_dialog", {"path": "C:/x", "app": "Notepad"}, None)
+    assert "cmd+shift+g" not in script.calls[-1]["code"]
+    assert "typeText" in script.calls[-1]["code"]
 
 
 def test_focus_window_launches_app():

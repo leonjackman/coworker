@@ -104,7 +104,7 @@ def build_workspace_tools(
     web_tools: list | None = None,
     browser_tool: Any | None = None,
     computer_tools: list | None = None,
-    applescript_tools: list | None = None,
+    native_script_tools: list | None = None,
     auto_apply_skills: bool = False,
     # WorkerAgent 集成（单 agent 模式）
     use_worker_enabled: bool = False,
@@ -791,12 +791,14 @@ def build_workspace_tools(
         # feature AND the Electron computer bridge is registered. NEVER mirrored
         # to worker/delegated sub-agents (see _CHILD_EXCLUDED_TOOLS).
         tools.extend(computer_tools)
-    if applescript_tools and not readonly:
-        # run_applescript is decoupled from the Computer Use master switch: the
-        # runtime mounts it on macOS whenever it is available (execute phase +
-        # HITL gated). It is passed explicitly so delegated sub-agents — which
-        # call build_workspace_tools without it — never receive OS scripting.
-        tools.extend(applescript_tools)
+    if native_script_tools and not readonly:
+        # The per-OS native-script tool (run_applescript on macOS /
+        # run_powershell on Windows) is decoupled from the Computer Use master
+        # switch: the runtime mounts it whenever the platform supports it
+        # (execute phase + HITL gated). It is passed explicitly so delegated
+        # sub-agents — which call build_workspace_tools without it — never
+        # receive OS scripting.
+        tools.extend(native_script_tools)
     if memory_store is not None and memory_rel:
         tools.append(memory_read)
         if not readonly:

@@ -21,7 +21,7 @@ import { Textarea } from '../../ui/textarea';
 import { t } from '../../../lib/i18n';
 import { orderSteps } from '../flowGraph';
 import { KIND_GROUPS, kindDescKey, kindIcon, kindLabelKey, kindStripe } from '../kinds';
-import { VALUE_KINDS, actionDef, actionsFor, outputsFor, type ActionField } from '../actions';
+import { VALUE_KINDS, actionDef, actionsFor, outputsFor, platformLabel, type ActionField } from '../actions';
 import { LOCATOR_KINDS } from '../kinds';
 import { chatService } from '../../../services/chatService';
 import { SLOTS } from './workflowTree';
@@ -1095,6 +1095,9 @@ export function NodeInspector({
                   ) : null}
                 </select>
               </label>
+              {platformLabel(action?.platform) ? (
+                <div className="wf-help">{t('workflows.platform')}: {platformLabel(action?.platform)}</div>
+              ) : null}
               {action?.fields.map(field)}
             </>
           ) : null}

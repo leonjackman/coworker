@@ -291,7 +291,7 @@ def test_applescript_mounted_via_explicit_param(tmp_path: Path):
     tool = build_applescript_tool()
     if tool is None:
         return  # non-macOS
-    names = [t.name for t in build_workspace_tools(ws, applescript_tools=[tool])]
+    names = [t.name for t in build_workspace_tools(ws, native_script_tools=[tool])]
     assert "run_applescript" in names
     # Not passed -> never mounted (sub-agents / non-macOS).
     names_without = [t.name for t in build_workspace_tools(ws)]
@@ -306,7 +306,7 @@ def test_applescript_not_mounted_for_readonly(tmp_path: Path):
     if tool is None:
         return
     ws = Workspace(tmp_path)
-    names = [t.name for t in build_workspace_tools(ws, applescript_tools=[tool], readonly=True)]
+    names = [t.name for t in build_workspace_tools(ws, native_script_tools=[tool], readonly=True)]
     assert "run_applescript" not in names
 
 

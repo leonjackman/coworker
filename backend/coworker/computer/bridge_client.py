@@ -150,6 +150,10 @@ class ComputerClient(LoopbackBridgeClient):
     def pause(self, paused: bool = True, reason: str = "user") -> dict[str, Any]:
         return self._call("POST", "/pause", {"paused": bool(paused), "reason": reason})
 
+    def notify(self, title: str, body: str = "") -> dict[str, Any]:
+        """Show a desktop notification through the Electron app (all OSes)."""
+        return self._call("POST", "/notify", {"title": str(title or ""), "body": str(body or "")})
+
     def request_permission(self, kind: str) -> dict[str, Any]:
         """Passively trigger the OS permission prompt/pane for a TCC kind.
 
