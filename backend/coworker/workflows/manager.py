@@ -183,6 +183,21 @@ class WorkflowManager:
         # Name changes are allowed only by creating a new workflow.
         if workflow.name != name and self.store.exists(workflow.name):
             return {"status": "error", "message": f"workflow already exists: {workflow.name}"}
+        # No-op guard: identical canonical content must not bump the version (the
+        # agent often resubmits the same YAML while thrashing on a run failure).
+        if not draft:
+            # Compare the canonical DEFINITION (name/description/platform/steps/
+            # inputs/outputs/triggers), ignoring volatile metadata (version,
+            # fingerprint, timestamps, provenance).
+            if self._same_definition(workflow, existing):
+                return {
+                    "status": "ok",
+                    "workflow": existing.to_dict(include_steps=False),
+                    "diagnostics": [],
+                    "warnings": [],
+                    "unchanged": True,
+                    "message": "content is identical to the current version — no new version created",
+                }
         from .fingerprint import current_fingerprint
 
         # Agent edits to a workflow are recorded against the agent source so the
@@ -198,6 +213,16 @@ class WorkflowManager:
         if workflow.name != name:
             self.store.delete(name)
         return self._ok_with_diagnostics(saved)
+
+    _DEFINITION_KEYS = ("name", "description", "platform", "steps", "inputs", "outputs", "triggers")
+
+    def _same_definition(self, a: Workflow, b: Workflow) -> bool:
+        """True when two workflows have the same editable definition (ignoring
+        version/fingerprint/timestamps/provenance)."""
+        try:
+            return all(getattr(a, key) == getattr(b, key) for key in self._DEFINITION_KEYS)
+        except Exception:  # noqa: BLE001 - never let the guard break an update
+            return False
 
     def delete(self, name: str) -> dict[str, Any]:
         removed = self.store.delete(name)

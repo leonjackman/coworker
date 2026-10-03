@@ -126,6 +126,23 @@ def test_missing_platform_is_error():
     assert "missing_platform" in _codes(diags)
 
 
+def test_bridge_kinds_reject_linux_only_platform():
+    head = _HEAD.replace("steps:\n", "platform: linux\nsteps:\n")
+    diags = _diags(head + (
+        "- id: \"id:1\"\n  kind: computer\n  do: launch_app\n  params: {app: x}\n"
+        "  description: launch\n  post: [ok]\n"
+    ))
+    assert "missing_platform" in _codes(diags)
+
+    # A platform set that includes macOS/Windows is fine.
+    ok_head = _HEAD.replace("steps:\n", "platform: [darwin, linux]\nsteps:\n")
+    ok = _diags(ok_head + (
+        "- id: \"id:1\"\n  kind: computer\n  do: launch_app\n  params: {app: x}\n"
+        "  description: launch\n  post: [ok]\n"
+    ))
+    assert "missing_platform" not in _codes(ok)
+
+
 def test_platform_suggestion_advisory():
     # An OS-specific step with NO declared platform → advisory to declare it once.
     body = (

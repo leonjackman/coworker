@@ -177,7 +177,20 @@ internal static class Input
             case "capslock": vk = 0x14; return true;
             case "insert": case "ins": vk = 0x2D; return true;
             case "printscreen": case "prtsc": vk = 0x2C; return true;
+            // Keypad tokens — aligned with the macOS helper (kp_* / num_lock).
+            case "kp_decimal": vk = 0x6E; return true;
+            case "kp_add": case "kp_plus": vk = 0x6B; return true;
+            case "kp_subtract": case "kp_minus": vk = 0x6D; return true;
+            case "kp_multiply": vk = 0x6A; return true;
+            case "kp_divide": vk = 0x6F; return true;
+            case "kp_enter": vk = 0x0D; return true;
+            case "kp_separator": vk = 0x6C; return true;
+            case "num_lock": vk = 0x90; return true;
+            case "clear": vk = 0x0C; return true;
         }
+        // kp_0..kp_9 / kp0..kp9.
+        if (t.Length == 3 && t.StartsWith("kp") && t[2] >= '0' && t[2] <= '9') { vk = (ushort)(0x60 + (t[2] - '0')); return true; }
+        if (t.Length == 4 && t.StartsWith("kp_") && t[3] >= '0' && t[3] <= '9') { vk = (ushort)(0x60 + (t[3] - '0')); return true; }
         if (t.Length >= 2 && t[0] == 'f' && int.TryParse(t.Substring(1), out var fn) && fn >= 1 && fn <= 24)
         {
             vk = (ushort)(0x70 + fn - 1); return true;

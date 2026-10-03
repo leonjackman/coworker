@@ -21,8 +21,11 @@ enum KeyMapping {
         put(kVK_Tab, "tab", "\t")
         put(kVK_Space, "space", " ")
         put(kVK_Escape, "escape", "esc")
-        put(kVK_Delete, "backspace", "delete", "back_space")
-        put(kVK_ForwardDelete, "forwarddelete", "forward_delete", "del")
+        // Align with the Windows helper: `backspace` = Backspace,
+        // `delete`/`del` = FORWARD delete (a Windows "Delete" key). Previously
+        // `delete` meant Backspace on macOS but forward-delete on Windows.
+        put(kVK_Delete, "backspace", "back_space")
+        put(kVK_ForwardDelete, "forwarddelete", "forward_delete", "del", "delete")
         put(kVK_UpArrow, "up", "uparrow", "up_arrow")
         put(kVK_DownArrow, "down", "downarrow", "down_arrow")
         put(kVK_LeftArrow, "left", "leftarrow", "left_arrow")

@@ -103,10 +103,10 @@ internal static class Program
                         ["input_model"] = "global",
                         ["background_input"] = false,
                         ["clipboard_restore"] = true,
-                        ["target_confirmation"] = false,
+                        ["target_confirmation"] = true,
                         ["unicode_graphemes"] = true,
                         ["middle_click"] = true,
-                        ["keypad_keys"] = false,
+                        ["keypad_keys"] = true,
                         ["permission_model"] = "uipi",
                     },
                 });
@@ -258,9 +258,22 @@ internal static class Program
             case "scroll_to":
             {
                 int pid = ResolveActPid(p);
-                int x = (int)Math.Round(Params.Dbl(p, "x"));
-                int y = (int)Math.Round(Params.Dbl(p, "y"));
-                Input.ScrollAt(x, y, (int)Params.Dbl(p, "dx"), (int)Params.Dbl(p, "dy"));
+                int dx = (int)Params.Dbl(p, "dx");
+                int dy = (int)Params.Dbl(p, "dy");
+                bool hasX = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("x", out _);
+                bool hasY = p.ValueKind == JsonValueKind.Object && p.TryGetProperty("y", out _);
+                if (hasX && hasY)
+                {
+                    Input.ScrollAt((int)Math.Round(Params.Dbl(p, "x")), (int)Math.Round(Params.Dbl(p, "y")), dx, dy);
+                }
+                else
+                {
+                    // No explicit point: bring the target forward and scroll at the
+                    // CURRENT cursor — never jump to (0,0) (macOS falls back to the
+                    // last pointer; Windows has a real cursor to reuse).
+                    if (pid > 0) UiaActions.TryActivate(pid);
+                    Input.Scroll(dx, dy);
+                }
                 Responder.Ok(id, new Dictionary<string, object> { ["performed"] = "scroll_to", ["pid"] = pid });
                 break;
             }
@@ -371,16 +384,39 @@ internal static class Program
             }
 
             case "permissions":
+            {
+                // Windows has no TCC-style promptable permission; the real gate is
+                // UIPI/elevation. Report that honestly instead of a bare `true`.
+                int front = AppInventory.FrontmostPid();
+                bool blocked = front > 0 && Elevation.IsBlocked(front);
                 Responder.Ok(id, new Dictionary<string, object>
                 {
-                    ["accessibility"] = true, ["screen"] = true, ["platform"] = "win32",
+                    ["platform"] = "win32",
+                    ["model"] = "uipi",
+                    ["accessibility"] = true,   // UIA needs no prompt on Windows
+                    ["screen"] = true,          // screen capture needs no prompt
+                    ["self_elevated"] = Elevation.SelfElevated,
+                    ["frontmost_pid"] = front,
+                    ["can_input_frontmost"] = !blocked,
+                    ["blocked_reason"] = blocked ? "uipi_blocked" : "",
+                    ["note"] = "Windows uses UIPI, not a prompt: input to an elevated window " +
+                               "requires running CoWorker as administrator.",
                 });
                 break;
+            }
 
             case "permissions_request":
             {
                 string kind = Params.Str(p, "kind", "accessibility");
-                Responder.Ok(id, new Dictionary<string, object> { ["kind"] = kind, ["granted"] = true, ["status"] = true });
+                Responder.Ok(id, new Dictionary<string, object>
+                {
+                    ["kind"] = kind,
+                    ["granted"] = true,   // nothing to request; the gate is UIPI
+                    ["status"] = true,
+                    ["model"] = "uipi",
+                    ["note"] = "Windows has no accessibility permission prompt; run CoWorker as " +
+                               "administrator to drive elevated windows.",
+                });
                 break;
             }
 

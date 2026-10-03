@@ -32,9 +32,9 @@ manifest, failures are loud and early, and drift is caught by contract tests.
 | Phase | Scope | Status |
 |---|---|---|
 | **P0** | capability manifest + conformance + low-risk correctness fixes | **done** |
-| **P1** | Windows Computer Use B1 behavioral parity | **partial** (5/9 done — see below) |
-| **P2** | Workflow robustness (inference, gating, ActionSpec, compaction, circuit breaker) | **mostly done** (see below) |
-| **P3** | Capability-gate refactor; Windows input research; mac small gaps | pending |
+| **P1** | Windows Computer Use B1 behavioral parity | **done** |
+| **P2** | Workflow robustness (inference, gating, ActionSpec, compaction, circuit breaker) | **done** |
+| **P3** | Capability-gate refactor; mac small gaps; Windows input research (documented) | **done except the input-model research** |
 
 ### P0 — delivered
 - **WS-C**: `unzip` removed from `MACOS_ONLY_TOKENS`
@@ -59,33 +59,31 @@ manifest, failures are loud and early, and drift is caught by contract tests.
 ## P1 — Windows Computer Use B1 parity
 Files: `electron/cw-automa-win/{Program.cs,Input.cs,TextInput.cs,AppInventory.cs,UiaActions.cs,Overlay.cs}`.
 
-**Done (verified: builds clean; conformance passes; `installed`=148, `no_target`
-and `cursor_demo` confirmed via a helper probe):**
-- **Clipboard restore** — `TextInput.PasteText` saves/restores prior text (item 3).
-- **Unicode grapheme/surrogate-safe typing** — `Input.TypeUnicode` groups
-  surrogate pairs in one `SendInput` (item 4). Flip `unicode_graphemes` ✅.
-- **`list_apps(installed)`** real inventory — Start Menu shortcuts + App Paths
-  (`AppInventory.Installed`) (item 5).
-- **`launch` localized display name** — falls back to a Start Menu shortcut,
-  confirmed via a newly appeared windowed pid (`AppInventory.Launch`) (item 6).
-- **`app_state`/`snapshot` strict `no_target`** — no silent frontmost retarget
-  (`Program.HandleSnapshot` + `ResolveRequestedPid`) (item 7).
-- **`cursor_demo(seconds)`** honors duration, bounded ≤15s (item 9 of old list).
-
-**Todo:**
-1. **Paste receipt / `target_confirmation`** — `TextInput` should confirm the
-   clipboard paste landed (readback/target-change), not optimistically `true`.
-2. **Permissions semantics** — surface UIPI/elevation as a first-class
-   permission state (keep `permission_model: uipi`).
-3. **`scroll`/`scroll_to`** anchor + coordinate defaults (mac falls back to the
-   last pointer; Windows defaults to (0,0) when x/y omitted).
-4. **mac small gaps** (do on macOS after the switch): middle-click, keypad/`fn`
-   tokens, unify `delete` semantics, remove dead `realTypeInto`.
+**All delivered (verified: `dotnet build` clean; conformance passes; helper probe
+shows the flipped manifest, rich `permissions`, and `scroll_to` without a point):**
+- **Clipboard restore** — `TextInput.PasteText` saves/restores prior text.
+- **Paste receipt / `target_confirmation`** — el-based entry falls back to a
+  clipboard paste **then reads the value back**; flag → true.
+- **Unicode grapheme/surrogate-safe typing** — surrogate pairs in one SendInput.
+- **`list_apps(installed)`** real inventory — Start Menu shortcuts + App Paths.
+- **`launch` localized display name** — Start Menu shortcut, confirmed via a new
+  windowed pid.
+- **`app_state`/`snapshot` strict `no_target`** — no silent frontmost retarget.
+- **UIPI as a first-class permission state** — `permissions` reports
+  `model:uipi` + `self_elevated`/`can_input_frontmost`/`blocked_reason`;
+  `permissions_request` explains the elevation gate; the Electron layer gates on
+  `features.permission_model` (not `process.platform`).
+- **`scroll_to`** no longer jumps to (0,0): brings the target forward and scrolls
+  at the current cursor when no point is given.
+- **`cursor_demo(seconds)`** honors duration, ≤15s.
+- **mac small gaps** — middle-click (`click_point` via `MouseButton.parse`),
+  keypad tokens (added on Windows too), `delete`=forward / `backspace`=Backspace
+  on both, dead `realTypeInto` removed, `act` `right`/`double` no longer collapse
+  into a single AXPress.
 
 > Build note: the built exe is locked while the desktop app runs. Publish to a
 > temp dir (`-o <temp>`) or quit the app; then
-> `node scripts/automation-conformance.js <helper>` and the probe pattern in
-> `PLATFORM-ALIGNMENT-HANDOFF` verification.
+> `node scripts/automation-conformance.js <helper>`.
 
 Acceptance: `node scripts/automation-conformance.js <helper>` green on both; the
 flipped flags documented in `COMPUTER-USE-PARITY.md`; real-machine E2E on Windows
@@ -105,11 +103,9 @@ Files: `workflows/platform_support.py`, `validation.py`, `capabilities.py`,
 1. **Auto-infer platform** — **done (advisory)**: `platform_suggestion` warning
    when steps imply exactly one OS and none is declared (`validation.py`;
    `infer_platforms` was previously only used by tests).
-2. **Linux/unsupported gating**: GUI `computer`/`app`/`browser` kinds are
-   effectively mac+Windows only; mark them unavailable (or explicitly degraded)
-   where no bridge exists instead of failing mid-run. — **remaining** (the
-   run-time `platform_mismatch` gate already covers declared platforms; an
-   undeclared workflow on Linux still fails at run).
+2. **Linux/unsupported gating** — **done**: `computer`/`app` (native bridge
+   kinds; `browser` is the embedded Electron browser, so it is NOT gated) are
+   rejected at authoring when `platform` is disjoint from `{darwin, win32}`.
 3. **Native-tool ActionSpec** — **done**: `run_applescript`/`run_powershell`
    declared in `TOOL_ACTIONS` with outputs + per-OS platform tags
    (`capabilities.py`), so the catalog/offline validation knows them.
@@ -119,21 +115,25 @@ Files: `workflows/platform_support.py`, `validation.py`, `capabilities.py`,
    full 50KB (`graph.py`, `agent/core.py`). HTTP/Studio shape unchanged.
 5. **Iteration circuit breaker** — **done**: `manager.repeated_failure_guidance()`
    reads run history and, on ≥N same-signature consecutive failures, the `run`
-   tool result carries `guidance` ("STOP rewriting; fix step X only"). (The
-   byte-identical `update` → `no_change` variant is still **remaining**.)
+   tool result carries `guidance` ("STOP rewriting; fix step X only"). Plus the
+   byte-identical `update` → `unchanged` guard (no version bump).
 
 
 ---
 
 ## P3 — Capability-gate refactor + research
-1. Convert shared-layer `process.platform` / `sys.platform` branches (search:
-   `desktop-controller.js:57,119,207,577,750`; `bridge_client.py:719`) to
-   capability checks from the manifest. Keep platform checks only in
-   `mac-driver.js` / `win-driver.js` / native helpers.
-2. Research: Windows per-app input targeting / avoid moving the real cursor
-   (UIA-first everywhere; assess scope). If infeasible, keep `background_input:false`
-   + `input_model:"global"` and rely on the capability note.
-3. Elevation/UIPI as a first-class permission state end-to-end.
+1. **Capability-gate the permission functions** — **done**: `desktop-controller`
+   `inputPermission`/`screenPermission` now read `features.permission_model`
+   (set from the helper manifest in `state()`), not `process.platform`. Remaining
+   `process.platform` uses are legitimate OS UX (TCC settings pane, stop hotkey
+   label) and stay.
+2. **mac small gaps** — **done** (see P1 note above): middle-click, keypad on
+   both, `delete` unified, dead code removed, `act` right/double real events.
+3. **Research (open)**: Windows per-app input targeting / avoiding real-cursor
+   movement. Windows has no `postToPid`; UIA Invoke/ValuePattern already avoids
+   the cursor for structure-native controls, but coordinate actions must move it.
+   If a robust per-app path is not feasible, keep `background_input:false` +
+   `input_model:"global"` and rely on the capability note.
 
 ---
 

@@ -234,6 +234,9 @@ from .platform_support import WINDOWS_ONLY_TOKENS as _WINDOWS_ONLY  # noqa: E402
 from .platform_support import explicit_tags as _explicit_platform_tags  # noqa: E402
 from .platform_support import infer_platforms as _infer_platforms  # noqa: E402
 _GUI_KINDS = ("browser", "computer", "app")
+# Kinds that need the NATIVE desktop automation bridge (macOS/Windows only).
+# `browser` is the embedded Electron browser, so it is NOT here (Linux ok).
+_BRIDGE_KINDS = ("computer", "app")
 _SEMANTIC_LOCATOR_KEYS = ("role", "name", "selector", "ref", "identifier", "text")
 
 #: All conformance codes. They are hard ERRORS on the authoring path
@@ -388,6 +391,16 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
                         f"declare `platform: {','.join(sorted(needed))}`",
                         diags,
                     )
+
+            # `computer`/`app` need the native automation bridge, which does not
+            # exist on Linux. If the workflow pins itself to Linux only, these
+            # steps can never run — reject up-front instead of failing mid-run.
+            if step.kind in _BRIDGE_KINDS and explicit_platform and explicit_platform.isdisjoint({"darwin", "win32"}):
+                _conformance_diag(
+                    step, "missing_platform", "kind",
+                    f"{step.kind} steps need the native desktop bridge (macOS or Windows) — remove "
+                    "`linux` from `platform`, or use a command/browser/file step instead", diags,
+                )
 
             if step.kind in _GUI_KINDS:
                 locator = step.locator or {}

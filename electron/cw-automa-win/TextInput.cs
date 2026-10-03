@@ -35,8 +35,8 @@ internal static class TextInput
                     vp.SetValue(text);
                     outcome.Strategy = "value-pattern";
                     outcome.Value = UiaTree.ValueOf(el);
-                    outcome.Verified = outcome.Value == text;
-                    return Finish(outcome, submit);
+                    outcome.Verified = Matches(outcome.Value, text);
+                    if (outcome.Verified) return Finish(outcome, submit);
                 }
                 catch { /* fall through to keyboard */ }
             }
@@ -47,15 +47,30 @@ internal static class TextInput
             outcome.Strategy = "keyboard";
             Thread.Sleep(60);
             outcome.Value = UiaTree.ValueOf(el);
-            outcome.Verified = outcome.Value == text;
+            outcome.Verified = Matches(outcome.Value, text);
+            if (outcome.Verified) return Finish(outcome, submit);
+
+            // Last resort: paste into the focused field, then READ BACK (the paste
+            // receipt). This is what makes `target_confirmation` true on Windows.
+            PasteText(text);
+            outcome.Strategy = "clipboard-paste";
+            Thread.Sleep(80);
+            outcome.Value = UiaTree.ValueOf(el);
+            outcome.Verified = Matches(outcome.Value, text);
             return Finish(outcome, submit);
         }
 
-        // No element ref: paste into whatever holds focus in the target app.
+        // No element ref: paste into whatever holds focus; nothing to read back.
         PasteText(text);
         outcome.Strategy = "clipboard-paste";
-        outcome.Verified = true;
+        outcome.Verified = false;
         return Finish(outcome, submit);
+    }
+
+    private static bool Matches(string actual, string text)
+    {
+        if (actual == null) return false;
+        return actual == text || actual.EndsWith(text, StringComparison.Ordinal);
     }
 
     private static TextOutcome Finish(TextOutcome outcome, bool submit)

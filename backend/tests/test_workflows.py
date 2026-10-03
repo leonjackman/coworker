@@ -291,6 +291,21 @@ steps:
     assert "STOP rewriting" in guidance and "id:1" in guidance
 
 
+def test_update_unchanged_does_not_bump_version(manager):
+    flow = (
+        "name: same-flow\ndescription: d\nsteps:\n"
+        "- id: \"id:1\"\n  kind: browser\n  do: navigate\n  params: {url: \"https://x\"}\n"
+        "  description: open\n"
+        "- id: \"id:2\"\n  kind: file\n  do: exists\n  params: {path: \"/tmp/x\"}\n"
+        "  description: verify\n  post: [\"result.exists\"]\n"
+    )
+    assert manager.create(flow)["status"] == "ok"
+    v1 = manager.get("same-flow")["version"]
+    result = manager.update("same-flow", flow)
+    assert result.get("status") == "ok" and result.get("unchanged") is True
+    assert manager.get("same-flow")["version"] == v1
+
+
 def test_capabilities_view_is_compact(manager):
     import json
 

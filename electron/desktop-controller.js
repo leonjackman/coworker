@@ -57,15 +57,24 @@ function isDarwin() {
   return process.platform === 'darwin';
 }
 
+// Permission MODEL is driven by the helper's advertised capability
+// (`features.permission_model`: tcc | uipi | none), not by process.platform.
+// TCC (macOS) has real promptable permissions; UIPI (Windows) has none — the
+// gate is instead elevation, surfaced by the helper's `permissions` call.
+let permissionModel = process.platform === 'darwin' ? 'tcc' : (process.platform === 'win32' ? 'uipi' : 'none');
+function setPermissionModel(model) {
+  if (model === 'tcc' || model === 'uipi' || model === 'none') permissionModel = model;
+}
+
 // Permission status via Electron's own native APIs — no nut-js / native-perms
 // module required any more (the input path itself now lives in cw-automa).
 function inputPermission() {
   try {
-    if (isDarwin()) {
+    if (permissionModel === 'tcc') {
       const trusted = systemPreferences.isTrustedAccessibilityClient(false);
-      return { status: trusted ? 'authorized' : 'denied' };
+      return { status: trusted ? 'authorized' : 'denied', model: 'tcc' };
     }
-    return { status: 'granted' };
+    return { status: 'granted', model: permissionModel };
   } catch (e) {
     return { status: 'unknown', detail: String(e && e.message || e).slice(0, 120) };
   }
@@ -73,14 +82,14 @@ function inputPermission() {
 
 function screenPermission() {
   try {
-    if (isDarwin()) {
+    if (permissionModel === 'tcc') {
       const raw = systemPreferences.getMediaAccessStatus('screen');
       const status = raw === 'granted'
         ? 'authorized'
         : (raw === 'not-determined' ? 'not determined' : raw);
-      return { status };
+      return { status, model: 'tcc' };
     }
-    return { status: 'granted' };
+    return { status: 'granted', model: permissionModel };
   } catch (e) {
     return { status: 'unknown', detail: String(e && e.message || e).slice(0, 120) };
   }
@@ -393,6 +402,7 @@ class DesktopController {
       const caps = await this._driverInstance().ensureReady();
       features = caps.features || {};
       methods = caps.methods || null;
+      setPermissionModel(features.permission_model);
     } catch (e) { /* helper unavailable — leave the manifest empty */ }
     const result = {
       ok: true,

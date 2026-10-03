@@ -126,7 +126,7 @@ func handleRequest(_ req: Request) {
                     "clipboard_restore": true,
                     "target_confirmation": true,
                     "unicode_graphemes": true,
-                    "middle_click": false,
+                    "middle_click": true,
                     "keypad_keys": true,
                     "permission_model": "tcc",
                 ],
@@ -319,12 +319,13 @@ func handleRequest(_ req: Request) {
         case "click_point":
             let pt = CGPoint(x: p.dbl("x"), y: p.dbl("y"))
             let kind = p.str("kind", "left")
-            let button: MouseButton = kind == "right" ? .right : .left
+            // Full button set (left/right/middle/back/forward) — aligns with Windows.
+            let button = MouseButton.parse(kind)
             let count = kind == "double" ? 2 : 1
             let target = try Injection.resolveCoordinateTarget(at: pt)
             cursorMove(pt, targetPid: target.pid)
             try Injection.click(x: pt.x, y: pt.y, button: button, count: count, modifiers: [])
-            cursorClick(pt, kind: kind == "double" ? .doubleClick : (kind == "right" ? .rightClick : .single))
+            cursorClick(pt, kind: kind == "double" ? .doubleClick : (button == .right ? .rightClick : .single))
             Responder.ok(req.id, ["performed": "click_point"])
 
         case "drag_point":
@@ -547,21 +548,26 @@ private func handleAct(_ id: Int, _ p: [String: Any]) throws {
     case "click", "double", "right":
         let kind: VirtualCursor.ClickKind = op == "double" ? .doubleClick : (op == "right" ? .rightClick : .single)
         if let c = center { cursorMove(c, targetPid: pid) } else { cursorShow(targetPid: pid) }
-        let axResult = AXUIElementPerformAction(el, kAXPressAction as CFString)
-        if axResult == .success {
-            if let c = center { cursorClick(c, kind: kind) }
-            ensureAppFrontmost(pid)
-            Responder.ok(id, ["performed": op])
-        } else if let c = center {
-            // AX press unavailable (canvas/rendered control) — non-blocking click.
-            let button: MouseButton = op == "right" ? .right : .left
-            try Injection.click(x: c.x, y: c.y, button: button, count: op == "double" ? 2 : 1, modifiers: [])
-            cursorClick(c, kind: kind)
-            ensureAppFrontmost(pid)
-            Responder.ok(id, ["performed": op, "via": "coords-fallback"])
-        } else {
+        // `right`/`double` MUST be real events: AXPress triggers the PRIMARY action,
+        // so it would turn a right-click into the default action and a double into
+        // a single. Only `click` tries AXPress first (matching the Windows helper).
+        if op == "click" {
+            let axResult = AXUIElementPerformAction(el, kAXPressAction as CFString)
+            if axResult == .success {
+                if let c = center { cursorClick(c, kind: kind) }
+                ensureAppFrontmost(pid)
+                Responder.ok(id, ["performed": op])
+                return
+            }
+        }
+        guard let c = center else {
             throw HelperError("computer_error", "element has no frame for coordinate fallback")
         }
+        let button: MouseButton = op == "right" ? .right : .left
+        try Injection.click(x: c.x, y: c.y, button: button, count: op == "double" ? 2 : 1, modifiers: [])
+        cursorClick(c, kind: kind)
+        ensureAppFrontmost(pid)
+        Responder.ok(id, ["performed": op, "via": op == "click" ? "coords-fallback" : "coords"])
 
     case "set_value":
         var result: [String: Any] = ["performed": op]
@@ -634,27 +640,6 @@ private func handleInputText(_ id: Int, _ p: [String: Any]) throws {
     ]
     if !outcome.notes.isEmpty { result["notes"] = outcome.notes }
     Responder.ok(id, result)
-}
-
-/// Real editing session: activate → focus → click for a caret → select all →
-/// paste → optional Return. All input uses postToPid (no cursor hijack).
-private func realTypeInto(pid: pid_t, app: AXUIElement, el: AXUIElement, text: String, submit: Bool) throws {
-    NSRunningApplication(processIdentifier: pid)?.activate()
-    usleep(160 * 1000)
-    AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, true as CFTypeRef)
-    usleep(80 * 1000)
-    if let c = AX.center(el) {
-        try Injection.click(x: c.x, y: c.y, button: .left, count: 1, modifiers: [])
-        cursorClick(c, kind: .single)
-    }
-    usleep(140 * 1000)
-    try Injection.key("cmd+a", repeat: 1)
-    usleep(60 * 1000)
-    try Clipboard.paste(text, into: ProcessTarget.resolve(pid: pid))
-    if submit {
-        try Injection.key("return", repeat: 1)
-        usleep(80 * 1000)
-    }
 }
 
 // MARK: - Resident entry

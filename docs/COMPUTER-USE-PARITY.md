@@ -59,37 +59,39 @@ divergence is printed as an expected warning).
 | `ax` / `uia` | true / false | false / true |
 | `input_model` | `per_pid` | `global` (P3 research) |
 | `background_input` | true | **false** (P3 research) |
-| `clipboard_restore` | true | true (P1 done) |
-| `target_confirmation` | true | **false** (P1 todo) |
-| `unicode_graphemes` | true | true (P1 done) |
-| `middle_click` | **false** (P1 todo) | true |
-| `keypad_keys` | true | **false** (P1 todo) |
+| `clipboard_restore` | true | true |
+| `target_confirmation` | true | true |
+| `unicode_graphemes` | true | true |
+| `middle_click` | true | true |
+| `keypad_keys` | true | true |
 | `permission_model` | `tcc` | `uipi` |
 
-Bold = the lagging side. When a flag flips, the corresponding
-`bridge_client._capability_notes()` guidance disappears automatically (it is
-derived from these values, not hardcoded).
+Only `input_model`/`background_input` still differ (macOS can post events to a
+pid; Windows injection is global) — the deliberate P3 research item, advertised
+and surfaced via `_capability_notes()`. Everything else is aligned; `delete`
+now means forward-delete on both (with `backspace` for Backspace).
 
 ---
 
 ## 3. Known gaps (bilateral)
 
 ### Windows behind macOS
-1. Coordinate injection moves the real pointer; no background input (`Input.cs` vs `Injection.swift` `postToPid`). — **P3 research** (documented via `input_model:global`).
-2. `permissions` / `permissions_request` are placeholders (hardcoded granted); real gate is UIPI (`Program.cs`, `Elevation.cs`). — *Windows has no TCC-equivalent; P3 makes UIPI a first-class permission state.*
-3. ~~Clipboard text entry does not restore the user clipboard~~ — **fixed P1** (`TextInput.PasteText` restores prior text). Paste *receipt* (`target_confirmation`) still todo.
-4. ~~Unicode typed per UTF-16 code unit~~ — **fixed P1** (`Input.TypeUnicode` groups surrogate pairs in one SendInput).
-5. ~~`list_apps(scope='installed')` returns running apps (stub)~~ — **fixed P1** (`AppInventory.Installed` enumerates Start Menu shortcuts + App Paths).
-6. ~~`launch` cannot resolve localized display names~~ — **fixed P1** (`launch` falls back to a Start Menu shortcut by display name; confirms via new windowed pid).
-7. ~~`app_state` silently retargets to the frontmost app~~ — **fixed P1** (`HandleSnapshot` strict `no_target`).
-8. `scroll`/`scroll_to` anchor at the real cursor / ignore pid; `scroll_to` defaults to (0,0) when x/y omitted (`Program.cs`). — **P1 todo**.
-9. ~~`cursor_demo` ignores `seconds`~~ — **fixed P1** (animates for the requested duration, bounded ≤15s).
+1. Coordinate injection moves the real pointer; no background input (`Input.cs` vs `Injection.swift` `postToPid`). — **P3 research** (advertised via `input_model:global`; deliberate, not a bug).
+2. ~~`permissions` / `permissions_request` were placeholders~~ — **fixed**: report `model:uipi` + real state (`self_elevated`, `can_input_frontmost`, `blocked_reason`); Electron gates on `permission_model`.
+3. ~~Clipboard text entry does not restore the user clipboard~~ — **fixed** (`TextInput.PasteText` restores prior text).
+4. ~~No paste receipt / `target_confirmation`~~ — **fixed**: el-based entry falls back to clipboard paste **with readback**.
+5. ~~Unicode typed per UTF-16 code unit~~ — **fixed** (`Input.TypeUnicode` groups surrogate pairs in one SendInput).
+6. ~~`list_apps(scope='installed')` returned running apps (stub)~~ — **fixed** (Start Menu shortcuts + App Paths).
+7. ~~`launch` could not resolve localized display names~~ — **fixed** (Start Menu shortcut by display name; confirms via new windowed pid).
+8. ~~`app_state` silently retargeted to the frontmost app~~ — **fixed** (strict `no_target`).
+9. ~~`scroll_to` defaulted to (0,0) when x/y omitted~~ — **fixed** (brings target forward, scrolls at the current cursor).
+10. ~~`cursor_demo` ignored `seconds`~~ — **fixed** (animates for the requested duration, ≤15s).
 
 ### macOS behind Windows
-10. No middle-click (`main.swift` `click_point`); no keypad/`fn` tokens; `delete` semantics differ (`KeyMapping.swift` vs `Input.cs`); dead `realTypeInto`.
+11. ~~No middle-click~~ — **fixed** (`click_point` uses `MouseButton.parse`); ~~keypad/`fn` tokens~~ — **keypad added to Windows** so both support them; ~~`delete` semantics differ~~ — **unified** (`delete`=forward, `backspace`=Backspace); ~~dead `realTypeInto`~~ — **removed**; `act` `right`/`double` no longer collapse into a single AXPress.
 
 ### Shared (both)
-11. ~~`disable_diff` dropped before the helper~~ — **fixed in P0** (kernel → `_replCall` → `desktop-controller.axAppState` → `driver.getAppState` → helper).
+12. ~~`disable_diff` dropped before the helper~~ — **fixed in P0**.
 
 ---
 
