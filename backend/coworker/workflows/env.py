@@ -358,7 +358,7 @@ def build_tool_environment(
             app = str(payload.get("app") or "")
             if not app:
                 raise RuntimeError("focus_window requires an app name")
-            return comp.invoke({"action": "launch_app", "app": app})
+            return comp.invoke({"action": "focus_window", "app": app})
         args: dict[str, Any] = {"action": action, **payload}
         _merge_locator(args, locator)
         # Semantic locator: resolve role/name/text to a ref by observing the AX

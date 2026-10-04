@@ -81,11 +81,12 @@ def test_drag_and_clipboard_generate_script(monkeypatch):
     assert "typeText" in script.calls[-1]["code"]
 
 
-def test_focus_window_launches_app():
+def test_focus_window_focuses_app():
+    # focus_window must FOCUS an already-running app, not launch a second instance.
     comp = _FakeTool("computer", {"ok": True})
     env = build_tool_environment(workspace=None, tools=[comp])
     env.app("focus_window", {"app": "Safari"}, None)
-    assert comp.calls[-1] == {"action": "launch_app", "app": "Safari"}
+    assert comp.calls[-1] == {"action": "focus_window", "app": "Safari"}
 
 
 def test_script_action_dispatches_to_computer_script():

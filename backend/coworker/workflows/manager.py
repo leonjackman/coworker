@@ -112,7 +112,7 @@ class WorkflowManager:
         data["history"] = self.store.history(name)
         data["state"] = self.get_state(name)
         diags = self._all_diagnostics(workflow)
-        data["valid"] = not diags
+        data["valid"] = not any(d.severity == "error" for d in diags)
         data["diagnostics"] = [d.to_dict() for d in diags]
         return data
 
@@ -214,7 +214,10 @@ class WorkflowManager:
             self.store.delete(name)
         return self._ok_with_diagnostics(saved)
 
-    _DEFINITION_KEYS = ("name", "description", "platform", "steps", "inputs", "outputs", "triggers")
+    _DEFINITION_KEYS = (
+        "name", "description", "platform", "steps", "inputs", "outputs", "triggers",
+        "entry", "exits",
+    )
 
     def _same_definition(self, a: Workflow, b: Workflow) -> bool:
         """True when two workflows have the same editable definition (ignoring
@@ -387,7 +390,7 @@ class WorkflowManager:
         if workflow is None:
             return {"status": "error", "errors": diagnostics, "valid": False, "diagnostics": []}
         diags = self._all_diagnostics(workflow)
-        errors = [str(d) for d in diags if d.severity == "error"]
+        errors = [*diagnostics, *(str(d) for d in diags if d.severity == "error")]
         warnings = [str(d) for d in diags if d.severity == "warning"]
         return {
             "status": "error" if errors else "ok",
@@ -596,7 +599,8 @@ class WorkflowManager:
             pass
         entry: dict[str, Any] = {}
         for step in _walk_steps(workflow.steps):
-            info = steps_ctx.get(step.id)
+            # The executor stores results under `step.bind` (= as_name or id).
+            info = steps_ctx.get(step.bind)
             status = "ok"
             error = ""
             if isinstance(info, dict):
@@ -670,18 +674,18 @@ class WorkflowManager:
         if len(runs) < limit:
             return ""
         sigs: list[tuple[str, str]] = []
-        step = ""
+        steps: list[str] = []
         for run in runs[:limit]:
             if run.get("status") != "failed":
                 return ""
             err = str(run.get("error") or "")
             match = self._FAIL_STEP_RE.search(err)
-            if match:
-                step = match.group(1)
-            detail = re.sub(r"\d+", "#", err.strip())[:200]
-            sigs.append((step, detail))
+            step_id = match.group(1) if match else ""
+            steps.append(step_id)
+            sigs.append((step_id, re.sub(r"\d+", "#", err.strip())[:200]))
         if len(set(sigs)) != 1:
             return ""
+        step = steps[0] if steps and len(set(steps)) == 1 else ""
         where = f"step '{step}'" if step else "the same step"
         return (
             f"This workflow has failed the SAME way {limit} times in a row at {where}. "
@@ -854,7 +858,10 @@ class WorkflowManager:
         # Draft saves (visual editor autosave/manual save) persist the document
         # even when it has capability problems; those are enforced at RUN time.
         if not draft:
-            errors = self._all_errors(workflow)
+            # Structural parser diagnostics (skipped steps, duplicate inputs,
+            # invalid mode, bad name…) are ERRORS — surface them instead of
+            # silently dropping them once a workflow object was produced.
+            errors = [*diagnostics, *self._all_errors(workflow)]
             if errors:
                 raise WorkflowValidationError("; ".join(errors))
         return workflow

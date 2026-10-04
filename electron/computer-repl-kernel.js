@@ -96,11 +96,31 @@ function makeBinding(selector, state) {
     return lines.join('\n');
   };
 
+  // Normalize a key chord into { key, modifiers } and map platform-specific
+  // primary modifiers to the NEUTRAL `mod` token. The platform driver resolves
+  // `mod` -> Cmd (macOS) / Ctrl (Windows). This is what makes the SAME script
+  // correct on both OSes (no `cmd+f` string that breaks on Windows).
+  const PRIMARY = new Set(['cmd', 'command', 'super', 'meta', 'win', 'windows']);
+  const normalizeChord = (key, modifiers = []) => {
+    let tokens = [String(key || '')];
+    if (String(key || '').includes('+')) tokens = String(key).split('+');
+    const keyToken = tokens.pop() || '';
+    const mods = [];
+    for (const t of [...tokens, ...(modifiers || [])]) {
+      const low = String(t).trim().toLowerCase();
+      if (!low) continue;
+      mods.push(PRIMARY.has(low) ? 'mod' : (low === 'option' ? 'alt' : low));
+    }
+    return { key: keyToken.trim(), modifiers: mods };
+  };
+
   const binding = {
     selector,
     async getAXState(opts = {}) {
       const res = await observe(opts);
-      return res;
+      // `refs` is the helper's COUNT; `refs_list` is the ordered ref strings so
+      // the model can address elements by label instead of regexing `.text`.
+      return Object.assign({}, res, { refs_list: state.refs.slice() });
     },
     async getAXStateText(opts = {}) {
       return textOf(await observe(opts));
@@ -109,8 +129,8 @@ function makeBinding(selector, state) {
       return app('screenshot', { display: opts.display || 0, max_width: opts.maxWidth || 1024 });
     },
     async getAXStateAndScreenshot(opts = {}) {
-      const [state, shot] = await Promise.all([observe(opts), app('screenshot', { max_width: opts.maxWidth || 1024 })]);
-      return { state, screenshot: shot };
+      const [res, shot] = await Promise.all([observe(opts), app('screenshot', { max_width: opts.maxWidth || 1024 })]);
+      return { state: Object.assign({}, res, { refs_list: state.refs.slice() }), screenshot: shot };
     },
     async click(target, opts = {}) {
       if (Array.isArray(target)) return app('click_point', { x: target[0], y: target[1] });
@@ -119,13 +139,19 @@ function makeBinding(selector, state) {
       return app('act', { ref: resolveTarget(target), op });
     },
     async doubleClick(target) {
-      return binding.click(target, { clickCount: 2 });
+      return app('act', { ref: resolveTarget(target), op: 'double' });
     },
     async rightClick(target) {
-      return binding.click(target, { mouseButton: 'right' });
+      return app('act', { ref: resolveTarget(target), op: 'right' });
+    },
+    async clickPoint(x, y) {
+      return app('click_point', { x: Number(x), y: Number(y) });
     },
     async focus(target) {
       return app('act', { ref: resolveTarget(target), op: 'focus' });
+    },
+    async show(target) {
+      return app('act', { ref: resolveTarget(target), op: 'show' });
     },
     async setValue(target, value) {
       return app('act', { ref: resolveTarget(target), op: 'set_value', value: String(value) });
@@ -136,30 +162,40 @@ function makeBinding(selector, state) {
     async typeText(text, opts = {}) {
       return app('input_text', { text: String(text), submit: !!opts.submit });
     },
+    async typeInto(ref, text, opts = {}) {
+      return app('input_text', { ref: resolveTarget(ref), text: String(text), submit: !!opts.submit });
+    },
     async paste(text, opts = {}) {
       return app('input_text', { text: String(text), submit: !!opts.submit, prefer: 'clipboard' });
     },
-    async selectText(target, text, opts = {}) {
+    async selectText(target, text) {
       const ref = resolveTarget(target);
-      if (opts.replace !== false) {
-        await app('act', { ref, op: 'focus' });
-        await app('input_text', { ref, text: String(text) });
-      }
-      return { performed: 'selectText', ref };
+      await app('act', { ref, op: 'focus' });
+      return app('input_text', { ref, text: String(text) });
     },
     async pressKey(key, opts = {}) {
-      return app('press_key', { key: String(key), repeat: opts.repeat || 1 });
+      const chord = normalizeChord(key, opts.modifiers);
+      return app('press_key', { key: chord.key, modifiers: chord.modifiers, repeat: opts.repeat || 1 });
     },
-    async scroll(target, direction, pages = 1) {
+    async shortcut(name, opts = {}) {
+      return app('shortcut', { name: String(name), repeat: opts.repeat || 1 });
+    },
+    async scroll(direction, pages = 1) {
       const dir = String(direction || 'down').toLowerCase();
       const unit = 120 * Math.max(1, Number(pages) || 1);
       const map = { down: [0, unit], up: [0, -unit], right: [unit, 0], left: [-unit, 0] };
       const [dx, dy] = map[dir] || map.down;
-      return app('scroll', { dx, dy });
+      return app('scroll_to', { app: selector, dx, dy });
     },
-    async scrollTo(target, dx, dy, x, y) {
-      const appRef = resolveTarget(target);
-      return app('scroll_to', { app: appRef, dx: Number(dx) || 0, dy: Number(dy) || 0, x: Number(x) || 0, y: Number(y) || 0 });
+    async scrollTo(opts = {}) {
+      const o = typeof opts === 'object' && opts !== null ? opts : {};
+      return app('scroll_to', {
+        app: selector,
+        dx: Number(o.dx) || 0,
+        dy: Number(o.dy) || 0,
+        ...(o.x != null ? { x: Number(o.x) } : {}),
+        ...(o.y != null ? { y: Number(o.y) } : {}),
+      });
     },
     async drag(from, to) {
       return app('drag', { x1: from[0], y1: from[1], x2: to[0], y2: to[1] });
@@ -185,17 +221,41 @@ const cua = {
     return (res && res.apps) || [];
   },
   async getApp(selector) {
+    // Binds an ALREADY-RUNNING app. To open one, call cua.launchApp(selector).
     if (typeof selector !== 'string' || !selector.trim()) {
       throw new TypeError('getApp requires an app name, bundle ID, or path');
     }
     const resolved = await rpc('resolve_app', { app: selector });
     if (!resolved || !resolved.pid) {
-      const err = new Error(`app not running: ${selector}`);
+      const err = new Error(`app not running: ${selector} (use cua.launchApp to open it)`);
       err.code = 'app_not_running';
       err.resolved = resolved || null;
       throw err;
     }
     return makeBinding(selector, { refs: [], pid: resolved.pid, bundleId: resolved.bundleId || '' });
+  },
+  async launchApp(selector) {
+    if (typeof selector !== 'string' || !selector.trim()) {
+      throw new TypeError('launchApp requires an app name, bundle ID, path, or executable');
+    }
+    const res = await rpc('launch', { app: selector });
+    if (res && res.ok === false) {
+      const err = new Error(`could not launch ${selector}`);
+      err.code = 'launch_failed';
+      err.detail = res;
+      throw err;
+    }
+    return res || {};
+  },
+  async focusApp(selector) {
+    const res = await rpc('focus_app', { app: String(selector || ''), settle: true });
+    if (res && res.focused === false) {
+      const err = new Error(`could not focus ${selector}`);
+      err.code = 'no_target';
+      err.detail = res;
+      throw err;
+    }
+    return res || {};
   },
   async getState() {
     return rpc('frontmost', {});

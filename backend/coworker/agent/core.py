@@ -29,7 +29,7 @@ from typing import Annotated, Any, Literal
 from typing_extensions import NotRequired
 
 from langchain.agents.middleware.types import AgentState
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .types import AgentMode, Autonomy, Language, Phase, VALID_LANGUAGES, WorkMode
 
@@ -236,6 +236,41 @@ class WorkflowArgs(BaseModel):
         default=False,
         description="For action=capabilities: return the FULL schema (not the compact view) for the requested kinds.",
     )
+
+    # Models frequently send a JSON-encoded string where the schema declares a
+    # list/dict (e.g. kinds='["computer"]'). Coerce before validation so the call
+    # succeeds instead of erroring and forcing a guessing loop.
+    @field_validator("kinds", mode="before")
+    @classmethod
+    def _coerce_kinds(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except (ValueError, TypeError):
+            pass
+        return [part.strip() for part in text.replace(",", " ").split() if part.strip()]
+
+    @field_validator("inputs", mode="before")
+    @classmethod
+    def _coerce_inputs(cls, value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except (ValueError, TypeError):
+            pass
+        return value
 
 
 class GitStatusArgs(BaseModel):

@@ -132,7 +132,7 @@ class _FakeClient:
         return self._ax_act
 
     # Structure-first surface (native AX)
-    def ax_snapshot(self, depth=6):
+    def ax_snapshot(self, depth=6, app=""):
         if self._snapshot_text is None:
             return {"error": "no accessibility", "error_code": "input_permission"}
         return {"ok": True, "frontmost": self._frontmost, "refs": 3, "text": self._snapshot_text}

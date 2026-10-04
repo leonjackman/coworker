@@ -158,13 +158,34 @@ def resolve_js(code: str, context: dict[str, Any], secrets: SecretResolver | Non
     if "{{" not in code:
         return code
 
+    def _string_quote(start: int, end: int) -> str:
+        """The quote of the JS string literal the ref sits inside, or "".
+
+        Finds the nearest opening quote before the ref on the same line and
+        confirms a matching close after it — so `"Hi {{x}}!"` (embedded) is
+        handled, not only the whole-token `'{{x}}'` case.
+        """
+        quote = ""
+        for i in range(start - 1, -1, -1):
+            ch = code[i]
+            if ch == "\n":
+                break
+            if ch in ("'", '"', "`") and (i == 0 or code[i - 1] != "\\"):
+                quote = ch
+                break
+        if not quote:
+            return ""
+        close = code.find(quote, end)
+        if close == -1:
+            return ""
+        newline = code.find("\n", end)
+        return "" if (newline != -1 and close > newline) else quote
+
     def _sub(match: re.Match[str]) -> str:
         value = _lookup(match.group(1), context, secrets)
-        start, end = match.start(), match.end()
-        before = code[start - 1] if start > 0 else ""
-        after = code[end] if end < len(code) else ""
-        if before in ("'", '"', "`") and before == after:
-            return _escape_js(_stringify_value(value), before)
+        quote = _string_quote(match.start(), match.end())
+        if quote:
+            return _escape_js(_stringify_value(value), quote)
         return json.dumps(value, ensure_ascii=False)
 
     return _REF_RE.sub(_sub, code)

@@ -593,10 +593,15 @@ class DesktopController {
   // UIA); coordinates are an explicit fallback. Platform differences live
   // entirely in the driver (see electron/automation/).
 
-  async axSnapshot(depth = 6) {
+  async axSnapshot(depth = 6, app = '') {
     const driver = this._driverInstance();
     if (!driver.supported) return { frontmost: '', refs: 0, text: '', error: `computer use is not supported on ${process.platform}` };
-    return driver.snapshotText(depth);
+    return driver.snapshotText(depth, 400, app);
+  }
+
+  async axFocusApp(app, settle = true) {
+    this._ensureNotPaused();
+    return this._driverInstance().focusApp(String(app || ''), !!settle);
   }
 
   // get_app_state: key-window accessibility tree + window info + incremental diff.
@@ -699,6 +704,11 @@ class DesktopController {
     return this._driverInstance().pressKeyTo(app, key, modifiers, repeat);
   }
 
+  async axShortcut(app, name, repeat = 1) {
+    this._ensureNotPaused();
+    return this._driverInstance().pressShortcutTo(app, name, repeat);
+  }
+
   async axDragTo(app, x1, y1, x2, y2) {
     this._ensureNotPaused();
     return this._driverInstance().dragTo(app, x1, y1, x2, y2);
@@ -731,10 +741,13 @@ class DesktopController {
         return res;
       }
       case 'screenshot': return this.screenshot({ display: Number(args.display) || 0, maxWidth: Number(args.max_width) || 1024, quality: 60 });
+      case 'launch': return this.axLaunch(String(args.app || ''));
+      case 'focus_app': return this._driverInstance().focusApp(String(args.app || ''), args.settle !== false);
       case 'act': {
         this._ensureNotPaused();
         const extra = {};
         if (args.value !== undefined) extra.value = String(args.value);
+        if (args.action !== undefined) extra.action = String(args.action);
         return this._driverInstance().actFor(String(args.app || ''), String(args.ref || ''), String(args.op || 'click'), extra);
       }
       case 'input_text': {
@@ -744,10 +757,13 @@ class DesktopController {
           ref: String(args.ref || ''),
           text: String(args.text || ''),
           submit: !!args.submit,
+          prefer: args.prefer === 'clipboard' ? 'clipboard' : '',
         });
       }
       case 'press_key': return this.axPressTo(String(args.app || ''), String(args.key || ''), args.modifiers, args.repeat);
-      case 'scroll': return this.axScrollTo(String(args.app || ''), Number(args.dx) || 0, Number(args.dy) || 0);
+      case 'shortcut': return this._driverInstance().pressShortcutTo(String(args.app || ''), String(args.name || ''), args.repeat);
+      case 'scroll': return this._driverInstance().scroll(Number(args.dx) || 0, Number(args.dy) || 0);
+      case 'scroll_to': return this.axScrollTo(String(args.app || ''), Number(args.dx) || 0, Number(args.dy) || 0, args.x, args.y);
       case 'drag': return this.axDragTo(String(args.app || ''), Number(args.x1), Number(args.y1), Number(args.x2), Number(args.y2));
       case 'click_point': return this.axClickPointTo(String(args.app || ''), Number(args.x), Number(args.y));
       case 'ui_settle': return this.axUiSettle({ app: String(args.app || ''), quietMs: args.quiet_ms, timeoutMs: args.timeout_ms });

@@ -69,7 +69,7 @@ def _http(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("json") is not None:
         kwargs["json"] = payload["json"]
     elif payload.get("body") is not None:
-        kwargs["content"] = str(payload["body"])
+        kwargs["content"] = _as_text(payload["body"])
 
     with httpx.Client() as client:
         resp = client.request(method, url, **kwargs)
@@ -104,13 +104,13 @@ def _file(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     if action == "write":
         if payload.get("mkdirs"):
             path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(payload.get("content") or ""), encoding=encoding)
+        path.write_text(_as_text(payload.get("content")), encoding=encoding)
         return {"path": str(path), "written": True}
     if action == "append":
         if payload.get("mkdirs"):
             path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding=encoding) as handle:
-            handle.write(str(payload.get("content") or ""))
+            handle.write(_as_text(payload.get("content")))
         return {"path": str(path), "appended": True}
     if action in ("copy", "move"):
         target = _expand(payload.get("to"))

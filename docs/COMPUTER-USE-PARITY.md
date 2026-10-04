@@ -95,7 +95,33 @@ now means forward-delete on both (with `backspace` for Backspace).
 
 ---
 
-## 4. How to gate on capabilities (examples)
+## 3b. Action contract & semantic shortcuts (root-cause single source)
+
+`backend/coworker/computer/actions.py` is the **single source** for every
+computer action. Each `Action` now also declares its wiring:
+
+- `rpc` — the host/helper JSON-RPC method (drives the host's table-driven
+  `_replCall` dispatch; the host may not have a hand-written route the table
+  lacks).
+- `script` — the JS sandbox binding name (must exist in
+  `electron/computer-repl-kernel.js`).
+- `op` — the sub-op when `rpc == "act"` (click/double/right/show).
+- `shortcut` — an implicit semantic shortcut (e.g. `go_back` → `back`).
+- `param_map` — catalog param → RPC/script arg (removes the `scroll_to`
+  `scroll_app`/`scroll_x`/`scroll_y` mismatch).
+- `requires_any` — at least one of these params must be present.
+
+`contract_dump()` exports it as JSON; `backend/tests/test_action_contract.py`
+fails if the kernel/host drift from it (a real drift guard, not a doc).
+
+**Semantic shortcuts** (`SEMANTIC_SHORTCUTS`) are platform-NEUTRAL names
+(`copy`, `save`, `find`, `back`, …). The concrete key+modifiers live in the
+**per-platform driver** (`driver.shortcutMap()`; `mod` → Cmd on macOS / Ctrl on
+Windows), selected at startup by `createDriver()`. The shared layer and the
+model use only the neutral name or `mod`, so the same script is correct on both
+OSes (no `cmd+f` that breaks on Windows).
+
+
 
 ```js
 // Electron (shared layer) — prefer capability checks over platform.

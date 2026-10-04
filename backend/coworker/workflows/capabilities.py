@@ -29,7 +29,9 @@ from typing import Any, Callable
 DSL_VERSION = 2
 
 # Template reference roots allowed anywhere a string is templated.
-TEMPLATE_ROOTS = ("inputs", "steps", "vars", "env")
+# `loop` exposes the current item/index inside `foreach` bodies (the executor
+# sets run.context["loop"] = {"item", "index"}).
+TEMPLATE_ROOTS = ("inputs", "steps", "vars", "env", "loop")
 
 
 def _action_platforms(name: str) -> list[str]:
@@ -41,9 +43,21 @@ def _action_platforms(name: str) -> list[str]:
 
 
 def _kind_platforms(spec: "KindSpec") -> set[str]:
+    """Platform restriction for a whole kind.
+
+    A kind is restricted only when EVERY action is restricted to the same set;
+    if any action runs everywhere (empty), the kind runs everywhere. This stops
+    the generic `tool` kind from being mislabeled darwin/win32 just because it
+    also declares the OS-specific run_applescript/run_powershell actions.
+    """
+    if not spec.actions:
+        return set()
     tags: set[str] = set()
     for action in spec.actions:
-        tags |= set(_action_platforms(action.name))
+        action_tags = set(_action_platforms(action.name))
+        if not action_tags:
+            return set()
+        tags |= action_tags
     return tags
 
 #: Action kinds whose BINDING can be resolved by the agent from an intent-only

@@ -18,7 +18,8 @@ Keyboard shortcuts belong exclusively to ``press_hotkey``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,27 @@ class Action:
     success: str = "no_error"
     agent_tool: bool = True  # exposed on the agent's single `computer` tool
     aliases: tuple[str, ...] = ()
+    # ── Declarative wiring (single source; consumed by the JS host kernel, the
+    #    driver and the contract test — never re-declared elsewhere):
+    rpc: str = ""  # host/helper JSON-RPC method this action maps to
+    script: str = ""  # JS sandbox binding method name ("" = not exposed to scripts)
+    op: str = ""  # sub-op when rpc is "act" (click/double/right/show)
+    shortcut: str = ""  # implicit semantic shortcut (go_back -> "back")
+    param_map: dict[str, str] = field(default_factory=dict)  # catalog param -> rpc/script arg
+    requires_any: tuple[str, ...] = ()  # at least one of these params must be present
+
+
+#: Semantic shortcut names (platform-NEUTRAL). The concrete key+modifiers for
+#: each name live in the per-platform driver (mac/win), so the shared layer and
+#: the model never hardcode a platform's modifier or key. Used by both the
+#: `computer` action `press_hotkey` (via the `shortcut` param) and the script API
+#: `app.shortcut(name)`.
+SEMANTIC_SHORTCUTS: tuple[str, ...] = (
+    "copy", "cut", "paste", "save", "save_as", "find", "select_all",
+    "undo", "redo", "new", "open", "close", "quit", "print",
+    "back", "forward", "zoom_in", "zoom_out", "fullscreen", "refresh",
+    "delete",
+)
 
 
 _TEXT_DESC = "The literal text to enter. Any characters are allowed (including '+'); use press_hotkey for keyboard shortcuts."
@@ -51,33 +73,41 @@ _APP_DESC = "Target app to act on (macOS display name or bundle id; Windows proc
 COMPUTER_ACTIONS: tuple[Action, ...] = (
     Action(
         "launch_app",
-        (Param("app", required=True, description="macOS: app display name (e.g. Calculator), bundle id (com.apple.calculator), or .app path. Windows: executable / App Paths name (e.g. notepad, mspaint, calc.exe) or a full path — localized display names do not resolve."),),
+        (Param("app", required=True, description="macOS: app display name (e.g. Calculator), bundle id (com.apple.calculator), or .app path. Windows: executable / App Paths name (e.g. notepad, mspaint, calc.exe), a full path, or an installed Start Menu name."),),
         description="Open an installed app.",
         observation_free=True,
+        rpc="launch",
+        script="launchApp",
     ),
     Action(
         "press_hotkey",
         (
-            Param("key", required=True, description="Key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or a single symbol)."),
+            Param("key", description="Key name (space, enter, tab, escape, backspace, delete, arrows, home, end, pageup/pagedown, F1..F12, a-z, 0-9, or a single symbol)."),
             Param("modifiers", "list", description=_MODS_DESC),
+            Param("shortcut", description=f"Semantic shortcut name (preferred; platform-neutral): one of {', '.join(SEMANTIC_SHORTCUTS)}."),
             Param("app", description=_APP_DESC),
         ),
-        description="Press a keyboard shortcut / key chord.",
+        description="Press a keyboard shortcut / key chord (or a semantic `shortcut`).",
         observation_free=True,
+        rpc="press_hotkey",
+        script="pressKey",
+        requires_any=("key", "shortcut"),
     ),
-    Action("click_ref", (Param("ref", required=True, description=_REF_DESC),), description="Click an element by ref.", locator="ref"),
-    Action("double_click_ref", (Param("ref", required=True, description=_REF_DESC),), description="Double-click an element by ref.", locator="ref"),
-    Action("right_click_ref", (Param("ref", required=True, description=_REF_DESC),), description="Right-click an element by ref.", locator="ref"),
+    Action("click_ref", (Param("ref", required=True, description=_REF_DESC),), description="Click an element by ref.", locator="ref", rpc="act", op="click", script="click"),
+    Action("double_click_ref", (Param("ref", required=True, description=_REF_DESC),), description="Double-click an element by ref.", locator="ref", rpc="act", op="double", script="doubleClick"),
+    Action("right_click_ref", (Param("ref", required=True, description=_REF_DESC),), description="Right-click an element by ref.", locator="ref", rpc="act", op="right", script="rightClick"),
     Action(
         "type_into",
         (
             Param("text", required=True, description=_TEXT_DESC),
             Param("ref", description="Element ref of the input field (macOS AXTextField/AXTextArea; Windows Edit/Document/ComboBox). Omit to type into the currently focused field of `app` (or the frontmost app)."),
-            Param("submit", "boolean", description="Press Enter after typing (search/submit fields need it while focused)."),
+            Param("submit", "boolean", description="Press Enter after typing (search/submit fields need this while focused)."),
             Param("app", description=_APP_DESC),
         ),
         description="Type literal text into a text field (by ref) or the focused field.",
         locator="ref",
+        rpc="input_text",
+        script="typeInto",
     ),
     Action(
         "type_text",
@@ -86,6 +116,8 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
             Param("app", description=_APP_DESC),
         ),
         description="Type literal text (into the target/frontmost app).",
+        rpc="type_text",
+        script="typeText",
     ),
     Action(
         "scroll",
@@ -94,20 +126,25 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
             Param("dx", "number", description="Horizontal delta."),
         ),
         description="Scroll the frontmost app.",
+        rpc="scroll",
+        script="scroll",
     ),
     Action(
         "scroll_to",
         (
-            Param("scroll_app", required=True, description="Target app name or bundle id to scroll (required)."),
+            Param("app", required=True, description=_APP_DESC + " (required for scroll_to)."),
             Param("dx", "number", description="Horizontal delta."),
             Param("dy", "number", description="Vertical delta (positive scrolls down)."),
-            Param("scroll_x", "number", description="X within the target app's window."),
-            Param("scroll_y", "number", description="Y within the target app's window."),
+            Param("x", "number", description="X within the target app's window."),
+            Param("y", "number", description="Y within the target app's window."),
         ),
         description="Scroll a specific app at a point.",
+        rpc="scroll_to",
+        script="scrollTo",
+        param_map={"app": "app", "x": "x", "y": "y"},
     ),
-    Action("go_back", (), description="Back (Cmd+[ on macOS, Alt+Left on Windows).", observation_free=True),
-    Action("show", (Param("ref", description=_REF_DESC),), description="Reveal/scroll to an element.", locator="ref"),
+    Action("go_back", (), description="Back (semantic `back` shortcut; Cmd+[ on macOS, Alt+Left on Windows).", observation_free=True, rpc="shortcut", script="shortcut", shortcut="back"),
+    Action("show", (Param("ref", description=_REF_DESC),), description="Reveal/scroll to an element.", locator="ref", rpc="act", op="show", script="show"),
     Action(
         "click_coords",
         (
@@ -119,6 +156,8 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
         ),
         description="Click raw coordinates (last resort).",
         locator="coords",
+        rpc="click_point",
+        script="clickPoint",
     ),
     # Workflow-only actions (not exposed on the agent tool): the executor runs
     # them through the scripting surface.
@@ -133,12 +172,46 @@ COMPUTER_ACTIONS: tuple[Action, ...] = (
         ),
         description="Drag between two points.",
         agent_tool=False,
+        rpc="drag",
+        script="drag",
     ),
-    Action("focus_window", (Param("app", required=True),), description="Focus an app window.", agent_tool=False),
+    Action("focus_window", (Param("app", required=True),), description="Focus (bring to front) an already-running app window.", rpc="focus_app", script="focusApp"),
+    # clipboard/file_dialog/script are executed by the executor via generated
+    # script code (see workflows/env.py `_computer_script_for`), not as direct
+    # script-sandbox methods — so they declare no `script` binding.
     Action("clipboard", (Param("op", required=True), Param("text", "textarea"), Param("app")), description="Read/write the clipboard.", agent_tool=False),
     Action("file_dialog", (Param("path", required=True), Param("app")), description="Use a native file dialog.", agent_tool=False),
     Action("script", (Param("code", required=True), Param("reset", "boolean")), description="Run cw-automa script code.", target="computer_script", agent_tool=False),
 )
+
+
+def contract_dump() -> dict[str, Any]:
+    """The computer-action contract as plain JSON — the SINGLE source consumed
+    by the JS host kernel / driver and by the contract test (scripts/contract-check.js).
+    Nothing else may re-declare this surface."""
+    return {
+        "shortcuts": list(SEMANTIC_SHORTCUTS),
+        "actions": [
+            {
+                "name": a.name,
+                "rpc": a.rpc,
+                "script": a.script,
+                "op": a.op,
+                "shortcut": a.shortcut,
+                "param_map": dict(a.param_map),
+                "target": a.target,
+                "locator": a.locator,
+                "success": a.success,
+                "agent_tool": a.agent_tool,
+                "requires_any": list(a.requires_any),
+                "params": [
+                    {"name": p.name, "type": p.type, "required": p.required, "aliases": list(p.aliases)}
+                    for p in a.params
+                ],
+            }
+            for a in COMPUTER_ACTIONS
+        ],
+    }
 
 ACTION_MAP: dict[str, Action] = {a.name: a for a in COMPUTER_ACTIONS}
 

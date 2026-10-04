@@ -34,7 +34,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sys
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -172,7 +171,10 @@ class ComputerClient(LoopbackBridgeClient):
     def ax_snapshot(self, depth: int = 6) -> dict[str, Any]:
         """Accessibility element tree flattened to text w/ stable refs. Primary
         observation; only needs the Accessibility permission (no Screen Rec)."""
-        return self._call("POST", "/ax/snapshot", {"depth": int(depth)})
+        payload: dict[str, Any] = {"depth": int(depth)}
+        if app:
+            payload["app"] = str(app)
+        return self._call("POST", "/ax/snapshot", payload)
 
     def ax_app_state(self, app: str = "", depth: int = 6) -> dict[str, Any]:
         """get_app_state: key-window AX tree + window info + an incremental diff
@@ -211,6 +213,17 @@ class ComputerClient(LoopbackBridgeClient):
 
     def ax_launch(self, app: str) -> dict[str, Any]:
         return self._call("POST", "/ax/launch", {"app": str(app)})
+
+    def ax_focus_app(self, app: str, settle: bool = True) -> dict[str, Any]:
+        return self._call("POST", "/ax/focus_app", {"app": str(app), "settle": bool(settle)})
+
+    def ax_shortcut(self, name: str, app: str = "", repeat: int = 1) -> dict[str, Any]:
+        """Press a SEMANTIC shortcut (platform-neutral name; the helper/driver
+        resolves it to the right key+modifiers for the current OS)."""
+        payload: dict[str, Any] = {"name": str(name), "repeat": int(repeat or 1)}
+        if app:
+            payload["app"] = str(app)
+        return self._call("POST", "/ax/shortcut", payload)
 
     def ax_list_apps(self, scope: str = "installed") -> dict[str, Any]:
         """List installed or running apps: ``{scope, apps:[{bundleId, displayName, path?}]}``."""
@@ -328,21 +341,25 @@ def computer_capability_line(data_dir: Path | str | None) -> str:
             notes = ""
         return (
             "OS Computer Use is ENABLED. PRIMARY surface = computer_script (persistent JavaScript): "
-            "`const app = await cua.getApp('Music')` binds an app, then in ONE call observe + act, with "
-            "loops/conditions: app.getAXState() (object with `.text` tree + `.refs`; there is no `.treeString`), "
-            "app.click(refOrIndex), app.typeText(text,{submit}), app.paste(text), app.setValue(ref,text), "
-            "app.pressKey('cmd+f'), app.scroll(target,'down',pages), app.drag([x,y],[x,y]), app.settle(). "
+            "`await cua.launchApp('Calculator')` opens an app, then `const app = await cua.getApp('Calculator')` "
+            "BINDS a running app, then in ONE call observe + act, with "
+            "loops/conditions: app.getAXState() returns `{text, refs, refs_list, ...}` — `.text` is the tree, "
+            "`.refs` is the COUNT and `.refs_list` is the ORDERED array of ref strings (no `.treeString`); "
+            "app.click(refOrIndex), app.typeText(text,{submit}), app.typeInto(ref,text), app.paste(text), "
+            "app.setValue(ref,text), app.pressKey('s',{modifiers:['mod']}) (use the neutral `mod` = Cmd/Ctrl, "
+            "or app.shortcut('save'|'copy'|'find'|...) for cross-platform shortcuts), "
+            "app.scroll('down',pages), app.scrollTo({dy}), app.drag([x,y],[x,y]), app.settle(). "
             "Element targets are opaque refs copied verbatim from the tree brackets (strings like "
-            "'role:label#n', e.g. macOS 'axbutton:搜索#1' / Windows 'button:确定#1') or INTEGER indices from "
-            "the SAME cell's getAXState (call it first). Bindings persist across calls; "
+            "'role:label#n', e.g. macOS 'axbutton:搜索#1' / Windows 'button:确定#1'), items of `.refs_list`, or "
+            "INTEGER indices from the SAME cell's getAXState (call it first). Bindings persist across calls; "
             "computer_script(reset=true, code=…) resets the session and then runs code. "
             "No require/process/fs/network. "
             "INPUT LADDER (AX-first): setValue (most deterministic) -> typeText -> paste. After any input, "
             "re-observe and confirm the field/result changed before claiming success; if AX readback is empty, "
             "trust the paste receipt/field change instead of retrying blindly. "
             "Legacy low-level tools remain: computer_observe (state/snapshot/app_state/screenshot) and computer "
-            "(click_ref/type_into/press_hotkey/launch_app/click_coords). Open apps ONLY via launch_app or "
-            "cua.getApp; press shortcuts ONLY via press_hotkey/pressKey. type_text/type_into enter literal text — any characters. "
+            "(click_ref/type_into/press_hotkey/launch_app/click_coords). Open apps via the low-level `launch_app` "
+            "or `cua.launchApp`; `cua.getApp` only BINDS a running app. type_text/type_into enter literal text — any characters. "
             "If an action fails the SAME way twice, STOP and ask the user instead of retry-looping. "
             "NEVER claim an outcome you did not observe. For the current local date/time, rely on the "
             "session time in your system context (never guess). If a permission error is reported, "
@@ -566,10 +583,15 @@ def build_computer_tools(
         if definition is None:
             return f"unknown computer action '{action}' (allowed: {', '.join(_AGENT_ACTION_NAMES)})"
         allowed = param_names(definition)
-        provided = [k for k, v in raw.items() if k != "action" and v not in (None, "", [], 0, 0.0, False)]
+        provided = {k: v for k, v in raw.items() if k != "action" and v not in (None, "", [], 0, 0.0, False)}
         unexpected = [k for k in provided if k not in allowed]
         if unexpected:
             return f"{action} got unexpected parameter(s): {', '.join(sorted(unexpected))} (allowed: {', '.join(sorted(allowed)) or 'none'})"
+        missing = [p.name for p in definition.params if p.required and p.name not in provided]
+        if missing:
+            return f"{action} requires parameter(s): {', '.join(missing)}"
+        if definition.requires_any and not any(name in provided for name in definition.requires_any):
+            return f"{action} requires at least one of: {', '.join(definition.requires_any)}"
         return None
 
     def _snapshot_text() -> str | None:
@@ -716,8 +738,11 @@ def build_computer_tools(
         if action == "launch_app":
             return client.ax_launch(str(args.app or ""))
         if action == "press_hotkey":
-            mods = [str(m) for m in (args.modifiers or [])]
             app = str(getattr(args, "app", "") or "")
+            shortcut = str(getattr(args, "shortcut", "") or "")
+            if shortcut:
+                return client.ax_shortcut(shortcut, app, 1)
+            mods = [str(m) for m in (args.modifiers or [])]
             if app:
                 return client.ax_press_to(app, str(args.key or ""), mods, 1)
             return client.ax_press(str(args.key or ""), mods)
@@ -744,21 +769,22 @@ def build_computer_tools(
         if action == "scroll":
             return client.ax_scroll(float(args.dx or 0), float(args.dy or 0))
         if action == "scroll_to":
-            if not str(getattr(args, "scroll_app", "") or ""):
-                return {"error": "scroll_to requires 'scroll_app' (target app name or bundle id)", "error_code": "param_error"}
+            target = str(getattr(args, "app", "") or "")
+            if not target:
+                return {"error": "scroll_to requires 'app' (target app name or bundle id)", "error_code": "param_error"}
             return client.ax_scroll_to(
-                str(getattr(args, "scroll_app", "") or ""),
+                target,
                 float(args.dx or 0), float(args.dy or 0),
-                float(args.scroll_x or 0), float(args.scroll_y or 0),
+                float(getattr(args, "x", 0) or 0), float(getattr(args, "y", 0) or 0),
             )
         if action == "go_back":
-            if sys.platform == "win32":
-                return client.ax_press("left", ["alt"])
-            return client.ax_press("[", ["cmd"])
+            return client.ax_shortcut("back", str(getattr(args, "app", "") or ""), 1)
         if action == "click_coords":
             return client.ax_coords(float(args.x or 0), float(args.y or 0),
                                     int(args.shot_width or 0), int(args.shot_height or 0),
                                     int(args.display or 0))
+        if action == "focus_window":
+            return client.ax_focus_app(str(args.app or ""), True)
         return {"error": f"unknown computer action: {action}", "error_code": "computer_error"}
 
     def _observe_impl(action: str, display: int, max_width: int, depth: int, app: str = "") -> str | list:
@@ -774,7 +800,7 @@ def build_computer_tools(
             elif action == "displays":
                 result = client.displays()
             elif action == "snapshot":
-                result = client.ax_snapshot(depth)
+                result = client.ax_snapshot(depth, app)
             elif action == "app_state":
                 result = client.ax_app_state(app, depth)
             elif action == "screenshot":
@@ -1005,10 +1031,10 @@ def build_computer_tools(
             "",
             description=(
                 "JavaScript for the persistent computer-use worker. `cua` is the only global: "
-                "await cua.getApp('Safari'|bundleId|path) binds an app; then "
-                "app.getAXState({disableDiffing?}) (returns an OBJECT: read `.text` for the tree, `.refs`; there is no `.treeString`), app.getAXStateText() (tree as text), app.getScreenshot(), app.getAXStateAndScreenshot(), "
-                "app.click(refOrIndex|[x,y]), app.drag([x,y],[x,y]), app.pressKey('cmd+s'), "
-                "app.scroll(target,'down',pages), app.typeText('hi',{submit?}), app.paste('hi'), "
+                "await cua.launchApp('Calculator'|path) opens an app; await cua.getApp(selector) BINDS a running app; then "
+                "app.getAXState({disableDiffing?}) (returns an OBJECT: read `.text` for the tree, `.refs` count + `.refs_list` array; there is no `.treeString`), app.getAXStateText() (tree as text), app.getScreenshot(), app.getAXStateAndScreenshot(), "
+                "app.click(refOrIndex|[x,y]), app.drag([x,y],[x,y]), app.pressKey('s',{modifiers:['mod']}) (neutral mod = Cmd/Ctrl), app.shortcut('save'|'copy'|'find'|...), "
+                "app.scroll('down',pages), app.scrollTo({dy}), app.typeText('hi',{submit?}), app.typeInto(ref,'hi'), app.paste('hi'), "
                 "app.setValue(ref,'v'), app.focus(ref), app.settle(). "
                 "Element targets are observed refs (strings) or integer indices from the SAME cell's "
                 "getAXState (call it first). cua.emitText(x)/cua.emitImage(shot) show output. "
@@ -1071,8 +1097,9 @@ def build_computer_tools(
     def computer_script(code: str = "", reset: bool = False, timeout_ms: int = 0) -> str | list:
         """Drive the desktop with a persistent JavaScript session (primary structure-first surface).
 
-        This is the preferred way to control apps: you write JS that binds an app
-        (``await cua.getApp('Music')``) and then observes and acts on it in ONE call —
+        This is the preferred way to control apps: you write JS that opens an app
+        (``await cua.launchApp('Calculator')``) and/or binds a running one
+        (``await cua.getApp('Calculator')``) and then observes and acts on it in ONE call —
         including loops and conditional logic — so a multi-step task (click a field, type,
         press Return, verify) does not need a tool round-trip per step. Bindings persist
         across calls; ``reset=true`` discards the worker and bindings, then runs ``code``

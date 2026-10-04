@@ -83,13 +83,15 @@ steps:
   - id: "id:1"
     kind: tool
     do: web_fetch
+    description: Fetch the page HTML/text
     params:
       url: "{{inputs.url}}"
     post:
       - "not_error"
   - id: "id:2"
     kind: assert
-    do: "contains {{inputs.keyword}}"
+    description: Assert the keyword appears in the fetched page text
+    do: "matches {{steps.id:1.text}} {{inputs.keyword}}"
 """,
     },
     {
@@ -124,41 +126,61 @@ steps:
   - id: "id:1"
     kind: browser
     do: navigate
+    description: Open the compose page
     params:
       url: "{{inputs.compose_url}}"
   - id: "id:2"
     kind: browser
     do: snapshot
+    description: Capture the page structure
   - id: "id:3"
     kind: browser
     do: click
+    description: Focus the title field
     locator:
       coords: "{{inputs.title_point}}"
+    bypass: [coord_only_locator]
+    bypass_reason: Rich compose editors expose no stable role/name for their fields.
   - id: "id:4"
     kind: browser
     do: type
+    description: Type the title
     params:
       text: "{{inputs.title}}"
   - id: "id:5"
     kind: browser
     do: click
+    description: Focus the body field
     locator:
       coords: "{{inputs.body_point}}"
     when: "{{inputs.body}}"
+    bypass: [coord_only_locator]
+    bypass_reason: Same as the title field.
   - id: "id:6"
     kind: browser
     do: type
+    description: Type the body
     params:
       text: "{{inputs.body}}"
     when: "{{inputs.body}}"
   - id: "id:7"
     kind: human
+    description: Human confirms the content before publishing
     do: "请检查页面内容后确认发布"
   - id: "id:8"
     kind: browser
     do: click
+    description: Click publish
     locator:
       coords: "{{inputs.publish_point}}"
+    bypass: [coord_only_locator]
+    bypass_reason: The publish button position is user-provided per platform.
+  - id: "id:9"
+    kind: browser
+    do: snapshot
+    description: Re-read the page after publishing (verification)
+    post:
+      - "not_error"
 """,
     },
     {
@@ -171,7 +193,6 @@ steps:
 description: 公众号后台定时创建草稿（navigate → snapshot → click/type，含人工确认）。
 schema_version: 2
 version: 1
-platform: wechat-mp
 inputs:
   title:
     type: string
@@ -192,41 +213,61 @@ steps:
   - id: "id:1"
     kind: browser
     do: navigate
+    description: 打开公众号后台
     params:
       url: https://mp.weixin.qq.com/
   - id: "id:2"
     kind: browser
     do: snapshot
+    description: 读取页面结构
   - id: "id:3"
     kind: browser
     do: click
+    description: 聚焦标题输入框
     locator:
       coords: "{{inputs.title_point}}"
+    bypass: [coord_only_locator]
+    bypass_reason: 富文本编辑器不暴露稳定的 role/name。
   - id: "id:4"
     kind: browser
     do: type
+    description: 输入标题
     params:
       text: "{{inputs.title}}"
   - id: "id:5"
     kind: browser
     do: click
+    description: 聚焦正文输入框
     locator:
       coords: "{{inputs.body_point}}"
     when: "{{inputs.body}}"
+    bypass: [coord_only_locator]
+    bypass_reason: 同标题输入框。
   - id: "id:6"
     kind: browser
     do: type
+    description: 输入正文
     params:
       text: "{{inputs.body}}"
     when: "{{inputs.body}}"
   - id: "id:7"
     kind: human
+    description: 人工确认保存草稿
     do: "确认保存公众号草稿？"
   - id: "id:8"
     kind: browser
     do: click
+    description: 点击保存草稿
     locator:
       coords: "{{inputs.save_point}}"
+    bypass: [coord_only_locator]
+    bypass_reason: 保存按钮位置由用户按平台提供。
+  - id: "id:9"
+    kind: browser
+    do: snapshot
+    description: 保存后重新读取页面（验证）
+    post:
+      - "not_error"
 """,
     },
 ]

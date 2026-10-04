@@ -289,9 +289,59 @@ class HelperDriver {
   }
 
   async pressKeyTo(app, key, modifiers = [], repeat = 1) {
-    const params = { key: String(key || ''), modifiers: modifiers || [], repeat: Number(repeat) || 1 };
+    // Resolve the NEUTRAL `mod` token to this platform's primary modifier so
+    // the shared/kernel layer never hardcodes cmd vs ctrl.
+    const resolved = (modifiers || []).map((m) => (String(m).toLowerCase() === 'mod'
+      ? (this._platformTag() === 'darwin' ? 'cmd' : 'ctrl')
+      : m));
+    const params = { key: String(key || ''), modifiers: resolved, repeat: Number(repeat) || 1 };
     if (app) params.app = String(app);
     return this.invoke('press_key', params);
+  }
+
+  _platformTag() {
+    return this.platform || process.platform;
+  }
+
+  /** Semantic shortcut table for the CURRENT platform (see docs). */
+  shortcutMap() {
+    const darwin = {
+      copy: ['c', ['cmd']], cut: ['x', ['cmd']], paste: ['v', ['cmd']],
+      save: ['s', ['cmd']], save_as: ['s', ['cmd', 'shift']], find: ['f', ['cmd']],
+      select_all: ['a', ['cmd']], undo: ['z', ['cmd']], redo: ['z', ['cmd', 'shift']],
+      new: ['n', ['cmd']], open: ['o', ['cmd']], close: ['w', ['cmd']],
+      quit: ['q', ['cmd']], print: ['p', ['cmd']],
+      back: ['[', ['cmd']], forward: [']', ['cmd']],
+      zoom_in: ['=', ['cmd']], zoom_out: ['-', ['cmd']],
+      fullscreen: ['f', ['ctrl', 'cmd']], refresh: ['r', ['cmd']], delete: ['delete', []],
+    };
+    const win = {
+      copy: ['c', ['ctrl']], cut: ['x', ['ctrl']], paste: ['v', ['ctrl']],
+      save: ['s', ['ctrl']], save_as: ['s', ['ctrl', 'shift']], find: ['f', ['ctrl']],
+      select_all: ['a', ['ctrl']], undo: ['z', ['ctrl']], redo: ['y', ['ctrl']],
+      new: ['n', ['ctrl']], open: ['o', ['ctrl']], close: ['w', ['ctrl']],
+      quit: ['f4', ['alt']], print: ['p', ['ctrl']],
+      back: ['left', ['alt']], forward: ['right', ['alt']],
+      zoom_in: ['=', ['ctrl']], zoom_out: ['-', ['ctrl']],
+      fullscreen: ['f11', []], refresh: ['f5', []], delete: ['delete', []],
+    };
+    const tag = this._platformTag();
+    return tag === 'darwin' ? darwin : win; // Linux follows the Windows/Ctrl convention
+  }
+
+  resolveShortcut(name) {
+    const entry = this.shortcutMap()[String(name || '').toLowerCase()];
+    if (!entry) {
+      const err = new Error(`unknown shortcut '${name}'`);
+      err.code = 'unknown_shortcut';
+      throw err;
+    }
+    return { key: entry[0], modifiers: entry[1] };
+  }
+
+  async pressShortcutTo(app, name, repeat = 1) {
+    const { key, modifiers } = this.resolveShortcut(name);
+    return this.pressKeyTo(app, key, modifiers, repeat);
   }
 
   async scrollTo(app, dx, dy, x, y) {

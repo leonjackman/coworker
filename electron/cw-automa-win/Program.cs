@@ -197,9 +197,13 @@ internal static class Program
                 string key = Params.Str(p, "key");
                 var mods = Params.StrArray(p, "modifiers");
                 if (string.IsNullOrEmpty(key)) throw new HelperError("param_error", "press_hotkey requires key");
+                // Windows injection is GLOBAL — bring the requested app forward
+                // first so the chord lands in the target, not whatever is frontmost.
+                int hp = ResolveActPid(p);
+                if (hp > 0) { Elevation.EnsureNotBlocked(hp); UiaActions.TryActivate(hp); Thread.Sleep(60); }
                 Input.PressCombo(key, mods, 1);
                 Overlay.Pulse();
-                Responder.Ok(id, new Dictionary<string, object> { ["performed"] = "press_hotkey" });
+                Responder.Ok(id, new Dictionary<string, object> { ["performed"] = "press_hotkey", ["pid"] = hp });
                 break;
             }
 
@@ -210,6 +214,7 @@ internal static class Program
                 int repeat = Math.Max(1, Params.Int(p, "repeat", 1));
                 if (string.IsNullOrEmpty(key)) throw new HelperError("param_error", "press_key requires key");
                 int pid = ResolveActPid(p);
+                if (pid > 0) { Elevation.EnsureNotBlocked(pid); UiaActions.TryActivate(pid); Thread.Sleep(60); }
                 Input.PressCombo(key, mods, repeat);
                 Overlay.Pulse();
                 Responder.Ok(id, new Dictionary<string, object> { ["performed"] = "press_key", ["pid"] = pid });

@@ -1923,7 +1923,7 @@ async function handleComputerBridgeRequest(method, url, payload) {
       return controller.openPermissionSettings(kind);
     }
     case '/ax/snapshot': {
-      return controller.axSnapshot(Number(payload && payload.depth) || 6);
+      return controller.axSnapshot(Number(payload && payload.depth) || 6, String(payload && payload.app || ''));
     }
     case '/ax/app_state': {
       return controller.axAppState(
@@ -1942,6 +1942,9 @@ async function handleComputerBridgeRequest(method, url, payload) {
     }
     case '/ax/launch': {
       return controller.axLaunch(String(payload && payload.app || ''));
+    }
+    case '/ax/focus_app': {
+      return controller.axFocusApp(String(payload && payload.app || ''), payload ? payload.settle !== false : true);
     }
     case '/ax/coords': {
       return controller.axClickCoords(Number(payload && payload.x) || 0, Number(payload && payload.y) || 0, payload || {});
@@ -1972,6 +1975,13 @@ async function handleComputerBridgeRequest(method, url, payload) {
         String(payload && payload.app || ''),
         String(payload && payload.key || ''),
         (payload && payload.modifiers) || [],
+        Number(payload && payload.repeat) || 1,
+      );
+    }
+    case '/ax/shortcut': {
+      return controller.axShortcut(
+        String(payload && payload.app || ''),
+        String(payload && payload.name || ''),
         Number(payload && payload.repeat) || 1,
       );
     }

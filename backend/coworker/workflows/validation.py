@@ -96,7 +96,9 @@ def validate_templates(workflow: Workflow, registry: CapabilityRegistry | None =
                 continue
             parts = [p for p in ref.split(".") if p != ""]
             root = parts[0] if parts else ""
-            if root == "env":
+            # `env.*` (any env var) and `loop.item`/`loop.index` (foreach scope)
+            # are free-form — nothing to validate statically.
+            if root in ("env", "loop"):
                 continue
             name = parts[1] if len(parts) > 1 else ""
             if root == "inputs":
@@ -199,10 +201,14 @@ def validate_assertions(workflow: Workflow) -> list[Diagnostic]:
             # An `assert` step with no real condition would pass VACUOUSLY (and
             # still satisfy the "has verification" rule) — reject it.
             if step.kind == "assert" and not specs:
+                # An assert step's own result is synthetic ({"asserted": true}),
+                # so its condition MUST reference another step's output.
                 diags.append(Diagnostic(
                     step.id, "post", "bad_assertion",
-                    "assert step has no condition — set `post`/`success` (e.g. "
-                    "[\"result.exists\"]) or a `do` spec (e.g. \"equals result.return_code 0\")",
+                    "assert step has no condition — set `post`/`success` to a spec over a prior "
+                    "step, e.g. [\"exists {{steps.id:1.stdout}}\"] or "
+                    "[\"contains {{steps.id:1.text}} ok\"], or a `do` spec like "
+                    "\"matches {{steps.id:1.text}} \\\\d+\"",
                 ))
             for slot in (step.then, step.else_, step.body):
                 if slot:
