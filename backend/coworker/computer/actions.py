@@ -64,6 +64,23 @@ SEMANTIC_SHORTCUTS: tuple[str, ...] = (
     "delete",
 )
 
+#: The COMPLETE computer-script sandbox surface: `app.<binding>()` methods and
+#: `cua.<method>()` calls that the kernel actually implements. This is the single
+#: source for the author-time script validator (`validate_scripts`) — the earlier
+#: hardcoded copy drifted and falsely rejected real methods. A contract test
+#: asserts this equals the kernel's surface (electron/computer-repl-kernel.js).
+SCRIPT_APP_METHODS: frozenset[str] = frozenset({
+    "getAXState", "getAXStateText", "getScreenshot", "getAXStateAndScreenshot",
+    "click", "doubleClick", "rightClick", "clickPoint", "focus", "show",
+    "setValue", "performSecondaryAction", "typeText", "typeInto", "paste",
+    "selectText", "pressKey", "shortcut", "scroll", "scrollTo", "drag", "settle",
+})
+
+SCRIPT_CUA_METHODS: frozenset[str] = frozenset({
+    "listApps", "getApp", "launchApp", "focusApp", "getState",
+    "emitText", "emitImage", "sleep",
+})
+
 
 _TEXT_DESC = "The literal text to enter. Any characters are allowed (including '+'); use press_hotkey for keyboard shortcuts."
 _REF_DESC = "Element ref from the latest computer_observe snapshot."

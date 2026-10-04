@@ -27,12 +27,22 @@ Helper paths: Windows `electron/cw-automa-win/bin/cwautoma-win.exe`; macOS `elec
 ## Recorded results
 
 ### 2026-10-05 — Windows (developer machine) — root-cause contract batch
-- A: **809 passed**, 2 skipped, **10 failed** (environmental, see below).
+- A: **813 passed**, 2 skipped, **10 failed** (environmental, see below).
 - B: clean.
 - C1: `Conformance PASSED (0 warnings)` on `cwautoma-win.exe` (version 4, 12 manifest keys, 35 methods).
 - C2: **13 passed, 0 failed**.
 - D: all pass.
-- E: **5 passed** (contract drift guard: every `script` binding exists in the kernel; every emitted RPC is routed by the host).
+- E: contract drift guard (every `script` binding exists in the kernel; the
+  declared script surface equals the kernel; every emitted RPC is routed by the
+  host). Plus `launch_app("Calculator")` now resolves on localized Windows
+  (verified via a helper probe → `pid`).
+
+Follow-up fixes verified here: the author-time script-method allowlist is DERIVED
+from the contract (no stale duplicate — it used to falsely reject
+`app.getAXStateText`/`app.shortcut`/`app.doubleClick`); the JS syntax-error
+message now names the real `SyntaxError` line (was `Node.js v24.18.0`);
+`not_empty <ref>` assertion; and a GUI-mutating step with no verification is
+now an advisory warning.
 
 ### macOS
 - Pending the switch (run the same gates; the Swift/`click_point`/`act`/`delete` changes need a macOS compile).

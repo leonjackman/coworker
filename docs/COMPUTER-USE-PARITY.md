@@ -114,6 +114,11 @@ computer action. Each `Action` now also declares its wiring:
 `contract_dump()` exports it as JSON; `backend/tests/test_action_contract.py`
 fails if the kernel/host drift from it (a real drift guard, not a doc).
 
+The complete script sandbox surface (`SCRIPT_APP_METHODS` / `SCRIPT_CUA_METHODS`)
+also lives in `actions.py` and is the source for the author-time script validator
+(`validation._SCRIPT_APP_METHODS`) — the old hardcoded copy drifted and falsely
+rejected real methods (`getAXStateText`, `shortcut`, `doubleClick`, …).
+
 **Semantic shortcuts** (`SEMANTIC_SHORTCUTS`) are platform-NEUTRAL names
 (`copy`, `save`, `find`, `back`, …). The concrete key+modifiers live in the
 **per-platform driver** (`driver.shortcutMap()`; `mod` → Cmd on macOS / Ctrl on

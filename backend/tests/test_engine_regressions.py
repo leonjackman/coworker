@@ -71,6 +71,46 @@ def test_native_file_write_serializes_structured_content():
         assert json.loads(written) == {"a": None, "b": [1, 2]}  # JSON, not Python repr
 
 
+def test_not_empty_assertion_alias():
+    from coworker.workflows.assertions import evaluate, validate_spec
+
+    assert validate_spec("not_empty result.stdout")[0] is True
+    assert evaluate("not_empty result.stdout", {"stdout": "x"}, {})[0] is True
+    assert evaluate("not_empty result.stdout", {"stdout": ""}, {})[0] is False
+
+
+def test_node_syntax_error_reports_the_real_error():
+    from coworker.workflows.validation import _node_syntax_error
+
+    err = _node_syntax_error("const x = ;")  # if node is absent, err is None
+    if err is not None:
+        assert "Node.js v" not in err
+        assert "error" in err.lower()
+
+
+def test_validate_scripts_matches_kernel_surface():
+    from coworker.workflows.parser import parse_workflow
+    from coworker.workflows.validation import validate_scripts
+
+    yaml = (
+        "name: t\ndescription: d\nsteps:\n"
+        "- id: \"id:1\"\n  kind: computer\n  do: script\n  params:\n    code: |\n"
+        "      const app = await cua.getApp('X');\n"
+        "      await app.getAXStateText();\n"
+        "      await app.shortcut('save');\n"
+        "      await app.doubleClick('a');\n"
+        "      await app.isRunning('x');\n"
+        "  description: s\n  post: [ok]\n"
+    )
+    wf, _ = parse_workflow(yaml)
+    msgs = [d.message for d in validate_scripts(wf)]
+    # Real kernel methods must NOT be flagged as unknown (look at the CALLED name,
+    # not the 'allowed:' list which legitimately contains them).
+    assert not any(f"app.{m}'" in msg for msg in msgs for m in ("getAXStateText", "shortcut", "doubleClick"))
+    # A non-existent method must be flagged.
+    assert any("app.isRunning'" in msg for msg in msgs)
+
+
 def test_loop_item_is_a_valid_template_root():
     flow = (
         "name: loop-flow\ndescription: d\nsteps:\n"

@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from coworker.computer.actions import (  # noqa: E402
     COMPUTER_ACTIONS,
+    SCRIPT_APP_METHODS,
+    SCRIPT_CUA_METHODS,
     SEMANTIC_SHORTCUTS,
     contract_dump,
 )
@@ -56,6 +58,21 @@ def test_every_script_binding_exists_in_kernel():
     kernel = _kernel_methods()
     missing = [a.name for a in COMPUTER_ACTIONS if a.script and a.script not in kernel]
     assert not missing, f"actions declare script bindings that the kernel lacks: {missing}"
+
+
+def test_declared_script_surface_equals_kernel():
+    # The author-time validator allowlist is DERIVED from this declared surface;
+    # it must equal the kernel's `app` binding exactly (no stale/duplicate list).
+    kernel_async = _kernel_methods()  # async methods, minus 'function'
+    cua_async = set(SCRIPT_CUA_METHODS) & kernel_async
+    assert kernel_async == set(SCRIPT_APP_METHODS) | cua_async, (
+        f"kernel-only: {sorted(kernel_async - set(SCRIPT_APP_METHODS) - cua_async)}; "
+        f"declared-only: {sorted(set(SCRIPT_APP_METHODS) - kernel_async)}"
+    )
+    # The synchronous cua helpers must exist in the kernel text too.
+    text = _KERNEL.read_text(encoding="utf-8")
+    for method in ("emitText", "emitImage", "sleep"):
+        assert method in text, f"kernel is missing cua.{method}"
 
 
 def test_every_emitted_rpc_is_routed_by_host():

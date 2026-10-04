@@ -240,6 +240,12 @@ from .platform_support import WINDOWS_ONLY_TOKENS as _WINDOWS_ONLY  # noqa: E402
 from .platform_support import explicit_tags as _explicit_platform_tags  # noqa: E402
 from .platform_support import infer_platforms as _infer_platforms  # noqa: E402
 _GUI_KINDS = ("browser", "computer", "app")
+# GUI actions that MUTATE state and default to a weak `no_error` success rule —
+# these warrant an explicit verification.
+_GUI_MUTATING_ACTIONS = frozenset({
+    "script", "type_text", "type_into", "click_ref", "double_click_ref",
+    "right_click_ref", "click_coords", "drag",
+})
 # Kinds that need the NATIVE desktop automation bridge (macOS/Windows only).
 # `browser` is the embedded Electron browser, so it is NOT here (Linux ok).
 _BRIDGE_KINDS = ("computer", "app")
@@ -423,14 +429,16 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
             # Verification is the contract. A state-changing action whose default
             # success rule is weak (bare result/no_error) SHOULD declare an
             # explicit post/success; advisory (warning) so it never blocks a run.
-            if step.kind in ("command", "http", "file") and not (step.post or step.success):
+            gui_mutating = step.kind in ("computer", "app") and step.do in _GUI_MUTATING_ACTIONS
+            if (step.kind in ("command", "http", "file") or gui_mutating) and not (step.post or step.success):
                 spec = registry.action(step.kind, step.do) if step.do else None
                 rule = getattr(spec, "success", "result_ok") if spec is not None else "result_ok"
-                if rule not in ("command_rc", "observable_change"):
+                strong_default = step.kind in ("command", "http", "file") and rule in ("command_rc", "observable_change")
+                if not strong_default:
                     _conformance_diag(
                         step, "unverified_state_change", "params",
                         f"{step.kind} step '{step.id}' changes state but declares no success condition "
-                        "(add `post`/`success`, e.g. the output file exists)",
+                        "(add `post`/`success` — for GUI steps an `assert` on the visible result)",
                         diags, severity="warning",
                     )
             # Guessy file sources (non-deterministic across runs) are advisory.
@@ -478,15 +486,8 @@ _SCRIPT_FORBIDDEN: tuple[tuple[str, str], ...] = (
 )
 
 # The app.* surface exposed by the cw-automa script sandbox (no evaluate()).
-_SCRIPT_APP_METHODS: frozenset[str] = frozenset(
-    {
-        "focus", "isRunning", "activate", "close",
-        "getAXState", "getWindowState", "windowState",
-        "getScreenshot", "screenshot",
-        "click", "clickByIndex", "typeText", "type", "paste", "setValue", "getValue",
-        "pressKey", "press", "scroll", "drag", "settle", "waitFor",
-    }
-)
+# Derived from the SINGLE contract source (never re-declared here).
+from coworker.computer.actions import SCRIPT_APP_METHODS as _SCRIPT_APP_METHODS  # noqa: E402
 
 _APP_METHOD_RE = re.compile(r"\bapp\.([A-Za-z_$][\w$]*)")
 
@@ -520,9 +521,26 @@ def _node_syntax_error(code: str) -> str | None:
             except OSError:
                 pass
     if proc.returncode != 0:
-        text = (proc.stderr or "").strip()
-        return text.splitlines()[-1][:200] if text else "syntax error"
+        return _first_syntax_error(proc.stderr or "")
     return None
+
+
+def _first_syntax_error(stderr: str) -> str:
+    """Extract the actionable error line from ``node --check`` output.
+
+    Node prints the failing source line, a caret, then ``SyntaxError: …`` and
+    finally a ``Node.js vXX`` banner. Taking the LAST line (the old behavior)
+    returned the useless banner — surface the ``SyntaxError`` line instead.
+    """
+    lines = [ln.rstrip() for ln in (stderr or "").splitlines() if ln.strip()]
+    for line in lines:
+        low = line.lower()
+        if "syntaxerror" in low or low.endswith("error"):
+            return line.strip()[:200]
+    for line in reversed(lines):
+        if not line.strip().startswith("Node.js v"):
+            return line.strip()[:200]
+    return "syntax error"
 
 
 def validate_scripts(workflow: Workflow) -> list[Diagnostic]:

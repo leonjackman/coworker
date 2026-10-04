@@ -287,6 +287,26 @@ internal static class AppInventory
     private static bool LooksLikeShellTarget(string app) =>
         app.Contains(':') || ShellAliases.Contains(app);
 
+    // Common ENGLISH (or localized) names a model/user writes, mapped to the
+    // launchable Windows target. Windows' own display names are localized
+    // (e.g. "计算器"), so "Calculator" would otherwise not resolve; macOS accepts
+    // these names, so this keeps `launch_app` parity for the common apps.
+    private static readonly Dictionary<string, string> CommonAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["calculator"] = "calc",
+        ["calc"] = "calc",
+        ["计算器"] = "calc",
+        ["paint"] = "mspaint",
+        ["mspaint"] = "mspaint",
+        ["wordpad"] = "write",
+        ["settings"] = "ms-settings:",
+        ["task manager"] = "taskmgr",
+        ["taskmanager"] = "taskmgr",
+        ["snipping tool"] = "snippingtool",
+        ["command prompt"] = "cmd",
+        ["cmd"] = "cmd",
+    };
+
     /// <summary>
     /// Launch an app and return the pid of the running instance, or -1 when it
     /// could not be confirmed. Callers must treat 0/-1 as failure: the old helper
@@ -297,6 +317,7 @@ internal static class AppInventory
     {
         if (string.IsNullOrWhiteSpace(app)) throw new HelperError("param_error", "launch requires app");
         app = app.Trim();
+        if (CommonAliases.TryGetValue(app, out var aliased)) app = aliased;
 
         var before = new HashSet<int>();
         foreach (var p in Process.GetProcesses()) { try { before.Add(p.Id); } catch { /* exited */ } }

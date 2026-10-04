@@ -169,9 +169,14 @@ def evaluate(spec: str, result: Any, context: dict[str, Any]) -> AssertionResult
             return False, f"assertion '{spec}' failed: '{needle}' not in {path}"
         return True, ""
 
-    if low.startswith("exists ") or low.startswith("not_exists "):
+    if low.startswith("exists ") or low.startswith("not_exists ") or low.startswith("not_empty "):
         invert = low.startswith("not_exists ")
-        ref = token[len("not_exists ") if invert else len("exists ") :].strip()
+        if invert:
+            ref = token[len("not_exists ") :].strip()
+        elif low.startswith("not_empty "):
+            ref = token[len("not_empty ") :].strip()
+        else:
+            ref = token[len("exists ") :].strip()
         try:
             value = _lookup_ref(ref, result, context)
         except (KeyError, IndexError, TemplateError):
@@ -216,7 +221,7 @@ def evaluate(spec: str, result: Any, context: dict[str, Any]) -> AssertionResult
 
 
 #: Operators that take a fixed arity of arguments (for authoring validation).
-_ARITY_1 = ("contains", "not_contains", "exists", "not_exists", "file_exists", "not_file_exists", "exit_code")
+_ARITY_1 = ("contains", "not_contains", "exists", "not_exists", "not_empty", "file_exists", "not_file_exists", "exit_code")
 _ARITY_2 = ("equals", "not_equals", "matches", "regex", "file_contains")
 _NO_ARGS = ("ok", "not_error", "no_error", "true", "false")
 
