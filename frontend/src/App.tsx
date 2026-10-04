@@ -40,6 +40,7 @@ import { BrowserPrompts } from './components/browser/BrowserPrompts';
 import { ChangesPanel } from './components/ChangesPanel';
 import { UpdateToastCard } from './components/UpdateToastCard';
 import { getLanguage, initLanguage, t, tOrDefault, translateError, useLanguage } from './lib/i18n';
+import { copyText } from './lib/clipboard';
 import { useUpdateCenter } from './lib/useUpdateCenter';
 import { useSessionBadges } from './lib/useSessionBadges';
 import { displayProjectName } from './lib/projectName';
@@ -419,7 +420,7 @@ function App() {
         if (!message) continue;
         if (message.role !== 'assistant' || !message.content?.trim()) continue;
         if (currentId && message.sessionId && message.sessionId !== currentId) continue;
-        void navigator.clipboard.writeText(message.content).catch(() => {});
+        void copyText(message.content);
         return true;
       }
       return false;

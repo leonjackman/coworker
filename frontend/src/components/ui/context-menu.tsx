@@ -2,6 +2,7 @@ import { ClipboardPaste, Copy, Eraser, Scissors, Square, Trash2 } from "lucide-r
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { isMac, modKeyLabel } from "../../lib/platform";
+import { copyText, readClipboardText } from "../../lib/clipboard";
 import { t } from "../../lib/i18n";
 
 /** 预置操作槽位：组件内部实现复制/粘贴/剪切等，免去使用者重复造轮子 */
@@ -61,29 +62,6 @@ function setElementValue(el: HTMLTextAreaElement | HTMLInputElement, value: stri
   const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
   setter?.call(el, value);
   el.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
-async function readClipboardText(): Promise<string> {
-  if (typeof window !== "undefined" && window.electronAPI?.clipboardReadText) {
-    return window.electronAPI.clipboardReadText();
-  }
-  try {
-    return await navigator.clipboard.readText();
-  } catch {
-    return "";
-  }
-}
-
-async function writeClipboardText(text: string): Promise<void> {
-  if (typeof window !== "undefined" && window.electronAPI?.clipboardWriteText) {
-    await window.electronAPI.clipboardWriteText(text);
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // ignore
-  }
 }
 
 function getSelectionRange(el: HTMLTextAreaElement | HTMLInputElement) {
@@ -222,11 +200,11 @@ export function ContextMenu({
 
         switch (slot) {
           case "copy":
-            if (selected) void writeClipboardText(selected);
+            if (selected) void copyText(selected);
             break;
           case "cut":
             if (selected) {
-              void writeClipboardText(selected);
+              void copyText(selected);
               if (isFormElement(el)) {
                 const range = getSelectionRange(el);
                 setElementValue(el, el.value.slice(0, range.start) + el.value.slice(range.end));

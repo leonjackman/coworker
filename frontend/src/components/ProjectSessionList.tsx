@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { WorkspacePage } from './ui/workspace-page';
 import { t } from '../lib/i18n';
+import { copyText } from '../lib/clipboard';
 import { displayProjectName } from '../lib/projectName';
 import { formatTimeAgo } from '../lib/utils';
 import type { OrgRosterEntry, ProjectEntry, SessionBadgeMap, SessionSummary } from '../types';
@@ -77,12 +78,9 @@ export function ProjectSessionList({ project, sessions, sessionBadges, onNewChat
   }, [project.roster, sessions, isSingle]);
 
   const handleCopyId = async (sessionId: string) => {
-    try {
-      await navigator.clipboard.writeText(sessionId);
+    if (await copyText(sessionId)) {
       setCopiedId(sessionId);
       window.setTimeout(() => setCopiedId(null), 1200);
-    } catch {
-      /* clipboard unavailable */
     }
   };
 

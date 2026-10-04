@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { Copy, Check } from 'lucide-react';
+import { copyText } from '../lib/clipboard';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
@@ -272,12 +273,9 @@ export function CodeBlock({ code, language = 'text' }: CodeBlockProps) {
   }, [code, language]);
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(code);
+    if (await copyText(code)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // clipboard unavailable
     }
   };
 

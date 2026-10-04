@@ -2,6 +2,7 @@ import { Check, Copy, Pencil, RefreshCw, Undo2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { Tooltip } from './ui/tooltip';
+import { copyText } from '../lib/clipboard';
 import { t } from '../lib/i18n';
 
 export interface MessageActionsProps {
@@ -24,13 +25,7 @@ export function MessageActions({ role, content, onEdit, onRegenerate, onRedo, re
   }, [copied]);
 
   const handleCopy = async () => {
-    if (!content) return;
-    try {
-      await navigator.clipboard.writeText(content);
-      setCopied(true);
-    } catch {
-      // clipboard unavailable
-    }
+    if (await copyText(content)) setCopied(true);
   };
 
   return (

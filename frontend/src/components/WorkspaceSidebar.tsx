@@ -2,6 +2,7 @@ import { Check, ChevronDown, ChevronRight, ChevronUp, Clock, Copy, FileText, Fol
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AppView, OrgRosterEntry, ProjectEntry, SessionBadgeMap, SessionSummary } from '../types';
 import { t } from '../lib/i18n';
+import { copyText } from '../lib/clipboard';
 import { displayProjectName } from '../lib/projectName';
 import { formatTimeAgo } from '../lib/utils';
 import { Badge } from './ui/badge';
@@ -123,12 +124,9 @@ function SessionRow({ session, active, badges, onOpen, onDelete }: SessionRowPro
   const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number } | null>(null);
 
   const handleCopyId = async () => {
-    try {
-      await navigator.clipboard.writeText(session.id);
+    if (await copyText(session.id)) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* clipboard unavailable */
     }
   };
 
