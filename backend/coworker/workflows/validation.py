@@ -246,6 +246,11 @@ _GUI_MUTATING_ACTIONS = frozenset({
     "script", "type_text", "type_into", "click_ref", "double_click_ref",
     "right_click_ref", "click_coords", "drag",
 })
+# Tool steps that DRIVE the desktop/GUI (or another opaque side-effect) and
+# therefore need an OBSERVED verification, not merely `no_error`.
+_NATIVE_DRIVING_TOOLS = frozenset({"run_powershell", "run_applescript", "computer_script"})
+# Success specs that prove nothing about the OBSERVED result.
+_WEAK_SUCCESS = frozenset({"", "ok", "not_error", "no_error"})
 # Kinds that need the NATIVE desktop automation bridge (macOS/Windows only).
 # `browser` is the embedded Electron browser, so it is NOT here (Linux ok).
 _BRIDGE_KINDS = ("computer", "app")
@@ -429,18 +434,33 @@ def validate_conformance(workflow: Workflow, registry: CapabilityRegistry) -> li
             # Verification is the contract. A state-changing action whose default
             # success rule is weak (bare result/no_error) SHOULD declare an
             # explicit post/success; advisory (warning) so it never blocks a run.
+            specs = [str(s).strip().lower() for s in (list(step.post) + list(step.success))]
+            has_specs = bool(specs)
+            weak_only = (not has_specs) or all(s in _WEAK_SUCCESS for s in specs)
             gui_mutating = step.kind in ("computer", "app") and step.do in _GUI_MUTATING_ACTIONS
-            if (step.kind in ("command", "http", "file") or gui_mutating) and not (step.post or step.success):
+            native_driving = step.kind == "tool" and step.do in _NATIVE_DRIVING_TOOLS
+            if step.kind in ("command", "http", "file") and not has_specs:
                 spec = registry.action(step.kind, step.do) if step.do else None
                 rule = getattr(spec, "success", "result_ok") if spec is not None else "result_ok"
-                strong_default = step.kind in ("command", "http", "file") and rule in ("command_rc", "observable_change")
-                if not strong_default:
+                if rule not in ("command_rc", "observable_change"):
                     _conformance_diag(
                         step, "unverified_state_change", "params",
                         f"{step.kind} step '{step.id}' changes state but declares no success condition "
-                        "(add `post`/`success` — for GUI steps an `assert` on the visible result)",
+                        "(add `post`/`success`, e.g. the output file exists)",
                         diags, severity="warning",
                     )
+            elif (gui_mutating or native_driving) and weak_only:
+                # A GUI/native-driving step whose ONLY success is `no_error`/`ok`
+                # proves nothing about what actually happened on screen — this is
+                # the false-success class (a wrong on-screen result passing as ok).
+                _conformance_diag(
+                    step, "unverified_state_change", "params",
+                    f"{step.kind} step '{step.id}' only declares a weak success "
+                    f"({', '.join(specs) or 'none'}) — add an `assert` on the OBSERVED result "
+                    "(e.g. the displayed value read via `computer_observe`/`app.getAXState`) so a "
+                    "wrong on-screen outcome fails the run",
+                    diags, severity="warning",
+                )
             # Guessy file sources (non-deterministic across runs) are advisory.
             if step.kind == "file" and step.do in ("glob", "newest"):
                 target = str((step.params or {}).get("path") or "")

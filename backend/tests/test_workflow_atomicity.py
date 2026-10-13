@@ -126,6 +126,26 @@ def test_missing_platform_is_error():
     assert "missing_platform" in _codes(diags)
 
 
+def test_gui_step_with_weak_success_warns():
+    # A GUI script step whose ONLY success is `no_error` proves nothing about the
+    # on-screen result (the false-success class: run says ok, screen is wrong).
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: computer\n  do: script\n  params: {code: \"cua.emitText('x')\"}\n"
+        "  description: type into app\n  success: no_error\n"
+        "- id: \"id:2\"\n  kind: assert\n  do: \"exists {{steps.id:1.text}}\"\n  description: verify\n"
+    ))
+    assert "unverified_state_change" in _codes(diags, "warning")
+
+
+def test_native_driving_tool_with_weak_success_warns():
+    diags = _diags(_HEAD + (
+        "- id: \"id:1\"\n  kind: tool\n  do: run_powershell\n  params: {script: \"Get-Date\"}\n"
+        "  description: drive the GUI\n  post: [not_error]\n"
+        "- id: \"id:2\"\n  kind: assert\n  do: \"exists {{steps.id:1.stdout}}\"\n  description: verify\n"
+    ))
+    assert "unverified_state_change" in _codes(diags, "warning")
+
+
 def test_bridge_kinds_reject_linux_only_platform():
     head = _HEAD.replace("steps:\n", "platform: linux\nsteps:\n")
     diags = _diags(head + (
