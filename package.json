@@ -1,6 +1,6 @@
 {
   "name": "coworker",
-  "version": "1.0.0",
+  "version": "0.8.0",
   "description": "Local desktop AI coding assistant MVP",
   "main": "electron/main.js",
   "scripts": {

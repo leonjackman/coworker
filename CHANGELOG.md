@@ -455,6 +455,74 @@
 
 - 前端 `tsc --noEmit` 零錯誤、`vite build` 通過；Electron 主進程與 preload 通過 `node --check`。
 
+## 0.8.0
+
+本版本把「桌面操控（Computer Use）」與「工作流（Workflow）」帶到 **Windows**，並讓它與 macOS 的能力一致；同時修好了一大批讓自動化「看起來成功、其實沒做對」的問題，讓它更可靠。
+
+> 🧪 **平台穩定度**：**Windows** 上的 **Computer Use 與 Workflow 為 BETA** —— 可用，但尚未十分穩定（操作時會移動真實滑鼠指標；部分商店應用、視窗焦點切換可能不準）。**Linux** 未經詳細測試，功能可能不完整或有明顯 BUG。穩定基線仍為 **macOS**。
+
+### 新增
+
+- **Windows 桌面操控（Beta）**：現在可以在 Windows 上讓 Agent 操作桌面應用 —— 看懂畫面與按鈕、點擊、輸入文字、按快捷鍵、開啟與切換應用，並可連續完成一串操作。
+- **能開啟更多應用**：除了 .exe 與開始選單，現在也能開啟 **Windows 商店 / UWP 應用**（例如 Affinity）；找不到時會列出相近的名稱供選擇。
+- **工作流可標註適用平台**：可指定工作流只在 macOS / Windows / Linux 執行；在不支援的系統上會安全跳過，而不是跑到一半才失敗。
+- **同一段自動化在兩個平台都正確**：例如快捷鍵會自動對應 macOS 的 Cmd 與 Windows 的 Ctrl。
+- **工作流問答更省資源**：Agent 查詢可用能力時預設只取精簡概要，不必一次讀入全部內容。
+- **更省事的安裝與檢查**：Windows 一鍵啟動器在需要時會**自動重建**桌面操控元件；另提供可重複執行的桌面能力自我檢查。
+
+### 改動
+
+- **Agent 知道「現在幾點」**：每次對話都會帶入目前的本地日期與時間，不必再用操作畫面去讀時鐘。
+- **Windows 上的輸入更貼近實際**：輸入前會先切到目標視窗；刪除鍵與 Backspace 的行為與 macOS 一致。
+- **提醒更清楚**：對話中的關鍵提醒（例如「需要先驗證」）會直接顯示，不會憑空消失。
+
+### 修復
+
+- **不再「假成功」**：自動化腳本若出錯或逾時，步驟會**如實失敗**，而不是回報成功卻什麼都沒做。
+- **Windows 桌面操控的一系列準確度問題**：剪貼簿內容被覆蓋、中文與 emoji 輸入、已安裝應用清單、找不到視窗時的處理、捲動位置、中鍵與數字鍵盤等。
+- **修好「觀察目前畫面」**：這項功能先前會報錯，連帶讓一些驗證悄悄失效。
+- **桌面穩定性**：Windows 停止熱鍵、日誌刷屏、啟動時的連線問題；並修好**打包版在 Windows 上「複製」按鈕無效**的問題。
+- **工作流更少踩雷**：常見的設定錯誤（例如把運算式寫成程式碼）會在建立時就提醒，而不是執行時才失敗；若某步驟的驗證過於寬鬆，也會收到建議。
+
+### 品質
+
+- 後端測試全部通過（含時區與搜尋相關）；桌面操控元件在 macOS 與 Windows 上都能建置並通過一致性檢查；新增「文件與實作一致性」的防護測試，避免兩邊再次對不上。
+
+---
+
+### English
+
+This release brings **desktop control (Computer Use)** and **Workflows** to **Windows**, on par with macOS — and fixes a large batch of "looks like it worked, but didn't" problems so automation is more reliable.
+
+> 🧪 **Platform status**: On **Windows**, **Computer Use** and **Workflow** are **BETA** — usable, but not yet fully stable (it moves your **real mouse** while it works; the odd **Store app or window switch** may throw it off). **Linux** hasn't been tested much yet — features may be **incomplete or have obvious bugs**. **macOS** remains the stable baseline.
+
+**Added**
+
+- **Windows desktop control (Beta)**: the agent can now drive desktop apps on Windows — read the screen and buttons, click, type, press shortcuts, open and switch apps, and carry out a sequence of steps.
+- **More apps can be opened**: besides .exe and Start Menu entries, it can now launch **Windows Store / UWP apps** (e.g. Affinity); when nothing matches, it lists nearby names to choose from.
+- **Workflows can be platform-tagged**: restrict a workflow to macOS / Windows / Linux; on an unsupported OS it is safely skipped instead of failing halfway.
+- **The same automation is correct on both platforms**: e.g. shortcuts map automatically to macOS Cmd vs Windows Ctrl.
+- **Lighter workflow Q&A**: when the agent checks available capabilities it fetches a compact summary by default instead of the whole catalog.
+- **Easier setup & checks**: the Windows one-click launcher rebuilds the desktop-control components when needed, and a repeatable self-check for desktop capabilities is included.
+
+**Changed**
+
+- **The agent knows what time it is**: every turn includes the current local date/time, so it no longer reads the clock off the screen.
+- **Input on Windows behaves more naturally**: it focuses the target window first; Delete and Backspace match macOS.
+- **Clearer reminders**: key in-chat reminders (e.g. "verification needed") are shown instead of vanishing.
+
+**Fixed**
+
+- **No more "false success"**: if an automation script errors or times out, the step now **fails honestly** instead of reporting success while doing nothing.
+- **A batch of Windows desktop-control accuracy issues**: clipboard being overwritten, Chinese/emoji typing, the installed-apps list, handling a missing window, scroll position, middle-click and the numeric keypad.
+- **Fixed "observe the current screen"**, which used to error and silently weaken some checks.
+- **Desktop stability**: the Windows stop hotkey, log spam, and a startup connection issue; also fixed the **"Copy" button doing nothing in the packaged Windows build**.
+- **Fewer workflow footguns**: common mistakes (like writing an expression as code) are flagged at creation time instead of failing at run time; overly loose verifications get a suggestion.
+
+**Quality**
+
+- Backend tests pass (including timezone and search); the desktop-control components build and pass the consistency check on both macOS and Windows; a new "docs vs implementation" guard test prevents the two from drifting apart again.
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）

@@ -25,7 +25,7 @@
 | 🗨️ Streaming Chat | 💬 Built-in Chat Project | 📥 Message Queue & Interject | 🔌 Multi-Provider |
 | 🧠 Long-Term Memory | 👥 Multi-Agent Teams ⚠️ | 👤 Sub-Agents | 🎯 Goal Mode |
 | ⚙️ Workflow Studio (Beta) | 🔄 MCP Integration | 📦 Skills | 🌐 Web Search & Fetch |
-| 🖥️ Built-in Browser | 🧭 Desktop Control (macOS) | 🔒 Human-in-the-Loop | 📓 Change Tracking |
+| 🖥️ Built-in Browser | 🧭 Desktop Control (macOS; Win Beta) | 🔒 Human-in-the-Loop | 📓 Change Tracking |
 | 🖥️ Integrated Terminal | 🔎 Audit & Traces | ✏️ Message Editing | 📄 Office & PDF Documents |
 | 🍎 macOS App Scripting | 📎 File Attachments | 🔗 Session Cross-Reference | 🛡️ Sensitive File Protection |
 | 📋 Plan / Build Modes | 🌎 i18n (11 languages) | 🎨 Themes | 🔊 Sound Notifications |
@@ -34,6 +34,8 @@
 > 📖 **Full feature guide** → [FEATURES.md](FEATURES.md)
 
 > ⚠️ **Multi-Agent (Experimental)** — Multi-agent teams, departments, and delegation are an experimental capability still under active development: the feature set is not yet complete, behavior may change, and the project mode is immutable after creation. Prefer single-agent mode for daily work.
+
+> 🧪 **Platform status (a quick heads-up)** — **macOS** is the one we polish the most, so treat it as the stable baseline. On **Windows**, **Computer Use** and **Workflow** are still in **BETA** — they're usable, but a bit rough around the edges: while it works, your **real mouse pointer moves**, and the occasional **Store app or window switch can trip it up**. **Linux** hasn't really been tested yet — expect **missing pieces and the odd obvious bug**.
 
 ---
 
