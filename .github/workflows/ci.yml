@@ -42,7 +42,26 @@ jobs:
       - name: Run backend suite
         env:
           PYTHONPATH: backend
-        run: python -m pytest backend/tests -q
+        # Don't fail here: the next step turns the JUnit XML into public check
+        # annotations naming each failing test (action logs require sign-in).
+        continue-on-error: true
+        run: python -m pytest backend/tests -q --junitxml=pytest-report.xml
+
+      - name: Report backend failures
+        if: always()
+        run: |
+          python - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+          failed = []
+          for f in glob.glob('pytest-report.xml'):
+              for tc in ET.parse(f).getroot().iter('testcase'):
+                  if tc.find('failure') is not None or tc.find('error') is not None:
+                      failed.append(f"{tc.get('classname')}::{tc.get('name')}")
+          for name in failed:
+              print(f"::error title=pytest::{name}")
+          print(f"{len(failed)} failing test(s)")
+          sys.exit(1 if failed else 0)
+          PY
 
   frontend:
     name: Frontend build + typecheck
@@ -80,6 +99,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Install backend deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt pytest pytest-asyncio
 
       - name: JS syntax
         run: |
