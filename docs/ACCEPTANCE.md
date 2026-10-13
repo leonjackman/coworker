@@ -56,6 +56,14 @@ message now names the real `SyntaxError` line (was `Node.js v24.18.0`);
 `not_empty <ref>` assertion; and a GUI-mutating step with no verification is
 now an advisory warning.
 
+### 2026-10-13 — CI green (run 38424686547 @ 203baa1)
+All five CI jobs pass: Backend tests, Frontend build + typecheck, Contract + JS
+syntax, macOS helper conformance, Windows helper conformance. The backend job
+now installs `tzdata` + `ripgrep` and the `test_search_ripgrep` fallback tests
+are hermetic (force rg-absent), so the suite is green on ubuntu; the action logs
+are gated, so backend failures are surfaced as public check annotations from the
+JUnit XML.
+
 ### 2026-10-13 — Windows — observation regression + Store/UWP launch
 - A: **817 passed**, 2 skipped, **10 failed** (environmental, same set).
 - C1: `PASSED`; C2: **14 passed, 0 failed** (added: an unknown app must fail
@@ -81,7 +89,9 @@ Confirmed identical on `HEAD` (pre-change) via `git stash`:
 |---|---|
 | `test_node_execution_contracts::test_command_set_wait_assert_execute` | a command binary not on this Windows PATH |
 | `test_schedules::*` (4) + `test_schedules_api::*` (2) | `zoneinfo`/`tzdata` missing (`timezone_ok("Asia/Shanghai")` False) |
-| `test_search_ripgrep::test_rg_fast_path_used_when_available` | `rg` (ripgrep) not installed |
 | `test_shell_allowlist_bypass::test_allowlisted_programs_are_all_permitted[argv2]` | platform allowlist expectation on Windows |
+
+(`test_search_ripgrep` is now fully green: the fallback tests force rg-absent and
+the fast-path test uses `json.dumps` for the path.)
 
 Install `tzdata`/`ripgrep` and put the missing binary on PATH to clear them; they are unrelated to this work.
