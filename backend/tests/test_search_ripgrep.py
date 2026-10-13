@@ -13,6 +13,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from coworker.workspace import Workspace  # noqa: E402
 
 
+@pytest.fixture
+def no_rg(monkeypatch):
+    """Force the pure-Python FALLBACK path regardless of whether `rg` is
+    installed on the host (CI installs ripgrep, dev machines may not)."""
+    from coworker import workspace as ws_module
+
+    real_which = ws_module.shutil.which
+    monkeypatch.setattr(ws_module.shutil, "which", lambda name: None if name == "rg" else real_which(name))
+    yield
+
+
 def _make_tree(tmp_path: Path) -> Path:
     (tmp_path / "a.txt").write_text("findme line\n")
     (tmp_path / "keep.md").write_text("findme\n")
@@ -23,7 +34,7 @@ def _make_tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_fallback_respects_gitignore(tmp_path: Path):
+def test_fallback_respects_gitignore(tmp_path: Path, no_rg):
     root = _make_tree(tmp_path)
     ws = Workspace(root)
     r = ws.search_text("findme", "")
@@ -33,7 +44,7 @@ def test_fallback_respects_gitignore(tmp_path: Path):
     assert all("dist" not in p for p in paths)
 
 
-def test_fallback_caps_results(tmp_path: Path):
+def test_fallback_caps_results(tmp_path: Path, no_rg):
     root = tmp_path
     for i in range(10):
         (root / f"f{i}.txt").write_text("hit\n")
@@ -43,7 +54,7 @@ def test_fallback_caps_results(tmp_path: Path):
     assert r["truncated"] is True
 
 
-def test_fallback_skips_oversized_file(tmp_path: Path):
+def test_fallback_skips_oversized_file(tmp_path: Path, no_rg):
     root = tmp_path
     (root / "big.log").write_text("x" * (300_000) + "\nhit\n")
     (root / "small.txt").write_text("hit\n")
@@ -58,14 +69,23 @@ def test_rg_fast_path_used_when_available(tmp_path: Path, monkeypatch):
     root = _make_tree(tmp_path)
     ws = Workspace(root)
 
+    import json as _json
     import subprocess as _sp
     from coworker import workspace as ws_module
 
+    # Build with json.dumps: a Windows path contains `\`, which is an invalid
+    # JSON escape when interpolated raw (it silently broke the parse on Windows).
     fake_json = "\n".join(
         [
-            '{"type":"match","data":{"path":{"text":"' + str(root / "a.txt") + '"},'
-            '"line_number":1,"lines":{"text":"findme line\\n"}}}',
-            '{"type":"summary","data":{}}',
+            _json.dumps({
+                "type": "match",
+                "data": {
+                    "path": {"text": str(root / "a.txt")},
+                    "line_number": 1,
+                    "lines": {"text": "findme line\n"},
+                },
+            }),
+            _json.dumps({"type": "summary", "data": {}}),
         ]
     )
 
