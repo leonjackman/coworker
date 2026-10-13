@@ -168,9 +168,10 @@ class ComputerClient(LoopbackBridgeClient):
         return self._call("POST", "/permissions/open-settings", {"kind": str(kind)})
 
     # ── Structure-first automation surface (native cw-automa AX helper) ──
-    def ax_snapshot(self, depth: int = 6) -> dict[str, Any]:
+    def ax_snapshot(self, depth: int = 6, app: str = "") -> dict[str, Any]:
         """Accessibility element tree flattened to text w/ stable refs. Primary
-        observation; only needs the Accessibility permission (no Screen Rec)."""
+        observation; only needs the Accessibility permission (no Screen Rec).
+        ``app`` empty targets the frontmost app."""
         payload: dict[str, Any] = {"depth": int(depth)}
         if app:
             payload["app"] = str(app)
@@ -596,10 +597,16 @@ def build_computer_tools(
 
     def _snapshot_text() -> str | None:
         """Return the current AX snapshot text, or None when observation fails
-        (fail-closed: if we cannot see, the agent must not guess)."""
+        (fail-closed: if we cannot see, the agent must not guess).
+
+        A raised exception (a bridge/interface bug) is LOGGED — never silently
+        swallowed — so a broken observation path cannot silently degrade every
+        GUI verification to `no_error`.
+        """
         try:
             res = client.ax_snapshot(6)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("computer observe snapshot failed: %r", exc, exc_info=True)
             return None
         if not isinstance(res, dict) or res.get("error_code"):
             return None

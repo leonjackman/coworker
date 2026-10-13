@@ -83,6 +83,11 @@ function invoke(method, params = {}, t = 8000) {
   const demo = await invoke('cursor_demo', { seconds: 0.5 }, 6000);
   check('cursor_demo honors seconds', demo.ok === true && demo.result && demo.result.seconds === 0.5, JSON.stringify(demo.error || demo.result));
 
+  // Parity: an unknown app must fail STRUCTURED (ok:false), never silently launch
+  // something else or report success.
+  const bogus = await invoke('launch', { app: 'no-such-app-xyz-123' }, 15000);
+  check('unknown app launch -> ok:false', bogus.ok === false && !!(bogus.error || bogus.error_code), JSON.stringify(bogus).slice(0, 160));
+
   proc.kill();
   console.log(`\nProbe: ${pass} passed, ${fail} failed.`);
   process.exit(fail ? 1 : 0);

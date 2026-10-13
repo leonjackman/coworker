@@ -287,6 +287,75 @@ internal static class AppInventory
     private static bool LooksLikeShellTarget(string app) =>
         app.Contains(':') || ShellAliases.Contains(app);
 
+    // ── UWP / Store (MSIX) apps ──────────────────────────────────────────────
+    // Store apps are not files on disk; they live in the virtual "shell:appsFolder"
+    // namespace and are started by their AppUserModelId (AUMID). Enumerate it via
+    // Shell.Application so launch_app can open them by display name OR AUMID
+    // (e.g. "Affinity" -> "Canva.Affinity_...!App"). Cached for the process life.
+    private static List<(string Name, string Aumid)> _appsFolder;
+
+    private static List<(string Name, string Aumid)> AppsFolder()
+    {
+        if (_appsFolder != null) return _appsFolder;
+        var list = new List<(string, string)>();
+        try
+        {
+            Type t = Type.GetTypeFromProgID("Shell.Application");
+            if (t != null)
+            {
+                dynamic shell = Activator.CreateInstance(t);
+                dynamic folder = shell.NameSpace("shell:appsFolder");
+                if (folder != null)
+                {
+                    foreach (dynamic item in folder.Items())
+                    {
+                        try
+                        {
+                            string name = (string)item.Name;
+                            string aumid = (string)item.Path;
+                            if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(aumid)) list.Add((name, aumid));
+                        }
+                        catch { /* skip unreadable item */ }
+                    }
+                }
+            }
+        }
+        catch { /* apps folder unavailable */ }
+        _appsFolder = list;
+        return list;
+    }
+
+    // AUMID of an installed Store/UWP app matching the selector (name exact, then
+    // name contains, then AUMID contains), or null.
+    private static string ResolveAppsFolder(string selector)
+    {
+        string q = (selector ?? "").Trim();
+        if (q.Length == 0) return null;
+        var apps = AppsFolder();
+        foreach (var entry in apps)
+            if (string.Equals(entry.Name, q, StringComparison.OrdinalIgnoreCase)) return entry.Aumid;
+        foreach (var entry in apps)
+            if (entry.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0) return entry.Aumid;
+        foreach (var entry in apps)
+            if (entry.Aumid.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0) return entry.Aumid;
+        return null;
+    }
+
+    // Best-effort candidate app names for a failed launch (error hint).
+    public static List<string> LaunchCandidates(string query)
+    {
+        string q = (query ?? "").Trim();
+        var names = new List<string>();
+        foreach (var entry in AppsFolder())
+            if (q.Length == 0 || entry.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                || entry.Aumid.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
+                names.Add(entry.Name);
+        foreach (var entry in Installed())
+            if (q.Length > 0 && entry.DisplayName.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
+                names.Add(entry.DisplayName);
+        return names.Distinct(StringComparer.OrdinalIgnoreCase).Take(15).ToList();
+    }
+
     // Common ENGLISH (or localized) names a model/user writes, mapped to the
     // launchable Windows target. Windows' own display names are localized
     // (e.g. "计算器"), so "Calculator" would otherwise not resolve; macOS accepts
@@ -336,17 +405,31 @@ internal static class AppInventory
         {
             // Localized Start Menu display name → launch its shortcut.
             string lnk = FindInstalledShortcut(app);
-            if (lnk == null)
+            if (lnk != null)
             {
-                throw new HelperError(
-                    "launch_failed",
-                    $"could not resolve \"{app}\" to an executable",
-                    "On Windows, launch_app takes an executable or App Paths entry (e.g. notepad, mspaint, " +
-                    "calc.exe), a full path, or an installed Start Menu app name. Refusing to hand an unknown " +
-                    "name to the shell.");
+                viaShortcut = true;
+                Start(lnk, app);
             }
-            viaShortcut = true;
-            Start(lnk, app);
+            else
+            {
+                // UWP / Store (MSIX) app: resolve to its AUMID and start it.
+                string aumid = ResolveAppsFolder(app);
+                if (aumid != null)
+                {
+                    viaShortcut = true;
+                    StartShell($"shell:appsFolder\\{aumid}", app);
+                }
+                else
+                {
+                    var candidates = LaunchCandidates(app);
+                    string hint = candidates.Count > 0 ? " Candidates: " + string.Join(", ", candidates) : "";
+                    throw new HelperError(
+                        "launch_failed",
+                        $"could not resolve \"{app}\" to an executable or installed app.{hint}",
+                        "On Windows, launch_app accepts an executable / App Paths name (notepad, mspaint, " +
+                        "calc.exe), a full path, a Start Menu app name, or a Store/UWP app name.");
+                }
+            }
         }
 
         // Confirm the app actually started and, if so, bring it to the foreground.
@@ -376,6 +459,14 @@ internal static class AppInventory
     private static void Start(string target, string app)
     {
         try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); }
+        catch (Exception e) { throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}"); }
+    }
+
+    // Start a shell namespace item (explorer.exe shell:appsFolder\<AUMID>) — the
+    // standard way to launch a UWP/Store app by AUMID.
+    private static void StartShell(string shellTarget, string app)
+    {
+        try { Process.Start(new ProcessStartInfo("explorer.exe", shellTarget) { UseShellExecute = false }); }
         catch (Exception e) { throw new HelperError("launch_failed", $"could not launch \"{app}\": {e.Message}"); }
     }
 

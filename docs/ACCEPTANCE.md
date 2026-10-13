@@ -56,6 +56,21 @@ message now names the real `SyntaxError` line (was `Node.js v24.18.0`);
 `not_empty <ref>` assertion; and a GUI-mutating step with no verification is
 now an advisory warning.
 
+### 2026-10-13 — Windows — observation regression + Store/UWP launch
+- A: **817 passed**, 2 skipped, **10 failed** (environmental, same set).
+- C1: `PASSED`; C2: **14 passed, 0 failed** (added: an unknown app must fail
+  structured with `ok:false`).
+- Fixed a live regression: `ComputerClient.ax_snapshot` was missing the `app`
+  parameter while the caller passed it, so `computer_observe snapshot` threw a
+  TypeError and `_snapshot_text()` silently returned `None` (weakening every
+  GUI verification). Now `ax_snapshot(depth, app)`; a **drift guard** test
+  asserts the test double is signature-compatible with the real bridge client
+  (a fake may not be "more correct" than the real class), plus a snapshot
+  round-trip test. `_snapshot_text()` logs a warning on failure (loud).
+- Windows `launch_app` now resolves **UWP/Store (MSIX) apps** via `shell:appsFolder`
+  (name or AUMID), e.g. `Affinity` → `Canva.Affinity_...!App` (verified: launched,
+  pid returned). On failure it lists candidates.
+
 ### macOS
 - Pending the switch (run the same gates; the Swift/`click_point`/`act`/`delete` changes need a macOS compile).
 

@@ -828,3 +828,53 @@ def test_capability_notes_reflect_manifest():
     notes = _capability_notes(win)
     assert "GLOBAL" in notes and "clipboard" in notes and "uipi_blocked" in notes
     assert _capability_notes(None) == "" and _capability_notes({}) == ""
+
+
+def test_fake_client_is_signature_compatible_with_real():
+    """Guard: the test double must not be MORE permissive than the real bridge
+    client. A fake that accepts a param the real class rejects (e.g. an `app`
+    arg added to `ax_snapshot` only on the fake) hides real call/wire drift —
+    exactly the regression that broke `computer_observe snapshot`."""
+    import inspect
+
+    from coworker.computer.bridge_client import ComputerClient
+
+    problems: list[str] = []
+    for name, fake_fn in inspect.getmembers(_FakeClient, predicate=inspect.isfunction):
+        if name.startswith("__"):
+            continue
+        real_fn = getattr(ComputerClient, name, None)
+        if not callable(real_fn):
+            continue
+        fp = inspect.signature(fake_fn).parameters
+        rp = inspect.signature(real_fn).parameters
+        real_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in rp.values())
+        fake_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in fp.values())
+        named = {
+            n for n, p in fp.items()
+            if n != "self" and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        }
+        extra = named - set(rp)
+        if extra and not real_kw:
+            problems.append(f"_FakeClient.{name} declares params the real rejects: {sorted(extra)}")
+        if not fake_kw:
+            missing = {
+                n for n, p in rp.items()
+                if p.default is inspect.Parameter.empty
+                and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+            } - set(fp)
+            if missing:
+                problems.append(f"_FakeClient.{name} missing required real params: {sorted(missing)}")
+    assert not problems, problems
+
+
+def test_observe_snapshot_returns_text(fake_client_factory):
+    """Regression: `computer_observe action=snapshot` must call the real
+    `ax_snapshot(depth, app)` shape and return the tree text (not a TypeError)."""
+    from coworker.computer.bridge_client import build_computer_tools
+
+    fake_client_factory(_FakeClient())
+    (observe, _act, _script) = build_computer_tools(Path("/tmp"), session_id="sess")
+    out = json.loads(observe.invoke({"action": "snapshot", "depth": 5, "app": "TestApp"}))
+    assert out.get("error_code") is None, out
+    assert "AXButton" in json.dumps(out, ensure_ascii=False)

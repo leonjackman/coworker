@@ -82,7 +82,7 @@ now means forward-delete on both (with `backspace` for Backspace).
 4. ~~No paste receipt / `target_confirmation`~~ — **fixed**: el-based entry falls back to clipboard paste **with readback**.
 5. ~~Unicode typed per UTF-16 code unit~~ — **fixed** (`Input.TypeUnicode` groups surrogate pairs in one SendInput).
 6. ~~`list_apps(scope='installed')` returned running apps (stub)~~ — **fixed** (Start Menu shortcuts + App Paths).
-7. ~~`launch` could not resolve localized display names~~ — **fixed** (Start Menu shortcut by display name; confirms via new windowed pid).
+7. ~~`launch` could not resolve localized display names~~ — **fixed** (Start Menu shortcut by display name; confirms via new windowed pid). Also resolves **UWP/Store (MSIX) apps** via `shell:appsFolder` (name or AUMID, e.g. `Affinity` → `Canva.Affinity_...!App`) and lists candidates on failure.
 8. ~~`app_state` silently retargeted to the frontmost app~~ — **fixed** (strict `no_target`).
 9. ~~`scroll_to` defaulted to (0,0) when x/y omitted~~ — **fixed** (brings target forward, scrolls at the current cursor).
 10. ~~`cursor_demo` ignored `seconds`~~ — **fixed** (animates for the requested duration, ≤15s).
