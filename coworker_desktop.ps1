@@ -129,6 +129,35 @@ if (Test-FrontendNeedsBuild) {
   Write-Host "  OK"
 }
 
+Write-Host "[3b/6] Preparing Windows computer-use helper..."
+$HelperSrc = "$RootDir\electron\cw-automa-win"
+$HelperExe = "$HelperSrc\bin\cwautoma-win.exe"
+$dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+function Test-HelperNeedsBuild {
+  if (-not (Test-Path $HelperExe)) { return $true }
+  $exeTime = (Get-Item $HelperExe).LastWriteTime
+  $newer = Get-ChildItem $HelperSrc -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Extension -in ".cs", ".csproj", ".manifest" -and
+      $_.FullName -notmatch "\\bin\\|\\obj\\" -and
+      $_.LastWriteTime -gt $exeTime
+    } | Select-Object -First 1
+  return [bool]$newer
+}
+if (-not $dotnet) {
+  Write-Host "  dotnet not found - cannot rebuild helper (computer use may be stale)" -ForegroundColor Yellow
+} elseif (Test-HelperNeedsBuild) {
+  Write-Host "  helper sources changed - rebuilding (dotnet publish)..."
+  & $dotnet publish "$HelperSrc\cwautoma-win.csproj" -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o "$HelperSrc\bin"
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  helper build FAILED - if the app is still running, close it fully and relaunch" -ForegroundColor Red
+  } else {
+    Write-Host "  OK"
+  }
+} else {
+  Write-Host "  helper up to date - skipping build"
+}
+
 Write-Host "[4/6] Starting backend..."
 # Persistent LLM request logging (messages + tools + sampling params -> data_dir/llm-requests.log).
 # On by default so every launch captures the exact bodies CW sends - useful for

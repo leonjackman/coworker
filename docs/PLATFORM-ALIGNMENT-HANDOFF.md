@@ -89,10 +89,13 @@ Acceptance: `node scripts/automation-conformance.js <helper>` green on both; the
 flipped flags documented in `COMPUTER-USE-PARITY.md`; real-machine E2E on Windows
 (clipboard unchanged after typing; permission failure surfaces clearly).
 
-> Build note: the Windows exe is locked while the desktop app runs. Either quit
-> the app, or publish to a temp dir:
-> `dotnet publish electron/cw-automa-win/cwautoma-win.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o <temp>`.
-> Normally `npm run build:automa-win`.
+> Build note: the Windows exe is locked while the desktop app runs. The
+> `coworker_desktop.ps1` launcher now auto-rebuilds the helper (step `[3b/6]`)
+> whenever its `.cs/.csproj/.manifest` sources are newer than the exe — so a
+> normal "close the app, run the launcher" cycle deploys it. Manual build:
+> `dotnet publish electron/cw-automa-win/cwautoma-win.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o electron/cw-automa-win/bin`
+> (or `npm run build:automa-win`). If the exe is locked, `Stop-Process -Name cwautoma-win`
+> frees it (the running app respawns the new binary on the next computer action).
 
 ---
 
