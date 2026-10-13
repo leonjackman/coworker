@@ -1,13 +1,16 @@
 name: CI
 
-# Pull-request / branch CI. Separate from `release.yml` (tag-triggered packaging).
+# Pull-request CI. Separate from `release.yml` (tag-triggered packaging).
 # Guards the two things that regress most: the backend/workflow engine and the
 # native computer-use helpers (whose contract drifts easily — see
 # docs/COMPUTER-USE-PARITY.md and docs/ACCEPTANCE.md).
+#
+# Triggered ONLY on pull requests and manual dispatch — NOT on branch pushes.
+# This keeps the constrained macOS/Windows hosted runners free for the
+# `Release` workflow (which runs on tags), reducing capacity-related
+# cancellations there.
 
 on:
-  push:
-    branches: [dev, main, master]
   pull_request:
   workflow_dispatch:
 
