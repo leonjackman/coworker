@@ -17,6 +17,18 @@
 
 Helper paths: Windows `electron/cw-automa-win/bin/cwautoma-win.exe`; macOS `electron/cw-automa/build/cw-automa`.
 
+## CI (`.github/workflows/ci.yml`)
+Runs on PRs / pushes to `dev|main|master`:
+- `backend` — full `pytest backend/tests` on ubuntu (installs `tzdata` + `ripgrep`).
+- `frontend` — `tsc --noEmit` + `vite build`.
+- `contract` — JS syntax (`node --check`) + the action-contract drift guard
+  (`test_action_contract.py` + `test_engine_regressions.py`).
+- `helper-macos` / `helper-windows` — build the native helper and run
+  `automation-conformance.js` (the bilateral contract check).
+
+`release.yml` (tag `v*`) additionally packages all platforms; it already builds
+and conformance-checks the native helper per OS.
+
 ## Manual / environment gates
 
 - **Windows helper build** — the exe is locked while the app runs. Quit the app, or publish to a temp dir:

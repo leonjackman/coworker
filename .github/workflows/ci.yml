@@ -1,0 +1,134 @@
+name: CI
+
+# Pull-request / branch CI. Separate from `release.yml` (tag-triggered packaging).
+# Guards the two things that regress most: the backend/workflow engine and the
+# native computer-use helpers (whose contract drifts easily — see
+# docs/COMPUTER-USE-PARITY.md and docs/ACCEPTANCE.md).
+
+on:
+  push:
+    branches: [dev, main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # tzdata (schedule/timezone tests) + ripgrep (search fast-path) make
+          # the suite green; they are otherwise environment-specific failures.
+          python -m pip install -r backend/requirements.txt pytest pytest-asyncio tzdata
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+
+      - name: Run backend suite
+        env:
+          PYTHONPATH: backend
+        run: python -m pytest backend/tests -q
+
+  frontend:
+    name: Frontend build + typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+      - name: Build
+        run: npm run build
+
+  contract:
+    name: Contract + JS syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: JS syntax
+        run: |
+          node --check electron/automation/driver.js
+          node --check electron/desktop-controller.js
+          node --check electron/computer-repl-kernel.js
+          node --check scripts/automation-conformance.js
+          node --check scripts/computer-use-probe.js
+
+      - name: Action-contract drift guard
+        env:
+          PYTHONPATH: backend
+        run: python -m pytest backend/tests/test_action_contract.py backend/tests/test_engine_regressions.py -q
+
+  helper-macos:
+    name: macOS helper conformance
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build native helper (cw-automa)
+        run: npm run build:automa
+
+      - name: Contract conformance
+        run: node scripts/automation-conformance.js electron/cw-automa/build/cw-automa
+
+  helper-windows:
+    name: Windows helper conformance
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build native helper (cwautoma-win)
+        run: npm run build:automa-win
+
+      - name: Contract conformance
+        shell: pwsh
+        run: node scripts/automation-conformance.js electron/cw-automa-win/bin/cwautoma-win.exe
