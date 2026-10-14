@@ -525,33 +525,33 @@ This release brings **desktop control (Computer Use)** and **Workflows** to **Wi
 
 ## 0.8.1
 
-本版本根治「MCP 伺服器在設定頁新增 / 修改後，Agent 卻看不到它的工具」的問題——不論哪種傳輸（stdio / http / SSE / websocket）都一樣，問題根源與 SSE 無關。執行期現在會**持續向設定收斂**，設定變更無需重啟即可生效。
+本版本修好了一個讓人不解的問題：剛在設定裡新增或改好的 MCP 服務，Agent 卻好像「看不到」它，要重開 App 才會生效。現在只要設定完成，Agent 就能立刻使用。
 
 ### 修復
 
-- **根因：執行期 MCP 會話只在啟動時建立一次快照**。此後在設定頁新增 / 修改 / 啟用伺服器，只會寫入設定檔而不會回流到執行期，因此該伺服器的工具從未進入 Agent 的工具集，模型自然「發現」不到（先前只能在對話中被動去翻設定檔才得知它的存在）。現在改為向設定收斂：新增 / 修改 / 檢查後即時建立真實會話，並在**每次模型呼叫**時做非阻塞自癒，未連線的已啟用伺服器會在下一輪自動補上。任何傳輸皆受益。
-- **設定後第一條訊息即可用**：`POST /mcp/servers`、`PATCH /mcp/servers/{id}`、`/check`、`/check-all` 會在回應前完成一次有界的收斂（逾時則落入連線失敗冷卻，不會無限拖延），保證新伺服器的工具立即可被模型使用。
-- **設定變更不再需要重啟**：啟用 / 停用、刪除，以及連線欄位變更（transport / url / command / args / env / headers / timeout）都會被偵測並正確重連或卸載；僅調整 `disabled_tools` 只會重建工具清單，不再無謂斷線。狀態面板顯示的「已連線」現在反映真實的執行期會話，而非一次性的探測結果。
+- **在設定裡新增 / 修改 MCP 服務後，Agent 馬上就能用**：以前只有在 App 啟動前就設定好的服務才會生效；啟動後才加入的服務，雖然設定頁顯示「已連線」，但 Agent 其實拿不到它的工具，甚至會說「沒有這個服務」。現在不論新增、修改還是啟用，都會即時生效，不需要重開 App。
+- **設定完就能直接對話**：儲存 MCP 設定後，下一句話 Agent 就能使用新的工具，不用等、也不用重開。
+- **啟用 / 停用 / 刪除 / 修改都即時生效**：調整連線設定（網址、指令、環境變數、標頭、逾時等）會自動重新連線；只是關掉某個工具時，不會把整個服務斷開。設定頁顯示的「已連線」也終於和實際狀況一致。
 
 ### 品質
 
-- 新增 `tests/test_mcp_reconcile.py`（11 個案例）：刪除 / 停用關閉、設定漂移重連、策略變更不重連、指紋語義、非阻塞語意、真實事件迴圈收斂、中介層自癒。
+- 新增自動測試，確保「設定後立即可用、設定變更即時生效、不需要重開 App」這些行為不會再壞掉。
 
 ---
 
 ### English
 
-This release fixes the **"an MCP server added/edited in Settings is invisible to the agent"** problem — on every transport (stdio / http / SSE / websocket) alike; the root cause had nothing to do with SSE. The runtime now **continuously reconciles to the saved config**, so config changes take effect without a restart.
+This release fixes a confusing problem: right after you added or edited an MCP server in Settings, the agent seemed unable to "see" it until you restarted the app. Now it just works as soon as you finish configuring it.
 
 **Fixed**
 
-- **Root cause: the live MCP session set was a one-shot snapshot taken at startup.** A server added / edited / enabled afterwards was written to config but never flowed back into the runtime, so its tools never entered the agent's tool set and the model simply could not "discover" it (it previously only found out by reading the config file mid-chat). The runtime now reconciles to config: a real session is established right after add / edit / check, and a **non-blocking self-heal runs on every model call** so an enabled-but-offline server is picked up on the next turn. Every transport benefits.
-- **Usable in the very first message after configuring**: `POST /mcp/servers`, `PATCH /mcp/servers/{id}`, `/check` and `/check-all` complete a bounded reconcile before responding (a hung handshake falls into the connect-failure cooldown instead of stalling the request), so the new server's tools are immediately available to the model.
-- **Config changes no longer need a restart**: enable / disable, delete, and connection-field changes (transport / url / command / args / env / headers / timeout) are detected and correctly reconnected or torn down; changing only `disabled_tools` merely rebuilds the tool list without a needless reconnect. The "connected" shown in the panel now reflects a real runtime session, not a one-shot probe.
+- **A server added or edited in Settings is usable right away**: before, only servers configured before the app started would take effect. A server added while the app was running showed "connected" in Settings, but the agent never actually received its tools — it could even tell you the server didn't exist. Now adding, editing, or enabling a server takes effect immediately, with no restart.
+- **Ready to chat as soon as you save**: after saving your MCP settings, the agent can use the new tools in your very next message — no waiting, no restart.
+- **Enable / disable / delete / edit all apply instantly**: changing connection details (URL, command, environment variables, headers, timeout, etc.) reconnects automatically, and turning off a single tool no longer drops the whole server. The "connected" status in Settings now matches reality.
 
 **Quality**
 
-- Added `tests/test_mcp_reconcile.py` (11 cases): delete/disable teardown, reconnect on config drift, no reconnect for policy-only changes, fingerprint semantics, non-blocking scheduling, convergence on a real loop, and middleware self-heal.
+- Added automated tests so these behaviors don't break again: usable immediately after setup, changes applied instantly, and no restart required.
 
 ## Unreleased
 
