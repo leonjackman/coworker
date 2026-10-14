@@ -523,6 +523,36 @@ This release brings **desktop control (Computer Use)** and **Workflows** to **Wi
 
 - Backend tests pass (including timezone and search); the desktop-control components build and pass the consistency check on both macOS and Windows; a new "docs vs implementation" guard test prevents the two from drifting apart again.
 
+## 0.8.1
+
+本版本根治「MCP 伺服器在設定頁新增 / 修改後，Agent 卻看不到它的工具」的問題——不論哪種傳輸（stdio / http / SSE / websocket）都一樣，問題根源與 SSE 無關。執行期現在會**持續向設定收斂**，設定變更無需重啟即可生效。
+
+### 修復
+
+- **根因：執行期 MCP 會話只在啟動時建立一次快照**。此後在設定頁新增 / 修改 / 啟用伺服器，只會寫入設定檔而不會回流到執行期，因此該伺服器的工具從未進入 Agent 的工具集，模型自然「發現」不到（先前只能在對話中被動去翻設定檔才得知它的存在）。現在改為向設定收斂：新增 / 修改 / 檢查後即時建立真實會話，並在**每次模型呼叫**時做非阻塞自癒，未連線的已啟用伺服器會在下一輪自動補上。任何傳輸皆受益。
+- **設定後第一條訊息即可用**：`POST /mcp/servers`、`PATCH /mcp/servers/{id}`、`/check`、`/check-all` 會在回應前完成一次有界的收斂（逾時則落入連線失敗冷卻，不會無限拖延），保證新伺服器的工具立即可被模型使用。
+- **設定變更不再需要重啟**：啟用 / 停用、刪除，以及連線欄位變更（transport / url / command / args / env / headers / timeout）都會被偵測並正確重連或卸載；僅調整 `disabled_tools` 只會重建工具清單，不再無謂斷線。狀態面板顯示的「已連線」現在反映真實的執行期會話，而非一次性的探測結果。
+
+### 品質
+
+- 新增 `tests/test_mcp_reconcile.py`（11 個案例）：刪除 / 停用關閉、設定漂移重連、策略變更不重連、指紋語義、非阻塞語意、真實事件迴圈收斂、中介層自癒。
+
+---
+
+### English
+
+This release fixes the **"an MCP server added/edited in Settings is invisible to the agent"** problem — on every transport (stdio / http / SSE / websocket) alike; the root cause had nothing to do with SSE. The runtime now **continuously reconciles to the saved config**, so config changes take effect without a restart.
+
+**Fixed**
+
+- **Root cause: the live MCP session set was a one-shot snapshot taken at startup.** A server added / edited / enabled afterwards was written to config but never flowed back into the runtime, so its tools never entered the agent's tool set and the model simply could not "discover" it (it previously only found out by reading the config file mid-chat). The runtime now reconciles to config: a real session is established right after add / edit / check, and a **non-blocking self-heal runs on every model call** so an enabled-but-offline server is picked up on the next turn. Every transport benefits.
+- **Usable in the very first message after configuring**: `POST /mcp/servers`, `PATCH /mcp/servers/{id}`, `/check` and `/check-all` complete a bounded reconcile before responding (a hung handshake falls into the connect-failure cooldown instead of stalling the request), so the new server's tools are immediately available to the model.
+- **Config changes no longer need a restart**: enable / disable, delete, and connection-field changes (transport / url / command / args / env / headers / timeout) are detected and correctly reconnected or torn down; changing only `disabled_tools` merely rebuilds the tool list without a needless reconnect. The "connected" shown in the panel now reflects a real runtime session, not a one-shot probe.
+
+**Quality**
+
+- Added `tests/test_mcp_reconcile.py` (11 cases): delete/disable teardown, reconnect on config drift, no reconnect for policy-only changes, fingerprint semantics, non-blocking scheduling, convergence on a real loop, and middleware self-heal.
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
