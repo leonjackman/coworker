@@ -161,6 +161,31 @@ def _classify_auth_error(exc: BaseException) -> bool:
     return False
 
 
+def _connect_fingerprint(server: dict[str, Any]) -> tuple[Any, ...]:
+    """Fields whose change requires tearing down and reconnecting the session.
+
+    Everything that shapes the transport/session handshake belongs here. Fields
+    that only affect the *exposed* tool set (``disabled_tools``) or the approval
+    path (``trusted``, read with a TTL) are deliberately excluded so a toggle
+    does not needlessly drop a live session.
+    """
+    return (
+        str(server.get("transport") or ""),
+        str(server.get("url") or ""),
+        str(server.get("command") or ""),
+        str(server.get("args") or ""),
+        str(server.get("cwd") or ""),
+        tuple(sorted((str(k), str(v)) for k, v in (server.get("env") or {}).items())),
+        tuple(sorted((str(k), str(v)) for k, v in (server.get("headers") or {}).items())),
+        server.get("timeout"),
+    )
+
+
+def _policy_fingerprint(server: dict[str, Any]) -> tuple[Any, ...]:
+    """Fields whose change only needs the exposed tool list rebuilt (no reconnect)."""
+    return (tuple(sorted(str(x) for x in (server.get("disabled_tools") or []))),)
+
+
 async def _close_quietly(closable: Any) -> None:
     """Best-effort ``await closable.close()`` that never propagates."""
     try:
@@ -180,6 +205,8 @@ class _ServerRuntime:
         "tools",
         "raw_tools",
         "loopback",
+        "config_fingerprint",
+        "policy_fingerprint",
         "_stop",
         "_owner",
     )
@@ -209,6 +236,12 @@ class _ServerRuntime:
         self.raw_tools: list[Any] = []
         self.tools: list[Any] = []
         self.loopback: LoopbackCallbackServer | None = None
+        # Fingerprints of the config this runtime was built from, used by
+        # ``reconcile`` to detect drift: a change to ``config_fingerprint``
+        # requires a reconnect; a change to ``policy_fingerprint`` only needs the
+        # exposed tool list rebuilt. See ``_connect_fingerprint``.
+        self.config_fingerprint: tuple[Any, ...] = ()
+        self.policy_fingerprint: tuple[Any, ...] = ()
 
     async def close(self, timeout: float = 10.0) -> None:
         self._stop.set()
@@ -326,10 +359,16 @@ class McpSessionManager:
         # Servers whose exposed tool names changed and whose persisted status
         # still has to be rewritten (drained by ``_refresh_statuses``).
         self._pending_status_refresh: set[str] = set()
-        # Background prewarm task, tracked so shutdown can cancel it instead of
-        # racing an in-flight `stdio_client` handshake (which leaves suspended
-        # async generators the loop can no longer finalize).
+        # Background prewarm/reconcile task, tracked so shutdown can cancel it
+        # instead of racing an in-flight `stdio_client` handshake (which leaves
+        # suspended async generators the loop can no longer finalize).
         self._prewarm_task: asyncio.Task | None = None
+        # Reconcile coalescing. ``_reconcile_pending`` is set by any caller that
+        # wants convergence; the drain task keeps running until it observes no
+        # further requests, so a change that lands mid-reconcile is not lost.
+        self._reconcile_lock = threading.Lock()
+        self._reconcile_pending = False
+        self._reconcile_running = False
         self._closing = False
         # Every live session-owner task (see ``_own_session``). Tracked at the
         # manager level because a connect that is itself being cancelled cannot
@@ -451,30 +490,130 @@ class McpSessionManager:
     # ── connection ───────────────────────────────────────────────────────
 
     def prewarm(self) -> None:
-        """Fire-and-forget connect of every enabled server (no blocking)."""
+        """Fire-and-forget convergence of the runtime to the enabled config.
+
+        Kept as the startup entry point; it is now a non-blocking alias of
+        :meth:`reconcile_soon` so the runtime is not just *connected once* but
+        continuously reconciled against ``mcp_servers.json``.
+        """
+        self.reconcile_soon()
+
+    def reconcile_soon(self) -> None:
+        """Non-blocking: schedule a reconcile pass (coalesced, fire-and-forget).
+
+        Safe to call from any thread and cheap when there is no drift -- callers
+        on the hot path (each model call) use it as a self-healing trigger.
+        """
         if self._loop is None or self._closing:
             return
+        with self._reconcile_lock:
+            self._reconcile_pending = True
+            if self._reconcile_running:
+                return
+            self._reconcile_running = True
         try:
-            asyncio.run_coroutine_threadsafe(self._prewarm_async(), self._loop)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to schedule MCP prewarm: %s", exc)
+            asyncio.run_coroutine_threadsafe(self._reconcile_drain(), self._loop)
+        except Exception as exc:  # noqa: BLE001 - a bad loop must not break chat
+            with self._reconcile_lock:
+                self._reconcile_running = False
+                self._reconcile_pending = False
+            logger.warning("Failed to schedule MCP reconcile: %s", exc)
 
-    async def _prewarm_async(self) -> None:
-        await asyncio.sleep(0)
-        if self._closing:
+    def reconcile_sync(self, timeout: float | None = None) -> None:
+        """Block until the runtime has converged to the enabled config.
+
+        Used by config-mutating API endpoints so the *next* message already sees
+        newly added/updated tools. Bounded: a server that hangs the handshake is
+        left in connect-failure cooldown rather than delaying the response
+        indefinitely.
+        """
+        if self._loop is None:
             return
-        # Tracked so `_shutdown_async` can cancel an in-flight handshake before
-        # tearing sessions down (quitting during prewarm otherwise leaves the
-        # transport's async generators suspended).
+        if timeout is None:
+            timeout = self._connect_timeout + 10
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._reconcile_async(), self._loop)
+            fut.result(timeout=timeout)
+        except TimeoutError:
+            logger.warning("MCP reconcile did not finish within the timeout")
+        except BaseException as exc:  # noqa: BLE001 - reconcile must never 500 the API
+            logger.warning("MCP reconcile failed: %s", friendly_error(exc))
+
+    async def _reconcile_drain(self) -> None:
+        """Run reconcile until no more requests are pending, then clear the flag."""
+        # Tracked so shutdown can cancel an in-flight handshake before tearing
+        # sessions down (quitting during prewarm otherwise leaves the transport's
+        # async generators suspended).
         self._prewarm_task = asyncio.current_task()
         try:
-            await self._ensure_connected_async(enable_browser_flow=False)
-        except asyncio.CancelledError:
-            logger.debug("MCP prewarm cancelled by shutdown")
-        except BaseException as exc:  # noqa: BLE001
-            logger.warning("MCP prewarm failed: %s", friendly_error(exc))
+            while True:
+                with self._reconcile_lock:
+                    if not self._reconcile_pending:
+                        self._reconcile_running = False
+                        return
+                    self._reconcile_pending = False
+                try:
+                    await self._reconcile_async()
+                except asyncio.CancelledError:
+                    logger.debug("MCP reconcile cancelled by shutdown")
+                    raise
+                except BaseException as exc:  # noqa: BLE001
+                    logger.warning("MCP reconcile failed: %s", friendly_error(exc))
+                if self._closing:
+                    with self._reconcile_lock:
+                        self._reconcile_running = False
+                    return
         finally:
             self._prewarm_task = None
+
+    async def _reconcile_async(self) -> None:
+        """Converge the live session set to the enabled config.
+
+        Closes sessions for servers that were disabled/deleted, reconnects
+        servers whose connection-relevant config changed, connects servers that
+        are enabled but not yet live, then refreshes the exposed tool list. Must
+        run on the manager loop (all ``_servers`` mutation happens there).
+        """
+        if self._closing:
+            return
+        try:
+            desired_list = self.mcp_manager.list_runtime_configs(enabled_only=True)
+        except Exception as exc:  # noqa: BLE001 - config problems must not break chat
+            logger.warning("MCP reconcile: failed to read config: %s", exc)
+            return
+        desired = {str(s.get("id") or ""): s for s in desired_list if str(s.get("id") or "")}
+
+        # 1) Close sessions that are no longer enabled (disabled or deleted).
+        for server_id in [sid for sid in list(self._servers) if sid not in desired]:
+            existing = self._servers.pop(server_id, None)
+            self._trust_cache.pop(server_id, None)
+            self._connect_failures.pop(server_id, None)
+            if existing is not None:
+                await existing.close()
+
+        # 2) Detect drift for servers that are still enabled.
+        for server_id, server in desired.items():
+            rt = self._servers.get(server_id)
+            if rt is None:
+                continue
+            if rt.config_fingerprint and rt.config_fingerprint != _connect_fingerprint(server):
+                existing = self._servers.pop(server_id, None)
+                self._trust_cache.pop(server_id, None)
+                # Edited config must retry immediately, not sit in cooldown.
+                self._connect_failures.pop(server_id, None)
+                if existing is not None:
+                    await existing.close()
+            elif rt.policy_fingerprint != _policy_fingerprint(server):
+                self._trust_cache.pop(server_id, None)
+                rt.policy_fingerprint = _policy_fingerprint(server)
+
+        # 3) Connect everything enabled that is not live (new or just closed).
+        await self._ensure_connected_async(enable_browser_flow=False)
+
+        # 4) Rebuild exposed tools (namespacing can change on add/remove) and
+        #    persist the true status for every live server.
+        changed = self._rebuild_tools()
+        await self._refresh_statuses(changed | set(self._servers))
 
     def ensure_connected(self, enable_browser_flow: bool = False) -> None:
         """Synchronous bridge: connect missing enabled servers (bounded)."""
@@ -792,6 +931,8 @@ class McpSessionManager:
         rt.server_name = server_name
         rt.raw_tools = raw_tools
         rt.loopback = loopback
+        rt.config_fingerprint = _connect_fingerprint(server)
+        rt.policy_fingerprint = _policy_fingerprint(server)
         self._servers[server_id] = rt
         # Cross-server name conflicts can only be resolved globally, so the
         # exposed tool list is (re)built for every connected server here.

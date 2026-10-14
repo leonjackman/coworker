@@ -124,15 +124,36 @@ class McpToolMiddleware(AgentMiddleware):
             )
         return "\n".join(lines)
 
+    def _self_heal(self) -> None:
+        """Non-blocking: ask the manager to reconcile enabled-but-offline servers.
+
+        Config can change while the app runs (a server added/edited in the UI),
+        and the runtime does not reconnect by itself. Rather than blocking this
+        model call on a connect (the latency trap the old synchronous
+        ``ensure_connected`` created), we trigger a coalesced background
+        reconcile so the missing tools appear on the next turn. It is a cheap
+        no-op when there is no drift, so calling it on every model call is safe.
+        """
+        try:
+            enabled_ids = {
+                str(server.get("id") or "")
+                for server in getattr(self, "_servers", [])
+                if str(server.get("id") or "")
+            }
+            live_ids = set(self.session_manager._servers.keys())
+            if enabled_ids - live_ids:
+                self.session_manager.reconcile_soon()
+        except Exception:  # noqa: BLE001 - self-healing must never break a run
+            logger.debug("MCP self-heal check failed", exc_info=True)
+
     def _overrides(self, request: Any) -> dict[str, Any]:
         logger.info("MCP _overrides START request_id=%s", id(request))
         logger.info("MCP _overrides _connecting=%d _servers=%d", len(self.session_manager._connecting), len(self.session_manager._servers))
-        # Note: ensure_connected is intentionally NOT called here.
-        # Sessions are pre-warmed at graph build time by the runtime,
-        # so tools are already available. This avoids blocking the event
-        # loop on every model call (the original code called
-        # ensure_connected synchronously which could block for seconds).
+        # NOTE: we must NOT block here on a connect -- sessions are made live by
+        # the manager's reconcile loop (prewarmed at startup, re-triggered by
+        # config-mutating endpoints and by the non-blocking self-heal below).
         self._refresh_tools()
+        self._self_heal()
         tools = self.tools
         if not tools:
             return {}

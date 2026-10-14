@@ -246,7 +246,9 @@ def _check_server(server_id: str) -> dict[str, Any]:
         tool_count=result.get("tool_count", 0),
         tools=result.get("tools", []),
     )
-    # Drop any live session so the next graph build reconnects with the check result.
+    # Drop any live session so a fresh one is built from the checked config; the
+    # endpoint reconciles right after so the result reflects a real runtime
+    # session, not just a one-shot probe.
     mcp_sessions.close_server(server_id)
     return server
 @router.get("/mcp/servers")
@@ -268,6 +270,10 @@ def create_mcp_server(request: McpServerCreatePayload):
         )
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
+    # Reconcile before returning so the newly added server's tools are live for
+    # the user's very next message (bounded: a hung handshake falls into the
+    # connect-failure cooldown instead of delaying this response forever).
+    mcp_sessions.reconcile_sync(timeout=MCP_CHECK_TIMEOUT_SECONDS)
     return {"status": "ok", "server": result}
 @router.patch("/mcp/servers/{server_id}")
 def update_mcp_server(server_id: str, request: McpServerUpdatePayload):
@@ -280,9 +286,10 @@ def update_mcp_server(server_id: str, request: McpServerUpdatePayload):
         result = mcp_manager.update_server(**kwargs)
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
-    # A connection-relevant field may have changed: drop the live session so the
-    # next graph build reconnects with the new config.
+    # A connection-relevant field may have changed: drop the live session, then
+    # reconcile so the new config is live for the next message.
     mcp_sessions.close_server(server_id)
+    mcp_sessions.reconcile_sync(timeout=MCP_CHECK_TIMEOUT_SECONDS)
     return {"status": "ok", "server": result}
 @router.delete("/mcp/servers/{server_id}")
 def delete_mcp_server(server_id: str):
@@ -291,6 +298,7 @@ def delete_mcp_server(server_id: str):
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
     mcp_sessions.close_server(server_id)
+    mcp_sessions.reconcile_soon()
     return {"status": "ok"}
 @router.get("/mcp/discover")
 def discover_mcp_templates():
@@ -301,6 +309,8 @@ def check_mcp_server(server_id: str):
         server = _check_server(server_id)
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
+    # Make the checked server live so the next message can use its tools.
+    mcp_sessions.reconcile_sync(timeout=MCP_CHECK_TIMEOUT_SECONDS)
     return {"status": "ok", "server": server}
 @router.post("/mcp/check-all")
 def check_all_mcp_servers():
@@ -309,6 +319,8 @@ def check_all_mcp_servers():
     if ids:
         with ThreadPoolExecutor(max_workers=min(len(ids), 4)) as pool:
             results = list(pool.map(_check_server, ids))
+    # One reconcile after the batch (not per check) to avoid N redundant passes.
+    mcp_sessions.reconcile_sync(timeout=MCP_CHECK_TIMEOUT_SECONDS)
     return {"status": "ok", "servers": mcp_manager.list_servers()}
 @router.post("/mcp/test")
 def test_mcp(request: McpTestPayload):
@@ -343,4 +355,7 @@ def reauthorize_mcp_server(server_id: str):
     except ValueError as exc:
         raise _mcp_not_found(exc) from exc
     result = mcp_sessions.reauthorize(server_id)
+    # reauthorize already (re)connected the server; reconcile keeps the rest of
+    # the runtime converged with any config changes made alongside it.
+    mcp_sessions.reconcile_soon()
     return {"status": "ok", **result}
