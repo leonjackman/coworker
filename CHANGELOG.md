@@ -525,33 +525,33 @@ This release brings **desktop control (Computer Use)** and **Workflows** to **Wi
 
 ## 0.8.1
 
-本版本修好了一個讓人不解的問題：剛在設定裡新增或改好的 MCP 服務，Agent 卻好像「看不到」它，要重開 App 才會生效。現在只要設定完成，Agent 就能立刻使用。
+本版本修復 MCP 服務設定的生效問題：在設定中新增或修改 MCP 服務後，Agent 未能立即識別其工具，需重新啟動應用程式方能生效。現在設定完成後即會即時生效。
 
 ### 修復
 
-- **在設定裡新增 / 修改 MCP 服務後，Agent 馬上就能用**：以前只有在 App 啟動前就設定好的服務才會生效；啟動後才加入的服務，雖然設定頁顯示「已連線」，但 Agent 其實拿不到它的工具，甚至會說「沒有這個服務」。現在不論新增、修改還是啟用，都會即時生效，不需要重開 App。
-- **設定完就能直接對話**：儲存 MCP 設定後，下一句話 Agent 就能使用新的工具，不用等、也不用重開。
-- **啟用 / 停用 / 刪除 / 修改都即時生效**：調整連線設定（網址、指令、環境變數、標頭、逾時等）會自動重新連線；只是關掉某個工具時，不會把整個服務斷開。設定頁顯示的「已連線」也終於和實際狀況一致。
+- **在設定中新增或修改 MCP 服務後立即生效**：此前僅在應用程式啟動前完成設定的服務才會生效；啟動後新增的服務雖於設定頁顯示為「已連線」，實際並未提供給 Agent，甚至會被判定為不存在。現無論新增、修改或啟用，均即時生效，無需重新啟動。
+- **設定完成後即可使用**：儲存 MCP 設定後，Agent 可於下一則訊息直接使用新增的工具。
+- **啟用、停用、刪除與修改均即時生效**：連線設定（網址、指令、環境變數、標頭、逾時等）變更後會自動重新連線；僅關閉個別工具時，不會中斷整個服務。設定頁顯示的「已連線」狀態亦與實際運作一致。
 
 ### 品質
 
-- 新增自動測試，確保「設定後立即可用、設定變更即時生效、不需要重開 App」這些行為不會再壞掉。
+- 新增自動化測試，確保「設定後即時生效、設定變更無需重新啟動」等行為維持穩定。
 
 ---
 
 ### English
 
-This release fixes a confusing problem: right after you added or edited an MCP server in Settings, the agent seemed unable to "see" it until you restarted the app. Now it just works as soon as you finish configuring it.
+This release fixes how MCP server settings take effect: after adding or editing an MCP server in Settings, the agent did not recognize its tools until the app was restarted. Settings now take effect immediately after they are saved.
 
 **Fixed**
 
-- **A server added or edited in Settings is usable right away**: before, only servers configured before the app started would take effect. A server added while the app was running showed "connected" in Settings, but the agent never actually received its tools — it could even tell you the server didn't exist. Now adding, editing, or enabling a server takes effect immediately, with no restart.
-- **Ready to chat as soon as you save**: after saving your MCP settings, the agent can use the new tools in your very next message — no waiting, no restart.
-- **Enable / disable / delete / edit all apply instantly**: changing connection details (URL, command, environment variables, headers, timeout, etc.) reconnects automatically, and turning off a single tool no longer drops the whole server. The "connected" status in Settings now matches reality.
+- **Servers added or edited in Settings now take effect immediately**: previously, only servers configured before the app started would take effect. A server added while the app was running appeared as "connected" in Settings but was not actually made available to the agent, and could even be reported as non-existent. Adding, editing, or enabling a server now takes effect immediately, with no restart required.
+- **Ready to use as soon as settings are saved**: after saving your MCP settings, the agent can use the new tools in the very next message.
+- **Enable, disable, delete, and edit all apply immediately**: changes to connection details (URL, command, environment variables, headers, timeout, etc.) reconnect automatically, and turning off an individual tool no longer disconnects the whole server. The "connected" status shown in Settings now reflects the actual state.
 
 **Quality**
 
-- Added automated tests so these behaviors don't break again: usable immediately after setup, changes applied instantly, and no restart required.
+- Added automated tests to keep these behaviors stable: effective immediately after setup, and applied without a restart.
 
 ## Unreleased
 
