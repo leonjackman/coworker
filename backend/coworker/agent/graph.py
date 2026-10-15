@@ -1086,8 +1086,7 @@ def build_coworker_agent_graph(
             memory_manager=memory_manager,
             skill_manager=skill_manager,
             workflow_manager=workflow_manager,
-            mcp_summary_provider=mcp_middleware._mcp_summary,
-            mcp_availability_provider=mcp_middleware._mcp_availability,
+            mcp_section_provider=mcp_middleware.mcp_section,
             chat_mode=chat_mode,
         )
     )

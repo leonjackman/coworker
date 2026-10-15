@@ -250,3 +250,61 @@ def test_middleware_does_not_self_heal_without_drift():
     )
     mw._overrides(Req())
     assert mgr.reconcile_calls == 0
+
+
+# --- phase-aware MCP prompt section -------------------------------------------
+
+
+class _FakeTool:
+    def __init__(self, name, server_id):
+        self.name = name
+        self.metadata = {"coworker_server": server_id}
+
+
+class _FakeServers:
+    def __init__(self, servers):
+        self._servers = servers
+
+    def list_servers(self, enabled_only=True):
+        return list(self._servers)
+
+
+def _mcp_middleware_for_section():
+    from coworker.mcp.mcp_middleware import McpToolMiddleware
+
+    mw = McpToolMiddleware.__new__(McpToolMiddleware)
+    mw._servers = [
+        {"id": "s1", "name": "百度云"},
+        {"id": "s2", "name": "广垦优品百度云"},
+    ]
+    mw.tools = [_FakeTool("file_list", "s1")]
+
+    class _SM:
+        def __init__(self):
+            self.mcp_manager = _FakeServers([
+                {"id": "s1", "name": "百度云", "status": "connected", "tool_count": 16},
+                {"id": "s2", "name": "广垦优品百度云", "status": "needs_auth"},
+            ])
+
+        def list_conflicts(self):
+            return {}
+
+    mw.session_manager = _SM()
+    return mw
+
+
+def test_mcp_section_build_shows_tools_and_unavailable_servers():
+    mw = _mcp_middleware_for_section()
+    text = mw.mcp_section(False)
+    assert "file_list" in text          # attribution in build
+    assert "需要重新授权" in text          # unavailable server surfaced
+
+
+def test_mcp_section_discuss_shows_status_not_tools():
+    mw = _mcp_middleware_for_section()
+    text = mw.mcp_section(True)
+    assert "规划/讨论阶段" in text        # explains tools are not callable now
+    assert "file_list" not in text       # no tool attribution in discuss
+    assert "百度云" in text and "已连接" in text  # real availability, so no guessing
+    assert "广垦优品百度云" in text
+    assert "需要重新授权" in text

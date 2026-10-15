@@ -166,8 +166,7 @@ class SystemAssembler(AgentMiddleware):
         memory_manager: Any | None = None,
         skill_manager: Any | None = None,
         workflow_manager: Any | None = None,
-        mcp_summary_provider: Callable[[], str | None] | None = None,
-        mcp_availability_provider: Callable[[], str | None] | None = None,
+        mcp_section_provider: Callable[[bool], str | None] | None = None,
         chat_mode: bool = False,
     ):
         self.capabilities = capabilities
@@ -175,8 +174,9 @@ class SystemAssembler(AgentMiddleware):
         self.memory_manager = memory_manager
         self.skill_manager = skill_manager
         self.workflow_manager = workflow_manager
-        self.mcp_summary_provider = mcp_summary_provider
-        self.mcp_availability_provider = mcp_availability_provider
+        # Phase-aware MCP content is owned by the MCP middleware; the assembler
+        # only embeds whatever it returns (arg = is_discuss) and never gates it.
+        self.mcp_section_provider = mcp_section_provider
         # 聊天项目（__chat__）：替换 phase 片段为聊天契约，去掉"可修改文件/运行
         # 命令/write_todos"的编码执行指令（base 已由 build_cw_chat_system_prompt 接管）。
         self.chat_mode = chat_mode
@@ -241,40 +241,14 @@ class SystemAssembler(AgentMiddleware):
             return ""
 
     def _mcp_section(self, is_discuss: bool) -> str:
-        if self.mcp_summary_provider is None or is_discuss:
+        # The MCP middleware owns the content (attribution in build; server
+        # status in discuss). The assembler only asks for it.
+        if self.mcp_section_provider is None:
             return ""
         try:
-            summary = self.mcp_summary_provider()
-        except Exception:  # noqa: BLE001 - an MCP summary hiccup must never break chat
+            return self.mcp_section_provider(is_discuss) or ""
+        except Exception:  # noqa: BLE001 - an MCP hiccup must never break chat
             return ""
-        availability = ""
-        if self.mcp_availability_provider is not None:
-            try:
-                availability = self.mcp_availability_provider() or ""
-            except Exception:  # noqa: BLE001 - availability is best-effort
-                availability = ""
-        if not summary and not availability:
-            return ""
-
-        lines = [
-            "## MCP 服务与工具归属 / MCP Server Attribution",
-            "",
-            "以下工具来自已连接的 MCP 服务（按服务器分组）。"
-            "When identifying tools, tools listed below belong to the named MCP server.",
-        ]
-        if summary:
-            lines.append("")
-            lines.append(summary)
-        if availability:
-            lines.append("")
-            lines.append(
-                "以下已启用的 MCP 服务当前不可用。若用户想使用它们，"
-                "请如实说明原因（例如需要重新授权），不要假装可用："
-            )
-            lines.append(availability)
-        lines.append("")
-        lines.append("If asked which tools belong to MCP servers, use this section as your reference.")
-        return "\n".join(lines)
 
     # -- assembly --------------------------------------------------------------
 

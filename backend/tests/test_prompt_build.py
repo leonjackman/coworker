@@ -1,7 +1,8 @@
 """七、請求 prompt build 不合理 (B1 殘留 / A–D) tests.
 
-- A: the MCP attribution is a SystemAssembler FRAGMENT placed AFTER behaviour /
-      capabilities (behaviour core first — codex/opencode), hidden in discuss.
+- A: the MCP section is a SystemAssembler FRAGMENT placed AFTER behaviour /
+      capabilities (behaviour core first — codex/opencode). Its content is owned
+      by the phase-aware MCP provider (attribution in build, status in discuss).
 - B: the behaviour prompt carries no stale "listed ones" reference (the tool
       catalogue was removed).
 - C: build_cw_system_prompt is behaviour-only; build_tool_context is gone.
@@ -61,26 +62,37 @@ def test_system_assembler_places_mcp_after_behaviour_and_capabilities():
         workspace=None,
         memory_manager=_FakeMemoryManager(),
         skill_manager=_FakeSkillManager(),
-        mcp_summary_provider=lambda: "- srv: tool_a, tool_b",
+        mcp_section_provider=lambda discuss: "- srv: tool_a, tool_b",
     )
     out = str(asm._overrides(_assembler_request())["system_message"].content or "")
-    assert "## MCP" in out
     assert "tool_a" in out
-    assert out.index("BASE_BEHAVIOUR") < out.index("## MCP")  # behaviour first
-    assert out.index("CAP_LINE") < out.index("## MCP")  # capabilities before MCP
+    assert out.index("BASE_BEHAVIOUR") < out.index("tool_a")  # behaviour first
+    assert out.index("CAP_LINE") < out.index("tool_a")  # capabilities before MCP
 
 
-def test_system_assembler_hides_mcp_in_discuss():
+def test_system_assembler_delegates_mcp_section_to_provider():
+    """The assembler no longer hides MCP in discuss -- it forwards is_discuss and
+    embeds whatever the (phase-aware) MCP provider returns."""
+    seen: dict[str, bool] = {}
+
+    def provider(discuss: bool) -> str:
+        seen["discuss"] = discuss
+        return "DISCUSS_STATUS" if discuss else "BUILD_TOOLS"
+
     asm = SystemAssembler(
         capabilities="",
         workspace=None,
         memory_manager=_FakeMemoryManager(),
         skill_manager=_FakeSkillManager(),
-        mcp_summary_provider=lambda: "- srv: tool_a",
+        mcp_section_provider=provider,
     )
     out = str(asm._overrides(_assembler_request(phase="discuss"))["system_message"].content or "")
-    assert "## MCP" not in out
-    assert "tool_a" not in out
+    assert seen["discuss"] is True
+    assert "DISCUSS_STATUS" in out
+
+    out_build = str(asm._overrides(_assembler_request())["system_message"].content or "")
+    assert seen["discuss"] is False
+    assert "BUILD_TOOLS" in out_build
 
 
 def test_mcp_middleware_no_longer_prepends_system_message():

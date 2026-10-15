@@ -126,31 +126,85 @@ class McpToolMiddleware(AgentMiddleware):
             )
         return "\n".join(lines)
 
-    def _mcp_availability(self) -> str | None:
-        """One line per enabled-but-unavailable server, with the reason.
+    def _server_status_lines(self, *, include_connected: bool) -> list[str]:
+        """One ``- <name>：<state>`` line per enabled server.
 
-        Lets the model *report* an account/connection problem ("百度云需要重新
-        授权") instead of the server silently missing from the tool set.
+        ``include_connected=False`` yields only the servers needing attention
+        (build mode); ``True`` yields every server (used in discuss, where the
+        model gets no tool attribution and needs the full availability picture).
         """
         try:
             servers = self.session_manager.mcp_manager.list_servers(enabled_only=True)
-        except Exception:  # noqa: BLE001 - availability is best-effort
-            return None
+        except Exception:  # noqa: BLE001 - status is best-effort
+            return []
         lines: list[str] = []
         for server in servers:
             status = str(server.get("status") or "")
             if status == STATUS_CONNECTED:
-                continue
-            name = str(server.get("name") or server.get("id") or "")
-            if status == STATUS_NEEDS_AUTH:
-                reason = "需要重新授权（账号失效）"
+                if not include_connected:
+                    continue
+                state = f"已连接（{int(server.get('tool_count') or 0)} 个工具）"
+            elif status == STATUS_NEEDS_AUTH:
+                state = "需要重新授权（账号失效）"
             elif status == STATUS_ERROR:
-                reason = f"连接失败：{str(server.get('error_message') or '未知原因')}"
+                state = f"连接失败：{str(server.get('error_message') or '未知原因')}"
             else:
-                reason = "当前未连接"
-            lines.append(f"- {name}：{reason}")
-        if not lines:
+                state = "当前未连接"
+            lines.append(f"- {str(server.get('name') or server.get('id') or '')}：{state}")
+        return lines
+
+    def mcp_section(self, discuss: bool) -> str | None:
+        """The single, phase-aware MCP prompt section (owned here, not by the
+        system-prompt assembler).
+
+        * build: which MCP tools are callable (attribution) + any server that is
+          enabled but unavailable (so the model reports re-auth/down servers
+          instead of pretending they do not exist);
+        * discuss / plan: the tools are NOT callable this phase, but the model is
+          still told every server's real state, so it can answer "is X available?"
+          truthfully instead of guessing from memory.
+        """
+        summary = self._mcp_summary()
+        status_all = self._server_status_lines(include_connected=True)
+        if not summary and not status_all:
             return None
+
+        header = (
+            "## MCP 服务状态 / MCP Server Status"
+            if discuss
+            else "## MCP 服务与工具归属 / MCP Server Attribution"
+        )
+        lines = [header, ""]
+        if discuss:
+            lines.append("当前处于规划/讨论阶段，MCP 工具暂不可调用；切换到构建（build）模式后即可使用。")
+            if status_all:
+                lines.append("")
+                lines.append("已启用的 MCP 服务：")
+                lines.extend(status_all)
+            lines.append("")
+            lines.append(
+                "If asked whether an MCP server is available, use the list above — "
+                "do not claim a server is missing or unreachable unless the list says so."
+            )
+            return "\n".join(lines)
+
+        if summary:
+            lines.append(
+                "以下工具来自已连接的 MCP 服务（按服务器分组）。"
+                "When identifying tools, tools listed below belong to the named MCP server."
+            )
+            lines.append("")
+            lines.append(summary)
+        unavailable = self._server_status_lines(include_connected=False)
+        if unavailable:
+            lines.append("")
+            lines.append(
+                "以下已启用的 MCP 服务当前不可用。若用户想使用它们，"
+                "请如实说明原因（例如需要重新授权），不要假装可用："
+            )
+            lines.extend(unavailable)
+        lines.append("")
+        lines.append("If asked which tools belong to MCP servers, use this section as your reference.")
         return "\n".join(lines)
 
     def _self_heal(self) -> None:
