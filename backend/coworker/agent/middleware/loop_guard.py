@@ -9,6 +9,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import Runtime
 from langchain_core.messages import AIMessage, HumanMessage
 
+from ...errors import error_text
 from ...logger import get_logger
 from .base import _is_degenerate_text, _msg_tokens
 from ..core import (
@@ -187,7 +188,7 @@ class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                         "(model=%s, prompt_tokens≈%s): %s",
                         model,
                         prompt_tokens,
-                        str(exc)[:400],
+                        error_text(exc),
                     )
                     raise
                 logger.warning(

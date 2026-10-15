@@ -20,6 +20,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from coworker.errors import error_text
+
 from .build import build_document
 from .common import (
     DEFAULT_READ_MAX_CHARS,
@@ -127,7 +129,7 @@ def build_document_tools(
         except DocumentError as exc:
             return json.dumps({"error": str(exc), "error_code": exc.error_code}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001 - a tool must never break the turn
-            return json.dumps({"error": str(exc)[:400], "error_code": "document_error"}, ensure_ascii=False)
+            return json.dumps({"error": error_text(exc), "error_code": "document_error"}, ensure_ascii=False)
 
     @tool(args_schema=CreateDocumentArgs)
     def create_document(file_path: str, content: str) -> str:
@@ -158,7 +160,7 @@ def build_document_tools(
         except DocumentError as exc:
             return json.dumps({"error": str(exc), "error_code": exc.error_code}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
-            return json.dumps({"error": str(exc)[:400], "error_code": "document_error"}, ensure_ascii=False)
+            return json.dumps({"error": error_text(exc), "error_code": "document_error"}, ensure_ascii=False)
 
     @tool(args_schema=EditDocumentArgs)
     def edit_document(file_path: str, operations: str) -> str:
@@ -187,7 +189,7 @@ def build_document_tools(
         except DocumentError as exc:
             return json.dumps({"error": str(exc), "error_code": exc.error_code}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
-            return json.dumps({"error": str(exc)[:400], "error_code": "document_error"}, ensure_ascii=False)
+            return json.dumps({"error": error_text(exc), "error_code": "document_error"}, ensure_ascii=False)
 
     @tool(args_schema=ConvertDocumentArgs)
     def convert_document(file_path: str, to_format: str, output_path: str = "", pages: str = "") -> str:
@@ -251,7 +253,7 @@ def build_document_tools(
         except DocumentError as exc:
             return json.dumps({"error": str(exc), "error_code": exc.error_code}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
-            return json.dumps({"error": str(exc)[:400], "error_code": "document_error"}, ensure_ascii=False)
+            return json.dumps({"error": error_text(exc), "error_code": "document_error"}, ensure_ascii=False)
 
     return [read_document, create_document, edit_document, convert_document]
 
@@ -314,4 +316,4 @@ def _merge_pdfs(
     except DocumentError as exc:
         return json.dumps({"error": str(exc), "error_code": exc.error_code}, ensure_ascii=False)
     except Exception as exc:  # noqa: BLE001
-        return json.dumps({"error": str(exc)[:400], "error_code": "document_error"}, ensure_ascii=False)
+        return json.dumps({"error": error_text(exc), "error_code": "document_error"}, ensure_ascii=False)

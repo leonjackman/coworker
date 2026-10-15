@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from coworker.errors import error_text
 from coworker.logger import get_logger
 from coworker.workers.worker_config import TaskBrief, WorkerConfig, WorkerResult
 
@@ -270,15 +271,15 @@ class WorkerAgent:
                 "type": "delegate_end",
                 "from": self.caller_agent or "Coworker",
                 "to": "Worker",
-                "error": str(exc)[:200],
+                "error": error_text(exc, limit=200),
                 "parallel": False,
                 "worker_run_id": worker_run_id,
             })
-            _close_stream(error=str(exc)[:400])
+            _close_stream(error=error_text(exc))
             return WorkerResult(
-                content=f"Worker 执行失败：{exc}",
+                content=f"Worker 执行失败：{error_text(exc)}",
                 success=False,
-                error=str(exc),
+                error=error_text(exc),
                 raw_length=0,
                 was_truncated=False,
             )

@@ -49,6 +49,9 @@ from .verification_guard import VerificationGuardMiddleware
 # Phase-gated tool selection
 from .phase_gate import PhaseToolGateMiddleware
 
+# Outermost tool-error boundary (behavioral failures -> model-visible)
+from .tool_error_fallback import ToolErrorFallbackMiddleware
+
 # Single system-prompt assembler (fragment model, codex-style)
 from .system_assembler import SystemAssembler, SYSTEM_FIXED_BUDGET_TOKENS
 
@@ -107,6 +110,8 @@ __all__ = [
     "VerificationGuardMiddleware",
     # Phase
     "PhaseToolGateMiddleware",
+    # Tool-error boundary
+    "ToolErrorFallbackMiddleware",
     # Assembler
     "SystemAssembler",
     "SYSTEM_FIXED_BUDGET_TOKENS",

@@ -20,6 +20,7 @@ import subprocess
 import sys
 from typing import Any
 
+from coworker.errors import error_text
 from coworker.logger import get_logger
 
 logger = get_logger(__name__)
@@ -100,7 +101,7 @@ def build_applescript_tool() -> Any | None:
             return json.dumps({"error": "osascript not found", "error_code": "unavailable"}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001 - a tool must never break the turn
             logger.warning("run_applescript failed: %s", exc)
-            return json.dumps({"error": str(exc)[:400], "error_code": "applescript_error"}, ensure_ascii=False)
+            return json.dumps({"error": error_text(exc), "error_code": "applescript_error"}, ensure_ascii=False)
         stderr = completed.stderr or ""
         permission_hint = ""
         if completed.returncode != 0 and ("not allowed" in stderr.lower() or "-1743" in stderr or "-600" in stderr):

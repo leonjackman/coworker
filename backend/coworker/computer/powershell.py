@@ -18,6 +18,7 @@ import subprocess
 import sys
 from typing import Any
 
+from coworker.errors import error_text
 from coworker.logger import get_logger
 
 logger = get_logger(__name__)
@@ -95,7 +96,7 @@ def build_powershell_tool() -> Any | None:
             return json.dumps({"error": "powershell.exe not found", "error_code": "unavailable"}, ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001 - a tool must never break the turn
             logger.warning("run_powershell failed: %s", exc)
-            return json.dumps({"error": str(exc)[:400], "error_code": "powershell_error"}, ensure_ascii=False)
+            return json.dumps({"error": error_text(exc), "error_code": "powershell_error"}, ensure_ascii=False)
         stderr = completed.stderr or ""
         hint = ""
         if completed.returncode != 0 and "access is denied" in stderr.lower():

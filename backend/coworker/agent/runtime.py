@@ -24,7 +24,7 @@ from langgraph.errors import GraphRecursionError
 
 from ..changes import ChangeStore
 from ..checkpoints import CheckpointManager
-from ..errors import error_text
+from ..errors import Action, Site, error_text, handle
 from ..config import BackendSettings
 from ..context import CalibrationStore
 from ..events import session_event_bus, worker_event_bus
@@ -235,6 +235,22 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         if project_dir:
             agent_rel = f"{project_dir}/{self.agent}/BASE/MEMORY.md"
         return view, getattr(view, "store", None), agent_rel
+
+    def _load_memory_or_degrade(self, degraded: list[str]) -> tuple[Any | None, Any | None, str]:
+        """Resolve the memory view, degrading to "no memory" on a behavioral error.
+
+        Memory is an additive capability: if reading it fails for a behavioral
+        reason, the turn continues without it (and records the degradation so the
+        final reply can say so) instead of aborting. Systemic failures still raise.
+        """
+        try:
+            return self._memory
+        except Exception as exc:  # noqa: BLE001 - policy decides
+            outcome = handle(Site.CONSTRUCTION, exc, detail="memory")
+            if outcome.action is Action.RAISE:
+                raise
+            degraded.append("记忆")
+            return None, None, ""
 
     def _web_tools_for(self, session_id: str) -> list[Any]:
         """Web search/fetch tools when enabled, else ``[]``.
@@ -745,7 +761,8 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
 
         prepared_messages = prepare_agent_messages(messages)
         turn_index = self._next_turn_index(session_id)
-        memory_view, memory_store, memory_rel = self._memory
+        degraded: list[str] = []
+        memory_view, memory_store, memory_rel = self._load_memory_or_degrade(degraded)
         # W1: cached tool closures read CURRENT values from the stable
         # audit-context dict; session_id/turn_index are updated each turn.
         self._audit_context["session_id"] = session_id
@@ -937,7 +954,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     # and the request still does not fit. Emit a precise terminal
                     # error (never the provider's raw 400) and compact so the
                     # user's next action starts from a smaller resident set.
-                    logger.warning("context guard overflow: %s", str(exc)[:300])
+                    logger.warning("context guard overflow: %s", error_text(exc, limit=300))
                     self.trace_store.record(
                         "agent_activity", "error", current_trace_context,
                         {"error": error_text(exc), "kind": "context_overflow"},
@@ -998,31 +1015,21 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         prepared_messages = prepare_agent_messages(messages, max_images=1)
                         inputs["messages"] = prepared_messages
                         continue
-                    if not str(exc).strip():
-                        # Empty-message exceptions (e.g. anyio ClosedResourceError
-                        # from a dead MCP stream, or a bare TimeoutError) must be
-                        # logged with their type so the real cause is never lost.
-                        logger.warning(
-                            "agent turn failed with an empty exception message (type=%s)",
-                            type(exc).__name__,
-                            exc_info=True,
-                        )
+                    # Central policy: fatal/systemic re-raises (the SSE layer turns
+                    # it into the single terminal `error` frame); a behavioral error
+                    # that escaped every tool boundary degrades to a graceful finish
+                    # instead of killing the turn. Logged with site + traceback.
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": error_text(exc)})
-                    # Failed turn: still offer a skill-review pass so "hit errors
-                    # and found a (partial) working path" can be captured as a draft.
                     self._maybe_self_review(session_id, messages, parts)
                     self._maybe_review_workflow(session_id, messages, parts)
-                    # Do NOT yield an error event here before raising: every consumer
-                    # of this stream wraps it in `_sse_events`, whose producer already
-                    # turns a raise into exactly one terminal `error` event (via the
-                    # `on_error` callback, enriched with session_id/provider/model/
-                    # base_url). Yielding a second error here produces a double error
-                    # event on the wire (one as a normal event, one as the terminal
-                    # error), which the frontend state machine treats as two
-                    # conflicting terminal states. Just record the trace and re-raise.
-                    raise
+                    if handle(Site.STREAM, exc, detail="agent_turn").action is Action.RAISE:
+                        raise
+                    degraded.append("工具调用")
+                    break
 
         final_content = "".join(content_parts)
+        if degraded:
+            final_content = f"{final_content}\n\n（提示：本轮 " + "、".join(degraded) + " 不可用，已跳过继续。）"
         # D5: combined final-content cleanup (plan leak + compaction echo).
         _mw = getattr(graph, "_cw_context_middleware", None)
         final_content = _clean_final_content(final_content, parts, getattr(_mw, "last_summary", "") or "")
@@ -1205,6 +1212,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         )
         content_parts: list[str] = []
         parts: list[dict[str, Any]] = []
+        degraded: list[str] = []
         decision_types = ", ".join(str(item.get("type")) for item in decisions)
         self.trace_store.record("agent_activity", "resolved", current_trace_context, {"approval_id": approval.get("id", ""), "decisions": decision_types})
 
@@ -1225,7 +1233,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
         )
 
         async with _open_checkpointer(self.checkpoints_dir) as checkpointer:
-            memory_view, memory_store, memory_rel = self._memory
+            memory_view, memory_store, memory_rel = self._load_memory_or_degrade(degraded)
             self._audit_context["session_id"] = session_id
             graph = self._compiled_graph(
                 session_id=session_id,
@@ -1319,12 +1327,18 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     )
             except Exception as exc:
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": error_text(exc), "resumed": True})
-                raise
+                # Same central policy as the main stream: systemic re-raises (red
+                # error); a behavioral error degrades to a graceful finish.
+                if handle(Site.RESUME, exc, detail="resume").action is Action.RAISE:
+                    raise
+                degraded.append("工具调用")
             finally:
                 # Reset so the flag cannot leak into subsequent turns or agent runs.
                 self.workspace._allow_external_write = False
 
         final_content = "".join(content_parts)
+        if degraded:
+            final_content = f"{final_content}\n\n（提示：本轮 " + "、".join(degraded) + " 不可用，已跳过继续。）"
         # D5: combined final-content cleanup (plan leak + compaction echo).
         _mw = getattr(graph, "_cw_context_middleware", None)
         final_content = _clean_final_content(final_content, parts, getattr(_mw, "last_summary", "") or "")

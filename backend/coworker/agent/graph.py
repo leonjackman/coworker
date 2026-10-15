@@ -78,6 +78,7 @@ from .middleware import (
     StallRetryMiddleware,
     SteerInjectionMiddleware,
     ToolCallCleanerMiddleware,
+    ToolErrorFallbackMiddleware,
     VerificationGuardMiddleware,
     _summarizer_candidates,
     command_approval_middleware,
@@ -1044,6 +1045,11 @@ def build_coworker_agent_graph(
         calibration_key=calibration_key,
     )
     middleware: list[Any] = [
+        # OUTERMOST tool boundary: any tool exception is handed to the central
+        # error policy. Behavioral failures become model-visible ToolMessages
+        # (the agent reports/falls back); systemic ones still propagate. Must be
+        # first so it wraps every other tool wrapper (phase gate, approvals, MCP).
+        ToolErrorFallbackMiddleware(),
         NormalizeMessagesMiddleware(),
         StallRetryMiddleware(),
         context_middleware,
@@ -1081,6 +1087,7 @@ def build_coworker_agent_graph(
             skill_manager=skill_manager,
             workflow_manager=workflow_manager,
             mcp_summary_provider=mcp_middleware._mcp_summary,
+            mcp_availability_provider=mcp_middleware._mcp_availability,
             chat_mode=chat_mode,
         )
     )

@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
+from coworker.errors import error_text
 from coworker.mcp.mcp import SECRET_PLACEHOLDER, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
 from coworker.mcp.mcp_discover import resolve_templates
 from coworker.mcp.mcp_test import test_mcp_connection_sync
@@ -178,7 +179,7 @@ def fetch_provider_models(request: ProviderFetchModelsPayload):
     try:
         models = provider_manager.fetch_models(request.base_url, api_key, request.provider_type)
     except Exception as exc:
-        return {"status": "error", "models": [], "error": str(exc)[:300]}
+        return {"status": "error", "models": [], "error": error_text(exc, limit=300)}
     return {"status": "ok", "models": models}
 @router.get("/providers/templates")
 def get_provider_templates():

@@ -19,6 +19,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 
+from .mcp import STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
 from .mcp_session import McpSessionManager
 
 from coworker.errors import error_text
@@ -123,6 +124,33 @@ class McpToolMiddleware(AgentMiddleware):
                 + " exist on several servers and are exposed with a "
                 "`<server>__<tool>` prefix. Use the prefixed name shown above."
             )
+        return "\n".join(lines)
+
+    def _mcp_availability(self) -> str | None:
+        """One line per enabled-but-unavailable server, with the reason.
+
+        Lets the model *report* an account/connection problem ("百度云需要重新
+        授权") instead of the server silently missing from the tool set.
+        """
+        try:
+            servers = self.session_manager.mcp_manager.list_servers(enabled_only=True)
+        except Exception:  # noqa: BLE001 - availability is best-effort
+            return None
+        lines: list[str] = []
+        for server in servers:
+            status = str(server.get("status") or "")
+            if status == STATUS_CONNECTED:
+                continue
+            name = str(server.get("name") or server.get("id") or "")
+            if status == STATUS_NEEDS_AUTH:
+                reason = "需要重新授权（账号失效）"
+            elif status == STATUS_ERROR:
+                reason = f"连接失败：{str(server.get('error_message') or '未知原因')}"
+            else:
+                reason = "当前未连接"
+            lines.append(f"- {name}：{reason}")
+        if not lines:
+            return None
         return "\n".join(lines)
 
     def _self_heal(self) -> None:
