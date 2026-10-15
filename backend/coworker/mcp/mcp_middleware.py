@@ -21,6 +21,7 @@ from langchain.agents.middleware import AgentMiddleware
 
 from .mcp_session import McpSessionManager
 
+from coworker.errors import error_text
 from coworker.logger import get_logger
 logger = get_logger(__name__)
 
@@ -288,7 +289,7 @@ class McpToolMiddleware(AgentMiddleware):
                 "duration_ms": int((time.monotonic() - started) * 1000),
             }
             if error is not None:
-                details["error"] = str(error)[:_AUDIT_PREVIEW_CHARS]
+                details["error"] = error_text(error, limit=_AUDIT_PREVIEW_CHARS)
             elif result is not None:
                 details["result_preview"] = self._result_preview(result)
                 if getattr(result, "status", None) == "error":

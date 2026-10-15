@@ -24,6 +24,7 @@ from langgraph.errors import GraphRecursionError
 
 from ..changes import ChangeStore
 from ..checkpoints import CheckpointManager
+from ..errors import error_text
 from ..config import BackendSettings
 from ..context import CalibrationStore
 from ..events import session_event_bus, worker_event_bus
@@ -939,7 +940,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     logger.warning("context guard overflow: %s", str(exc)[:300])
                     self.trace_store.record(
                         "agent_activity", "error", current_trace_context,
-                        {"error": str(exc)[:400], "kind": "context_overflow"},
+                        {"error": error_text(exc), "kind": "context_overflow"},
                     )
                     await self._force_compact(graph, inputs, config)
                     yield {
@@ -997,7 +998,16 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         prepared_messages = prepare_agent_messages(messages, max_images=1)
                         inputs["messages"] = prepared_messages
                         continue
-                    self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400]})
+                    if not str(exc).strip():
+                        # Empty-message exceptions (e.g. anyio ClosedResourceError
+                        # from a dead MCP stream, or a bare TimeoutError) must be
+                        # logged with their type so the real cause is never lost.
+                        logger.warning(
+                            "agent turn failed with an empty exception message (type=%s)",
+                            type(exc).__name__,
+                            exc_info=True,
+                        )
+                    self.trace_store.record("agent_activity", "error", current_trace_context, {"error": error_text(exc)})
                     # Failed turn: still offer a skill-review pass so "hit errors
                     # and found a (partial) working path" can be captured as a draft.
                     self._maybe_self_review(session_id, messages, parts)
@@ -1308,7 +1318,7 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                         "可讓任務更聚焦或分步後繼續。）"
                     )
             except Exception as exc:
-                self.trace_store.record("agent_activity", "error", current_trace_context, {"error": str(exc)[:400], "resumed": True})
+                self.trace_store.record("agent_activity", "error", current_trace_context, {"error": error_text(exc), "resumed": True})
                 raise
             finally:
                 # Reset so the flag cannot leak into subsequent turns or agent runs.

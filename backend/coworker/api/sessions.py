@@ -46,8 +46,10 @@ from coworker.api.streaming import (
     _session_context_usage_snapshot,
     _session_goal,
     _session_message_history,
-    _session_referenced_ids
+    _session_referenced_ids,
+    cancellation_event,
 )
+from coworker.errors import error_text
 
 from fastapi import APIRouter
 
@@ -576,7 +578,10 @@ async def regenerate_message(session_id: str, message_id: str, request: Regenera
             # records from this stream stay bound to a message (rollback needs
             # the binding).
             _persist_partial()
-            return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
+            stopped = cancellation_event(session_id, exc)
+            if stopped is not None:
+                return stopped
+            return {"type": "error", "session_id": session_id, "error": error_text(exc)}
 
         snapshot_workspace = None
         try:
@@ -782,7 +787,10 @@ async def edit_message(session_id: str, message_id: str, request: EditMessageReq
             # records from this stream stay bound to a message (rollback needs
             # the binding).
             _persist_partial()
-            return {"type": "error", "session_id": session_id, "error": str(exc)[:400]}
+            stopped = cancellation_event(session_id, exc)
+            if stopped is not None:
+                return stopped
+            return {"type": "error", "session_id": session_id, "error": error_text(exc)}
 
         snapshot_workspace = None
         try:

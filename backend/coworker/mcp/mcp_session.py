@@ -59,6 +59,31 @@ DEFAULT_CALL_TIMEOUT = 60.0
 
 _REMOTE_TRANSPORTS = {"sse", "streamable_http"}
 
+# How long an idle remote session waits between keepalive pings. Must stay below
+# the transport's ``sse_read_timeout`` (default 300s) so the long-lived SSE
+# stream never idles into an ``httpx.ReadTimeout``.
+DEFAULT_KEEPALIVE_INTERVAL = 120.0
+DEFAULT_KEEPALIVE_PING_TIMEOUT = 20.0
+
+# anyio closes a read/write stream by raising one of these on the *next* use.
+# They subclass ``Exception`` with an empty message, so a naive
+# ``str(exc)``-based classifier misses them and the dead session is never
+# reconnected -- the empty error then leaks all the way to the user. Resolved
+# lazily (anyio is only present via the MCP SDK).
+_ANYIO_CLOSED_ERRORS: tuple[type[BaseException], ...] | None = None
+
+
+def _anyio_closed_errors() -> tuple[type[BaseException], ...]:
+    global _ANYIO_CLOSED_ERRORS
+    if _ANYIO_CLOSED_ERRORS is None:
+        try:
+            from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
+
+            _ANYIO_CLOSED_ERRORS = (BrokenResourceError, ClosedResourceError, EndOfStream)
+        except Exception:  # noqa: BLE001 - anyio absent must not crash classification
+            _ANYIO_CLOSED_ERRORS = ()
+    return _ANYIO_CLOSED_ERRORS
+
 # Providers reject tool names outside ``^[a-zA-Z0-9_-]{1,128}$``; namespaced
 # names must stay inside that budget.
 MAX_TOOL_NAME_LEN = 128
@@ -130,8 +155,19 @@ def _is_transport_error(exc: BaseException) -> bool:
 
     A false positive is harmless: the reconnect+retry path is idempotent.
     """
+    closed_types: tuple[type[BaseException], ...] = (
+        ConnectionError,
+        BrokenPipeError,
+        EOFError,
+        TimeoutError,
+        *_anyio_closed_errors(),
+    )
     for leaf in flatten_exceptions(exc):
-        if isinstance(leaf, (ConnectionError, BrokenPipeError, EOFError, TimeoutError)):
+        # ``anyio.ClosedResourceError`` / ``BrokenResourceError`` / ``EndOfStream``
+        # have empty messages, so they must be matched by type -- otherwise a
+        # session whose stream died is treated as a plain tool error and never
+        # reconnected.
+        if isinstance(leaf, closed_types):
             return True
         text = str(leaf).lower()
         markers = (
@@ -338,6 +374,11 @@ class McpSessionManager:
         self.open_browser = open_browser
         self._connect_timeout = connect_timeout
         self._call_timeout = call_timeout
+        # Active keepalive for remote transports (see :meth:`_serve_session`):
+        # ping well within the transport's read timeout so the SSE stream never
+        # silently idle-disconnects mid-turn.
+        self.keepalive_interval = DEFAULT_KEEPALIVE_INTERVAL
+        self.keepalive_ping_timeout = DEFAULT_KEEPALIVE_PING_TIMEOUT
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -958,7 +999,7 @@ class McpSessionManager:
             session = await stack.enter_async_context(create_session(connection))
             if not ready.done():
                 ready.set_result(session)
-            await stop.wait()
+            await self._serve_session(server_id, connection, session, stop)
         except BaseException as exc:  # noqa: BLE001 - surfaced through `ready`
             if not ready.done():
                 ready.set_exception(exc)
@@ -975,6 +1016,59 @@ class McpSessionManager:
                     await stack.aclose()
                 except BaseException:  # noqa: BLE001 - teardown is best-effort
                     logger.debug("MCP session %s teardown raised", server_id)
+
+    async def _serve_session(
+        self,
+        server_id: str,
+        connection: dict[str, Any],
+        session: Any,
+        stop: asyncio.Event,
+    ) -> None:
+        """Park the owner task on ``stop``, pinging remote sessions meanwhile.
+
+        SSE / streamable_http hold a long-lived HTTP stream whose server-side
+        read timeout (default 300s) silently drops the connection when idle,
+        which then makes the *next* tool call fail with an empty-message
+        ``anyio`` closed error. A periodic protocol ``ping`` keeps the stream
+        warm so the session survives long idle gaps between MCP uses.
+
+        A failed ping means the transport is already dead: stop serving so the
+        owner task tears the session down and the next tool call reconnects
+        (``_is_transport_error`` → ``McpSessionClosedError`` → retry).
+        """
+        transport = str(connection.get("transport") or "")
+        if transport not in _REMOTE_TRANSPORTS:
+            await stop.wait()
+            return
+
+        interval = float(self.keepalive_interval)
+        while True:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=interval)
+                return  # clean stop
+            except (TimeoutError, asyncio.TimeoutError):
+                pass
+            try:
+                await asyncio.wait_for(
+                    session.send_ping(), timeout=float(self.keepalive_ping_timeout)
+                )
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:  # noqa: BLE001 - a dead session must not wedge
+                if _is_transport_error(exc):
+                    logger.info(
+                        "MCP keepalive ping failed for %s (%s); session will reconnect on next use",
+                        server_id,
+                        friendly_error(exc, transport),
+                    )
+                    return
+                # A server that merely rejects `ping` (JSON-RPC error) is still
+                # alive -- keep the session, just skip this cycle.
+                logger.debug(
+                    "MCP keepalive ping rejected for %s: %s",
+                    server_id,
+                    friendly_error(exc, transport),
+                )
 
     async def _wire_auth(
         self,

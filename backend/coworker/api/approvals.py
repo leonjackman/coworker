@@ -32,6 +32,7 @@ from coworker.api.streaming import (
     SSE_HEARTBEAT_SECONDS,
     _merge_message_parts
 )
+from coworker.errors import error_text
 
 from fastapi import APIRouter
 
@@ -344,18 +345,18 @@ async def _resume_in_background(resume_id: str, approval: dict[str, Any], siblin
                     "autonomy": str(context.get("autonomy") or "guarded"),
                     "streaming": True,
                 },
-                {"error": str(exc)[:400], "resume_id": resume_id, "approval_id": approval.get("id", "")},
+                {"error": error_text(exc), "resume_id": resume_id, "approval_id": approval.get("id", "")},
             )
         except Exception:  # noqa: BLE001 - a trace hiccup must never mask the resume error
             logger.warning("failed to record resume error trace", exc_info=True)
         await approval_event_bus.publish(
             resume_id,
-            {"type": "error", "session_id": session_id, "error": str(exc)[:400], "resume_id": resume_id},
+            {"type": "error", "session_id": session_id, "error": error_text(exc), "resume_id": resume_id},
         )
         # Persist error summary to session so it survives restart
         try:
             session = session_store.require(session_id)
-            session.last_error = str(exc)[:400]
+            session.last_error = error_text(exc)
             session_store.save(session)
         except KeyError:
             pass

@@ -55,8 +55,10 @@ from coworker.api.streaming import (
     _hard_stop_session_stream,
     _parts_to_conversation,
     _publish_turn,
-    _session_goal
+    _session_goal,
+    cancellation_event,
 )
+from coworker.errors import error_text
 
 from fastapi import APIRouter
 
@@ -808,10 +810,15 @@ async def chat_stream(request: ChatStreamRequest):
                 except Exception:  # noqa: BLE001 - never break the terminal event
                     logger.debug("error→blocked goal update failed for %s", session_id, exc_info=True)
             terminal_sent = True
+            # A Stop / client disconnect is not an error -- report a plain
+            # "stopped" so the UI never shows a misleading connection failure.
+            stopped = cancellation_event(session_id, exc)
+            if stopped is not None:
+                return stopped
             return {
                 "type": "error",
                 "session_id": session_id,
-                "error": str(exc)[:400],
+                "error": error_text(exc),
                 "provider": getattr(runtime, "provider_name", "") or "",
                 "model": getattr(runtime, "model_name", "") or "",
                 "base_url": getattr(getattr(runtime, "llm", None), "base_url", "") or "",

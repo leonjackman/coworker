@@ -18,8 +18,13 @@ from coworker.agent.core import (
     normalize_work_mode,
     _runtime_context_budget,
 )
+from coworker.errors import error_text
 from coworker.events import WorkerEventBus, session_event_bus, worker_event_bus
 from coworker.goal_feature import goal_feature
+from coworker.api.stream_stop import (
+    _mark_stop_reason,
+    cancellation_event,
+)
 from coworker.api.state import (
     _stream_tasks,
     agent_registry,
@@ -101,9 +106,14 @@ async def _sse_events(
             # error event instead of letting the exception propagate (which
             # would leave only the "end" sentinel in the queue).
             try:
-                err = on_error(exc) if on_error is not None else {"type": "error", "error": str(exc)[:400]}
+                if on_error is not None:
+                    err = on_error(exc)
+                elif isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                    err = {"type": "stopped", "reason": "client"}
+                else:
+                    err = {"type": "error", "error": error_text(exc)}
             except BaseException:  # noqa: BLE001 - never lose the terminal event
-                logger.exception("on_error handler failed for stream: %r", str(exc)[:200])
+                logger.exception("on_error handler failed for stream: %r", error_text(exc, limit=200))
                 err = {"type": "error", "error": "internal stream failure"}
             await queue.put(("error", err))
         finally:
@@ -286,6 +296,9 @@ def _force_stop_session_stream(session_id: str) -> None:
     checkpoint thread is deleted by the stream's finally, and the next run
     rebuilds fresh from session history anyway.
     """
+    # Recorded before cancelling so the terminal event can distinguish an
+    # explicit user Stop from a client disconnect.
+    _mark_stop_reason(session_id, "user")
     _hard_stop_session_stream(session_id)
     agent_registry.checkpoint_manager.mark_idle(session_id)
 async def _guard_session_not_streaming(session_id: str) -> None:

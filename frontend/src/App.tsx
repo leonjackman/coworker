@@ -569,7 +569,7 @@ function App() {
                 return { ...p, parts: settleRunningTools(transcript), done: true };
               }
               if (event.type === 'error') {
-                return { ...p, error: event.error, done: true };
+                return { ...p, error: event.error || t('chat.generation_failed'), done: true };
               }
               if (event.type === 'worker_stream_end') {
                 // Terminal frame with NO prior done/error and an empty (or still
@@ -1831,10 +1831,19 @@ function App() {
         // per-session store must always be updated so the card reappears after
         // switching back.
         setSessionTodos(event.session_id ?? requestSessionId, assistantMessageId, event.todos);
+      } else if (event.type === 'stopped') {
+        textThrottle.flushNow();
+        localParts = settleRunningTools(localParts);
+        commit(localParts, {
+          content: event.reason === 'user' ? t('chat.stopped_user') : t('chat.stopped_client'),
+          status: 'stopped',
+          streamEndAt: Date.now(),
+        });
+        clearSessionTodos(event.session_id ?? requestSessionId);
       } else if (event.type === 'error') {
         textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
-        commit(localParts, { content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() });
+        commit(localParts, { content: event.error || t('chat.generation_failed'), status: 'error', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? requestSessionId);
       } else if (event.type === 'idle_warning') {
         // Backend detected N seconds of inactivity on the SSE stream.
@@ -2397,10 +2406,19 @@ function App() {
               : item,
           ),
         );
+      } else if (event.type === 'stopped') {
+        textThrottle.flushNow();
+        localParts = settleRunningTools(localParts);
+        commit(localParts, {
+          content: event.reason === 'user' ? t('chat.stopped_user') : t('chat.stopped_client'),
+          status: 'stopped',
+          streamEndAt: Date.now(),
+        });
+        clearSessionTodos(event.session_id ?? currentSessionId);
       } else if (event.type === 'error') {
         textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
-        commit(localParts, { content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() });
+        commit(localParts, { content: event.error || t('chat.generation_failed'), status: 'error', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_error');
       }
@@ -2645,10 +2663,19 @@ function App() {
               : item,
           ),
         );
+      } else if (event.type === 'stopped') {
+        textThrottle.flushNow();
+        localParts = settleRunningTools(localParts);
+        commit(localParts, {
+          content: event.reason === 'user' ? t('chat.stopped_user') : t('chat.stopped_client'),
+          status: 'stopped',
+          streamEndAt: Date.now(),
+        });
+        clearSessionTodos(event.session_id ?? currentSessionId);
       } else if (event.type === 'error') {
         textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
-        commit(localParts, { content: event.error || t('chat.backend_unreachable'), status: 'error', streamEndAt: Date.now() });
+        commit(localParts, { content: event.error || t('chat.generation_failed'), status: 'error', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? currentSessionId);
         playSound('reply_error');
       }
@@ -2992,13 +3019,23 @@ function App() {
                   : item,
               ),
             );
+      } else if (event.type === 'stopped') {
+        resumeThrottle.flushNow();
+        resumeParts = settleRunningTools(resumeParts);
+        setMessages((current) =>
+          current.map((item) =>
+            item.id === targetMessageId
+              ? { ...item, content: event.reason === 'user' ? t('chat.stopped_user') : t('chat.stopped_client'), status: 'stopped', parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
+              : item,
+          ),
+        );
       } else if (event.type === 'error') {
         resumeThrottle.flushNow();
         resumeParts = settleRunningTools(resumeParts);
         setMessages((current) =>
           current.map((item) =>
             item.id === targetMessageId
-              ? { ...item, content: event.error || t('chat.backend_unreachable'), status: 'error', parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
+              ? { ...item, content: event.error || t('chat.generation_failed'), status: 'error', parts: mergeMessageParts(item.parts || [], resumeParts), streamEndAt: Date.now() }
               : item,
           ),
         );
