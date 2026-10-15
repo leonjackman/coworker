@@ -84,6 +84,27 @@ def _anyio_closed_errors() -> tuple[type[BaseException], ...]:
             _ANYIO_CLOSED_ERRORS = ()
     return _ANYIO_CLOSED_ERRORS
 
+
+_HTTPX_TRANSPORT_ERRORS: tuple[type[BaseException], ...] | None = None
+
+
+def _httpx_transport_errors() -> tuple[type[BaseException], ...]:
+    """Raw ``httpx.TransportError`` types (RemoteProtocolError/ReadTimeout/...).
+
+    A dropped MCP SSE channel surfaces on the *next* call as one of these,
+    which the message-based markers below do not catch -- so without them the
+    dead session is never reconnected.
+    """
+    global _HTTPX_TRANSPORT_ERRORS
+    if _HTTPX_TRANSPORT_ERRORS is None:
+        try:
+            import httpx
+
+            _HTTPX_TRANSPORT_ERRORS = (httpx.TransportError,)
+        except Exception:  # noqa: BLE001 - httpx absent must not crash classification
+            _HTTPX_TRANSPORT_ERRORS = ()
+    return _HTTPX_TRANSPORT_ERRORS
+
 # Providers reject tool names outside ``^[a-zA-Z0-9_-]{1,128}$``; namespaced
 # names must stay inside that budget.
 MAX_TOOL_NAME_LEN = 128
@@ -161,6 +182,7 @@ def _is_transport_error(exc: BaseException) -> bool:
         EOFError,
         TimeoutError,
         *_anyio_closed_errors(),
+        *_httpx_transport_errors(),
     )
     for leaf in flatten_exceptions(exc):
         # ``anyio.ClosedResourceError`` / ``BrokenResourceError`` / ``EndOfStream``

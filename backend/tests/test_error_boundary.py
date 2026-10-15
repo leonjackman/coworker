@@ -19,6 +19,7 @@ import pytest
 BACKEND = str(Path(__file__).resolve().parents[1])
 sys.path.insert(0, BACKEND)
 
+import httpx  # noqa: E402
 from anyio import ClosedResourceError  # noqa: E402
 from langchain_core.messages import ToolMessage  # noqa: E402
 from langgraph.errors import GraphBubbleUp  # noqa: E402
@@ -32,8 +33,9 @@ from coworker.errors import (  # noqa: E402
     behavior_message,
     classify,
     handle,
+    is_connection_error,
 )
-from coworker.mcp.mcp_session import McpSessionClosedError  # noqa: E402
+from coworker.mcp.mcp_session import McpSessionClosedError, _is_transport_error  # noqa: E402
 
 # Matched by name in the classifier (avoids importing the agent stack).
 ContextOverflowError = type("ContextOverflowError", (RuntimeError,), {})
@@ -94,6 +96,37 @@ def test_fatal_and_interrupt_and_cancel_always_raise():
     assert handle(Site.STREAM, ContextOverflowError("x")).action is Action.RAISE
     assert handle(Site.TOOL, asyncio.CancelledError()).action is Action.RAISE
     assert handle(Site.TOOL, GraphBubbleUp()).action is Action.RAISE
+
+
+# --- site-aware connection errors (LLM drop vs MCP tool drop) -----------------
+
+
+def test_connection_error_is_systemic_outside_a_tool():
+    # A dropped provider stream (e.g. RemoteProtocolError in the 'model' task)
+    # must abort with a real error, not silently degrade.
+    exc = httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+    assert handle(Site.STREAM, exc).severity is Severity.FATAL
+    assert handle(Site.STREAM, exc).action is Action.RAISE
+    assert handle(Site.RESUME, exc).action is Action.RAISE
+
+
+def test_connection_error_at_tool_site_stays_behavioral():
+    exc = httpx.RemoteProtocolError("peer closed connection")
+    assert handle(Site.TOOL, exc).action is Action.TOOL_MESSAGE
+
+
+def test_is_connection_error_covers_httpx_and_os():
+    assert is_connection_error(httpx.RemoteProtocolError("x"))
+    assert is_connection_error(httpx.ReadTimeout("x"))
+    assert is_connection_error(ConnectionResetError())
+    assert not is_connection_error(ValueError("x"))
+
+
+def test_mcp_transport_error_recognizes_httpx():
+    # So a dead MCP SSE channel is reconnected instead of swallowed.
+    assert _is_transport_error(httpx.RemoteProtocolError("peer closed connection"))
+    assert _is_transport_error(httpx.ReadTimeout("x"))
+    assert not _is_transport_error(ValueError("bad args"))
 
 
 # --- tool boundary ------------------------------------------------------------

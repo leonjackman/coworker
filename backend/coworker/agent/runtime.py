@@ -84,6 +84,17 @@ from .middleware import (
 )
 
 
+def _with_degraded_notice(content: str, degraded: list[str]) -> str:
+    """Append a neutral note when the turn continued without some capability.
+
+    Deliberately cause-neutral (never claims "工具调用") so a degraded turn does
+    not send the model (and the user) down a wrong diagnosis.
+    """
+    if not degraded:
+        return content
+    return f"{content}\n\n（提示：本轮 {'、'.join(degraded)} 不可用，已尽力完成你能看到的部分；如需可重试。）"
+
+
 def _prepend_compaction_summary(
     prepared_messages: list[Any], summary: str, language: Language
 ) -> list[Any]:
@@ -1024,12 +1035,10 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     self._maybe_review_workflow(session_id, messages, parts)
                     if handle(Site.STREAM, exc, detail="agent_turn").action is Action.RAISE:
                         raise
-                    degraded.append("工具调用")
+                    degraded.append("部分能力")
                     break
 
-        final_content = "".join(content_parts)
-        if degraded:
-            final_content = f"{final_content}\n\n（提示：本轮 " + "、".join(degraded) + " 不可用，已跳过继续。）"
+        final_content = _with_degraded_notice("".join(content_parts), degraded)
         # D5: combined final-content cleanup (plan leak + compaction echo).
         _mw = getattr(graph, "_cw_context_middleware", None)
         final_content = _clean_final_content(final_content, parts, getattr(_mw, "last_summary", "") or "")
@@ -1331,14 +1340,12 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 # error); a behavioral error degrades to a graceful finish.
                 if handle(Site.RESUME, exc, detail="resume").action is Action.RAISE:
                     raise
-                degraded.append("工具调用")
+                degraded.append("部分能力")
             finally:
                 # Reset so the flag cannot leak into subsequent turns or agent runs.
                 self.workspace._allow_external_write = False
 
-        final_content = "".join(content_parts)
-        if degraded:
-            final_content = f"{final_content}\n\n（提示：本轮 " + "、".join(degraded) + " 不可用，已跳过继续。）"
+        final_content = _with_degraded_notice("".join(content_parts), degraded)
         # D5: combined final-content cleanup (plan leak + compaction echo).
         _mw = getattr(graph, "_cw_context_middleware", None)
         final_content = _clean_final_content(final_content, parts, getattr(_mw, "last_summary", "") or "")

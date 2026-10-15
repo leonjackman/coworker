@@ -132,6 +132,45 @@ def behavior_message(exc: BaseException, *, tool: str = "", server: str = "") ->
 _PROVIDER_ERRORS: tuple[type[BaseException], ...] | None = None
 _INTERRUPT_TYPE: type[BaseException] | None = None
 _STALL_TYPE: type[BaseException] | None = None
+_TRANSPORT_ERRORS: tuple[type[BaseException], ...] | None = None
+
+
+def _transport_errors() -> tuple[type[BaseException], ...]:
+    """The raw HTTP transport errors (``httpx.TransportError`` subtree).
+
+    The streaming model call can surface these unwrapped mid-stream
+    (``RemoteProtocolError`` "peer closed connection", ``ReadTimeout``,
+    ``ConnectError`` ...), which ``_provider_errors`` does not catch because they
+    are not ``openai.*`` types.
+    """
+    global _TRANSPORT_ERRORS
+    if _TRANSPORT_ERRORS is None:
+        try:
+            import httpx
+
+            _TRANSPORT_ERRORS = (httpx.TransportError,)
+        except Exception:  # noqa: BLE001 - httpx absent must not crash classification
+            _TRANSPORT_ERRORS = ()
+    return _TRANSPORT_ERRORS
+
+
+def _provider_connection_errors() -> tuple[type[BaseException], ...]:
+    try:
+        import openai
+
+        # ``APITimeoutError`` subclasses ``APIConnectionError``; both are the
+        # SDK's wrapper around a dropped/unreachable provider connection.
+        return (openai.APIConnectionError,)
+    except Exception:  # noqa: BLE001 - openai absent must not crash classification
+        return ()
+
+
+def is_connection_error(exc: BaseException) -> bool:
+    """True for a connection/transport failure of any layer (httpx, OS, openai)."""
+    types = _transport_errors() + _provider_connection_errors()
+    if types and isinstance(exc, types):
+        return True
+    return isinstance(exc, (ConnectionError, BrokenPipeError, EOFError, TimeoutError))
 
 
 def _provider_errors() -> tuple[type[BaseException], ...]:
@@ -214,6 +253,24 @@ def classify(exc: BaseException) -> Severity:
     return Severity.BEHAVIORAL
 
 
+def _severity_for(site: Site, exc: BaseException) -> Severity:
+    """Site-aware severity.
+
+    A connection/transport failure is *systemic* when it happens outside a tool
+    (the LLM/provider is unreachable) but *behavioral* at a tool boundary (an
+    MCP/remote tool's channel dropped and the model should be told). ``classify``
+    stays site-agnostic; only this decides by location.
+    """
+    severity = classify(exc)
+    if (
+        severity is Severity.BEHAVIORAL
+        and site in (Site.STREAM, Site.RESUME)
+        and is_connection_error(exc)
+    ):
+        return Severity.FATAL
+    return severity
+
+
 def _decide(site: Site, severity: Severity) -> Action:
     """The one place that maps (site, severity) -> action."""
     if severity in (Severity.CANCELLED, Severity.INTERRUPT, Severity.FATAL):
@@ -242,7 +299,7 @@ def handle(
     traceback, and the chosen action are recorded so a swallowed-but-handled
     failure is always traceable in the logs.
     """
-    severity = classify(exc)
+    severity = _severity_for(site, exc)
     action = _decide(site, severity)
     if severity is Severity.CANCELLED:
         # A Stop / client disconnect is expected, not an incident: no warning.

@@ -9,7 +9,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import Runtime
 from langchain_core.messages import AIMessage, HumanMessage
 
-from ...errors import error_text
+from ...errors import error_text, is_connection_error
 from ...logger import get_logger
 from .base import _is_degenerate_text, _msg_tokens
 from ..core import (
@@ -124,14 +124,16 @@ class ToolCallCleanerMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
 
 
 class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
-    """Retry a model generation call once after a stream-chunk stall.
+    """Retry a model generation call once after a stream stall or transport drop.
 
-    ``langchain-openai`` aborts the stream when no chunk arrives for
-    ``stream_chunk_timeout`` (``StreamChunkTimeoutError``). A flaky / briefly
-    overloaded provider may recover immediately, so we retry the SINGLE model
-    call once before letting the error propagate to the SSE layer (which would
-    otherwise abort the whole turn). Only the model call is retried — tools are
-    never re-run, so this is safe to apply at every model step.
+    Two recoverable provider failures are retried once: ``langchain-openai``
+    aborting the stream when no chunk arrives for ``stream_chunk_timeout``
+    (``StreamChunkTimeoutError``), and a dropped connection mid-stream
+    (``httpx.TransportError`` such as ``RemoteProtocolError``). A flaky /
+    briefly overloaded provider may recover immediately, so we retry the SINGLE
+    model call once before letting the error propagate to the SSE layer (which
+    would otherwise abort the whole turn). Only the model call is retried —
+    tools are never re-run, so this is safe to apply at every model step.
     """
 
     def __init__(self, max_retries: int = 1) -> None:
@@ -148,6 +150,12 @@ class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         except Exception:  # noqa: BLE001 - version drift must not crash a turn
             return False
         return isinstance(exc, StreamChunkTimeoutError)
+
+    @staticmethod
+    def _should_retry(exc: BaseException) -> bool:
+        # Retry both a chunk stall and a dropped connection (a flaky provider
+        # can recover immediately; retrying the SINGLE model call is safe).
+        return StallRetryMiddleware._is_stall(exc) or is_connection_error(exc)
 
     @staticmethod
     def _prompt_tokens(request: Any) -> int:
@@ -176,15 +184,15 @@ class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
         while True:
             try:
                 return await handler(request)
-            except Exception as exc:  # noqa: BLE001 - retry only genuine stalls
-                if not self._is_stall(exc):
+            except Exception as exc:  # noqa: BLE001 - retry only stalls/drops
+                if not self._should_retry(exc):
                     raise
                 attempt += 1
                 prompt_tokens = self._prompt_tokens(request)
                 model = self._model_name(request)
                 if attempt > self.max_retries:
                     logger.error(
-                        "model stream stalled repeatedly (chunk timeout); giving up "
+                        "model stream stalled/dropped repeatedly; giving up "
                         "(model=%s, prompt_tokens≈%s): %s",
                         model,
                         prompt_tokens,
@@ -192,7 +200,7 @@ class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                     )
                     raise
                 logger.warning(
-                    "model stream stalled (chunk timeout); retrying call %d/%d "
+                    "model stream stalled/dropped; retrying call %d/%d "
                     "(model=%s, prompt_tokens≈%s)",
                     attempt,
                     self.max_retries,
