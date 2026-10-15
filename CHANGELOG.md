@@ -553,6 +553,38 @@ This release fixes how MCP server settings take effect: after adding or editing 
 
 - Added automated tests to keep these behaviors stable: effective immediately after setup, and applied without a restart.
 
+## 0.8.2
+
+本版本重新規範「什麼情況才該中斷並提示錯誤」：只有系統性的故障（後端服務斷線、模型無法連線、程式底層錯誤）才會中斷並顯示錯誤；其餘「本次沒做成」的情況（外部服務掉線、帳號需要重新授權、技能/流程/記憶等工具失敗）則交由 AI 自行處理並如實告知，不再動輒中斷對話。
+
+### 修復
+
+- **只有系統性錯誤才中斷**：後端服務斷線、模型無法連線、底層系統錯誤等，會直接提示錯誤並停止本輪；其餘情況不再中斷。
+- **行為性錯誤交由 AI 處理**：外部服務（如 MCP/SSE）掉線、帳號需要重新授權、技能/流程/記憶等工具失敗時，AI 會收到失敗資訊並自行換方法或如實說明，對話繼續進行。
+- **模型串流中斷會重試並如實報錯**：模型回應途中斷線時，會先自動重試一次；仍失敗則顯示真實錯誤，不再被靜默略過或誤報為其他原因。
+- **規劃模式下顯示 MCP 真實狀態**：規劃/討論階段雖不開放 MCP 工具呼叫，但 AI 會看到各服務目前的連線狀態，能如實回答「是否可用」，不再憑空猜測。
+
+### 品質
+
+- 新增自動化測試，涵蓋錯誤分類、降級提示與 MCP 狀態顯示等行為。
+
+---
+
+### English
+
+This release redefines when the app should stop and show an error: only systemic failures (the local backend disconnecting, the model being unreachable, low-level system errors) abort the turn and surface an error. Everything else that merely "didn't work this time" (an external service dropping, an account needing re-authorization, a skill/workflow/memory tool failing) is now handed to the agent, which handles it and tells you — the conversation is no longer interrupted.
+
+**Fixed**
+
+- **Only systemic failures abort**: a backend disconnect, an unreachable model, or a low-level system error stops the turn and shows a real error; everything else no longer interrupts.
+- **Behavioral failures are handled by the agent**: when an external service (e.g. MCP/SSE) drops, an account needs re-authorization, or a skill/workflow/memory tool fails, the agent receives the failure, changes approach, or explains it plainly — and the conversation continues.
+- **A dropped model stream retries and reports truthfully**: if the model's response is cut off mid-stream, the call is retried once automatically; if it still fails, a real error is shown instead of being silently swallowed or misreported.
+- **MCP status is shown in plan mode**: although MCP tools are not callable during plan/discuss, the agent now sees each server's real connection state and can answer "is it available?" truthfully instead of guessing.
+
+**Quality**
+
+- Added automated tests covering error classification, the degrade notice, and MCP status display.
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
