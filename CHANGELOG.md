@@ -585,6 +585,40 @@ This release redefines when the app should stop and show an error: only systemic
 
 - Added automated tests covering error classification, the degrade notice, and MCP status display.
 
+## 0.8.3
+
+本版本修復三處桌面端的穩定性與提示問題：內嵌瀏覽器不再於啟動時自動佔用右側欄；電腦喚醒後不再誤顯示「CoWorker 正在控制電腦」；電腦控制功能若中途異常結束，也不再反覆彈出程式錯誤視窗。
+
+### 修復
+
+- **內嵌瀏覽器不再於啟動時自動打開**：以往重新開啟 CoWorker 時，右側的內嵌瀏覽器有時會自動彈出並還原先前的分頁。現在啟動時維持收起，只有在設定中開啟「啟動時恢復標籤頁」後，才會還原你的分頁。
+- **電腦喚醒後不再誤顯示「正在控制電腦」**：電腦鎖定、睡眠或喚醒後，桌面不再出現「CoWorker 正在控制電腦」的提示。只有你主動暫停電腦控制時才會顯示提示，恢復後提示隨即隱藏，直到下一次實際操作才重新出現。
+- **電腦控制異常結束時更穩定**：電腦控制功能若中途異常結束，後續操作會自行復原並重新連線，不再反覆彈出程式錯誤視窗；若仍發生異常，也會自動記錄下來，方便排查。
+- **免安裝執行時不再誤報更新錯誤**：以免安裝（解壓）方式執行時，不再顯示自動更新的錯誤；只有正式安裝的版本才會檢查更新。
+
+### 品質
+
+- 強化電腦控制功能的異常復原與穩定性。
+- 新增本機打包工具，打包前會先關閉執行中的程式，讓本機打包更順暢。
+
+---
+
+### English
+
+This release fixes three desktop reliability and messaging problems: the embedded browser no longer opens the side panel on startup; waking the computer no longer shows a false "CoWorker is controlling the computer" notice; and the computer-control feature no longer repeatedly pops up an error window when it ends unexpectedly.
+
+**Fixed**
+
+- **The embedded browser no longer opens on startup**: previously, reopening CoWorker could automatically open the built-in browser on the right and restore your earlier tabs. It now stays collapsed on startup and only restores your tabs when you have turned on "Restore tabs on startup".
+- **No more false "controlling the computer" notice after waking**: locking, sleeping, or waking the computer no longer shows the "CoWorker is controlling the computer" indicator. It appears only when you pause computer control yourself, hides as soon as you resume, and returns only on the next real action.
+- **Computer control recovers more gracefully when it ends unexpectedly**: if the computer-control feature stops unexpectedly, later actions reconnect and recover on their own instead of repeatedly showing an error window; if a problem still occurs, it is recorded automatically to help diagnose it.
+- **No more false update errors when running without installing**: running the app without installing it no longer shows an auto-update error; only installed builds check for updates.
+
+**Quality**
+
+- Strengthened error recovery and stability for computer control.
+- Added a local packaging tool that closes the running app before packaging, so local builds go more smoothly.
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
