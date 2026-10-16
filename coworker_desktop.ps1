@@ -16,13 +16,21 @@ if (-not $Npm) { $Npm = "npm.cmd" }
 
 Write-Host "=== Coworker Desktop ===" -ForegroundColor Cyan
 
-Write-Host "[0/6] Releasing port $BackendPort..."
+Write-Host "[0/6] Releasing port $BackendPort and reaping stale CoWorker processes..."
 $listeners = Get-NetTCPConnection -LocalPort $BackendPort -State Listen -ErrorAction SilentlyContinue
 foreach ($l in $listeners) {
   $proc = Get-Process -Id $l.OwningProcess -ErrorAction SilentlyContinue
   if ($proc) {
     Write-Host "  Releasing port $BackendPort held by $($proc.ProcessName) (pid $($proc.Id))"
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+  }
+}
+# Kill leftover packaged-backend / native-helper processes from a previous run
+# so a stale one can never make the backend fail to bind (exit code 1).
+foreach ($name in @("pybackend", "cwautoma-win", "cw-automa")) {
+  Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "  Killing stale $($_.ProcessName) (pid $($_.Id))"
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
   }
 }
 Write-Host "  OK"

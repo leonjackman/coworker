@@ -46,7 +46,7 @@ const path = require('path');
 const http = require('http');
 const fs = require('fs');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const browserData = require('./browser-data');
 const { CredentialVault } = require('./browser-credentials');
 const { autoUpdater } = require('electron-updater');
@@ -411,6 +411,45 @@ function refreshBrandIcons() {
 // Bundled Python backend management (packaged builds only)
 // ---------------------------------------------------------------------------
 
+// Reap stale CoWorker processes before we launch our own backend. A previous
+// run (packaged or dev) that still holds the backend port makes the bundled
+// backend fail to bind, so uvicorn exits code 1 ("Backend Error"). Free the
+// backend port and kill leftover backend/helper images first. Best-effort:
+// never throws, never kills this process.
+function reapStaleCoworkerProcesses() {
+  const isWin = process.platform === 'win32';
+  const run = (cmd, args) => {
+    try { return execFileSync(cmd, args, { encoding: 'utf8', windowsHide: true }); } catch { return ''; }
+  };
+
+  // 1) Free the backend port.
+  try {
+    if (isWin) {
+      const out = run('netstat', ['-ano', '-p', 'tcp']);
+      const pids = new Set();
+      for (const line of out.split(/\r?\n/)) {
+        const m = line.match(/[:.](\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
+        if (m && Number(m[1]) === BACKEND_PORT && Number(m[2]) !== process.pid) pids.add(m[2]);
+      }
+      for (const pid of pids) run('taskkill', ['/F', '/PID', String(pid)]);
+    } else {
+      const out = run('lsof', ['-ti', `tcp:${BACKEND_PORT}`]);
+      for (const pid of out.split(/\s+/).filter(Boolean)) {
+        if (Number(pid) !== process.pid) {
+          try { process.kill(Number(pid), 'SIGKILL'); } catch { /* gone */ }
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+
+  // 2) Kill leftover packaged-backend / native-helper images from a prior run.
+  if (isWin) {
+    for (const img of ['pybackend.exe', 'cwautoma-win.exe']) run('taskkill', ['/F', '/IM', img]);
+  } else {
+    for (const name of ['pybackend', 'cw-automa']) run('pkill', ['-x', name]);
+  }
+}
+
 async function startBundledBackend() {
   if (IS_DEV) return;
 
@@ -429,6 +468,7 @@ async function startBundledBackend() {
   }
 
   console.log('Starting bundled backend:', backendPath);
+  reapStaleCoworkerProcesses();
 
   backendProcess = spawn(backendPath, [], {
     stdio: ['pipe', 'pipe', 'pipe'],
