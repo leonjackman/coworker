@@ -479,6 +479,94 @@ function reapStaleCoworkerProcesses() {
   }
 }
 
+// Spawn the bundled backend, stream its output to the console AND to
+// userData/backend-console.log, and resolve once it is healthy or has failed.
+// `tail` always carries the last lines of backend output so a failure can be
+// explained precisely (e.g. "[Errno 10048] ... bind on ('127.0.0.1', 9527)")
+// instead of a bare "exited unexpectedly with code N".
+function spawnBundledBackend(backendPath) {
+  const tail = [];
+  let logPath = null;
+  try { logPath = path.join(app.getPath('userData'), 'backend-console.log'); } catch { /* ignore */ }
+  const record = (line) => {
+    if (!line) return;
+    tail.push(line);
+    if (tail.length > 25) tail.shift();
+    try { if (logPath) fs.appendFileSync(logPath, line + '\n'); } catch { /* ignore */ }
+  };
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let ready = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(Object.assign({ tail: tail.join('\n') }, result));
+    };
+
+    // A stale process still holding the backend port is the most common reason
+    // the bundled backend cannot bind (uvicorn then exits). Reap just before
+    // every spawn so a retry gets a clean port too.
+    reapStaleCoworkerProcesses();
+    record(`--- backend start ${new Date().toISOString()} ---`);
+
+    const proc = spawn(backendPath, [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: process.platform === 'win32',
+      env: { ...process.env, PYTHONNOUSERSITE: '1' },
+    });
+    backendProcess = proc;
+
+    proc.stdout.on('data', (data) => {
+      const text = data.toString().trim();
+      if (text) { console.log('[backend]', text); text.split(/\r?\n/).forEach(record); }
+    });
+
+    proc.stderr.on('data', (data) => {
+      const text = data.toString().trim();
+      if (text) { console.error('[backend]', text); text.split(/\r?\n/).forEach(record); }
+    });
+
+    proc.on('error', (err) => {
+      record(`spawn error: ${err.message}`);
+      finish({ ok: false, reason: 'start-error', code: null });
+    });
+
+    proc.on('exit', (code, signal) => {
+      console.log(`Backend exited: code=${code} signal=${signal}`);
+      record(`backend exited: code=${code} signal=${signal}`);
+      backendProcess = null;
+      if (code === 0 || code === null) return;
+      if (ready) {
+        // Died AFTER a healthy start — not a startup race; surface it.
+        const detail = tail.length ? `\n\nlast backend output:\n${tail.join('\n')}` : '';
+        dialog.showErrorBox('Backend Error', `Backend process exited unexpectedly with code ${code}.${detail}`);
+        app.quit();
+        return;
+      }
+      finish({ ok: false, reason: 'exit', code });
+    });
+
+    // Wait for backend to be ready. 120 × 500ms ≈ 1 minute: on cold/first run
+    // the bundled (PyInstaller) backend can take much longer than the old 30s
+    // on slow disks / antivirus scans, so give it a full minute before giving up.
+    (async () => {
+      for (let attempt = 0; attempt < 120; attempt++) {
+        await new Promise((r) => setTimeout(r, 500));
+        if (settled) return;
+        try {
+          await requestBackend('/health', 'GET', null, 1000);
+          ready = true;
+          console.log('Backend is ready');
+          finish({ ok: true });
+          return;
+        } catch { /* not ready yet */ }
+      }
+      if (!settled) finish({ ok: false, reason: 'timeout', code: null });
+    })();
+  });
+}
+
 async function startBundledBackend() {
   if (IS_DEV) return;
 
@@ -486,7 +574,7 @@ async function startBundledBackend() {
   const backendPath = path.join(process.resourcesPath, backendName);
 
   // Check if bundled backend exists
-  if (!require('fs').existsSync(backendPath)) {
+  if (!fs.existsSync(backendPath)) {
     dialog.showErrorBox(
       'Missing Backend',
       `Could not find the bundled backend at:\n${backendPath}\n\n` +
@@ -497,55 +585,26 @@ async function startBundledBackend() {
   }
 
   console.log('Starting bundled backend:', backendPath);
-  reapStaleCoworkerProcesses();
+  let result = await spawnBundledBackend(backendPath);
 
-  backendProcess = spawn(backendPath, [], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    shell: process.platform === 'win32',
-    env: { ...process.env, PYTHONNOUSERSITE: '1' },
-  });
-
-  backendProcess.stdout.on('data', (data) => {
-    const text = data.toString().trim();
-    if (text) console.log('[backend]', text);
-  });
-
-  backendProcess.stderr.on('data', (data) => {
-    const text = data.toString().trim();
-    if (text) console.error('[backend]', text);
-  });
-
-  backendProcess.on('error', (err) => {
-    console.error('Failed to start bundled backend:', err.message);
-    dialog.showErrorBox('Backend Error', `Failed to start the bundled backend:\n${err.message}`);
-    app.quit();
-  });
-
-  backendProcess.on('exit', (code, signal) => {
-    console.log(`Backend exited: code=${code} signal=${signal}`);
-    backendProcess = null;
-    if (code !== 0 && code !== null) {
-      dialog.showErrorBox('Backend Error', `Backend process exited unexpectedly with code ${code}`);
-      app.quit();
-    }
-  });
-
-  // Wait for backend to be ready. 120 × 500ms ≈ 1 minute: on cold/first run the
-  // bundled (PyInstaller) backend can take much longer than the old 30s on slow
-  // disks / antivirus scans, so give it a full minute before giving up.
-  for (let attempt = 0; attempt < 120; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    try {
-      await requestBackend('/health', 'GET', null, 1000);
-      console.log('Backend is ready');
-      return;
-    } catch {
-      // Not ready yet
-    }
+  // A first attempt can lose a race against a just-exiting previous instance
+  // (the OS has not released the port yet). If it failed to start or exited
+  // early — not merely timed out — reap and try exactly once more.
+  if (!result.ok && result.reason !== 'timeout') {
+    console.warn('Bundled backend failed to start; reaping and retrying once');
+    result = await spawnBundledBackend(backendPath);
   }
+  if (result.ok) return;
 
-  console.error('Backend failed to start within 1 minute');
-  dialog.showErrorBox('Backend Error', 'Backend failed to start within 1 minute.');
+  console.error('Backend failed to start:', result.reason, result.code ?? '');
+  const detail = result.tail ? `\n\nlast backend output:\n${result.tail}` : '';
+  if (result.reason === 'start-error') {
+    dialog.showErrorBox('Backend Error', `Failed to start the bundled backend.${detail}`);
+  } else if (result.reason === 'exit') {
+    dialog.showErrorBox('Backend Error', `Backend process exited unexpectedly with code ${result.code}.${detail}`);
+  } else {
+    dialog.showErrorBox('Backend Error', `Backend failed to start within 1 minute.${detail}`);
+  }
   app.quit();
 }
 
