@@ -619,6 +619,34 @@ This release fixes three desktop reliability and messaging problems: the embedde
 - Strengthened error recovery and stability for computer control.
 - Added a local packaging tool that closes the running app before packaging, so local builds go more smoothly.
 
+## 0.8.4
+
+本版本讓 CoWorker 在啟動本機後端服務失敗時更穩健：會自動清理佔用連接埠的殘留程式並重試；若仍失敗，會顯示來自後端本身的真實原因，不再只有籠統的「後端程式異常結束」。
+
+### 修復
+
+- **啟動後端失敗時自動恢復**：以往若上一次執行殘留的程式仍佔用後端連接埠，本次啟動會直接失敗並顯示「後端程式異常結束」。現在會先自動清理該殘留程式並重試一次，避免因此無法啟動。
+- **啟動失敗時顯示真實原因**：若後端確實無法啟動，錯誤視窗會附上後端自己的說明（例如連接埠被佔用），並將完整輸出記錄到記錄檔，方便排查，不再只是籠統的錯誤訊息。
+
+### 品質
+
+- 後端啟動過程的輸出會寫入 `backend-console.log`，讓啟動問題可被追查。
+
+---
+
+### English
+
+This release makes CoWorker more resilient when the local backend service fails to start: it now clears any leftover process holding the backend port and retries once; if it still fails, the error window shows the real reason reported by the backend instead of a bare "backend process exited".
+
+**Fixed**
+
+- **Automatic recovery when the backend fails to start**: previously, if a leftover process from a previous run was still holding the backend port, startup failed immediately with "backend process exited unexpectedly". CoWorker now clears that leftover process and retries once, so it no longer fails to start for that reason.
+- **The real reason is shown when startup fails**: if the backend genuinely cannot start, the error window now includes the backend's own message (for example, the port already being in use), and the full output is written to a log file for troubleshooting, instead of a bare generic error.
+
+**Quality**
+
+- The backend's startup output is written to `backend-console.log` so startup problems can be investigated.
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
