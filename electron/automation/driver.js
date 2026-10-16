@@ -100,16 +100,17 @@ class HelperDriver {
 
   // ── Process / JSON-RPC plumbing ──────────────────────────────────────
   _spawn() {
-    if (this._proc && !this._proc.killed) return;
+    if (this._proc && !this._proc.killed && this._proc.exitCode === null) return;
     if (!safeIsFile(this.binaryPath)) {
       this._flushError('helper binary missing: ' + (this.binaryPath || '(none)'));
       return;
     }
     this._ensureExecutable();
-    this._proc = spawn(this.binaryPath, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    this._proc.stdout.setEncoding('utf8');
-    this._proc.stderr.setEncoding('utf8');
-    this._proc.stdout.on('data', (chunk) => {
+    const proc = spawn(this.binaryPath, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    this._proc = proc;
+    proc.stdout.setEncoding('utf8');
+    proc.stderr.setEncoding('utf8');
+    proc.stdout.on('data', (chunk) => {
       this._buffer += chunk;
       let idx;
       while ((idx = this._buffer.indexOf('\n')) >= 0) {
@@ -123,14 +124,28 @@ class HelperDriver {
         }
       }
     });
-    this._proc.stderr.on('data', (chunk) => {
+    proc.stderr.on('data', (chunk) => {
       try { console.warn(`[automa:${this.platform}]`, String(chunk).trim()); } catch (e) { /* ignore */ }
     });
-    this._proc.on('error', (err) => {
+    // Writing to a dead helper's stdin raises EPIPE. With no 'error' listener
+    // that surfaces as an *uncaught* main-process exception, which Electron
+    // renders as "A JavaScript error occurred in the main process" — and a
+    // helper that keeps dying makes those dialogs stack up. Capture it, fail
+    // the in-flight calls, drop the dead proc and let the next invoke() respawn.
+    proc.stdin.on('error', (err) => {
       this.ready = false;
+      this._flushError(`helper stdin: ${err.message}`);
+    });
+    proc.on('error', (err) => {
+      this.ready = false;
+      if (this._proc === proc) this._proc = null;
       this._flushError(`helper failed: ${err.message}`);
     });
-    this._proc.on('exit', () => { this.ready = false; this._flushError('helper exited'); });
+    proc.on('exit', () => {
+      this.ready = false;
+      if (this._proc === proc) this._proc = null;
+      this._flushError('helper exited');
+    });
   }
 
   _onMessage(msg) {
@@ -165,7 +180,7 @@ class HelperDriver {
               features: msg.result.features || {},
             };
           }
-          this._resolveBoot(true);
+          this._resolveBoot(!!(msg && msg.ok));
         })
         .catch(() => this._resolveBoot(false));
     });
@@ -174,15 +189,27 @@ class HelperDriver {
   _call(method, params = {}) {
     const id = ++this._seq;
     return new Promise((resolve, reject) => {
-      this._pending.set(id, { resolve });
-      const line = JSON.stringify({ id, method, params });
       const proc = this._proc;
-      if (!proc || proc.killed) {
-        this._pending.delete(id);
+      if (!proc || proc.killed || proc.exitCode !== null) {
         reject(new Error('helper not running'));
         return;
       }
-      proc.stdin.write(line + '\n');
+      this._pending.set(id, { resolve });
+      const line = JSON.stringify({ id, method, params }) + '\n';
+      try {
+        // The write callback reports EPIPE/ECONNRESET asynchronously; handle it
+        // per-call so a dead helper fails cleanly instead of throwing.
+        proc.stdin.write(line, (err) => {
+          if (err && this._pending.has(id)) {
+            this._pending.delete(id);
+            reject(new Error(`helper write failed (${err.code || err.message})`));
+          }
+        });
+      } catch (err) {
+        this._pending.delete(id);
+        reject(new Error(`helper write failed (${err.code || err.message})`));
+        return;
+      }
       setTimeout(() => {
         if (this._pending.has(id)) {
           this._pending.delete(id);

@@ -56,6 +56,34 @@ const { CancellationToken } = require('builder-util-runtime');
 // NODE_ENV and IS_PACKAGED are not set automatically.
 const IS_DEV = !app.isPackaged || process.env.COWORKER_DEV === '1';
 
+// electron-updater reads `app-update.yml` from the app resources dir. That file
+// is emitted by electron-builder for real installers (nsis/dmg/AppImage) but NOT
+// for unpacked `--dir` builds (e.g. the local `pack-local-win` output). Calling
+// checkForUpdates() without it emits an unhandled updater 'error' (ENOENT),
+// which Electron surfaces as a "A JavaScript error occurred in the main process"
+// dialog on launch. Gate on the file so unpacked/local builds stay quiet while
+// real installers keep updating normally.
+const AUTO_UPDATE_SUPPORTED = !IS_DEV && fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'));
+
+// Electron's default handler pops a "A JavaScript error occurred in the main
+// process" dialog for every uncaught error/rejection. A recurring background
+// failure then stacks identical dialogs and leaves no trace to debug. Record
+// each one to userData/main-crash.log so the real stack is diagnosable, and
+// register the listener (which also replaces Electron's dialog-per-error
+// behaviour) so a single bad task cannot spam the user.
+function recordMainCrash(kind, err) {
+  try {
+    const detail = err && err.stack ? err.stack : String(err);
+    fs.appendFileSync(
+      path.join(app.getPath('userData'), 'main-crash.log'),
+      `[${new Date().toISOString()}] ${kind}\n${detail}\n\n`,
+    );
+  } catch { /* best effort */ }
+  console.error(`[main:${kind}]`, err);
+}
+process.on('uncaughtException', (err) => recordMainCrash('uncaughtException', err));
+process.on('unhandledRejection', (err) => recordMainCrash('unhandledRejection', err));
+
 // ── Auto-update settings persistence ───────────────────────────────────
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
@@ -146,7 +174,7 @@ function setUpdateState(patch) {
 }
 
 function setupAutoUpdater() {
-  if (IS_DEV) return;
+  if (!AUTO_UPDATE_SUPPORTED) return;
 
   autoUpdater.autoDownload = false;
   autoUpdater.allowDowngrade = false;
@@ -277,6 +305,7 @@ function isCancellationError(err) {
 
 async function checkForUpdates({ automatic = false } = {}) {
   if (IS_DEV) return { status: 'dev-mode' };
+  if (!AUTO_UPDATE_SUPPORTED) return { status: 'disabled' };
   if (automatic && !updateSettings.autoUpdateEnabled) return { status: 'disabled' };
 
   if (inFlightCheck) {
@@ -334,7 +363,7 @@ function cancelUpdateCheck() {
 
 function startAutoUpdateTimer() {
   stopAutoUpdateTimer();
-  if (IS_DEV || !updateSettings.autoUpdateEnabled) return;
+  if (!AUTO_UPDATE_SUPPORTED || !updateSettings.autoUpdateEnabled) return;
   checkForUpdates({ automatic: true }).catch(() => {});
   autoUpdateTimer = setInterval(() => {
     checkForUpdates({ automatic: true }).catch(() => {});
