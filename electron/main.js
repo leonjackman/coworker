@@ -510,9 +510,13 @@ function spawnBundledBackend(backendPath) {
     reapStaleCoworkerProcesses();
     record(`--- backend start ${new Date().toISOString()} ---`);
 
+    // Spawn the exe DIRECTLY (no shell). With `shell: true` on Windows the
+    // command line is handed to cmd.exe, which splits the path at the first
+    // space — an install under `C:\Program Files\...` then fails with
+    // "'C:\Program' is not recognized" and the backend exits code 1.
     const proc = spawn(backendPath, [], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
+      windowsHide: true,
       env: { ...process.env, PYTHONNOUSERSITE: '1' },
     });
     backendProcess = proc;
@@ -649,7 +653,10 @@ function escapeHtml(value) {
 }
 
 function showStartupError(details) {
-  if (!mainWindow || mainWindow.isDestroyed()) {
+  // During quit the renderer is torn down on purpose, so a late did-fail-load /
+  // render-process-gone would otherwise try to load into a dead window and
+  // throw "Object has been destroyed" (an unhandled rejection).
+  if (isQuitting || !mainWindow || mainWindow.isDestroyed()) {
     return;
   }
 
@@ -731,8 +738,14 @@ function showStartupError(details) {
     </body>
   </html>`;
 
-  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-  mainWindow.show();
+  try {
+    if (mainWindow.isDestroyed()) return;
+    const loading = mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    if (loading && typeof loading.catch === 'function') loading.catch(() => {});
+    mainWindow.show();
+  } catch {
+    // window already torn down — nothing to show
+  }
 }
 
 function createTray() {
