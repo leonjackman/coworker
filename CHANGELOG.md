@@ -587,93 +587,45 @@ This release redefines when the app should stop and show an error: only systemic
 
 ## 0.8.3
 
-本版本修復三處桌面端的穩定性與提示問題：內嵌瀏覽器不再於啟動時自動佔用右側欄；電腦喚醒後不再誤顯示「CoWorker 正在控制電腦」；電腦控制功能若中途異常結束，也不再反覆彈出程式錯誤視窗。
+本版本聚焦桌面端的啟動與操作穩定性：修正安裝在含空白路徑時後端服務無法啟動（並顯示「Backend Error」）的問題、後端啟動失敗時的自動恢復與真實原因提示，以及內嵌瀏覽器誤開右側欄、電腦喚醒後誤顯示「正在控制電腦」、電腦控制與更新相關的多項提示問題。
 
 ### 修復
 
+- **安裝在含空白的路徑時可正常啟動**：以往若安裝位置含有空白（例如 `C:\Program Files\CoWorker`），後端服務會無法啟動並顯示「Backend Error」。現已修正，任何安裝路徑皆可正常啟動。
+- **啟動後端失敗時自動恢復並顯示真實原因**：當上一次執行殘留的程式仍佔用後端連接埠時，會自動清理並重試一次；若後端確實無法啟動，錯誤視窗會附上後端本身的說明，並將完整輸出記錄到記錄檔，不再只有籠統的「後端程式異常結束」。
 - **內嵌瀏覽器不再於啟動時自動打開**：以往重新開啟 CoWorker 時，右側的內嵌瀏覽器有時會自動彈出並還原先前的分頁。現在啟動時維持收起，只有在設定中開啟「啟動時恢復標籤頁」後，才會還原你的分頁。
-- **電腦喚醒後不再誤顯示「正在控制電腦」**：電腦鎖定、睡眠或喚醒後，桌面不再出現「CoWorker 正在控制電腦」的提示。只有你主動暫停電腦控制時才會顯示提示，恢復後提示隨即隱藏，直到下一次實際操作才重新出現。
+- **電腦喚醒後不再誤顯示「正在控制電腦」**：電腦鎖定、睡眠或喚醒後，桌面不再出現「CoWorker 正在控制電腦」的提示。只有你主動暫停電腦控制時才會顯示提示，恢復後提示隨即隱藏。
 - **電腦控制異常結束時更穩定**：電腦控制功能若中途異常結束，後續操作會自行復原並重新連線，不再反覆彈出程式錯誤視窗；若仍發生異常，也會自動記錄下來，方便排查。
 - **免安裝執行時不再誤報更新錯誤**：以免安裝（解壓）方式執行時，不再顯示自動更新的錯誤；只有正式安裝的版本才會檢查更新。
+- **啟動失敗畫面不再產生多餘的錯誤紀錄**：修正視窗關閉瞬間顯示啟動失敗畫面所造成的競態。
 
 ### 品質
 
 - 強化電腦控制功能的異常復原與穩定性。
-- 新增本機打包工具，打包前會先關閉執行中的程式，讓本機打包更順暢。
+- 後端啟動過程的輸出會寫入 `backend-console.log`，讓啟動問題可被追查。
+- 新增「從含空白路徑啟動」的驗證，以及本機打包工具（打包前先關閉執行中的程式）。
 
 ---
 
 ### English
 
-This release fixes three desktop reliability and messaging problems: the embedded browser no longer opens the side panel on startup; waking the computer no longer shows a false "CoWorker is controlling the computer" notice; and the computer-control feature no longer repeatedly pops up an error window when it ends unexpectedly.
+This release focuses on desktop startup and operation reliability: it fixes the backend service failing to start (showing "Backend Error") when installed in a path that contains a space, adds automatic recovery and a real reason when the backend fails to start, and resolves several misleading prompts around the embedded browser, waking the computer, computer control, and updates.
 
 **Fixed**
 
+- **Starts correctly when installed in a path with a space**: previously, an install location containing a space (for example `C:\Program Files\CoWorker`) prevented the backend service from starting and showed "Backend Error". This is fixed; it now starts from any install path.
+- **Automatic recovery with the real reason when the backend fails to start**: if a leftover process from a previous run is still holding the backend port, it is cleared and the start is retried once; if the backend genuinely cannot start, the error window includes the backend's own message and the full output is written to a log file, instead of a bare "backend process exited unexpectedly".
 - **The embedded browser no longer opens on startup**: previously, reopening CoWorker could automatically open the built-in browser on the right and restore your earlier tabs. It now stays collapsed on startup and only restores your tabs when you have turned on "Restore tabs on startup".
-- **No more false "controlling the computer" notice after waking**: locking, sleeping, or waking the computer no longer shows the "CoWorker is controlling the computer" indicator. It appears only when you pause computer control yourself, hides as soon as you resume, and returns only on the next real action.
+- **No more false "controlling the computer" notice after waking**: locking, sleeping, or waking the computer no longer shows the "CoWorker is controlling the computer" indicator. It appears only when you pause computer control yourself and hides as soon as you resume.
 - **Computer control recovers more gracefully when it ends unexpectedly**: if the computer-control feature stops unexpectedly, later actions reconnect and recover on their own instead of repeatedly showing an error window; if a problem still occurs, it is recorded automatically to help diagnose it.
 - **No more false update errors when running without installing**: running the app without installing it no longer shows an auto-update error; only installed builds check for updates.
-
-**Quality**
-
-- Strengthened error recovery and stability for computer control.
-- Added a local packaging tool that closes the running app before packaging, so local builds go more smoothly.
-
-## 0.8.4
-
-本版本讓 CoWorker 在啟動本機後端服務失敗時更穩健：會自動清理佔用連接埠的殘留程式並重試；若仍失敗，會顯示來自後端本身的真實原因，不再只有籠統的「後端程式異常結束」。
-
-### 修復
-
-- **啟動後端失敗時自動恢復**：以往若上一次執行殘留的程式仍佔用後端連接埠，本次啟動會直接失敗並顯示「後端程式異常結束」。現在會先自動清理該殘留程式並重試一次，避免因此無法啟動。
-- **啟動失敗時顯示真實原因**：若後端確實無法啟動，錯誤視窗會附上後端自己的說明（例如連接埠被佔用），並將完整輸出記錄到記錄檔，方便排查，不再只是籠統的錯誤訊息。
-
-### 品質
-
-- 後端啟動過程的輸出會寫入 `backend-console.log`，讓啟動問題可被追查。
-
----
-
-### English
-
-This release makes CoWorker more resilient when the local backend service fails to start: it now clears any leftover process holding the backend port and retries once; if it still fails, the error window shows the real reason reported by the backend instead of a bare "backend process exited".
-
-**Fixed**
-
-- **Automatic recovery when the backend fails to start**: previously, if a leftover process from a previous run was still holding the backend port, startup failed immediately with "backend process exited unexpectedly". CoWorker now clears that leftover process and retries once, so it no longer fails to start for that reason.
-- **The real reason is shown when startup fails**: if the backend genuinely cannot start, the error window now includes the backend's own message (for example, the port already being in use), and the full output is written to a log file for troubleshooting, instead of a bare generic error.
-
-**Quality**
-
-- The backend's startup output is written to `backend-console.log` so startup problems can be investigated.
-
-## 0.8.5
-
-本版本修復安裝版無法啟動本機後端服務、並顯示「Backend Error」的問題：當 CoWorker 安裝在含有空白的資料夾（例如 `C:\Program Files\CoWorker`）時，後端服務會啟動失敗。現已修正，任何安裝路徑皆可正常啟動。
-
-### 修復
-
-- **安裝在含空白的路徑時可正常啟動**：以往若安裝位置含有空白（例如 `C:\Program Files\CoWorker`），後端服務會無法啟動並顯示「Backend Error」。現已修正。
-- **啟動失敗畫面不再產生多餘的錯誤紀錄**：修正視窗關閉瞬間顯示啟動失敗畫面所造成的競態，避免留下無關的錯誤記錄。
-
-### 品質
-
-- 新增「從含空白路徑啟動」的驗證。
-
----
-
-### English
-
-This release fixes the installed app failing to start its local backend service — and showing "Backend Error" — when CoWorker is installed in a folder that contains a space (for example `C:\Program Files\CoWorker`). It now starts correctly from any install path.
-
-**Fixed**
-
-- **Starts correctly when installed in a path with a space**: previously, an install location containing a space (for example `C:\Program Files\CoWorker`) prevented the backend service from starting and showed "Backend Error". This is fixed.
 - **The startup-failure screen no longer leaves a spurious error record**: fixed a race where showing the startup-failure screen as the window closed recorded an unrelated error.
 
 **Quality**
 
-- Added verification for starting from a path that contains a space.
+- Strengthened error recovery and stability for computer control.
+- The backend's startup output is written to `backend-console.log` so startup problems can be investigated.
+- Added verification for starting from a path that contains a space, plus a local packaging tool that closes the running app before packaging.
 
 ## Unreleased
 
