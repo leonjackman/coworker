@@ -898,7 +898,11 @@ let permissionStore = null;
 let browserSessionRef = null;
 let downloadControls = null;
 const browserSettings = {
-  restore_tabs: true,
+  // Must match backend DEFAULTS (coworker/browser/settings.py): the packaged
+  // renderer asks for settings before the bundled backend is reachable, so a
+  // stale `true` here would wrongly re-enable tab restore and reopen the
+  // embedded browser panel on every launch.
+  restore_tabs: false,
   download_dir: '',
   ask_where_to_save: false,
   password_manager_enabled: false,

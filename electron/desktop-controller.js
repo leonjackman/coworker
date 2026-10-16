@@ -144,14 +144,22 @@ class DesktopController {
   setPaused(paused, reason = '') {
     this.paused = !!paused;
     this.pauseReason = paused ? reason : '';
+    // Automatic pauses (screen lock / sleep / shutdown) must NOT paint the
+    // status pill: the user sees it the moment they unlock/wake and reads the
+    // active pill ("CoWorker is controlling") as if the agent were acting, even
+    // though it is idle. Only a user-initiated pause shows the persistent red
+    // pill; resuming always hides it (the next real action re-reveals it), and
+    // an auto-pause just parks the virtual cursor.
+    const auto = reason === 'screen-lock' || reason === 'suspend' || reason === 'shutdown';
     try {
       const driver = this._driverInstance();
       if (this.paused) {
-        // Park the native virtual cursor + switch the status pill to "paused".
+        // Park the native virtual cursor so it can't linger over the desktop.
         driver.cursorHide().catch(() => {});
-        driver.hudPause(true).catch(() => {});
+        if (auto) driver.hudHide().catch(() => {});
+        else driver.hudPause(true).catch(() => {});
       } else {
-        driver.hudPause(false).catch(() => {});
+        driver.hudHide().catch(() => {});
       }
     } catch (e) { /* helper unavailable */ }
     try { if (this._onPauseChange) this._onPauseChange(this.paused, this.pauseReason); } catch (e) { /* ignore */ }
