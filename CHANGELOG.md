@@ -647,6 +647,34 @@ This release makes CoWorker more resilient when the local backend service fails 
 
 - The backend's startup output is written to `backend-console.log` so startup problems can be investigated.
 
+## 0.8.5
+
+本版本修復安裝版無法啟動本機後端服務、並顯示「Backend Error」的問題：當 CoWorker 安裝在含有空白的資料夾（例如 `C:\Program Files\CoWorker`）時，後端服務會啟動失敗。現已修正，任何安裝路徑皆可正常啟動。
+
+### 修復
+
+- **安裝在含空白的路徑時可正常啟動**：以往若安裝位置含有空白（例如 `C:\Program Files\CoWorker`），後端服務會無法啟動並顯示「Backend Error」。現已修正。
+- **啟動失敗畫面不再產生多餘的錯誤紀錄**：修正視窗關閉瞬間顯示啟動失敗畫面所造成的競態，避免留下無關的錯誤記錄。
+
+### 品質
+
+- 新增「從含空白路徑啟動」的驗證。
+
+---
+
+### English
+
+This release fixes the installed app failing to start its local backend service — and showing "Backend Error" — when CoWorker is installed in a folder that contains a space (for example `C:\Program Files\CoWorker`). It now starts correctly from any install path.
+
+**Fixed**
+
+- **Starts correctly when installed in a path with a space**: previously, an install location containing a space (for example `C:\Program Files\CoWorker`) prevented the backend service from starting and showed "Backend Error". This is fixed.
+- **The startup-failure screen no longer leaves a spurious error record**: fixed a race where showing the startup-failure screen as the window closed recorded an unrelated error.
+
+**Quality**
+
+- Added verification for starting from a path that contains a space.
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
