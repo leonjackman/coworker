@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from coworker.logger import get_logger
+from coworker.net.proxy import httpx_proxy_kwargs, resolve_proxy
 
 from .base import SearchResult, SearchResultSet
 
@@ -76,9 +77,12 @@ def tavily_search(
         "include_answer": True,
     }
     try:
-        response = httpx.post(TAVILY_API_URL, json=payload, timeout=30.0)
-        response.raise_for_status()
-        data = response.json()
+        with httpx.Client(
+            timeout=30.0, **httpx_proxy_kwargs(resolve_proxy(TAVILY_API_URL))
+        ) as client:
+            response = client.post(TAVILY_API_URL, json=payload)
+            response.raise_for_status()
+            data = response.json()
     except httpx.HTTPStatusError as exc:
         detail = ""
         try:

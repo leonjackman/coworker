@@ -30,6 +30,8 @@ from typing import Any
 
 import httpx
 
+from .net.proxy import httpx_proxy_kwargs, resolve_proxy
+
 _SETTINGS_FILENAME = ".coworker_settings.json"
 
 _DATA_URL_SPLIT_RE = re.compile(r"^data:(?P<mime>[\w.+:-]+/[\w.+:-]+);base64,(?P<body>.*)$", re.S)
@@ -196,10 +198,16 @@ class LoopbackBridgeClient:
         url = f"{info.base_url}{path}"
         headers = {"Authorization": f"Bearer {info.token}"}
         try:
-            if method == "GET":
-                resp = httpx.get(url, headers=headers, timeout=_TIMEOUT)
-            else:
-                resp = httpx.post(url, json=payload or {}, headers=headers, timeout=_TIMEOUT)
+            # Local bridge traffic is always direct (resolve_proxy has an
+            # explicit loopback rule); using one helper keeps it consistent with
+            # every other outbound call.
+            with httpx.Client(
+                timeout=_TIMEOUT, **httpx_proxy_kwargs(resolve_proxy(url))
+            ) as client:
+                if method == "GET":
+                    resp = client.get(url, headers=headers)
+                else:
+                    resp = client.post(url, json=payload or {}, headers=headers)
             if resp.status_code >= 400:
                 body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                 return {

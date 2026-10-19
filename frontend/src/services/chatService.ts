@@ -145,8 +145,8 @@ export interface ChatService {
   updateProvider: (providerId: string, request: ProviderUpdatePayload) => Promise<void>;
   deleteProvider: (providerId: string) => Promise<void>;
   setDefaultProvider: (providerId: string, model: string) => Promise<void>;
-  testProvider: (request: { base_url: string; api_key: string; model: string; provider_id?: string }) => Promise<ProviderTestResult>;
-  fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string; provider_id?: string }) => Promise<{ models: string[]; error?: string }>;
+  testProvider: (request: { base_url: string; api_key: string; model: string; provider_id?: string; proxy_mode?: string; proxy_url?: string }) => Promise<ProviderTestResult>;
+  fetchProviderModels: (request: { base_url: string; api_key: string; provider_type: string; provider_id?: string; proxy_mode?: string; proxy_url?: string }) => Promise<{ models: string[]; error?: string }>;
   discoverProviderContext: (providerId: string) => Promise<{ status: string; provider: ProviderEntry }>;
   getProviderTemplates: () => Promise<{ status: string; templates: Array<{ key: string; name: string; base_url: string; icon: string | null }>; order: string[]; icon_aliases: Record<string, string | null> }>;
   openDirectoryPicker: (options?: { title?: string; defaultPath?: string }) => Promise<string | null>;
@@ -1353,13 +1353,13 @@ class ElectronChatService implements ChatService {
     await window.electronAPI.setDefaultProvider({ provider_id: providerId, model });
   }
 
-  async testProvider(request: { base_url: string; api_key: string; model: string }): Promise<ProviderTestResult> {
+  async testProvider(request: { base_url: string; api_key: string; model: string; provider_id?: string; proxy_mode?: string; proxy_url?: string }): Promise<ProviderTestResult> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.testProvider(request);
     return response.result;
   }
 
-  async fetchProviderModels(request: { base_url: string; api_key: string; provider_type: string }): Promise<{ models: string[]; error?: string }> {
+  async fetchProviderModels(request: { base_url: string; api_key: string; provider_type: string; provider_id?: string; proxy_mode?: string; proxy_url?: string }): Promise<{ models: string[]; error?: string }> {
     if (!window.electronAPI) throw new Error('Electron API is unavailable');
     const response = await window.electronAPI.fetchProviderModels(request);
     return response;
@@ -2004,7 +2004,7 @@ class HttpChatService implements ChatService {
     });
   }
 
-  async testProvider(request: { base_url: string; api_key: string; model: string }): Promise<ProviderTestResult> {
+  async testProvider(request: { base_url: string; api_key: string; model: string; provider_id?: string; proxy_mode?: string; proxy_url?: string }): Promise<ProviderTestResult> {
     const response = await this.request<{ status: string; result: ProviderTestResult }>('/providers/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2013,7 +2013,7 @@ class HttpChatService implements ChatService {
     return response.result;
   }
 
-  async fetchProviderModels(request: { base_url: string; api_key: string; provider_type: string }): Promise<{ models: string[]; error?: string }> {
+  async fetchProviderModels(request: { base_url: string; api_key: string; provider_type: string; provider_id?: string; proxy_mode?: string; proxy_url?: string }): Promise<{ models: string[]; error?: string }> {
     return this.request<{ status: string; models: string[]; error?: string }>('/providers/fetch-models', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

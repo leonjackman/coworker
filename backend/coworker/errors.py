@@ -28,6 +28,11 @@ from dataclasses import dataclass
 from enum import Enum
 
 from coworker.logger import get_logger
+from coworker.net.network_errors import (
+    NetworkError,
+    classify_network_error,
+    is_stream_stall,
+)
 
 logger = get_logger(__name__)
 
@@ -90,6 +95,8 @@ class Action(str, Enum):
 class Outcome:
     severity: Severity
     action: Action
+    # Normalized network diagnosis (None for behavioral/cancellation errors).
+    network: NetworkError | None = None
 
 
 # --- text ---------------------------------------------------------------------
@@ -290,6 +297,8 @@ def handle(
     tool: str = "",
     server: str = "",
     detail: str = "",
+    endpoint: str = "",
+    proxy: str | None = None,
 ) -> Outcome:
     """Classify ``exc``, log the decision, and return what the caller must do.
 
@@ -298,22 +307,30 @@ def handle(
     a fallback (or propagated as fatal), the site, the original error type +
     traceback, and the chosen action are recorded so a swallowed-but-handled
     failure is always traceable in the logs.
+
+    ``endpoint`` / ``proxy`` let the normalized network diagnosis distinguish a
+    proxy disconnect from a dead provider (and tell the user what to do).
     """
     severity = _severity_for(site, exc)
     action = _decide(site, severity)
+    network: NetworkError | None = None
+    if is_connection_error(exc) or _is_stall_error(exc):
+        network = classify_network_error(exc, proxy=proxy, endpoint=endpoint)
     if severity is Severity.CANCELLED:
         # A Stop / client disconnect is expected, not an incident: no warning.
         logger.debug("error handled: site=%s cancelled (detail=%s)", site.value, detail or "-")
         return Outcome(severity=severity, action=action)
     logger.warning(
-        "error handled: site=%s severity=%s action=%s exc_type=%s tool=%s server=%s detail=%s",
+        "error handled: site=%s severity=%s action=%s exc_type=%s network_kind=%s "
+        "tool=%s server=%s detail=%s",
         site.value,
         severity.value,
         action.value,
         type(exc).__name__,
+        network.kind.value if network else "-",
         tool or "-",
         server or "-",
         detail or "-",
         exc_info=True,
     )
-    return Outcome(severity=severity, action=action)
+    return Outcome(severity=severity, action=action, network=network)

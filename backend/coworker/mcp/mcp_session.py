@@ -42,6 +42,7 @@ from langchain_mcp_adapters.sessions import create_session
 from langchain_mcp_adapters.tools import _list_all_tools
 from mcp.types import LATEST_PROTOCOL_VERSION
 
+from ..net.proxy import httpx_proxy_kwargs, resolve_proxy
 from .mcp import McpManager, STATUS_CONNECTED, STATUS_ERROR, STATUS_NEEDS_AUTH
 from .mcp_loader import build_connection
 from .mcp_oauth import (
@@ -58,6 +59,36 @@ DEFAULT_CONNECT_TIMEOUT = 30.0
 DEFAULT_CALL_TIMEOUT = 60.0
 
 _REMOTE_TRANSPORTS = {"sse", "streamable_http"}
+_REMOTE_HTTP_TRANSPORTS = {"sse", "streamable_http", "http"}
+
+
+def _with_mcp_proxy(connection: dict[str, Any]) -> dict[str, Any]:
+    """Attach an httpx factory that pins the resolved proxy for MCP HTTP/SSE.
+
+    The MCP SDK builds its own ``httpx.AsyncClient`` for SSE / Streamable HTTP.
+    Without a factory it re-reads the system proxy with the same
+    exceptions-dropping resolver that used to force the LLM through the proxy,
+    so a remote MCP server could connect via a different path than the model.
+    """
+    if connection.get("httpx_client_factory") is not None:
+        return connection
+    if str(connection.get("transport") or "") not in _REMOTE_HTTP_TRANSPORTS:
+        return connection
+    url = connection.get("url")
+    if not url:
+        return connection
+    proxy_kwargs = httpx_proxy_kwargs(resolve_proxy(url))
+
+    def factory(headers: Any = None, timeout: Any = None, auth: Any = None) -> Any:
+        return httpx.AsyncClient(
+            headers=headers,
+            auth=auth,
+            timeout=timeout or httpx.Timeout(30.0, read=300.0),
+            follow_redirects=True,
+            **proxy_kwargs,
+        )
+
+    return {**connection, "httpx_client_factory": factory}
 
 # How long an idle remote session waits between keepalive pings. Must stay below
 # the transport's ``sse_read_timeout`` (default 300s) so the long-lived SSE
@@ -881,10 +912,11 @@ class McpSessionManager:
         headers = dict(connection.get("headers") or {})
         auth = connection.get("auth")
         timeout = httpx.Timeout(self._connect_timeout, read=8)
+        proxy_kwargs = httpx_proxy_kwargs(resolve_proxy(url))
         status = 0
         try:
             if transport == "sse":
-                async with httpx.AsyncClient(headers=headers, auth=auth, timeout=timeout) as client:
+                async with httpx.AsyncClient(headers=headers, auth=auth, timeout=timeout, **proxy_kwargs) as client:
                     async with client.stream("GET", url) as resp:
                         status = resp.status_code
             else:
@@ -903,7 +935,7 @@ class McpSessionManager:
                         },
                     }
                 )
-                async with httpx.AsyncClient(headers=headers, auth=auth, timeout=timeout) as client:
+                async with httpx.AsyncClient(headers=headers, auth=auth, timeout=timeout, **proxy_kwargs) as client:
                     resp = await client.post(url, content=body)
                     status = resp.status_code
         except Exception:  # noqa: BLE001 - probe is best-effort
@@ -933,6 +965,9 @@ class McpSessionManager:
             )
         else:
             loopback = None
+
+        # Keep MCP HTTP/SSE on the same proxy decision as the rest of CW.
+        connection = _with_mcp_proxy(connection)
 
         # The transport context is opened and closed inside a single dedicated
         # task. anyio (used by the MCP SDK's http/sse transports) pins cancel

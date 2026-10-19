@@ -3250,7 +3250,16 @@ function openSseStream({
           buffer = buffer.slice(sepIndex + 2);
           // SSE multi-line `data:` – collect ALL `data:` lines and join with newline
           const dataLines = frame.split('\n').filter(l => l.startsWith('data:'));
-          if (dataLines.length === 0) continue;
+          if (dataLines.length === 0) {
+            // Keep-alive comment (`: ping`). The renderer only sees forwarded
+            // `data:` events, so without this its idle watchdog would keep
+            // ticking during a long but healthy generation. Forward a
+            // lightweight heartbeat to reset it.
+            if (frame.trim().startsWith(':')) {
+              forwardEvent({ type: 'heartbeat' });
+            }
+            continue;
+          }
           const raw = dataLines.map(l => l.slice(5).trim()).join('\n');
           if (!raw) continue;
           let parsed;

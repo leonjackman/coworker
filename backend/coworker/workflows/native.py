@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..net.proxy import httpx_proxy_kwargs, resolve_proxy
+
 
 def run_native(
     kind: str,
@@ -71,7 +73,7 @@ def _http(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     elif payload.get("body") is not None:
         kwargs["content"] = _as_text(payload["body"])
 
-    with httpx.Client() as client:
+    with httpx.Client(**httpx_proxy_kwargs(resolve_proxy(url))) as client:
         resp = client.request(method, url, **kwargs)
     try:
         data: Any = resp.json()

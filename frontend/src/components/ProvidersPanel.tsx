@@ -1,7 +1,7 @@
 import { AlertTriangle, BrainCircuit, Check, Loader2, Network, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { getProviderTemplateOrder, providerTemplate, ProviderIcon } from '../lib/provider-registry';
-import { t, translateError } from '../lib/i18n';
+import { t, tOrDefault, translateError } from '../lib/i18n';
 import { chatService } from '../services/chatService';
 import type { ProviderEntry, ProviderPayload, ProviderTestResult } from '../types';
 import { Badge } from './ui/badge';
@@ -25,6 +25,8 @@ const emptyForm = (): FormState => ({
   base_url: '',
   api_key: '',
   model: '',
+  proxy_mode: 'auto',
+  proxy_url: '',
   availableModels: [],
 });
 
@@ -126,6 +128,8 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
       ...(provider.context_window ? { context_window: provider.context_window } : {}),
       ...(provider.max_output_tokens !== undefined && provider.max_output_tokens > 0 ? { max_output_tokens: provider.max_output_tokens } : {}),
       vision: Boolean(provider.vision),
+      proxy_mode: provider.proxy_mode ?? 'auto',
+      proxy_url: provider.proxy_url ?? '',
     });
     setMaxOutputMode(provider.max_output_tokens !== undefined && MAX_OUTPUT_PRESETS.includes(provider.max_output_tokens) ? 'preset' : 'custom');
     setTestResult(null);
@@ -146,10 +150,12 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
     setFetchingModels(true);
     setMessage(null);
     try {
-      const fetchParams: { base_url: string; api_key: string; provider_type: string; provider_id?: string } = {
+      const fetchParams: { base_url: string; api_key: string; provider_type: string; provider_id?: string; proxy_mode?: string; proxy_url?: string } = {
         base_url: form.base_url,
         api_key: form.api_key,
         provider_type: form.provider_type,
+        proxy_mode: form.proxy_mode ?? 'auto',
+        proxy_url: form.proxy_url ?? '',
       };
       if (form.id) fetchParams.provider_id = form.id;
       const response = await chatService.fetchProviderModels(fetchParams);
@@ -182,6 +188,8 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
           ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
           vision: Boolean(form.vision),
+          proxy_mode: form.proxy_mode ?? 'auto',
+          proxy_url: form.proxy_url ?? '',
         });
         newProviderId = form.id;
       } else {
@@ -194,6 +202,8 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
           ...(form.context_window !== undefined ? { context_window: form.context_window } : {}),
           ...(form.max_output_tokens !== undefined ? { max_output_tokens: form.max_output_tokens } : {}),
           vision: Boolean(form.vision),
+          proxy_mode: form.proxy_mode ?? 'auto',
+          proxy_url: form.proxy_url ?? '',
         });
         newProviderId = created.provider.id;
       }
@@ -268,10 +278,12 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
     setTesting(true);
     setTestResult(null);
     try {
-      const testParams: { base_url: string; api_key: string; model: string; provider_id?: string } = {
+      const testParams: { base_url: string; api_key: string; model: string; provider_id?: string; proxy_mode?: string; proxy_url?: string } = {
         base_url: form.base_url,
         api_key: form.api_key,
         model: form.model,
+        proxy_mode: form.proxy_mode ?? 'auto',
+        proxy_url: form.proxy_url ?? '',
       };
       if (form.id) testParams.provider_id = form.id;
       const result = await chatService.testProvider(testParams);
@@ -444,6 +456,33 @@ export function ProvidersPanel({ onProviderChange }: ProvidersPanelProps) {
                 />
                 <span>{t('providers.vision')}</span>
               </div>
+            </label>
+
+            <label className="field">
+              <span>{tOrDefault('providers.proxy_mode', 'Network proxy')}</span>
+              <select
+                value={form.proxy_mode ?? 'auto'}
+                onChange={(event) => setForm({ ...form, proxy_mode: event.target.value })}
+                disabled={saving}
+              >
+                <option value="auto">{tOrDefault('providers.proxy_auto', 'Auto (honor system bypass)')}</option>
+                <option value="direct">{tOrDefault('providers.proxy_direct', 'Direct (no proxy)')}</option>
+                <option value="proxy">{tOrDefault('providers.proxy_custom', 'Custom proxy')}</option>
+              </select>
+              {(form.proxy_mode ?? 'auto') === 'proxy' && (
+                <input
+                  value={form.proxy_url ?? ''}
+                  onChange={(event) => setForm({ ...form, proxy_url: event.target.value })}
+                  placeholder="http://127.0.0.1:1082"
+                  disabled={saving}
+                />
+              )}
+              <small>
+                {tOrDefault(
+                  'providers.proxy_hint',
+                  'If a system proxy drops the connection, set this provider to Direct.',
+                )}
+              </small>
             </label>
 
             <div className="provider-test-row">

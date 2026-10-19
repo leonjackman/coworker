@@ -1843,7 +1843,10 @@ function App() {
       } else if (event.type === 'error') {
         textThrottle.flushNow();
         localParts = settleRunningTools(localParts);
-        commit(localParts, { content: event.error || t('chat.generation_failed'), status: 'error', streamEndAt: Date.now() });
+        // Prefer the normalized, actionable hint (e.g. "proxy dropped the
+        // connection — retry or switch to direct") over the opaque raw error.
+        const errorMessage = event.network?.hint || event.error || t('chat.generation_failed');
+        commit(localParts, { content: errorMessage, status: 'error', streamEndAt: Date.now() });
         clearSessionTodos(event.session_id ?? requestSessionId);
       } else if (event.type === 'idle_warning') {
         // Backend detected N seconds of inactivity on the SSE stream.

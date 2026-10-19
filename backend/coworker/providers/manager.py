@@ -13,11 +13,14 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..atomicio import atomic_write_text
+from ..net.proxy import describe as describe_proxy
+from ..net.proxy import resolve_proxy, urllib_opener
 from .catalog import get_provider_meta
 from .models import (
     CONFIG_VERSION,
@@ -42,6 +45,14 @@ _CTX_DISCOVERY_CACHE: dict[str, tuple[float, int, str | None]] = {}
 # A user-configured context window above this many tokens is only trusted when
 # the server reports at least that much via live discovery.
 _UNVERIFIED_CONTEXT_WINDOW_WARN = 131_072  # 128k
+
+_PROXY_MODES = frozenset({"auto", "direct", "proxy"})
+
+
+def _normalize_proxy_mode(value: str | None) -> str:
+    """Clamp a user-supplied proxy mode to the three supported values."""
+    mode = (value or "auto").strip().lower()
+    return mode if mode in _PROXY_MODES else "auto"
 
 
 class ProviderManager:
@@ -189,6 +200,8 @@ class ProviderManager:
             "context_error": error,
             "max_output_tokens": provider.max_output_tokens if provider.max_output_tokens > 0 else DEFAULT_MAX_OUTPUT_TOKENS,
             "vision": bool(provider.vision),
+            "proxy_mode": getattr(provider, "proxy_mode", "auto") or "auto",
+            "proxy_url": getattr(provider, "proxy_url", "") or "",
             "created_at": provider.created_at,
             "updated_at": provider.updated_at,
         }
@@ -205,7 +218,7 @@ class ProviderManager:
     # CRUD
     # ------------------------------------------------------------------
 
-    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0, vision: bool = False) -> dict[str, Any]:
+    def add_provider(self, *, name: str, provider_type: str, base_url: str, api_key: str = "", model: str = "", context_window: int = 0, max_output_tokens: int = 0, vision: bool = False, proxy_mode: str = "auto", proxy_url: str = "") -> dict[str, Any]:
         base_url = self.validate_base_url(base_url, provider_type)
         if not name.strip():
             raise ValueError("provider name is required")
@@ -227,6 +240,8 @@ class ProviderManager:
             context_window=max(0, int(context_window or 0)),
             max_output_tokens=max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens or 0))),
             vision=bool(vision),
+            proxy_mode=_normalize_proxy_mode(proxy_mode),
+            proxy_url=(proxy_url or "").strip(),
         )
         config.providers.append(provider)
         if not config.default_provider_id:
@@ -235,7 +250,7 @@ class ProviderManager:
         self.save(config)
         return self.public_provider(provider)
 
-    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None, max_output_tokens: int | None = None, vision: bool | None = None) -> dict[str, Any]:
+    def update_provider(self, provider_id: str, *, name: str | None = None, base_url: str | None = None, api_key: str | None = None, model: str | None = None, enabled: bool | None = None, context_window: int | None = None, max_output_tokens: int | None = None, vision: bool | None = None, proxy_mode: str | None = None, proxy_url: str | None = None) -> dict[str, Any]:
         config = self.load()
         provider = self.require_provider(config, provider_id)
         if name is not None:
@@ -259,6 +274,10 @@ class ProviderManager:
             provider.max_output_tokens = max(MAX_OUTPUT_TOKENS_MIN, min(MAX_OUTPUT_TOKENS_MAX, int(max_output_tokens)))
         if vision is not None:
             provider.vision = bool(vision)
+        if proxy_mode is not None:
+            provider.proxy_mode = _normalize_proxy_mode(proxy_mode)
+        if proxy_url is not None:
+            provider.proxy_url = proxy_url.strip()
         if enabled is not None:
             provider.enabled = enabled
             if not enabled and config.default_provider_id == provider.id:
@@ -302,7 +321,15 @@ class ProviderManager:
     # Connection testing & model fetching
     # ------------------------------------------------------------------
 
-    def test_provider_connection(self, base_url: str, api_key: str, model: str) -> dict[str, Any]:
+    def test_provider_connection(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        *,
+        proxy_mode: str = "auto",
+        proxy_url: str = "",
+    ) -> dict[str, Any]:
         self.validate_base_url(base_url, "custom")
         endpoint = self.chat_completions_url(base_url, "custom")
         body = {
@@ -314,17 +341,35 @@ class ProviderManager:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         started_at = time.monotonic()
+        # Use the FORM's proxy policy (not just the system default) so the test
+        # exercises the exact path a real chat request will take.
+        decision = resolve_proxy(
+            base_url,
+            SimpleNamespace(proxy_mode=proxy_mode, proxy_url=proxy_url),
+        )
+        proxy_note = describe_proxy(decision)
         try:
             request = urllib.request.Request(endpoint, data=json.dumps(body).encode(), headers=headers, method="POST")
-            response = urllib.request.urlopen(request, timeout=15)
+            # Use the SAME proxy decision as the LLM stream. A bare urlopen()
+            # reads the system proxy differently and used to make "test
+            # connection" succeed while real chat died behind the proxy.
+            response = urllib_opener(decision).open(request, timeout=15)
             latency_ms = round((time.monotonic() - started_at) * 1000)
             if response.status == 200:
-                return {"ok": True, "latency_ms": latency_ms}
-            return {"ok": False, "latency_ms": latency_ms, "error": f"HTTP {response.status}"}
+                return {"ok": True, "latency_ms": latency_ms, "proxy": proxy_note}
+            return {"ok": False, "latency_ms": latency_ms, "error": f"HTTP {response.status}", "proxy": proxy_note}
         except Exception as exc:
-            return {"ok": False, "latency_ms": None, "error": str(exc)[:240]}
+            return {"ok": False, "latency_ms": None, "error": str(exc)[:240], "proxy": proxy_note}
 
-    def fetch_models(self, base_url: str, api_key: str = "", provider_type: str = "custom") -> list[str]:
+    def fetch_models(
+        self,
+        base_url: str,
+        api_key: str = "",
+        provider_type: str = "custom",
+        *,
+        proxy_mode: str = "auto",
+        proxy_url: str = "",
+    ) -> list[str]:
         self.validate_base_url(base_url, provider_type)
         base = base_url.rstrip("/")
         meta = get_provider_meta(provider_type)
@@ -338,7 +383,11 @@ class ProviderManager:
             url = f"{base}/models" if has_versioned_path else f"{base}/v1/models"
             headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         request = urllib.request.Request(url, headers=headers, method="GET")
-        response = urllib.request.urlopen(request, timeout=15)
+        decision = resolve_proxy(
+            base_url,
+            SimpleNamespace(proxy_mode=proxy_mode, proxy_url=proxy_url),
+        )
+        response = urllib_opener(decision).open(request, timeout=15)
         payload = json.loads(response.read().decode())
         if is_ollama:
             return [str(model["name"]) for model in payload.get("models", []) if model.get("name")]
@@ -503,7 +552,8 @@ class ProviderManager:
         try:
             payload = json.dumps({"model": model or ""}).encode()
             request = urllib.request.Request(f"{base}/api/show", data=payload, headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(request, timeout=_CTX_DISCOVERY_TIMEOUT_SECONDS) as response:
+            opener = urllib_opener(resolve_proxy(base))
+            with opener.open(request, timeout=_CTX_DISCOVERY_TIMEOUT_SECONDS) as response:
                 data = json.loads(response.read().decode())
             model_info = data.get("model_info") or {}
             for key, value in model_info.items():
@@ -525,7 +575,8 @@ class ProviderManager:
         if provider and provider.api_key:
             headers["Authorization"] = f"Bearer {provider.api_key}"
         request = urllib.request.Request(url, headers=headers, method="GET")
-        with urllib.request.urlopen(request, timeout=_CTX_DISCOVERY_TIMEOUT_SECONDS) as response:
+        opener = urllib_opener(resolve_proxy(url, provider))
+        with opener.open(request, timeout=_CTX_DISCOVERY_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode())
 
     # ------------------------------------------------------------------

@@ -139,6 +139,18 @@ RUNTIME_CACHE_MAX = 128
 RETRY_RETRIES = 1
 
 
+def _network_context(llm: Any) -> tuple[str, str | None]:
+    """(endpoint, proxy_url) used by the normalized network diagnosis."""
+    endpoint = str(
+        getattr(llm, "openai_api_base", "")
+        or getattr(llm, "base_url", "")
+        or ""
+    )
+    client = getattr(llm, "http_async_client", None)
+    decision = getattr(client, "_cw_proxy_decision", None)
+    return endpoint, getattr(decision, "proxy_url", None)
+
+
 async def _aclose_on_exit(agen: AsyncGenerator[Any, None]) -> AsyncGenerator[Any, None]:
     """Yield from ``agen`` but ALWAYS ``aclose()`` it — on normal end, on a
     raised exception, and on ``GeneratorExit``/cancellation of this wrapper.
@@ -1033,7 +1045,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                     self.trace_store.record("agent_activity", "error", current_trace_context, {"error": error_text(exc)})
                     self._maybe_self_review(session_id, messages, parts)
                     self._maybe_review_workflow(session_id, messages, parts)
-                    if handle(Site.STREAM, exc, detail="agent_turn").action is Action.RAISE:
+                    endpoint, proxy = _network_context(self.llm)
+                    if handle(
+                        Site.STREAM, exc, detail="agent_turn",
+                        endpoint=endpoint, proxy=proxy,
+                    ).action is Action.RAISE:
                         raise
                     degraded.append("部分能力")
                     break
@@ -1338,7 +1354,11 @@ class OpenAICompatibleStreamRuntime(AgentStreamRuntime):
                 self.trace_store.record("agent_activity", "error", current_trace_context, {"error": error_text(exc), "resumed": True})
                 # Same central policy as the main stream: systemic re-raises (red
                 # error); a behavioral error degrades to a graceful finish.
-                if handle(Site.RESUME, exc, detail="resume").action is Action.RAISE:
+                endpoint, proxy = _network_context(self.llm)
+                if handle(
+                    Site.RESUME, exc, detail="resume",
+                    endpoint=endpoint, proxy=proxy,
+                ).action is Action.RAISE:
                     raise
                 degraded.append("部分能力")
             finally:

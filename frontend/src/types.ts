@@ -375,6 +375,10 @@ export interface ProviderEntry {
   /** Multimodal (vision) capability: screenshots/images are sent as native
    *  image blocks instead of being externalized to disk. */
   vision?: boolean;
+  /** Outbound proxy policy: auto (honor bypass lists/system proxy), direct, or proxy. */
+  proxy_mode?: string;
+  /** Explicit proxy URL used when proxy_mode === 'proxy'. */
+  proxy_url?: string;
   created_at: string;
   updated_at: string;
 }
@@ -395,6 +399,8 @@ export interface ProviderPayload {
   context_window?: number;
   max_output_tokens?: number;
   vision?: boolean;
+  proxy_mode?: string;
+  proxy_url?: string;
 }
 
 export interface ProviderUpdatePayload {
@@ -406,12 +412,16 @@ export interface ProviderUpdatePayload {
   context_window?: number;
   max_output_tokens?: number;
   vision?: boolean;
+  proxy_mode?: string;
+  proxy_url?: string;
 }
 
 export interface ProviderTestResult {
   ok: boolean;
   latency_ms?: number | null;
   error?: string;
+  /** Resolved proxy decision used by the test request (diagnostic). */
+  proxy?: string;
 }
 
 export interface SessionSummary {
@@ -841,7 +851,22 @@ export interface PendingRequest {
         session_id?: string;
       }
     | { type: 'done'; content: string; session_id: string; mode?: AgentMode; provider?: string; model?: string; parts?: MessagePart[]; message_id?: string; compaction_notice?: string; loop_reason?: 'tool_calls' | 'repeated' | 'degenerate' | 'overflow' | 'hitl' | 'step_cap' | 'idle' | 'idle_hard' | 'final'; compaction?: { summary: string; count: number; fingerprints: string[]; failed: boolean } }
-    | { type: 'error'; error: string; session_id?: string }
+    | {
+        type: 'error';
+        error: string;
+        session_id?: string;
+        /** Normalized network diagnosis (kind/hint/proxy/endpoint). */
+        network?: {
+          kind: string;
+          retryable: boolean;
+          root_cause?: string;
+          endpoint?: string;
+          proxy?: string | null;
+          hint?: string;
+          attempt?: number;
+        } | null;
+      }
+    | { type: 'heartbeat' }
     | { type: 'stopped'; reason?: 'user' | 'client'; session_id?: string }
     | { type: 'goal_updated'; goal: GoalState; session_id?: string }
     | { type: 'goal_cleared'; session_id?: string }

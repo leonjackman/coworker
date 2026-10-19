@@ -28,6 +28,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from coworker.logger import get_logger
+from coworker.net.proxy import httpx_proxy_kwargs, resolve_proxy
 
 logger = get_logger(__name__)
 
@@ -267,8 +268,12 @@ def fetch_page(url: str, *, timeout_s: float = 30.0, out_format: str = "markdown
         "Accept-Language": "en-US,en;q=0.9",
     }
 
+    proxy_kwargs = httpx_proxy_kwargs(resolve_proxy(url))
+
     def _attempt() -> httpx.Response:
-        with httpx.Client(headers=headers, follow_redirects=True, timeout=timeout_s) as client:
+        with httpx.Client(
+            headers=headers, follow_redirects=True, timeout=timeout_s, **proxy_kwargs
+        ) as client:
             response = client.get(url)
             # Retry with an honest UA once when Cloudflare bot detection kicked in.
             if (
@@ -279,6 +284,7 @@ def fetch_page(url: str, *, timeout_s: float = 30.0, out_format: str = "markdown
                     headers={**headers, "User-Agent": "coworker"},
                     follow_redirects=True,
                     timeout=timeout_s,
+                    **proxy_kwargs,
                 ) as honest:
                     return honest.get(url)
             return response

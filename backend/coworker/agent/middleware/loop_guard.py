@@ -1,5 +1,6 @@
 """Loop protection middleware: tool-call cleaning, stall retry, repeated-call guard, idle-stuck guard."""
 
+import asyncio
 import hashlib
 import json
 from collections import deque
@@ -10,6 +11,8 @@ from langchain.agents.middleware.types import Runtime
 from langchain_core.messages import AIMessage, HumanMessage
 
 from ...errors import error_text, is_connection_error
+from ...net.network_errors import classify_network_error
+from ...net.retry import NetworkRetryCoordinator, RetryPolicy
 from ...logger import get_logger
 from .base import _is_degenerate_text, _msg_tokens
 from ..core import (
@@ -136,8 +139,11 @@ class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
     tools are never re-run, so this is safe to apply at every model step.
     """
 
-    def __init__(self, max_retries: int = 1) -> None:
-        self.max_retries = max(1, int(max_retries))
+    def __init__(self, max_retries: int | None = None) -> None:
+        # ``None`` → use the shared env-configured policy (default: 2 attempts
+        # within a 60s total budget). An explicit value is honored for
+        # backwards compatibility with call sites that tune the count.
+        self.max_retries = None if max_retries is None else max(1, int(max_retries))
 
     @staticmethod
     def _is_stall(exc: BaseException) -> bool:
@@ -179,34 +185,59 @@ class StallRetryMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):
                 return str(name)
         return "?"
 
+    @staticmethod
+    def _proxy_for_request(request: Any) -> str | None:
+        """The proxy resolved for this call, so errors can name it."""
+        model = getattr(request, "model", None)
+        client = getattr(model, "http_async_client", None)
+        decision = getattr(client, "_cw_proxy_decision", None)
+        return getattr(decision, "proxy_url", None)
+
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
-        attempt = 0
+        policy = RetryPolicy.from_env()
+        if self.max_retries is not None:
+            policy = RetryPolicy(
+                max_attempts=self.max_retries + 1,
+                total_budget_s=policy.total_budget_s,
+                backoff=policy.backoff,
+            )
+        coordinator = NetworkRetryCoordinator(policy)
+        proxy = self._proxy_for_request(request)
         while True:
             try:
                 return await handler(request)
             except Exception as exc:  # noqa: BLE001 - retry only stalls/drops
                 if not self._should_retry(exc):
                     raise
-                attempt += 1
+                net = classify_network_error(exc, proxy=proxy)
                 prompt_tokens = self._prompt_tokens(request)
                 model = self._model_name(request)
-                if attempt > self.max_retries:
+                if not coordinator.should_retry(net):
                     logger.error(
-                        "model stream stalled/dropped repeatedly; giving up "
-                        "(model=%s, prompt_tokens≈%s): %s",
+                        "model stream stalled/dropped; giving up after %d attempt(s) "
+                        "(model=%s, prompt_tokens≈%s, network=%s, budget_left=%.1fs): %s",
+                        coordinator.attempt,
                         model,
                         prompt_tokens,
+                        net.kind.value,
+                        coordinator.remaining_budget(),
                         error_text(exc),
                     )
                     raise
+                delay = coordinator.begin_retry()
                 logger.warning(
-                    "model stream stalled/dropped; retrying call %d/%d "
-                    "(model=%s, prompt_tokens≈%s)",
-                    attempt,
-                    self.max_retries,
+                    "model stream stalled/dropped; retrying in %.1fs (attempt %d/%d, "
+                    "model=%s, prompt_tokens≈%s, network=%s, proxy=%s)",
+                    delay,
+                    coordinator.attempt,
+                    max(1, policy.max_attempts - 1),
                     model,
                     prompt_tokens,
+                    net.kind.value,
+                    net.proxy or "direct",
                 )
+                if delay > 0:
+                    await asyncio.sleep(delay)
 
 
 class RepeatedToolCallMiddleware(AgentMiddleware[CoworkerAgentState, Any, Any]):

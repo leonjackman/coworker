@@ -31,6 +31,8 @@ class ProviderCreate(BaseModel):
     context_window: int = 0
     max_output_tokens: int = 0
     vision: bool = False
+    proxy_mode: str = "auto"
+    proxy_url: str = ""
 class ProviderUpdate(BaseModel):
     name: Optional[str] = None
     base_url: Optional[str] = None
@@ -40,6 +42,8 @@ class ProviderUpdate(BaseModel):
     context_window: Optional[int] = None
     max_output_tokens: Optional[int] = None
     vision: Optional[bool] = None
+    proxy_mode: Optional[str] = None
+    proxy_url: Optional[str] = None
 class DefaultProviderPayload(BaseModel):
     provider_id: str
     model: str
@@ -48,11 +52,15 @@ class ProviderTestPayload(BaseModel):
     api_key: str = ""
     model: str
     provider_id: str = ""
+    proxy_mode: str = "auto"
+    proxy_url: str = ""
 class ProviderFetchModelsPayload(BaseModel):
     base_url: str
     api_key: str = ""
     provider_type: str = "custom"
     provider_id: str = ""
+    proxy_mode: str = "auto"
+    proxy_url: str = ""
 class McpServerCreatePayload(BaseModel):
     name: str
     transport: str  # "stdio" | "http" | "sse" | "websocket"
@@ -101,6 +109,8 @@ def create_provider(request: ProviderCreate):
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
             vision=request.vision,
+            proxy_mode=request.proxy_mode,
+            proxy_url=request.proxy_url,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -130,6 +140,8 @@ def update_provider(provider_id: str, request: ProviderUpdate):
             context_window=request.context_window,
             max_output_tokens=request.max_output_tokens,
             vision=request.vision,
+            proxy_mode=request.proxy_mode,
+            proxy_url=request.proxy_url,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -169,7 +181,13 @@ def delete_provider(provider_id: str):
 def test_provider(request: ProviderTestPayload):
     api_key = _resolve_provider_secret(request) if not request.api_key and request.provider_id else request.api_key
     try:
-        result = provider_manager.test_provider_connection(request.base_url, api_key, request.model)
+        result = provider_manager.test_provider_connection(
+            request.base_url,
+            api_key,
+            request.model,
+            proxy_mode=request.proxy_mode,
+            proxy_url=request.proxy_url,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "result": result}
@@ -177,7 +195,13 @@ def test_provider(request: ProviderTestPayload):
 def fetch_provider_models(request: ProviderFetchModelsPayload):
     api_key = _resolve_provider_secret(request) if not request.api_key and request.provider_id else request.api_key
     try:
-        models = provider_manager.fetch_models(request.base_url, api_key, request.provider_type)
+        models = provider_manager.fetch_models(
+            request.base_url,
+            api_key,
+            request.provider_type,
+            proxy_mode=request.proxy_mode,
+            proxy_url=request.proxy_url,
+        )
     except Exception as exc:
         return {"status": "error", "models": [], "error": error_text(exc, limit=300)}
     return {"status": "ok", "models": models}

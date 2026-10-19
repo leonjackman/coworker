@@ -19,14 +19,31 @@ from coworker.agent.model_defaults import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_proxy(monkeypatch):
+    """Keep these tests independent of the machine's real proxy configuration."""
+    for name in (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+        "NO_PROXY", "no_proxy",
+        "COWORKER_LLM_PROXY_MODE", "COWORKER_LLM_PROXY_URL", "OPENAI_PROXY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    import coworker.net.proxy as proxy_mod
+
+    monkeypatch.setattr(proxy_mod, "macos_system_proxy_exceptions", lambda: ())
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {})
+
+
 def _pool(client):
     return client._transport._pool
 
 
 def test_stream_chunk_timeout_default_is_bounded():
-    # P0-2: the default stall bound dropped from 600s -> 120s so a dead-but-TCP-
-    # alive provider surfaces promptly instead of looking "network congested".
-    assert _llm_stream_chunk_timeout() == 120.0
+    # The default stall bound is 60s: long enough for a heavy prefill, short
+    # enough that a dead-but-TCP-alive provider surfaces promptly instead of
+    # looking "network congested" for minutes.
+    assert _llm_stream_chunk_timeout() == 60.0
 
 
 def test_https_client_enables_http2_and_long_keepalive():
@@ -51,13 +68,37 @@ def test_plain_http_client_stays_http1():
     assert _pool(client)._keepalive_expiry >= 60.0
 
 
-def test_proxy_env_disables_tuning(monkeypatch):
-    # A custom transport would shadow env-proxy auto-detection; when an active
-    # proxy is configured we must fall back to langchain's default client.
+def test_proxy_env_keeps_tuned_transport_and_pins_proxy(monkeypatch):
+    # A visible proxy must NOT make us fall back to langchain's default client:
+    # doing so re-read the system proxy with a different (exceptions-dropping)
+    # resolver and forced every endpoint through it. We keep the tuned client
+    # and pin the resolved proxy explicitly with trust_env=False.
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:8888")
     client = _build_tuned_async_httpx_client("https://api.deepseek.com/v1", None)
     assert client is not None
-    assert bool(getattr(client, "_cw_tuned_transport", False)) is False
+    assert bool(getattr(client, "_cw_tuned_transport", False)) is True
+    assert client.trust_env is False
+    decision = getattr(client, "_cw_proxy_decision")
+    assert decision.proxy_url == "http://127.0.0.1:8888"
+
+
+def test_provider_direct_bypasses_visible_proxy(monkeypatch):
+    # A provider explicitly configured for direct traffic must bypass a visible
+    # system/env proxy (the user's per-provider override wins).
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:8888")
+    from coworker.providers.models import ProviderEntry
+
+    provider = ProviderEntry(
+        id="p", name="local", provider_type="custom",
+        base_url="http://47.76.63.128:1111/v1", proxy_mode="direct",
+    )
+    client = _build_tuned_async_httpx_client(
+        "http://47.76.63.128:1111/v1", None, provider
+    )
+    assert client is not None
+    decision = getattr(client, "_cw_proxy_decision")
+    assert decision.proxy_url is None
+    assert client.trust_env is False
 
 
 def test_no_proxy_alone_does_not_disable_tuning(monkeypatch):
@@ -79,13 +120,15 @@ def test_request_log_wrapper_preserves_tuned_transport(monkeypatch, tmp_path):
     if not _http2_available():
         pytest.skip("h2 package not installed")
     client = _build_tuned_async_httpx_client("https://api.deepseek.com/v1", None)
-    # Logging disabled → wrapper is the tuned client itself (zero overhead).
-    assert wrap_async_client(client, None) is client
+    # Logging disabled → a lightweight wrapper that records failures only.
+    assert wrap_async_client(client, tmp_path) is not client
+    assert wrap_async_client(client, tmp_path)._record_success is False
     # Logging enabled → wrapper is a logging client that CARRIES the tuned
     # transport over (http2 / keep-alive preserved on the logged path).
     monkeypatch.setenv("COWORKER_LLM_LOG", "1")
     monkeypatch.setenv("COWORKER_DATA_DIR", str(tmp_path))
     wrapped = wrap_async_client(client, None)
     assert wrapped is not client
+    assert wrapped._record_success is True
     assert wrapped._transport is client._transport
     assert _pool(wrapped)._http2 is True

@@ -25,6 +25,8 @@ from typing import Any, Literal
 
 import httpx
 
+from ..net.proxy import httpx_proxy_kwargs, resolve_proxy
+
 logger = logging.getLogger(__name__)
 
 _DATA_URL_SPLIT_RE = re.compile(r"^data:(?P<mime>[\w.+:-]+/[\w.+:-]+);base64,(?P<body>.*)$", re.S)
@@ -213,10 +215,14 @@ class BridgeClient:
         headers = {"Authorization": f"Bearer {info.token}"}
         effective_timeout = timeout if timeout is not None else _TIMEOUT
         try:
-            if method == "GET":
-                resp = httpx.get(url, headers=headers, timeout=effective_timeout)
-            else:
-                resp = httpx.post(url, json=payload or {}, headers=headers, timeout=effective_timeout)
+            with httpx.Client(
+                timeout=effective_timeout,
+                **httpx_proxy_kwargs(resolve_proxy(url)),
+            ) as client:
+                if method == "GET":
+                    resp = client.get(url, headers=headers)
+                else:
+                    resp = client.post(url, json=payload or {}, headers=headers)
             if resp.status_code >= 400:
                 body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
                 return {

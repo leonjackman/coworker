@@ -59,6 +59,7 @@ from coworker.api.streaming import (
     cancellation_event,
 )
 from coworker.errors import error_text
+from coworker.net.network_errors import classify_network_error
 
 from fastapi import APIRouter
 
@@ -132,6 +133,14 @@ def _cached_provider_unreachable(provider_id: str | None, model: str | None) -> 
             return None
         if model and model != provider.model:
             provider = replace(provider, model=model)
+        # Universal health fast-fail: a cloud provider that just dropped
+        # several streams should fail immediately too (the old guard covered
+        # local providers only).
+        from coworker.net.health import should_fast_fail
+
+        health_reason = should_fast_fail(provider)
+        if health_reason:
+            return health_reason
         if not ProviderManager._is_local(provider):
             return None
         return ProviderManager.cached_context_error(provider)
@@ -757,6 +766,18 @@ async def chat_stream(request: ChatStreamRequest):
                     session_store.update_modes(session_id, work_mode, autonomy)
                 except Exception:  # noqa: BLE001 - never break the terminal event
                     logger.warning("update_modes failed in _on_end for session %s", session_id, exc_info=True)
+                try:
+                    provider = provider_manager.load().find_enabled(request.provider_id)
+                    if provider is not None:
+                        from coworker.net.health import record_success
+
+                        # Health is keyed on (id, base_url, model); mirror any
+                        # per-request model override so success/failure agree.
+                        if request.model and provider.model != request.model:
+                            provider = replace(provider, model=request.model)
+                        record_success(provider)
+                except Exception:  # noqa: BLE001 - health bookkeeping is best-effort
+                    pass
                 return {"type": "done", "session_id": session_id, "content": accumulated_content, "stream_end": True}
             if interrupt_emitted and not terminal_sent and not error_emitted:
                 # Interrupted for an approval/question: persist the partial reply
@@ -815,13 +836,39 @@ async def chat_stream(request: ChatStreamRequest):
             stopped = cancellation_event(session_id, exc)
             if stopped is not None:
                 return stopped
+            llm = getattr(runtime, "llm", None)
+            endpoint = str(
+                getattr(llm, "openai_api_base", "")
+                or getattr(llm, "base_url", "")
+                or ""
+            )
+            client = getattr(llm, "http_async_client", None)
+            decision = getattr(client, "_cw_proxy_decision", None)
+            proxy = getattr(decision, "proxy_url", None)
+            try:
+                net = classify_network_error(exc, proxy=proxy, endpoint=endpoint)
+                network = net.to_dict()
+                try:
+                    provider = provider_manager.load().find_enabled(getattr(runtime, "provider_id", ""))
+                    if provider is not None:
+                        from coworker.net.health import record_failure
+
+                        runtime_model = getattr(runtime, "model_name", "")
+                        if runtime_model and provider.model != runtime_model:
+                            provider = replace(provider, model=runtime_model)
+                        record_failure(provider, net)
+                except Exception:  # noqa: BLE001 - health bookkeeping is best-effort
+                    pass
+            except Exception:  # noqa: BLE001 - diagnosis must never break the terminal event
+                network = None
             return {
                 "type": "error",
                 "session_id": session_id,
                 "error": error_text(exc),
                 "provider": getattr(runtime, "provider_name", "") or "",
                 "model": getattr(runtime, "model_name", "") or "",
-                "base_url": getattr(getattr(runtime, "llm", None), "base_url", "") or "",
+                "base_url": getattr(llm, "base_url", "") or "",
+                "network": network,
             }
 
         # The turn runs as a background task that publishes to the session bus;

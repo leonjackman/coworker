@@ -31,6 +31,7 @@ from typing import Any
 import aiohttp
 import yaml
 
+from coworker.net.proxy import resolve_proxy
 from coworker.skills.skills import (
     MAX_DESCRIPTION_LENGTH,
     MAX_NAME_LENGTH,
@@ -485,11 +486,12 @@ class SkillMarketManager:
         owners: list[tuple[str, str]] = []  # (owner_handle, owner_slug)
         file_url = f"https://clawhub.ai/api/v1/skills/{_urlencode(slug)}/file"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=False) as session:
                 async with session.get(
                     file_url,
                     params={"path": "SKILL.md"},
                     timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                    proxy=_aiohttp_proxy(file_url),
                 ) as resp:
                     if resp.status == 409:
                         payload = await resp.json(content_type=None)
@@ -1040,12 +1042,13 @@ class SkillMarketManager:
         """
         file_url = f"{SKILLHUB_V1}/skills/{_urlencode(slug)}/file"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=False) as session:
                 async with session.get(
                     file_url,
                     params={"path": "SKILL.md"},
                     timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
                     allow_redirects=True,
+                    proxy=_aiohttp_proxy(file_url),
                 ) as resp:
                     if resp.status == 200:
                         text = await resp.text(encoding="utf-8")
@@ -1079,11 +1082,12 @@ class SkillMarketManager:
         if owner:
             params["owner"] = owner
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=False) as session:
                 async with session.get(
                     file_url,
                     params=params,
                     timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                    proxy=_aiohttp_proxy(file_url),
                 ) as resp:
                     if resp.status == 200:
                         text = await resp.text(encoding="utf-8")
@@ -1135,11 +1139,12 @@ async def _get_json(
     attempt = 0
     while True:
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(trust_env=False) as session:
                 async with session.get(
                     url,
                     params=_clean_params(params),
                     timeout=aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT),
+                    proxy=_aiohttp_proxy(url),
                 ) as resp:
                     data = await resp.json(content_type=None) if resp.status == 200 else None
         except Exception:
@@ -1150,6 +1155,19 @@ async def _get_json(
             return None
         attempt += 1
         await asyncio.sleep(0.5)
+
+
+def _aiohttp_proxy(url: str) -> str | None:
+    """Resolved proxy URL for an outbound aiohttp request (None = direct).
+
+    Keeps skill-market downloads on the same decision as LLM/MCP/web traffic.
+    aiohttp does not implement the HTTP(S)_PROXY env fallback itself, so passing
+    the resolved URL is the only way to make it consistent.
+    """
+    try:
+        return resolve_proxy(url).proxy_url
+    except Exception:  # noqa: BLE001 - resolution must never block a request
+        return None
 
 
 def _clean_params(params: dict[str, Any] | None) -> dict[str, str] | None:

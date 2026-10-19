@@ -18,6 +18,8 @@ import os
 import re
 from typing import Any
 
+from ..net.proxy import describe as describe_proxy
+from ..net.proxy import httpx_proxy_kwargs, resolve_proxy
 from ..providers import DEFAULT_MAX_OUTPUT_TOKENS, ProviderEntry, ProviderManager
 from ..providers.catalog import get_provider_meta
 
@@ -34,12 +36,12 @@ def _llm_stream_chunk_timeout() -> float:
     link a connection can stay TCP-alive while no token arrives for a long
     time. A huge value hides the stall behind an indefinite spinner; a modest
     value matches opencode's fail-fast behaviour. Configurable via env;
-    default 120s.
+    default 60s.
     """
     try:
-        return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "120.0"))
+        return float(os.environ.get("COWORKER_LLM_STREAM_CHUNK_TIMEOUT_S", "60.0"))
     except (TypeError, ValueError):
-        return 120.0
+        return 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -91,34 +93,7 @@ def _http2_available() -> bool:
         return False
 
 
-def _http_proxy_visible() -> bool:
-    """Best-effort check for a REAL forward proxy (custom transports disable
-    httpx's proxy auto-detection, so we skip tuning and let langchain build its
-    default client whenever traffic may actually be routed via a proxy).
-
-    A lone ``NO_PROXY`` (very common) routes nothing and must not disable
-    tuning; langchain's own ``_proxy_env_detected`` treats the macOS
-    ``urllib.request.getproxies()`` ``{'no': ...}`` result as positive, which
-    would defeat the tuning on most dev machines. We only bail out for an
-    explicit ``*_PROXY`` env var or a system proxy that actually carries
-    traffic (http/https/socks keys in ``getproxies()``).
-    """
-    proxy_env = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
-    if any(os.environ.get(name) for name in proxy_env):
-        return True
-    try:
-        import urllib.request
-
-        proxies = urllib.request.getproxies()
-    except Exception:  # noqa: BLE001 - best-effort
-        return False
-    for key, value in proxies.items():
-        if str(key).lower() != "no" and value:
-            return True
-    return False
-
-
-def _build_tuned_async_httpx_client(base_url: str | None, timeout: Any) -> Any:
+def _build_tuned_async_httpx_client(base_url: str | None, timeout: Any, provider: Any = None) -> Any:
     """Return an httpx.AsyncClient tuned for weak / lossy provider links.
 
     Differences vs langchain-openai's default builder (which HTTP/1.1 + 5s
@@ -131,11 +106,15 @@ def _build_tuned_async_httpx_client(base_url: str | None, timeout: Any) -> Any:
     * keep-alive pool expiry raised (default 5s -> 60s) so a thinking/tool gap
       does not pay a fresh TCP+TLS handshake on the next call.
     * connect timeout loosened (5s -> 10s) for lossy links.
+    * an explicit :func:`coworker.net.proxy.resolve_proxy` decision, applied
+      identically to httpx and the urllib-based provider probes.
 
     The kernel TCP keep-alive / TCP_USER_TIMEOUT socket profile langchain
-    computes from its ``LANGCHAIN_OPENAI_TCP_*`` envs is preserved. When a proxy
-    env is visible we return langchain's own default client untouched so env /
-    system proxy auto-detection keeps working.
+    computes from its ``LANGCHAIN_OPENAI_TCP_*`` envs is preserved. Unlike the
+    previous implementation we never hand the request to langchain's default
+    client merely because a system proxy exists: that made every endpoint
+    (including a self-hosted provider listed in the macOS proxy bypass list) go
+    through the proxy.
 
     ``timeout`` mirrors langchain's ``_get_default_async_httpx_client``
     signature; our tuned client sets an explicit non-default timeout so openai
@@ -149,8 +128,10 @@ def _build_tuned_async_httpx_client(base_url: str | None, timeout: Any) -> Any:
     except Exception:  # noqa: BLE001 - never break LLM construction on tuning
         return None
 
-    if _http_proxy_visible():
-        return _cu._get_default_async_httpx_client(base_url, timeout)
+    # ONE decision shared by httpx (here) and urllib (provider probes). A
+    # system-proxy bypass entry that Python's getproxies() dropped is honored
+    # here, so a self-hosted provider is never forced through a local proxy.
+    decision = resolve_proxy(base_url, provider)
 
     try:
         socket_options = tuple(_cu._resolve_socket_options(None))
@@ -161,10 +142,18 @@ def _build_tuned_async_httpx_client(base_url: str | None, timeout: Any) -> Any:
     http2 = bool(is_https and _http2_available())
     keepalive = _http_keepalive_seconds()
 
-    # Nothing to tune (no socket profile, no http2, default keep-alive):
-    # keep langchain's own builder so behaviour is byte-identical to today.
-    if not socket_options and not http2 and keepalive <= 0:
-        return _cu._get_default_async_httpx_client(base_url, timeout)
+    # Nothing to tune and no proxy to pin: keep langchain's own builder so
+    # behaviour is byte-identical to the default. When a proxy IS resolved we
+    # must build our own client to pin ``trust_env=False`` (otherwise httpx
+    # re-reads env/system proxy and the two stacks diverge again).
+    if not socket_options and not http2 and keepalive <= 0 and decision.proxy_url is None:
+        default_client = _cu._get_default_async_httpx_client(base_url, timeout)
+        try:
+            setattr(default_client, "_cw_proxy_decision", decision)
+            setattr(default_client, "_cw_proxy_description", describe_proxy(decision))
+        except Exception:  # noqa: BLE001 - cosmetic
+            pass
+        return default_client
 
     limits = httpx.Limits(
         max_connections=1000,
@@ -192,10 +181,14 @@ def _build_tuned_async_httpx_client(base_url: str | None, timeout: Any) -> Any:
         ),
         transport=transport,
         follow_redirects=True,
+        **httpx_proxy_kwargs(decision),
     )
-    # Marker so the request-logging wrapper can carry the tuned transport over.
+    # Markers so the request-logging wrapper can carry the tuned transport over
+    # and diagnostics can show why this endpoint went direct/through a proxy.
     try:
         setattr(client, "_cw_tuned_transport", True)
+        setattr(client, "_cw_proxy_decision", decision)
+        setattr(client, "_cw_proxy_description", describe_proxy(decision))
     except Exception:  # noqa: BLE001 - cosmetic
         pass
     return client
@@ -352,11 +345,11 @@ def provider_llm_kwargs(model_name: str, provider: ProviderEntry, base_url: str 
         parallel_tool_calls=True,
         repetition_penalty=repetition_penalty_for(model_name) if use_penalty else None,
     )
-    _inject_http_transport(kwargs, data_dir)
+    _inject_http_transport(kwargs, data_dir, provider)
     return kwargs
 
 
-def _inject_http_transport(kwargs: dict[str, Any], data_dir: Any) -> None:
+def _inject_http_transport(kwargs: dict[str, Any], data_dir: Any, provider: Any = None) -> None:
     """Inject a weak-network-tuned ``http_async_client`` into ChatOpenAI kwargs.
 
     Every streaming runtime (main agent, workers, delegation, skill review)
@@ -373,7 +366,7 @@ def _inject_http_transport(kwargs: dict[str, Any], data_dir: Any) -> None:
 
         base_url = kwargs.get("base_url")
         timeout = kwargs.get("timeout") or kwargs.get("request_timeout")
-        inner = _build_tuned_async_httpx_client(base_url, timeout)
+        inner = _build_tuned_async_httpx_client(base_url, timeout, provider)
         if inner is None:
             return
         kwargs["http_async_client"] = wrap_async_client(inner, data_dir)

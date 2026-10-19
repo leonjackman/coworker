@@ -37,6 +37,12 @@ class ProviderEntry:
     max_output_tokens: int = 0
     # Multimodal (vision) capability.
     vision: bool = False
+    # Outbound proxy policy for this endpoint: "auto" (honor NO_PROXY / the
+    # macOS system bypass list, then the visible system/env proxy), "direct"
+    # (never proxy), or "proxy" (always use proxy_url).
+    proxy_mode: str = "auto"
+    # Explicit proxy URL used when proxy_mode == "proxy" (scheme optional).
+    proxy_url: str = ""
 
 
 @dataclass
