@@ -627,6 +627,54 @@ This release focuses on desktop startup and operation reliability: it fixes the 
 - The backend's startup output is written to `backend-console.log` so startup problems can be investigated.
 - Added verification for starting from a path that contains a space, plus a local packaging tool that closes the running app before packaging.
 
+## 0.8.4
+
+本版本聚焦於網路連線的穩定性：修正部分使用者在開啟系統代理（例如 Clash、Stash）時，發送訊息後長時間沒有回應、最終顯示連線失敗的問題；同時讓模型對話、遠端 MCP、網頁抓取與技能下載共用一致的網路設定，並在連線異常時更快給出可行動的提示。
+
+### 修復
+
+- **開啟系統代理時不再卡住或連線失敗**：以往系統代理可能連模型服務也一併轉發，造成連線中斷，畫面持續等待卻沒有明確原因。現在會正確辨識系統代理的例外清單，讓指定的模型服務直接連線，其餘服務仍依你的代理設定運作。
+- **連線異常時更快回應**：當模型服務中斷或長時間沒有輸出時，會在約一分鐘內停止等待並說明原因（例如「經代理中斷」），不再無限轉圈，並提供重試或改用直連的建議。
+- **長時間任務不再誤判斷線**：修正桌面端在模型持續輸出時，仍可能因心跳遺失而中斷連線的問題。
+
+### 新增
+
+- **每個模型服務可個別設定網路方式**：在「模型提供商」設定中，可為單一服務選擇「自動（遵循系統例外）」、「直連」或「自訂代理」，並可直接測試連線結果。
+- **更清楚的連線紀錄**：模型請求若失敗，會記錄對應的會話、代理方式與失敗原因，方便回報與排查。
+
+### 改動
+
+- **一致的網路策略**：模型對話、遠端 MCP、網頁抓取、搜尋、工作流程與技能下載現在使用同一套代理判斷，避免「測試連線正常、實際使用卻失敗」的情況。
+
+### 品質
+
+- 新增代理判斷、錯誤分類、重試上限與服務健康狀態的自動化測試。
+
+---
+
+### English
+
+This release focuses on network stability: it fixes the case where, with a system proxy enabled (for example Clash or Stash), sending a message could hang for a long time and finally fail with a connection error. Model chat, remote MCP, web fetching and skill downloads now share one network policy, and connection problems fail faster with actionable guidance.
+
+**Fixed**
+
+- **No more hangs or connection failures when a system proxy is enabled**: previously the system proxy could also forward model traffic, breaking the connection while the UI kept waiting without a clear reason. CoWorker now honors the system proxy's bypass list so the designated model service connects directly, while other services still follow your proxy settings.
+- **Faster, clearer connection errors**: when the model service disconnects or stops producing output, CoWorker stops waiting within about a minute and explains why (for example "interrupted by the proxy"), instead of spinning forever, and suggests retrying or switching to a direct connection.
+- **Long tasks no longer disconnect due to a missed heartbeat**: fixed a desktop issue where a healthy, still-generating response could be aborted because the renderer missed its keep-alive signal.
+
+**Added**
+
+- **Per-provider network settings**: in Model Providers you can now choose "Auto (honor system bypass)", "Direct", or "Custom proxy" for each service, and test the connection with the same settings.
+- **Clearer connection records**: failed model requests now record the session, proxy mode and failure reason, making reports easier to investigate.
+
+**Changed**
+
+- **One consistent network policy**: model chat, remote MCP, web fetching, search, workflows and skill downloads now use the same proxy decision, avoiding "the connection test passes but real usage fails".
+
+**Quality**
+
+- Added automated coverage for proxy resolution, error classification, retry limits and provider health.
+
 ## Unreleased
 
 （發版時將本區段改名為對應版本號，例如 `## x.x.x` ）
